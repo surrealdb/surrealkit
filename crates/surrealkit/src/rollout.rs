@@ -230,8 +230,7 @@ pub async fn run_lint(opts: RolloutExecutionOpts) -> Result<()> {
 pub async fn run_status(db: &Surreal<Any>, selector: Option<String>) -> Result<()> {
 	run_setup(db).await?;
 	let mut query =
-		"SELECT id, name, status, started_at, completed_at, last_error FROM _surrealkit_rollout"
-			.to_string();
+		"SELECT id, name, status, started_at, completed_at, last_error FROM __rollout".to_string();
 	if selector.is_some() {
 		query.push_str(" WHERE id = $id");
 	}
@@ -265,7 +264,7 @@ pub async fn run_status(db: &Surreal<Any>, selector: Option<String>) -> Result<(
 
 		let mut step_resp = db
 			.query(
-				"SELECT step_id, phase, kind, status, error FROM _surrealkit_rollout_step \
+				"SELECT step_id, phase, kind, status, error FROM __rollout_step \
 				 WHERE rollout_id = $rollout_id ORDER BY started_at, step_id;",
 			)
 			.bind(("rollout_id", id.clone()))
@@ -470,7 +469,7 @@ pub async fn run_rollback(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Resu
 pub async fn load_active_rollout_id(db: &Surreal<Any>) -> Result<Option<String>> {
 	let mut resp = db
 		.query(
-			"SELECT id, status FROM _surrealkit_rollout \
+			"SELECT id, status FROM __rollout \
 			 WHERE status INSIDE ['planned', 'running_start', 'ready_to_complete', 'running_complete', 'running_rollback', 'failed'] \
 			 ORDER BY started_at DESC LIMIT 1;",
 		)
@@ -483,7 +482,7 @@ pub async fn load_managed_entities(db: &Surreal<Any>) -> Result<Vec<ManagedEntit
 	let mut resp = db
 		.query(
 			"SELECT kind, scope, name, source_path, statement_hash, file_hash, active_rollout_id, state \
-			 FROM _surrealkit_managed_entity;",
+			 FROM __managed_entity;",
 		)
 		.await?;
 	let rows: Vec<Value> = resp.take(0)?;
@@ -523,9 +522,9 @@ pub async fn upsert_managed_entities(
 ) -> Result<()> {
 	for entity in entities {
 		db.query(
-			"DELETE _surrealkit_managed_entity \
+			"DELETE __managed_entity \
 			 WHERE kind = $kind AND scope = $scope AND name = $name; \
-			 CREATE _surrealkit_managed_entity CONTENT { \
+			 CREATE __managed_entity CONTENT { \
 			 	kind: $kind, \
 			 	scope: $scope, \
 			 	name: $name, \
@@ -554,7 +553,7 @@ pub async fn upsert_managed_entities(
 pub async fn delete_managed_entities(db: &Surreal<Any>, entities: &[EntityKey]) -> Result<()> {
 	for entity in entities {
 		db.query(
-			"DELETE _surrealkit_managed_entity \
+			"DELETE __managed_entity \
 			 WHERE kind = $kind AND scope = $scope AND name = $name;",
 		)
 		.bind(("kind", entity.kind.clone()))
@@ -572,27 +571,25 @@ pub async fn replace_managed_entities(
 	active_rollout_id: Option<&str>,
 	state: &str,
 ) -> Result<()> {
-	db.query("DELETE _surrealkit_managed_entity;").await?.check()?;
+	db.query("DELETE __managed_entity;").await?.check()?;
 	upsert_managed_entities(db, entities, active_rollout_id, state).await
 }
 
 pub async fn replace_sync_hashes(db: &Surreal<Any>, files: &[SchemaFile]) -> Result<()> {
-	db.query("DELETE _surrealkit_sync;").await?.check()?;
+	db.query("DELETE __sync;").await?.check()?;
 	for file in files {
-		db.query(
-			"CREATE _surrealkit_sync CONTENT { path: $path, hash: $hash, synced_at: time::now() };",
-		)
-		.bind(("path", file.path.clone()))
-		.bind(("hash", file.hash.clone()))
-		.await?
-		.check()?;
+		db.query("CREATE __sync CONTENT { path: $path, hash: $hash, synced_at: time::now() };")
+			.bind(("path", file.path.clone()))
+			.bind(("hash", file.hash.clone()))
+			.await?
+			.check()?;
 	}
 	Ok(())
 }
 
 pub async fn delete_sync_hashes(db: &Surreal<Any>, paths: &[String]) -> Result<()> {
 	for path in paths {
-		db.query("DELETE _surrealkit_sync WHERE path = $path;")
+		db.query("DELETE __sync WHERE path = $path;")
 			.bind(("path", path.clone()))
 			.await?
 			.check()?;
@@ -860,16 +857,17 @@ fn value_to_expect_string(value: &Value) -> String {
 }
 
 async fn rollout_rows_exist(db: &Surreal<Any>) -> Result<bool> {
-	let mut resp = db.query("SELECT id FROM _surrealkit_rollout LIMIT 1;").await?;
+	let mut resp = db.query("SELECT id FROM __rollout LIMIT 1;").await?;
 	let row: Option<Value> = resp.take(0)?;
 	Ok(row.is_some())
 }
 
 async fn ensure_no_conflicting_active_rollout(db: &Surreal<Any>, rollout_id: &str) -> Result<()> {
 	if let Some(active_id) = load_active_rollout_id(db).await?
-		&& active_id != rollout_id {
-			bail!("rollout '{}' cannot start while rollout '{}' is active", rollout_id, active_id);
-		}
+		&& active_id != rollout_id
+	{
+		bail!("rollout '{}' cannot start while rollout '{}' is active", rollout_id, active_id);
+	}
 	Ok(())
 }
 
@@ -882,8 +880,8 @@ async fn create_rollout_record(
 ) -> Result<()> {
 	let started_at = OffsetDateTime::now_utc().format(&Rfc3339)?;
 	db.query(
-		"DELETE _surrealkit_rollout WHERE id = $id; \
-		 CREATE _surrealkit_rollout CONTENT { \
+		"DELETE __rollout WHERE id = $id; \
+		 CREATE __rollout CONTENT { \
 		 	id: $id, \
 		 	name: $name, \
 		 	manifest_path: $manifest_path, \
@@ -915,7 +913,7 @@ async fn create_rollout_record(
 
 async fn load_rollout_record(db: &Surreal<Any>, rollout_id: &str) -> Result<Option<Value>> {
 	let mut resp = db
-		.query("SELECT * FROM _surrealkit_rollout WHERE id = $id LIMIT 1;")
+		.query("SELECT * FROM __rollout WHERE id = $id LIMIT 1;")
 		.bind(("id", rollout_id.to_string()))
 		.await?;
 	let row: Option<Value> = resp.take(0)?;
@@ -954,7 +952,7 @@ async fn set_rollout_status(
 	completed_at: Option<String>,
 ) -> Result<()> {
 	db.query(
-		"UPDATE _surrealkit_rollout SET \
+		"UPDATE __rollout SET \
 		 	status = $status, \
 		 	last_error = $last_error, \
 		 	completed_at = $completed_at, \
@@ -977,7 +975,7 @@ async fn step_already_completed(
 ) -> Result<bool> {
 	let mut resp = db
 		.query(
-			"SELECT status FROM _surrealkit_rollout_step \
+			"SELECT status FROM __rollout_step \
 			 WHERE rollout_id = $rollout_id AND step_id = $step_id LIMIT 1;",
 		)
 		.bind(("rollout_id", rollout_id.to_string()))
@@ -992,8 +990,8 @@ async fn step_already_completed(
 
 async fn record_step_start(db: &Surreal<Any>, rollout_id: &str, step: &RolloutStep) -> Result<()> {
 	db.query(
-		"DELETE _surrealkit_rollout_step WHERE rollout_id = $rollout_id AND step_id = $step_id; \
-		 CREATE _surrealkit_rollout_step CONTENT { \
+		"DELETE __rollout_step WHERE rollout_id = $rollout_id AND step_id = $step_id; \
+		 CREATE __rollout_step CONTENT { \
 		 	rollout_id: $rollout_id, \
 		 	step_id: $step_id, \
 		 	phase: $phase, \
@@ -1021,7 +1019,7 @@ async fn record_step_complete(
 	step: &RolloutStep,
 ) -> Result<()> {
 	db.query(
-		"UPDATE _surrealkit_rollout_step SET \
+		"UPDATE __rollout_step SET \
 		 	status = 'completed', \
 		 	finished_at = time::now(), \
 		 	error = NONE \
@@ -1041,7 +1039,7 @@ async fn record_step_failure(
 	error: &str,
 ) -> Result<()> {
 	db.query(
-		"UPDATE _surrealkit_rollout_step SET \
+		"UPDATE __rollout_step SET \
 		 	status = 'failed', \
 		 	finished_at = time::now(), \
 		 	error = $error \
@@ -1063,7 +1061,7 @@ fn step_checksum(step: &RolloutStep) -> Result<String> {
 pub async fn acquire_lock(db: &Surreal<Any>, lock_key: &str) -> Result<()> {
 	let owner = std::env::var("SURREALKIT_OWNER").unwrap_or_else(|_| "surrealkit".to_string());
 	db.query(
-		"CREATE ONLY _surrealkit_lock:global CONTENT { \
+		"CREATE ONLY __lock:global CONTENT { \
 		 	key: $key, \
 		 	owner: $owner, \
 		 	created_at: time::now() \
@@ -1077,7 +1075,7 @@ pub async fn acquire_lock(db: &Surreal<Any>, lock_key: &str) -> Result<()> {
 }
 
 pub async fn release_lock(db: &Surreal<Any>, _lock_key: &str) -> Result<()> {
-	db.query("DELETE _surrealkit_lock:global;").await?.check()?;
+	db.query("DELETE __lock:global;").await?.check()?;
 	Ok(())
 }
 
