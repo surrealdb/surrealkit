@@ -17,8 +17,8 @@ serde_json = '1.0'
 toml = '0.8'
 rust_dotenv = '0.1.2'
 sha2 = '0.10'
-surrealdb = { version = '3.0.2', features = ['protocol-http', 'jwks'] }
-surrealdb-types = { version = '3.0.1' }
+surrealdb = { version = '3.0.5', features = ['protocol-http', 'jwks'] }
+surrealdb-types = { version = '3.0.5' }
 time = { version = '0.3', features = ['macros', 'formatting'] }
 tokio = { version = '1.47', features = ['macros', 'rt-multi-thread', 'signal', 'time'] }
 walkdir = '2.5'

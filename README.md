@@ -3,15 +3,11 @@
 [![Crates.io](https://img.shields.io/crates/v/surrealkit.svg)](https://crates.io/crates/surrealkit) [![Documentation](https://docs.rs/surrealkit/badge.svg)](https://docs.rs/surrealkit)
 [![License](https://img.shields.io/badge/license-Unlicense-blue.svg)](https://unlicense.org/)
 
-> EXPERIMENTAL | For SurrealDB v3
-
 Manage SurrealDB schema sync, phased rollouts, seeding, and testing for SurrealDB.
 
 ## Scope
 
 This project manages SurrealDB schema sync, phased rollouts, seed data, testing, and database administration for SurrealDB v3. The rollout path is designed for shared and production-like databases, but should still be treated as experimental until it has broader field validation.
-
-If and when SurrealDB implements first-class tooling to manage schema rollouts, seeding, and testing, SurrealKit will be deprecated in favour of the official SurrealDB tooling but intends to provide seamless transition.
 
 ## Usage
 
