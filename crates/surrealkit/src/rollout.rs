@@ -120,7 +120,7 @@ pub struct LoadedRolloutSpec {
 	pub spec: RolloutSpec,
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ManagedEntityRecord {
 	pub entity: CatalogEntity,
@@ -866,11 +866,10 @@ async fn rollout_rows_exist(db: &Surreal<Any>) -> Result<bool> {
 }
 
 async fn ensure_no_conflicting_active_rollout(db: &Surreal<Any>, rollout_id: &str) -> Result<()> {
-	if let Some(active_id) = load_active_rollout_id(db).await? {
-		if active_id != rollout_id {
+	if let Some(active_id) = load_active_rollout_id(db).await?
+		&& active_id != rollout_id {
 			bail!("rollout '{}' cannot start while rollout '{}' is active", rollout_id, active_id);
 		}
-	}
 	Ok(())
 }
 
@@ -944,7 +943,7 @@ fn verify_rollout_record_matches(row: &Value, rollout: &LoadedRolloutSpec) -> Re
 fn deserialize_entities_field(row: &Value, key: &str) -> Result<Vec<CatalogEntity>> {
 	let value =
 		row.get(key).cloned().ok_or_else(|| anyhow!("missing '{}' on rollout record", key))?;
-	Ok(serde_json::from_value(value).with_context(|| format!("parsing {}", key))?)
+	serde_json::from_value(value).with_context(|| format!("parsing {}", key))
 }
 
 async fn set_rollout_status(

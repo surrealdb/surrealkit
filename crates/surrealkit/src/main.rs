@@ -117,8 +117,8 @@ enum RolloutCommands {
 
 fn load_env() -> DotEnv {
 	// Load .env in CWD if present, ignore missing
-	let env = DotEnv::new("");
-	env
+	
+	DotEnv::new("")
 }
 
 #[tokio::main]

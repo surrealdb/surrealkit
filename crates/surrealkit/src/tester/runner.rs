@@ -193,14 +193,13 @@ impl RunnerContext {
 		let cases_failed = cases.iter().filter(|c| !c.passed).count();
 		let cases_passed = cases_total.saturating_sub(cases_failed);
 
-		if !self.opts.keep_db {
-			if let Err(err) = cleanup_suite_db(&self.cfg, &host, &namespace, &database).await {
+		if !self.opts.keep_db
+			&& let Err(err) = cleanup_suite_db(&self.cfg, &host, &namespace, &database).await {
 				eprintln!(
 					"warning: failed to clean up test db {}/{}: {:#}",
 					namespace, database, err
 				);
 			}
-		}
 
 		Ok(SuiteReport {
 			suite_file: suite.path.to_string_lossy().replace('\\', "/"),
@@ -696,7 +695,7 @@ fn slugify(input: &str) -> String {
 	}
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub fn build_filter_input(opts: &TestOpts) -> FilterInput {
 	FilterInput {
 		suite_pattern: opts.suite.clone(),

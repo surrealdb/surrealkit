@@ -259,11 +259,10 @@ async fn store_sync_hash(db: &Surreal<Any>, path: &str, hash: &str) -> Result<()
 }
 
 async fn detect_shared_db(db: &Surreal<Any>) -> Result<bool> {
-	if let Ok(value) = env::var("SURREALKIT_SHARED_DB") {
-		if let Some(parsed) = parse_bool(&value) {
+	if let Ok(value) = env::var("SURREALKIT_SHARED_DB")
+		&& let Some(parsed) = parse_bool(&value) {
 			return Ok(parsed);
 		}
-	}
 
 	let mut resp =
 		db.query("SELECT value FROM _surrealkit_sync_meta WHERE key = 'shared' LIMIT 1;").await?;
@@ -274,16 +273,14 @@ async fn detect_shared_db(db: &Surreal<Any>) -> Result<bool> {
 }
 
 async fn write_meta_from_env(db: &Surreal<Any>) -> Result<()> {
-	if let Ok(raw_shared) = env::var("SURREALKIT_SHARED_DB") {
-		if let Some(shared) = parse_bool(&raw_shared) {
+	if let Ok(raw_shared) = env::var("SURREALKIT_SHARED_DB")
+		&& let Some(shared) = parse_bool(&raw_shared) {
 			upsert_meta(db, "shared", serde_json::json!(shared)).await?;
 		}
-	}
-	if let Ok(owner) = env::var("SURREALKIT_OWNER") {
-		if !owner.trim().is_empty() {
+	if let Ok(owner) = env::var("SURREALKIT_OWNER")
+		&& !owner.trim().is_empty() {
 			upsert_meta(db, "owner", serde_json::json!(owner)).await?;
 		}
-	}
 	Ok(())
 }
 

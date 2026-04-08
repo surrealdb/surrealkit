@@ -69,8 +69,8 @@ pub async fn connect(cfg: &DbCfg) -> Result<Surreal<Any>> {
 		.with_context(|| format!("Failed connecting to {}", cfg.host))?;
 
 	db.signin(Root {
-		username: cfg.user.to_string(),
-		password: cfg.pass.to_string(),
+		username: cfg.user.clone(),
+		password: cfg.pass.clone(),
 	})
 	.await
 	.context("signin failed")?;

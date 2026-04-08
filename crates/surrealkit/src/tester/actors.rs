@@ -260,11 +260,10 @@ pub fn resolve_string(
 	env_name: Option<&str>,
 	default: Option<&str>,
 ) -> Result<String> {
-	if let Some(value) = literal {
-		if !value.trim().is_empty() {
+	if let Some(value) = literal
+		&& !value.trim().is_empty() {
 			return Ok(value.to_string());
 		}
-	}
 
 	if let Some(key) = env_name {
 		let value = env::var(key).with_context(|| format!("reading env var {}", key))?;
@@ -273,11 +272,10 @@ pub fn resolve_string(
 		}
 	}
 
-	if let Some(value) = default {
-		if !value.trim().is_empty() {
+	if let Some(value) = default
+		&& !value.trim().is_empty() {
 			return Ok(value.to_string());
 		}
-	}
 
 	bail!("required value missing")
 }
@@ -286,6 +284,6 @@ fn required_string(literal: Option<&str>, env_name: Option<&str>, label: String)
 	resolve_string(literal, env_name, None).with_context(|| format!("missing {label}"))
 }
 
-fn some_default<'a>(value: &'a str) -> Option<&'a str> {
+fn some_default(value: &str) -> Option<&str> {
 	Some(value)
 }
