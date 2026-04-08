@@ -1,6 +1,9 @@
+use std::fs;
+use std::path::Path;
+
 use anyhow::{Result, anyhow};
-use std::{fs, path::Path};
-use surrealdb::{Surreal, engine::any::Any};
+use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
 
 use crate::core::{display, exec_surql};
 

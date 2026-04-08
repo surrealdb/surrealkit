@@ -3,14 +3,14 @@ use std::env;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
+use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
 use surrealdb::opt::auth::{Database, Namespace, Record, Root};
-use surrealdb::{Surreal, engine::any::Any};
 use surrealdb_types::SurrealValue;
 
+use super::types::{ActorKind, ActorSpec};
 use crate::config::DbCfg;
 use crate::core::create_surreal_client;
-
-use super::types::{ActorKind, ActorSpec};
 
 #[derive(Debug, Clone)]
 pub struct ActorSession {
@@ -114,7 +114,10 @@ async fn build_session(
 				some_default(cfg.pass()),
 			)?;
 			let token = db
-				.signin(Root { username, password })
+				.signin(Root {
+					username,
+					password,
+				})
 				.await
 				.with_context(|| format!("actor '{name}' root signin failed"))?;
 			Some(token.access.as_insecure_token().to_string())
@@ -217,12 +220,9 @@ async fn build_session(
 		}
 	};
 
-	db.use_ns(&actor_ns)
-		.use_db(&actor_db)
-		.await
-		.with_context(|| {
-			format!("actor '{name}' use_ns/use_db failed for {actor_ns}/{actor_db}")
-		})?;
+	db.use_ns(&actor_ns).use_db(&actor_db).await.with_context(|| {
+		format!("actor '{name}' use_ns/use_db failed for {actor_ns}/{actor_db}")
+	})?;
 
 	if let Some(token) = &access_token {
 		session_headers
@@ -252,9 +252,7 @@ pub fn require_actor<'a>(
 	actors: &'a HashMap<String, ActorSession>,
 	name: &str,
 ) -> Result<&'a ActorSession> {
-	actors
-		.get(name)
-		.ok_or_else(|| anyhow!("actor '{}' not configured", name))
+	actors.get(name).ok_or_else(|| anyhow!("actor '{}' not configured", name))
 }
 
 pub fn resolve_string(

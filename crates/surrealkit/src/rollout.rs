@@ -5,12 +5,14 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use surrealdb::{Surreal, engine::any::Any};
+use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
 use surrealdb_types::SurrealValue;
-use time::{OffsetDateTime, format_description::well_known::Rfc3339, macros::format_description};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
+use time::macros::format_description;
 
-use crate::core::exec_surql;
-use crate::core::sha256_hex;
+use crate::core::{exec_surql, sha256_hex};
 use crate::schema_state::{
 	CATALOG_SNAPSHOT_PATH, CatalogDiff, CatalogEntity, CatalogSnapshot, EntityKey, FileDiff,
 	ROLLOUTS_DIR, SchemaFile, build_catalog_snapshot, collect_schema_files, diff_catalog,
@@ -164,9 +166,8 @@ pub async fn run_plan(opts: RolloutPlanOpts) -> Result<()> {
 
 	let name = opts.name.unwrap_or_else(|| "schema_rollout".to_string());
 	let slug = slugify(&name);
-	let ts = OffsetDateTime::now_utc().format(&format_description!(
-		"[year][month][day][hour][minute][second]"
-	))?;
+	let ts = OffsetDateTime::now_utc()
+		.format(&format_description!("[year][month][day][hour][minute][second]"))?;
 	let rollout_id = format!("{ts}__{slug}");
 	let path = Path::new(ROLLOUTS_DIR).join(format!("{rollout_id}.toml"));
 
@@ -222,10 +223,7 @@ pub async fn run_lint(opts: RolloutExecutionOpts) -> Result<()> {
 			current_hash
 		);
 	}
-	println!(
-		"Rollout {} is valid (checksum {}).",
-		rollout.spec.id, rollout.checksum
-	);
+	println!("Rollout {} is valid (checksum {}).", rollout.spec.id, rollout.checksum);
 	Ok(())
 }
 
@@ -307,21 +305,14 @@ pub async fn run_start(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Result<
 	let source_entities = load_managed_entities(db).await?;
 	let source_catalog = CatalogSnapshot {
 		version: 2,
-		entities: source_entities
-			.iter()
-			.map(|row| row.entity.clone())
-			.collect(),
+		entities: source_entities.iter().map(|row| row.entity.clone()).collect(),
 	};
 
 	acquire_lock(db, "global").await?;
 	let result = async {
 		ensure_no_conflicting_active_rollout(db, &rollout.spec.id).await?;
 		let record = load_rollout_record(db, &rollout.spec.id).await?;
-		match record
-			.as_ref()
-			.and_then(|row| string_field(row, "status"))
-			.as_deref()
-		{
+		match record.as_ref().and_then(|row| string_field(row, "status")).as_deref() {
 			Some("completed") => bail!("rollout '{}' is already completed", rollout.spec.id),
 			Some("rolled_back") => {
 				bail!("rollout '{}' has already been rolled back", rollout.spec.id)
@@ -342,14 +333,7 @@ pub async fn run_start(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Result<
 			.await?;
 		}
 
-		set_rollout_status(
-			db,
-			&rollout.spec.id,
-			RolloutStatus::RunningStart,
-			None,
-			None,
-		)
-		.await?;
+		set_rollout_status(db, &rollout.spec.id, RolloutStatus::RunningStart, None, None).await?;
 		if let Err(err) = execute_phase(db, &rollout, RolloutPhase::Start).await {
 			set_rollout_status(
 				db,
@@ -361,14 +345,8 @@ pub async fn run_start(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Result<
 			.await?;
 			return Err(err);
 		}
-		set_rollout_status(
-			db,
-			&rollout.spec.id,
-			RolloutStatus::ReadyToComplete,
-			None,
-			None,
-		)
-		.await?;
+		set_rollout_status(db, &rollout.spec.id, RolloutStatus::ReadyToComplete, None, None)
+			.await?;
 		println!("Rollout {} is ready to complete.", rollout.spec.id);
 		Ok(())
 	}
@@ -393,22 +371,14 @@ pub async fn run_complete(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Resu
 		verify_rollout_record_matches(&row, &rollout)?;
 		match string_field(&row, "status").as_deref() {
 			Some("ready_to_complete") | Some("running_complete") | Some("failed") => {}
-			Some(other) => bail!(
-				"rollout '{}' is not ready to complete (status={})",
-				rollout.spec.id,
-				other
-			),
+			Some(other) => {
+				bail!("rollout '{}' is not ready to complete (status={})", rollout.spec.id, other)
+			}
 			None => bail!("rollout '{}' has no status", rollout.spec.id),
 		}
 
-		set_rollout_status(
-			db,
-			&rollout.spec.id,
-			RolloutStatus::RunningComplete,
-			None,
-			None,
-		)
-		.await?;
+		set_rollout_status(db, &rollout.spec.id, RolloutStatus::RunningComplete, None, None)
+			.await?;
 		if let Err(err) = execute_phase(db, &rollout, RolloutPhase::Complete).await {
 			set_rollout_status(
 				db,
@@ -462,14 +432,8 @@ pub async fn run_rollback(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Resu
 			_ => {}
 		}
 
-		set_rollout_status(
-			db,
-			&rollout.spec.id,
-			RolloutStatus::RunningRollback,
-			None,
-			None,
-		)
-		.await?;
+		set_rollout_status(db, &rollout.spec.id, RolloutStatus::RunningRollback, None, None)
+			.await?;
 		if let Err(err) = execute_phase(db, &rollout, RolloutPhase::Rollback).await {
 			set_rollout_status(
 				db,
@@ -530,14 +494,9 @@ pub async fn load_managed_entities(db: &Surreal<Any>) -> Result<Vec<ManagedEntit
 		let source_path = string_field_req(&row, "source_path")?;
 		let statement_hash = string_field_req(&row, "statement_hash")?;
 		let file_hash = string_field_req(&row, "file_hash")?;
-		let scope = row
-			.get("scope")
-			.and_then(|value| value.as_str())
-			.map(str::to_string);
-		let active_rollout_id = row
-			.get("active_rollout_id")
-			.and_then(|value| value.as_str())
-			.map(str::to_string);
+		let scope = row.get("scope").and_then(|value| value.as_str()).map(str::to_string);
+		let active_rollout_id =
+			row.get("active_rollout_id").and_then(|value| value.as_str()).map(str::to_string);
 		let state = string_field(&row, "state").unwrap_or_else(|| "active".to_string());
 		out.push(ManagedEntityRecord {
 			entity: CatalogEntity {
@@ -613,9 +572,7 @@ pub async fn replace_managed_entities(
 	active_rollout_id: Option<&str>,
 	state: &str,
 ) -> Result<()> {
-	db.query("DELETE _surrealkit_managed_entity;")
-		.await?
-		.check()?;
+	db.query("DELETE _surrealkit_managed_entity;").await?.check()?;
 	upsert_managed_entities(db, entities, active_rollout_id, state).await
 }
 
@@ -682,11 +639,8 @@ fn build_rollout_spec(
 		});
 	}
 
-	let removed_entities: Vec<EntityKey> = catalog_diff
-		.removed
-		.iter()
-		.map(CatalogEntity::key)
-		.collect();
+	let removed_entities: Vec<EntityKey> =
+		catalog_diff.removed.iter().map(CatalogEntity::key).collect();
 	if !removed_entities.is_empty() {
 		steps.push(RolloutStep {
 			id: "remove_legacy_entities".to_string(),
@@ -726,22 +680,12 @@ Author a manual rollout manifest for non-additive changes.",
 		);
 	}
 
-	let removed_by_scope: BTreeSet<(String, Option<String>)> = diff
-		.removed
-		.iter()
-		.map(|entity| (entity.kind.clone(), entity.scope.clone()))
-		.collect();
-	let added_by_scope: BTreeSet<(String, Option<String>)> = diff
-		.added
-		.iter()
-		.map(|entity| (entity.kind.clone(), entity.scope.clone()))
-		.collect();
+	let removed_by_scope: BTreeSet<(String, Option<String>)> =
+		diff.removed.iter().map(|entity| (entity.kind.clone(), entity.scope.clone())).collect();
+	let added_by_scope: BTreeSet<(String, Option<String>)> =
+		diff.added.iter().map(|entity| (entity.kind.clone(), entity.scope.clone())).collect();
 
-	if removed_by_scope
-		.intersection(&added_by_scope)
-		.next()
-		.is_some()
-	{
+	if removed_by_scope.intersection(&added_by_scope).next().is_some() {
 		bail!(
 			"automatic rollout planning detected add/remove changes in the same scope. \
 Author a manual rollout manifest with explicit renames/backfill steps."
@@ -752,12 +696,8 @@ Author a manual rollout manifest with explicit renames/backfill steps."
 }
 
 fn changed_files(files: &[SchemaFile], diff: &FileDiff) -> Vec<String> {
-	let changed: BTreeSet<&str> = diff
-		.added
-		.iter()
-		.chain(diff.modified.iter())
-		.map(String::as_str)
-		.collect();
+	let changed: BTreeSet<&str> =
+		diff.added.iter().chain(diff.modified.iter()).map(String::as_str).collect();
 	let mut out: Vec<String> = files
 		.iter()
 		.filter(|file| changed.contains(file.path.as_str()))
@@ -881,10 +821,7 @@ async fn execute_step(db: &Surreal<Any>, step: &RolloutStep) -> Result<()> {
 		}
 		RolloutStepKind::AssertSql => {
 			let sql = step.sql.as_deref().ok_or_else(|| anyhow!("missing sql"))?;
-			let expect = step
-				.expect
-				.as_deref()
-				.ok_or_else(|| anyhow!("missing expect"))?;
+			let expect = step.expect.as_deref().ok_or_else(|| anyhow!("missing expect"))?;
 			let actual = execute_sql_value(db, sql).await?;
 			if value_to_expect_string(&actual) != expect.trim() {
 				bail!(
@@ -923,9 +860,7 @@ fn value_to_expect_string(value: &Value) -> String {
 }
 
 async fn rollout_rows_exist(db: &Surreal<Any>) -> Result<bool> {
-	let mut resp = db
-		.query("SELECT id FROM _surrealkit_rollout LIMIT 1;")
-		.await?;
+	let mut resp = db.query("SELECT id FROM _surrealkit_rollout LIMIT 1;").await?;
 	let row: Option<Value> = resp.take(0)?;
 	Ok(row.is_some())
 }
@@ -933,11 +868,7 @@ async fn rollout_rows_exist(db: &Surreal<Any>) -> Result<bool> {
 async fn ensure_no_conflicting_active_rollout(db: &Surreal<Any>, rollout_id: &str) -> Result<()> {
 	if let Some(active_id) = load_active_rollout_id(db).await? {
 		if active_id != rollout_id {
-			bail!(
-				"rollout '{}' cannot start while rollout '{}' is active",
-				rollout_id,
-				active_id
-			);
+			bail!("rollout '{}' cannot start while rollout '{}' is active", rollout_id, active_id);
 		}
 	}
 	Ok(())
@@ -972,14 +903,8 @@ async fn create_rollout_record(
 	.bind(("name", rollout.spec.name.clone()))
 	.bind(("manifest_path", rollout.path.to_string_lossy().to_string()))
 	.bind(("manifest_checksum", rollout.checksum.clone()))
-	.bind((
-		"source_schema_hash",
-		rollout.spec.source_schema_hash.clone(),
-	))
-	.bind((
-		"target_schema_hash",
-		rollout.spec.target_schema_hash.clone(),
-	))
+	.bind(("source_schema_hash", rollout.spec.source_schema_hash.clone()))
+	.bind(("target_schema_hash", rollout.spec.target_schema_hash.clone()))
 	.bind(("status", status.as_str().to_string()))
 	.bind(("source_entities", serde_json::to_value(source_entities)?))
 	.bind(("target_entities", serde_json::to_value(target_entities)?))
@@ -1017,10 +942,8 @@ fn verify_rollout_record_matches(row: &Value, rollout: &LoadedRolloutSpec) -> Re
 }
 
 fn deserialize_entities_field(row: &Value, key: &str) -> Result<Vec<CatalogEntity>> {
-	let value = row
-		.get(key)
-		.cloned()
-		.ok_or_else(|| anyhow!("missing '{}' on rollout record", key))?;
+	let value =
+		row.get(key).cloned().ok_or_else(|| anyhow!("missing '{}' on rollout record", key))?;
 	Ok(serde_json::from_value(value).with_context(|| format!("parsing {}", key))?)
 }
 
@@ -1063,9 +986,7 @@ async fn step_already_completed(
 		.await?;
 	let row: Option<Value> = resp.take(0)?;
 	Ok(matches!(
-		row.as_ref()
-			.and_then(|value| string_field(value, "status"))
-			.as_deref(),
+		row.as_ref().and_then(|value| string_field(value, "status")).as_deref(),
 		Some("completed")
 	))
 }
@@ -1183,9 +1104,7 @@ fn slugify(input: &str) -> String {
 }
 
 fn string_field(row: &Value, key: &str) -> Option<String> {
-	row.get(key)
-		.and_then(|value| value.as_str())
-		.map(str::to_string)
+	row.get(key).and_then(|value| value.as_str()).map(str::to_string)
 }
 
 fn string_field_req(row: &Value, key: &str) -> Result<String> {
@@ -1280,10 +1199,8 @@ mod tests {
 
 		assert_eq!(spec.steps.len(), 3);
 		assert!(
-			spec.steps
-				.iter()
-				.any(|step| step.phase == RolloutPhase::Start
-					&& step.kind == RolloutStepKind::ApplySchema)
+			spec.steps.iter().any(|step| step.phase == RolloutPhase::Start
+				&& step.kind == RolloutStepKind::ApplySchema)
 		);
 		assert!(spec.steps.iter().any(|step| {
 			step.phase == RolloutPhase::Rollback && step.kind == RolloutStepKind::RemoveEntities

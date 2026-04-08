@@ -10,10 +10,9 @@ mod types;
 use std::env;
 
 use anyhow::{Result, bail};
+pub use types::TestOpts;
 
 use crate::config::DbCfg;
-
-pub use types::TestOpts;
 
 pub async fn run_test(opts: TestOpts) -> Result<()> {
 	let cfg = DbCfg::from_env(&rust_dotenv::dotenv::DotEnv::new(""))?;
@@ -56,9 +55,7 @@ fn resolve_timeout_ms(opts: &TestOpts, global: &types::GlobalTestConfig) -> u64 
 	opts.timeout_ms
 		.or(global.defaults.timeout_ms)
 		.or_else(|| {
-			env::var("SURREALKIT_TEST_TIMEOUT_MS")
-				.ok()
-				.and_then(|raw| raw.parse::<u64>().ok())
+			env::var("SURREALKIT_TEST_TIMEOUT_MS").ok().and_then(|raw| raw.parse::<u64>().ok())
 		})
 		.unwrap_or(10_000)
 }

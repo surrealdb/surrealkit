@@ -1,10 +1,10 @@
-use sha2::{Digest, Sha256};
 use std::path::Path;
-use surrealdb::{
-	Surreal,
-	engine::any::{Any, connect},
-	opt::{Config, capabilities::Capabilities},
-};
+
+use sha2::{Digest, Sha256};
+use surrealdb::Surreal;
+use surrealdb::engine::any::{Any, connect};
+use surrealdb::opt::Config;
+use surrealdb::opt::capabilities::Capabilities;
 
 pub async fn create_surreal_client(address: &String) -> Result<Surreal<Any>, surrealdb::Error> {
 	let config =

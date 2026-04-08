@@ -7,10 +7,7 @@ use super::types::RunReport;
 
 pub fn print_human_report(report: &RunReport) {
 	println!("Test run summary:");
-	println!(
-		"  suites: {} total, {} failed",
-		report.suites_total, report.suites_failed
-	);
+	println!("  suites: {} total, {} failed", report.suites_total, report.suites_failed);
 	println!(
 		"  cases: {} total, {} passed, {} failed",
 		report.cases_total, report.cases_passed, report.cases_failed

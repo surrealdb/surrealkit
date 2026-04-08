@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use rust_dotenv::dotenv::DotEnv;
+use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
+use surrealdb::opt::auth::Root;
 
 use crate::core::create_surreal_client;
-use surrealdb::{Surreal, engine::any::Any, opt::auth::Root};
 
 #[derive(Debug, Clone)]
 pub struct DbCfg {
@@ -22,21 +24,14 @@ impl DbCfg {
 			.get_var("PUBLIC_DATABASE_HOST".to_string())
 			.unwrap_or(String::from("http://localhost:8000"));
 
-		let db = dotenv
-			.get_var("PUBLIC_DATABASE_NAME".to_string())
-			.unwrap_or(String::from("test"));
+		let db = dotenv.get_var("PUBLIC_DATABASE_NAME".to_string()).unwrap_or(String::from("test"));
 
-		let ns = dotenv
-			.get_var("PUBLIC_DATABASE_NAMESPACE".to_string())
-			.unwrap_or(String::from("db"));
+		let ns =
+			dotenv.get_var("PUBLIC_DATABASE_NAMESPACE".to_string()).unwrap_or(String::from("db"));
 
-		let user = dotenv
-			.get_var("DATABASE_USER".to_string())
-			.unwrap_or(String::from("root"));
+		let user = dotenv.get_var("DATABASE_USER".to_string()).unwrap_or(String::from("root"));
 
-		let pass = dotenv
-			.get_var("DATABASE_PASSWORD".to_string())
-			.unwrap_or(String::from("root"));
+		let pass = dotenv.get_var("DATABASE_PASSWORD".to_string()).unwrap_or(String::from("root"));
 
 		Ok(Self {
 			host,

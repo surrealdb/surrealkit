@@ -2,7 +2,8 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use rust_dotenv::dotenv::DotEnv;
-use surrealdb::{Surreal, engine::any::Any};
+use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
 
 mod config;
 mod core;
@@ -14,8 +15,9 @@ mod setup;
 mod sync;
 mod tester;
 
-use config::{DbCfg, connect};
 use core::exec_surql;
+
+use config::{DbCfg, connect};
 use rollout::{RolloutExecutionOpts, RolloutPlanOpts};
 use setup::run_setup;
 use sync::SyncOpts;
@@ -152,15 +154,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			)
 			.await?;
 		}
-		Commands::Rollout { command } => match command {
+		Commands::Rollout {
+			command,
+		} => match command {
 			RolloutCommands::Baseline => {
 				let db = connect_from_env(&env).await?;
 				rollout::run_baseline(&db).await?;
 			}
-			RolloutCommands::Plan { name, dry_run } => {
-				rollout::run_plan(RolloutPlanOpts { name, dry_run }).await?;
+			RolloutCommands::Plan {
+				name,
+				dry_run,
+			} => {
+				rollout::run_plan(RolloutPlanOpts {
+					name,
+					dry_run,
+				})
+				.await?;
 			}
-			RolloutCommands::Start { target } => {
+			RolloutCommands::Start {
+				target,
+			} => {
 				let db = connect_from_env(&env).await?;
 				rollout::run_start(
 					&db,
@@ -170,7 +183,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 				)
 				.await?;
 			}
-			RolloutCommands::Complete { target } => {
+			RolloutCommands::Complete {
+				target,
+			} => {
 				let db = connect_from_env(&env).await?;
 				rollout::run_complete(
 					&db,
@@ -180,7 +195,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 				)
 				.await?;
 			}
-			RolloutCommands::Rollback { target } => {
+			RolloutCommands::Rollback {
+				target,
+			} => {
 				let db = connect_from_env(&env).await?;
 				rollout::run_rollback(
 					&db,
@@ -190,11 +207,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 				)
 				.await?;
 			}
-			RolloutCommands::Status { target } => {
+			RolloutCommands::Status {
+				target,
+			} => {
 				let db = connect_from_env(&env).await?;
 				rollout::run_status(&db, target).await?;
 			}
-			RolloutCommands::Lint { target } => {
+			RolloutCommands::Lint {
+				target,
+			} => {
 				rollout::run_lint(RolloutExecutionOpts {
 					selector: Some(target),
 				})
@@ -209,7 +230,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			let db = connect_from_env(&env).await?;
 			rollout::run_status(&db, None).await?;
 		}
-		Commands::Apply { path } => {
+		Commands::Apply {
+			path,
+		} => {
 			let db = connect_from_env(&env).await?;
 			let sql = std::fs::read_to_string(&path)?;
 			exec_surql(&db, &sql).await?;

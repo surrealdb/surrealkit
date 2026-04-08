@@ -169,16 +169,10 @@ pub fn save_catalog_snapshot(snapshot: &CatalogSnapshot) -> Result<()> {
 }
 
 pub fn diff_schema(old: &SchemaSnapshot, new: &SchemaSnapshot) -> FileDiff {
-	let old_map: BTreeMap<&str, &str> = old
-		.files
-		.iter()
-		.map(|f| (f.path.as_str(), f.hash.as_str()))
-		.collect();
-	let new_map: BTreeMap<&str, &str> = new
-		.files
-		.iter()
-		.map(|f| (f.path.as_str(), f.hash.as_str()))
-		.collect();
+	let old_map: BTreeMap<&str, &str> =
+		old.files.iter().map(|f| (f.path.as_str(), f.hash.as_str())).collect();
+	let new_map: BTreeMap<&str, &str> =
+		new.files.iter().map(|f| (f.path.as_str(), f.hash.as_str())).collect();
 
 	let mut added = Vec::new();
 	let mut modified = Vec::new();
@@ -257,12 +251,7 @@ pub fn parse_schema_statements(file: &SchemaFile) -> Result<Vec<CatalogEntity>> 
 }
 
 pub fn catalog_snapshot_to_map(snapshot: &CatalogSnapshot) -> BTreeMap<EntityKey, CatalogEntity> {
-	snapshot
-		.entities
-		.iter()
-		.cloned()
-		.map(|entity| (entity.key(), entity))
-		.collect()
+	snapshot.entities.iter().cloned().map(|entity| (entity.key(), entity)).collect()
 }
 
 pub fn diff_catalog(old: &CatalogSnapshot, new: &CatalogSnapshot) -> CatalogDiff {
@@ -302,21 +291,15 @@ pub fn render_remove_sql(entities: &[EntityKey], api_supported: bool) -> Result<
 	let mut out = Vec::new();
 	for entity in ordered {
 		let stmt = match entity.kind.as_str() {
-			"field" => format!(
-				"REMOVE FIELD {} ON {};",
-				entity.name,
-				scope_or_err(&entity, "FIELD")?
-			),
-			"event" => format!(
-				"REMOVE EVENT {} ON {};",
-				entity.name,
-				scope_or_err(&entity, "EVENT")?
-			),
-			"index" => format!(
-				"REMOVE INDEX {} ON {};",
-				entity.name,
-				scope_or_err(&entity, "INDEX")?
-			),
+			"field" => {
+				format!("REMOVE FIELD {} ON {};", entity.name, scope_or_err(&entity, "FIELD")?)
+			}
+			"event" => {
+				format!("REMOVE EVENT {} ON {};", entity.name, scope_or_err(&entity, "EVENT")?)
+			}
+			"index" => {
+				format!("REMOVE INDEX {} ON {};", entity.name, scope_or_err(&entity, "INDEX")?)
+			}
 			"table" => format!("REMOVE TABLE {};", entity.name),
 			"function" => format!("REMOVE FUNCTION {};", entity.name),
 			"param" => format!("REMOVE PARAM {};", entity.name),
@@ -349,11 +332,7 @@ Use a manual migration or upgrade server support.",
 
 fn scope_or_err(entity: &EntityKey, object: &str) -> Result<String> {
 	entity.scope.clone().ok_or_else(|| {
-		anyhow!(
-			"cannot render REMOVE {} for '{}' because scope is missing",
-			object,
-			entity.name
-		)
+		anyhow!("cannot render REMOVE {} for '{}' because scope is missing", object, entity.name)
 	})
 }
 
@@ -371,20 +350,12 @@ fn removal_sort_key(entity: &EntityKey) -> (usize, Option<String>, String, Strin
 		"table" => 9,
 		_ => 10,
 	};
-	(
-		weight,
-		entity.scope.clone(),
-		entity.kind.clone(),
-		entity.name.clone(),
-	)
+	(weight, entity.scope.clone(), entity.kind.clone(), entity.name.clone())
 }
 
 fn normalize_path(path: &Path) -> Result<String> {
 	let cwd = std::env::current_dir().context("resolving current directory")?;
-	let rel = path
-		.strip_prefix(&cwd)
-		.or_else(|_| path.strip_prefix("."))
-		.unwrap_or(path);
+	let rel = path.strip_prefix(&cwd).or_else(|_| path.strip_prefix(".")).unwrap_or(path);
 	Ok(rel.to_string_lossy().replace('\\', "/"))
 }
 
@@ -650,12 +621,7 @@ mod tests {
 				&& entity.name == "name"
 				&& entity.source_path == "database/schema/root.surql"
 		}));
-		assert!(
-			catalog
-				.entities
-				.iter()
-				.any(|entity| entity.kind == "api" && entity.name == "v1")
-		);
+		assert!(catalog.entities.iter().any(|entity| entity.kind == "api" && entity.name == "v1"));
 	}
 
 	#[test]
@@ -681,10 +647,7 @@ mod tests {
 		let supported = render_remove_sql(&entities, true).expect("api should be supported");
 		assert_eq!(supported[0], "REMOVE FIELD nickname ON person;");
 		assert!(supported.iter().any(|line| line == "REMOVE API v1;"));
-		assert_eq!(
-			supported.last().expect("table removal"),
-			"REMOVE TABLE person;"
-		);
+		assert_eq!(supported.last().expect("table removal"), "REMOVE TABLE person;");
 
 		let unsupported = render_remove_sql(&entities, false);
 		assert!(unsupported.is_err());

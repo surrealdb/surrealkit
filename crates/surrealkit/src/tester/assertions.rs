@@ -98,12 +98,7 @@ pub fn assert_json_value_with_context(
 
 	if let Some(pattern) = &assertion.regex {
 		let re = Regex::new(pattern).map_err(|e| {
-			anyhow!(
-				"invalid regex '{}' for path '{}': {}",
-				pattern,
-				assertion.path,
-				e
-			)
+			anyhow!("invalid regex '{}' for path '{}': {}", pattern, assertion.path, e)
 		})?;
 		let text = value_to_text(value);
 		if !re.is_match(&text) {
@@ -189,12 +184,7 @@ pub fn assert_header_value(
 
 	if let Some(pattern) = &assertion.regex {
 		let re = Regex::new(pattern).map_err(|e| {
-			anyhow!(
-				"invalid header regex '{}' for '{}': {}",
-				pattern,
-				assertion.name,
-				e
-			)
+			anyhow!("invalid header regex '{}' for '{}': {}", pattern, assertion.name, e)
 		})?;
 		if !re.is_match(&value) {
 			return Ok(AssertionReport {

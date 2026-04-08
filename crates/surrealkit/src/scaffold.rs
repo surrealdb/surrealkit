@@ -1,5 +1,7 @@
+use std::fs;
+use std::path::Path;
+
 use anyhow::{Context, Result};
-use std::{fs, path::Path};
 
 pub fn scaffold() -> Result<()> {
 	let database_dir = Path::new("database");

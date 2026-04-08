@@ -3,8 +3,10 @@ use std::env;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
-use surrealdb::{Surreal, engine::any::Any};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::core::exec_surql;
 use crate::rollout::{
@@ -70,11 +72,8 @@ async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> 
 	}
 
 	let file_paths: BTreeSet<String> = files.iter().map(|file| file.path.clone()).collect();
-	let removed_paths: Vec<String> = tracked
-		.keys()
-		.filter(|path| !file_paths.contains(*path))
-		.cloned()
-		.collect();
+	let removed_paths: Vec<String> =
+		tracked.keys().filter(|path| !file_paths.contains(*path)).cloned().collect();
 
 	let mut changed_count = 0usize;
 	let mut apply_errors = 0usize;
@@ -131,10 +130,8 @@ async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> 
 		})
 		.cloned()
 		.collect();
-	let stale_entities: Vec<EntityKey> = stale_records
-		.iter()
-		.map(|record| record.entity.key())
-		.collect();
+	let stale_entities: Vec<EntityKey> =
+		stale_records.iter().map(|record| record.entity.key()).collect();
 	let stale_count = stale_entities.len();
 	let destructive_change = stale_count > 0;
 
@@ -164,10 +161,7 @@ async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> 
 		let remove_sql = render_remove_sql(&stale_entities, true)?;
 		if opts.dry_run {
 			if !watch_mode {
-				println!(
-					"DRY RUN: would prune {} stale managed entities",
-					remove_sql.len()
-				);
+				println!("DRY RUN: would prune {} stale managed entities", remove_sql.len());
 				for stmt in &remove_sql {
 					println!("  {}", stmt);
 				}
@@ -271,15 +265,11 @@ async fn detect_shared_db(db: &Surreal<Any>) -> Result<bool> {
 		}
 	}
 
-	let mut resp = db
-		.query("SELECT value FROM _surrealkit_sync_meta WHERE key = 'shared' LIMIT 1;")
-		.await?;
+	let mut resp =
+		db.query("SELECT value FROM _surrealkit_sync_meta WHERE key = 'shared' LIMIT 1;").await?;
 	let row: Option<serde_json::Value> = resp.take(0)?;
-	let shared = row
-		.as_ref()
-		.and_then(|v| v.get("value"))
-		.and_then(|v| v.as_bool())
-		.unwrap_or(false);
+	let shared =
+		row.as_ref().and_then(|v| v.get("value")).and_then(|v| v.as_bool()).unwrap_or(false);
 	Ok(shared)
 }
 
