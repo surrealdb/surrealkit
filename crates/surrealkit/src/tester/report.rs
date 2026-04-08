@@ -23,11 +23,11 @@ pub fn print_human_report(report: &RunReport) {
 			suite.cases_passed,
 			suite.cases_failed
 		);
-		for case in &suite.cases {
+		for (index, case) in suite.cases.iter().enumerate() {
 			if case.passed {
 				continue;
 			}
-			println!("  FAIL {} ({})", case.name, case.kind);
+			println!("  FAIL case #{}", index + 1);
 			for assertion in &case.assertions {
 				if assertion.passed {
 					continue;
