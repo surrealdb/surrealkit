@@ -27,17 +27,12 @@ pub fn print_human_report(report: &RunReport) {
 			if case.passed {
 				continue;
 			}
-			println!(
-				"  FAIL {} ({}) {}",
-				case.name,
-				case.kind,
-				case.message.as_deref().unwrap_or("unknown failure")
-			);
+			println!("  FAIL {} ({})", case.name, case.kind);
 			for assertion in &case.assertions {
 				if assertion.passed {
 					continue;
 				}
-				println!("    - {}: {}", assertion.name, assertion.message);
+				println!("    - {} (failed)", assertion.name);
 			}
 		}
 	}
