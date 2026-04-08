@@ -3,7 +3,7 @@ name: Publish Vite Plugin
 on:
   push:
     tags:
-      - 'vite-plugin-v*'
+      - "vite-plugin-v*"
   workflow_dispatch:
 
 permissions:
@@ -20,10 +20,10 @@ jobs:
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
       - name: Setup Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
         with:
           node-version: 22
           registry-url: https://registry.npmjs.org
