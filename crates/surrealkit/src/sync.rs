@@ -232,13 +232,19 @@ async fn prune_managed_entities(db: &Surreal<Any>, stale_entities: &[EntityKey])
 }
 
 async fn load_sync_hashes(db: &Surreal<Any>) -> Result<BTreeMap<String, String>> {
-	let mut resp = db.query("SELECT path, hash FROM _surrealkit_sync;").await?;
+	let mut resp = db
+		.query("SELECT key, val FROM __entity WHERE ns = 'sync';")
+		.await?;
 	let rows: Vec<serde_json::Value> = resp.take(0)?;
 
 	let mut out = BTreeMap::new();
 	for row in rows {
-		let path = row.get("path").and_then(|v| v.as_str()).map(str::to_string);
-		let hash = row.get("hash").and_then(|v| v.as_str()).map(str::to_string);
+		let path = row.get("key").and_then(|v| v.as_str()).map(str::to_string);
+		let hash = row
+			.get("val")
+			.and_then(|v| v.get("hash"))
+			.and_then(|v| v.as_str())
+			.map(str::to_string);
 		if let (Some(path), Some(hash)) = (path, hash) {
 			out.insert(path, hash);
 		}
@@ -248,8 +254,8 @@ async fn load_sync_hashes(db: &Surreal<Any>) -> Result<BTreeMap<String, String>>
 
 async fn store_sync_hash(db: &Surreal<Any>, path: &str, hash: &str) -> Result<()> {
 	db.query(
-		"DELETE _surrealkit_sync WHERE path = $path; \
-		 CREATE _surrealkit_sync CONTENT { path: $path, hash: $hash, synced_at: time::now() };",
+		"DELETE __entity WHERE ns = 'sync' AND key = $path; \
+		 CREATE __entity CONTENT { ns: 'sync', key: $path, val: { hash: $hash }, updated_at: time::now() };",
 	)
 	.bind(("path", path.to_string()))
 	.bind(("hash", hash.to_string()))
@@ -264,11 +270,12 @@ async fn detect_shared_db(db: &Surreal<Any>) -> Result<bool> {
 			return Ok(parsed);
 		}
 
-	let mut resp =
-		db.query("SELECT value FROM _surrealkit_sync_meta WHERE key = 'shared' LIMIT 1;").await?;
+	let mut resp = db
+		.query("SELECT val FROM __entity WHERE ns = 'meta' AND key = 'shared' LIMIT 1;")
+		.await?;
 	let row: Option<serde_json::Value> = resp.take(0)?;
 	let shared =
-		row.as_ref().and_then(|v| v.get("value")).and_then(|v| v.as_bool()).unwrap_or(false);
+		row.as_ref().and_then(|v| v.get("val")).and_then(|v| v.as_bool()).unwrap_or(false);
 	Ok(shared)
 }
 
@@ -291,8 +298,8 @@ async fn store_last_sync_meta(db: &Surreal<Any>) -> Result<()> {
 
 async fn upsert_meta(db: &Surreal<Any>, key: &str, value: serde_json::Value) -> Result<()> {
 	db.query(
-		"DELETE _surrealkit_sync_meta WHERE key = $key; \
-		 CREATE _surrealkit_sync_meta CONTENT { key: $key, value: $value, updated_at: time::now() };",
+		"DELETE __entity WHERE ns = 'meta' AND key = $key; \
+		 CREATE __entity CONTENT { ns: 'meta', key: $key, val: $value, updated_at: time::now() };",
 	)
 	.bind(("key", key.to_string()))
 	.bind(("value", value))
