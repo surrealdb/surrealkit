@@ -1,44 +1,44 @@
 name: Publish Vite Plugin
 
 on:
-  push:
-    tags:
-      - "vite-plugin-v*"
-  workflow_dispatch:
+    push:
+        tags:
+            - "vite-plugin-v*"
+    workflow_dispatch:
 
 permissions:
-  contents: read
-  id-token: write
+    contents: read
+    id-token: write
 
 jobs:
-  publish:
-    name: Publish vite-plugin-surrealkit to npm
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: packages/vite-plugin-surrealkit
+    publish:
+        name: Publish vite-plugin-surrealkit to npm
+        runs-on: ubuntu-latest
+        defaults:
+            run:
+                working-directory: packages/vite-plugin-surrealkit
 
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
-      - name: Setup Node.js
-        uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
-        with:
-          node-version: 22
-          registry-url: https://registry.npmjs.org
+            - name: Setup Node.js
+              uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+              with:
+                  node-version: 22
+                  registry-url: https://registry.npmjs.org
 
-      - name: Install dependencies
-        run: npm install
+            - name: Install dependencies
+              run: npm install
 
-      - name: Typecheck
-        run: npm run typecheck
+            - name: Typecheck
+              run: npm run typecheck
 
-      - name: Build
-        run: npm run build
+            - name: Build
+              run: npm run build
 
-      - name: Publish package
-        if: startsWith(github.ref, 'refs/tags/')
-        run: npm publish --provenance --access public
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+            - name: Publish package
+              if: startsWith(github.ref, 'refs/tags/')
+              run: npm publish --provenance --access public
+              env:
+                  NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

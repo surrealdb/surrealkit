@@ -1,35 +1,36 @@
 name: Publish Crate
 
 on:
-  push:
-    tags:
-      - "v*"
-  workflow_dispatch:
+    push:
+        tags:
+            - "v*"
+    workflow_dispatch:
 
 jobs:
-  publish:
-    name: Publish surrealkit to crates.io
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    publish:
+        name: Publish surrealkit to crates.io
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
-        with:
-          toolchain: 1.94.0
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+              with:
+                  toolchain: 1.94.0
+                  components: clippy, rustfmt
 
-      - name: Lint
-        run: cargo clippy
+            - name: Lint
+              run: cargo clippy
 
-      - name: Format
-        run: cargo +nightly fmt
+            - name: Format
+              run: cargo +nightly fmt
 
-      - name: Test crate
-        run: cargo test --manifest-path crates/surrealkit/Cargo.toml --all-features --locked
+            - name: Test crate
+              run: cargo test --manifest-path crates/surrealkit/Cargo.toml --all-features --locked
 
-      - name: Publish crate
-        if: startsWith(github.ref, 'refs/tags/')
-        run: cargo publish --manifest-path crates/surrealkit/Cargo.toml --locked
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+            - name: Publish crate
+              if: startsWith(github.ref, 'refs/tags/')
+              run: cargo publish --manifest-path crates/surrealkit/Cargo.toml --locked
+              env:
+                  CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
