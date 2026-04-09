@@ -5,10 +5,7 @@ pub fn apply_filters(mut suites: Vec<LoadedSuite>, filters: &FilterInput) -> Vec
 
 	for suite in &mut suites {
 		suite.spec.cases.retain(|case| {
-			match_case(
-				case.name.as_str(),
-				filters.case_pattern.as_deref().unwrap_or("*"),
-			)
+			match_case(case.name.as_str(), filters.case_pattern.as_deref().unwrap_or("*"))
 		});
 
 		if !filters.tags.is_empty() {
@@ -26,11 +23,8 @@ pub fn apply_filters(mut suites: Vec<LoadedSuite>, filters: &FilterInput) -> Vec
 }
 
 fn match_suite(suite: &LoadedSuite, pattern: &str) -> bool {
-	let suite_name = suite
-		.spec
-		.name
-		.clone()
-		.unwrap_or_else(|| suite.path.to_string_lossy().to_string());
+	let suite_name =
+		suite.spec.name.clone().unwrap_or_else(|| suite.path.to_string_lossy().to_string());
 	let suite_path = suite.path.to_string_lossy().to_string();
 	glob_match(pattern, &suite_name) || glob_match(pattern, &suite_path)
 }

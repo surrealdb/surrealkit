@@ -17,7 +17,10 @@ pub fn load_specs() -> Result<LoadedSpecs> {
 		return Err(anyhow!("No suite files found in {}", TEST_SUITES_DIR));
 	}
 
-	Ok(LoadedSpecs { global, suites })
+	Ok(LoadedSpecs {
+		global,
+		suites,
+	})
 }
 
 fn load_global_config() -> Result<GlobalTestConfig> {

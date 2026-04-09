@@ -3,9 +3,9 @@ name = 'surrealkit'
 description = 'Manage migrations, seeding and tests for your SurrealDB via CLI'
 version = '0.4.0'
 edition = '2024'
-authors = ['Chiru Boggavarapu <chiru@foretag.co>']
-repository = 'https://github.com/ForetagInc/surrealkit'
-license-file = 'UNLICENSE'
+authors = ['Chiru Boggavarapu <chiru@foretag.co>', 'Tobie Morgan Hitchcock <tobie@surrealdb.com>']
+repository = 'https://github.com/surrealdb/surrealkit'
+license-file = 'LICENSE'
 keywords = ['surrealdb', 'migrations', 'seed', 'testing', 'manage']
 
 [dependencies]
@@ -17,10 +17,13 @@ serde_json = '1.0'
 toml = '0.8'
 rust_dotenv = '0.1.2'
 sha2 = '0.10'
-surrealdb = { version = '3.0.2', features = ['protocol-http', 'jwks'] }
-surrealdb-types = { version = '3.0.1' }
+surrealdb = { version = '3.0.5', features = ['protocol-http', 'jwks'] }
+surrealdb-types = { version = '3.0.5' }
 time = { version = '0.3', features = ['macros', 'formatting'] }
 tokio = { version = '1.47', features = ['macros', 'rt-multi-thread', 'signal', 'time'] }
 walkdir = '2.5'
 reqwest = { version = '0.12', default-features = false, features = ['json', 'rustls-tls'] }
 regex = '1'
+
+[lints]
+workspace = true

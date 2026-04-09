@@ -4,5 +4,5 @@ tags = ['smoke']
 [[cases]]
 name = 'rollout_table_visible'
 kind = 'schema_metadata'
-sql = 'INFO FOR TABLE _surrealkit_rollout;'
-contains = ['_surrealkit_rollout']
+sql = 'INFO FOR TABLE __rollout;'
+contains = ['__rollout']

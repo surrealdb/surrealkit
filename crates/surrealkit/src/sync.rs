@@ -3,8 +3,10 @@ use std::env;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
-use surrealdb::{Surreal, engine::any::Any};
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 
 use crate::core::exec_surql;
 use crate::rollout::{
@@ -70,11 +72,8 @@ async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> 
 	}
 
 	let file_paths: BTreeSet<String> = files.iter().map(|file| file.path.clone()).collect();
-	let removed_paths: Vec<String> = tracked
-		.keys()
-		.filter(|path| !file_paths.contains(*path))
-		.cloned()
-		.collect();
+	let removed_paths: Vec<String> =
+		tracked.keys().filter(|path| !file_paths.contains(*path)).cloned().collect();
 
 	let mut changed_count = 0usize;
 	let mut apply_errors = 0usize;
@@ -131,10 +130,8 @@ async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> 
 		})
 		.cloned()
 		.collect();
-	let stale_entities: Vec<EntityKey> = stale_records
-		.iter()
-		.map(|record| record.entity.key())
-		.collect();
+	let stale_entities: Vec<EntityKey> =
+		stale_records.iter().map(|record| record.entity.key()).collect();
 	let stale_count = stale_entities.len();
 	let destructive_change = stale_count > 0;
 
@@ -164,10 +161,7 @@ async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> 
 		let remove_sql = render_remove_sql(&stale_entities, true)?;
 		if opts.dry_run {
 			if !watch_mode {
-				println!(
-					"DRY RUN: would prune {} stale managed entities",
-					remove_sql.len()
-				);
+				println!("DRY RUN: would prune {} stale managed entities", remove_sql.len());
 				for stmt in &remove_sql {
 					println!("  {}", stmt);
 				}
@@ -238,13 +232,19 @@ async fn prune_managed_entities(db: &Surreal<Any>, stale_entities: &[EntityKey])
 }
 
 async fn load_sync_hashes(db: &Surreal<Any>) -> Result<BTreeMap<String, String>> {
-	let mut resp = db.query("SELECT path, hash FROM _surrealkit_sync;").await?;
+	let mut resp = db
+		.query("SELECT key, val FROM __entity WHERE ns = 'sync';")
+		.await?;
 	let rows: Vec<serde_json::Value> = resp.take(0)?;
 
 	let mut out = BTreeMap::new();
 	for row in rows {
-		let path = row.get("path").and_then(|v| v.as_str()).map(str::to_string);
-		let hash = row.get("hash").and_then(|v| v.as_str()).map(str::to_string);
+		let path = row.get("key").and_then(|v| v.as_str()).map(str::to_string);
+		let hash = row
+			.get("val")
+			.and_then(|v| v.get("hash"))
+			.and_then(|v| v.as_str())
+			.map(str::to_string);
 		if let (Some(path), Some(hash)) = (path, hash) {
 			out.insert(path, hash);
 		}
@@ -254,8 +254,8 @@ async fn load_sync_hashes(db: &Surreal<Any>) -> Result<BTreeMap<String, String>>
 
 async fn store_sync_hash(db: &Surreal<Any>, path: &str, hash: &str) -> Result<()> {
 	db.query(
-		"DELETE _surrealkit_sync WHERE path = $path; \
-		 CREATE _surrealkit_sync CONTENT { path: $path, hash: $hash, synced_at: time::now() };",
+		"DELETE __entity WHERE ns = 'sync' AND key = $path; \
+		 CREATE __entity CONTENT { ns: 'sync', key: $path, val: { hash: $hash }, updated_at: time::now() };",
 	)
 	.bind(("path", path.to_string()))
 	.bind(("hash", hash.to_string()))
@@ -265,35 +265,29 @@ async fn store_sync_hash(db: &Surreal<Any>, path: &str, hash: &str) -> Result<()
 }
 
 async fn detect_shared_db(db: &Surreal<Any>) -> Result<bool> {
-	if let Ok(value) = env::var("SURREALKIT_SHARED_DB") {
-		if let Some(parsed) = parse_bool(&value) {
+	if let Ok(value) = env::var("SURREALKIT_SHARED_DB")
+		&& let Some(parsed) = parse_bool(&value) {
 			return Ok(parsed);
 		}
-	}
 
 	let mut resp = db
-		.query("SELECT value FROM _surrealkit_sync_meta WHERE key = 'shared' LIMIT 1;")
+		.query("SELECT val FROM __entity WHERE ns = 'meta' AND key = 'shared' LIMIT 1;")
 		.await?;
 	let row: Option<serde_json::Value> = resp.take(0)?;
-	let shared = row
-		.as_ref()
-		.and_then(|v| v.get("value"))
-		.and_then(|v| v.as_bool())
-		.unwrap_or(false);
+	let shared =
+		row.as_ref().and_then(|v| v.get("val")).and_then(|v| v.as_bool()).unwrap_or(false);
 	Ok(shared)
 }
 
 async fn write_meta_from_env(db: &Surreal<Any>) -> Result<()> {
-	if let Ok(raw_shared) = env::var("SURREALKIT_SHARED_DB") {
-		if let Some(shared) = parse_bool(&raw_shared) {
+	if let Ok(raw_shared) = env::var("SURREALKIT_SHARED_DB")
+		&& let Some(shared) = parse_bool(&raw_shared) {
 			upsert_meta(db, "shared", serde_json::json!(shared)).await?;
 		}
-	}
-	if let Ok(owner) = env::var("SURREALKIT_OWNER") {
-		if !owner.trim().is_empty() {
+	if let Ok(owner) = env::var("SURREALKIT_OWNER")
+		&& !owner.trim().is_empty() {
 			upsert_meta(db, "owner", serde_json::json!(owner)).await?;
 		}
-	}
 	Ok(())
 }
 
@@ -304,8 +298,8 @@ async fn store_last_sync_meta(db: &Surreal<Any>) -> Result<()> {
 
 async fn upsert_meta(db: &Surreal<Any>, key: &str, value: serde_json::Value) -> Result<()> {
 	db.query(
-		"DELETE _surrealkit_sync_meta WHERE key = $key; \
-		 CREATE _surrealkit_sync_meta CONTENT { key: $key, value: $value, updated_at: time::now() };",
+		"DELETE __entity WHERE ns = 'meta' AND key = $key; \
+		 CREATE __entity CONTENT { ns: 'meta', key: $key, val: $value, updated_at: time::now() };",
 	)
 	.bind(("key", key.to_string()))
 	.bind(("value", value))

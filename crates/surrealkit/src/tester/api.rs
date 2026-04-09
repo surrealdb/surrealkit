@@ -23,9 +23,7 @@ pub async fn execute_api_case(
 	default_timeout_ms: u64,
 ) -> Result<ApiResult> {
 	let client = reqwest::Client::builder()
-		.timeout(Duration::from_millis(
-			case.timeout_ms.unwrap_or(default_timeout_ms),
-		))
+		.timeout(Duration::from_millis(case.timeout_ms.unwrap_or(default_timeout_ms)))
 		.build()
 		.context("building API client")?;
 
@@ -36,7 +34,11 @@ pub async fn execute_api_case(
 	let url = format!(
 		"{}{}{}",
 		base_url.trim_end_matches('/'),
-		if path.starts_with('/') { "" } else { "/" },
+		if path.starts_with('/') {
+			""
+		} else {
+			"/"
+		},
 		path
 	);
 
@@ -56,10 +58,7 @@ pub async fn execute_api_case(
 		req = req.json(body);
 	}
 
-	let resp = req
-		.send()
-		.await
-		.with_context(|| format!("request to {} failed", url))?;
+	let resp = req.send().await.with_context(|| format!("request to {} failed", url))?;
 	let status = resp.status().as_u16();
 	let headers = resp.headers().clone();
 	let body_text = resp.text().await.context("reading response body")?;
@@ -90,13 +89,14 @@ pub async fn execute_api_case(
 			actor_auth: actor.auth.clone(),
 		};
 		for (idx, assertion) in case.body_assertions.iter().enumerate() {
-			assertions.push(assert_json_value_with_context(
-				parsed, assertion, idx, &ctx,
-			)?);
+			assertions.push(assert_json_value_with_context(parsed, assertion, idx, &ctx)?);
 		}
 	}
 
-	Ok(ApiResult { status, assertions })
+	Ok(ApiResult {
+		status,
+		assertions,
+	})
 }
 
 fn insert_header(headers: &mut HeaderMap, key: &str, value: &str) -> Result<()> {

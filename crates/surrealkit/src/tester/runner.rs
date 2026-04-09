@@ -6,16 +6,12 @@ use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
-use surrealdb::{Surreal, engine::any::Any};
+use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
 use surrealdb_types::SurrealValue;
-use time::{OffsetDateTime, format_description::well_known::Rfc3339};
+use time::OffsetDateTime;
+use time::format_description::well_known::Rfc3339;
 use tokio::sync::Semaphore;
-
-use crate::config::DbCfg;
-use crate::core::create_surreal_client;
-use crate::seed;
-use crate::setup::run_setup;
-use crate::sync::{self, SyncOpts};
 
 use super::actors::{
 	ActorSession, actor_name_or_default, build_actor_sessions, merged_actor_specs, require_actor,
@@ -26,6 +22,11 @@ use super::types::{
 	AssertionReport, CaseKind, CaseReport, FilterInput, GlobalTestConfig, JsonAssertionSpec,
 	LoadedSuite, PermissionAction, RunReport, SuiteReport, TestOpts,
 };
+use crate::config::DbCfg;
+use crate::core::create_surreal_client;
+use crate::seed;
+use crate::setup::run_setup;
+use crate::sync::{self, SyncOpts};
 
 pub struct RunnerContext {
 	pub cfg: DbCfg,
@@ -151,19 +152,14 @@ impl RunnerContext {
 
 	async fn run_suite(&self, suite: LoadedSuite) -> Result<SuiteReport> {
 		let started = Instant::now();
-		let suite_name = suite
-			.spec
-			.name
-			.clone()
-			.unwrap_or_else(|| suite.path.to_string_lossy().to_string());
+		let suite_name =
+			suite.spec.name.clone().unwrap_or_else(|| suite.path.to_string_lossy().to_string());
 		let slug = slugify(&format!("{}-{}", suite_name, suite.path.display()));
 		let namespace = format!("{}_sk_test_{}_{}", self.cfg.ns(), self.run_id, slug);
 		let database = format!("{}_sk_test_{}_{}", self.cfg.db(), self.run_id, slug);
 		let host = self.cfg.host().to_string();
 
-		let actors = self
-			.prepare_suite(&suite, &host, &namespace, &database)
-			.await?;
+		let actors = self.prepare_suite(&suite, &host, &namespace, &database).await?;
 		let mut cases = Vec::new();
 
 		for case in &suite.spec.cases {
@@ -197,14 +193,13 @@ impl RunnerContext {
 		let cases_failed = cases.iter().filter(|c| !c.passed).count();
 		let cases_passed = cases_total.saturating_sub(cases_failed);
 
-		if !self.opts.keep_db {
-			if let Err(err) = cleanup_suite_db(&self.cfg, &host, &namespace, &database).await {
+		if !self.opts.keep_db
+			&& let Err(err) = cleanup_suite_db(&self.cfg, &host, &namespace, &database).await {
 				eprintln!(
 					"warning: failed to clean up test db {}/{}: {:#}",
 					namespace, database, err
 				);
 			}
-		}
 
 		Ok(SuiteReport {
 			suite_file: suite.path.to_string_lossy().replace('\\', "/"),
@@ -252,47 +247,23 @@ impl RunnerContext {
 			seed::seed(&root.db).await?;
 		}
 
-		for fixture in self
-			.global
-			.fixtures
-			.iter()
-			.filter(|f| fixture_targets_root(f))
-		{
+		for fixture in self.global.fixtures.iter().filter(|f| fixture_targets_root(f)) {
 			apply_fixture(fixture, &bootstrap_actors, Path::new("database/tests")).await?;
 		}
-		for fixture in suite
-			.spec
-			.fixtures
-			.iter()
-			.filter(|f| fixture_targets_root(f))
-		{
-			let suite_base = suite
-				.path
-				.parent()
-				.unwrap_or_else(|| Path::new("database/tests/suites"));
+		for fixture in suite.spec.fixtures.iter().filter(|f| fixture_targets_root(f)) {
+			let suite_base =
+				suite.path.parent().unwrap_or_else(|| Path::new("database/tests/suites"));
 			apply_fixture(fixture, &bootstrap_actors, suite_base).await?;
 		}
 
 		let actors = build_actor_sessions(&self.cfg, host, namespace, database, &merged).await?;
 
-		for fixture in self
-			.global
-			.fixtures
-			.iter()
-			.filter(|f| !fixture_targets_root(f))
-		{
+		for fixture in self.global.fixtures.iter().filter(|f| !fixture_targets_root(f)) {
 			apply_fixture(fixture, &actors, Path::new("database/tests")).await?;
 		}
-		for fixture in suite
-			.spec
-			.fixtures
-			.iter()
-			.filter(|f| !fixture_targets_root(f))
-		{
-			let suite_base = suite
-				.path
-				.parent()
-				.unwrap_or_else(|| Path::new("database/tests/suites"));
+		for fixture in suite.spec.fixtures.iter().filter(|f| !fixture_targets_root(f)) {
+			let suite_base =
+				suite.path.parent().unwrap_or_else(|| Path::new("database/tests/suites"));
 			apply_fixture(fixture, &actors, suite_base).await?;
 		}
 
@@ -329,10 +300,7 @@ async fn run_case(
 			let actor_name = actor_name_or_default(spec.actor.as_deref());
 			let actor = require_actor(actors, actor_name)?;
 			let root = require_actor(actors, "root")?;
-			let record_id = spec
-				.record_id
-				.clone()
-				.unwrap_or_else(|| "perm_record".to_string());
+			let record_id = spec.record_id.clone().unwrap_or_else(|| "perm_record".to_string());
 
 			let mut assertions = Vec::new();
 			for (idx, rule) in spec.rules.iter().enumerate() {
@@ -357,10 +325,7 @@ async fn run_case(
 						format!("DELETE {}:{};", spec.table, record_id)
 					}
 					PermissionAction::Query => rule.sql.clone().ok_or_else(|| {
-						anyhow!(
-							"permissions_matrix action=query in '{}' requires sql",
-							case.name
-						)
+						anyhow!("permissions_matrix action=query in '{}' requires sql", case.name)
 					})?,
 				};
 
@@ -458,10 +423,7 @@ async fn run_case(
 			)?;
 
 			if report.passed && !spec.assertions.is_empty() {
-				let verify_sql = spec
-					.verify_sql
-					.clone()
-					.unwrap_or_else(|| spec.action_sql.clone());
+				let verify_sql = spec.verify_sql.clone().unwrap_or_else(|| spec.action_sql.clone());
 				let value = execute_sql_value(&actor.db, &verify_sql).await?;
 				for (idx, assertion) in spec.assertions.iter().enumerate() {
 					report.assertions.push(assert_json_value_with_context(
@@ -498,10 +460,7 @@ async fn run_case(
 				message: if passed {
 					None
 				} else {
-					Some(format!(
-						"api assertions failed (status={})",
-						api_result.status
-					))
+					Some(format!("api assertions failed (status={})", api_result.status))
 				},
 				assertions: api_result.assertions,
 			})
@@ -532,9 +491,7 @@ fn report_sql_expect(
 			});
 			let ctx = actor_assertion_context(actor);
 			for (idx, assertion) in json_assertions.iter().enumerate() {
-				assertions.push(assert_json_value_with_context(
-					&value, assertion, idx, &ctx,
-				)?);
+				assertions.push(assert_json_value_with_context(&value, assertion, idx, &ctx)?);
 			}
 			passed = assertions.iter().all(|x| x.passed);
 			if !passed {
@@ -562,9 +519,7 @@ fn report_sql_expect(
 		}
 		(false, Err(err)) => {
 			let text = format!("{err:#}");
-			let contains_ok = error_contains
-				.map(|needle| text.contains(needle))
-				.unwrap_or(true);
+			let contains_ok = error_contains.map(|needle| text.contains(needle)).unwrap_or(true);
 			let code_ok = error_code.map(|code| text.contains(code)).unwrap_or(true);
 			passed = contains_ok && code_ok;
 			message = if passed {
@@ -623,9 +578,7 @@ fn evaluate_outcome(
 		}
 		(false, Err(err)) => {
 			let text = format!("{err:#}");
-			let contains_ok = error_contains
-				.map(|needle| text.contains(needle))
-				.unwrap_or(true);
+			let contains_ok = error_contains.map(|needle| text.contains(needle)).unwrap_or(true);
 			let code_ok = error_code.map(|code| text.contains(code)).unwrap_or(true);
 			Ok(AssertionReport {
 				name: label,
@@ -661,10 +614,7 @@ async fn apply_fixture(
 	let actor = require_actor(actors, actor_name)?;
 	let sql = fixture_sql(fixture, base_dir)?;
 	execute_sql_value(&actor.db, &sql).await.with_context(|| {
-		format!(
-			"fixture '{}' failed",
-			fixture.name.as_deref().unwrap_or("unnamed")
-		)
+		format!("fixture '{}' failed", fixture.name.as_deref().unwrap_or("unnamed"))
 	})?;
 	Ok(())
 }
@@ -684,10 +634,7 @@ fn fixture_sql(fixture: &crate::tester::types::FixtureSpec, base_dir: &Path) -> 
 			)
 		}
 		(None, None) => {
-			bail!(
-				"fixture '{}' requires sql or file",
-				fixture.name.as_deref().unwrap_or("unnamed")
-			)
+			bail!("fixture '{}' requires sql or file", fixture.name.as_deref().unwrap_or("unnamed"))
 		}
 	}
 }
@@ -748,7 +695,7 @@ fn slugify(input: &str) -> String {
 	}
 }
 
-#[allow(dead_code)]
+#[expect(dead_code)]
 pub fn build_filter_input(opts: &TestOpts) -> FilterInput {
 	FilterInput {
 		suite_pattern: opts.suite.clone(),

@@ -19,8 +19,8 @@ pub fn assert_json_value_with_context(
 	let found = lookup_path(actual, &assertion.path);
 	let exists = found.is_some();
 
-	if let Some(expected_exists) = assertion.exists {
-		if expected_exists != exists {
+	if let Some(expected_exists) = assertion.exists
+		&& expected_exists != exists {
 			return Ok(AssertionReport {
 				name: label,
 				passed: false,
@@ -30,7 +30,6 @@ pub fn assert_json_value_with_context(
 				),
 			});
 		}
-	}
 
 	if found.is_none() {
 		return Ok(AssertionReport {
@@ -42,8 +41,8 @@ pub fn assert_json_value_with_context(
 
 	let value = found.expect("checked above");
 
-	if let Some(expected) = &assertion.equals {
-		if value != expected {
+	if let Some(expected) = &assertion.equals
+		&& value != expected {
 			return Ok(AssertionReport {
 				name: label,
 				passed: false,
@@ -53,7 +52,6 @@ pub fn assert_json_value_with_context(
 				),
 			});
 		}
-	}
 
 	if let Some(auth_ref) = &assertion.equals_auth {
 		let Some(auth) = ctx.actor_auth.as_ref() else {
@@ -98,12 +96,7 @@ pub fn assert_json_value_with_context(
 
 	if let Some(pattern) = &assertion.regex {
 		let re = Regex::new(pattern).map_err(|e| {
-			anyhow!(
-				"invalid regex '{}' for path '{}': {}",
-				pattern,
-				assertion.path,
-				e
-			)
+			anyhow!("invalid regex '{}' for path '{}': {}", pattern, assertion.path, e)
 		})?;
 		let text = value_to_text(value);
 		if !re.is_match(&text) {
@@ -138,8 +131,8 @@ pub fn assert_header_value(
 		.map(|(_, value)| value.to_str().unwrap_or_default().to_string());
 	let exists = found.is_some();
 
-	if let Some(expected_exists) = assertion.exists {
-		if exists != expected_exists {
+	if let Some(expected_exists) = assertion.exists
+		&& exists != expected_exists {
 			return Ok(AssertionReport {
 				name: label,
 				passed: false,
@@ -149,7 +142,6 @@ pub fn assert_header_value(
 				),
 			});
 		}
-	}
 
 	if found.is_none() {
 		return Ok(AssertionReport {
@@ -161,8 +153,8 @@ pub fn assert_header_value(
 
 	let value = found.expect("checked above");
 
-	if let Some(expected) = &assertion.equals {
-		if &value != expected {
+	if let Some(expected) = &assertion.equals
+		&& &value != expected {
 			return Ok(AssertionReport {
 				name: label,
 				passed: false,
@@ -172,10 +164,9 @@ pub fn assert_header_value(
 				),
 			});
 		}
-	}
 
-	if let Some(part) = &assertion.contains {
-		if !value.contains(part) {
+	if let Some(part) = &assertion.contains
+		&& !value.contains(part) {
 			return Ok(AssertionReport {
 				name: label,
 				passed: false,
@@ -185,16 +176,10 @@ pub fn assert_header_value(
 				),
 			});
 		}
-	}
 
 	if let Some(pattern) = &assertion.regex {
 		let re = Regex::new(pattern).map_err(|e| {
-			anyhow!(
-				"invalid header regex '{}' for '{}': {}",
-				pattern,
-				assertion.name,
-				e
-			)
+			anyhow!("invalid header regex '{}' for '{}': {}", pattern, assertion.name, e)
 		})?;
 		if !re.is_match(&value) {
 			return Ok(AssertionReport {
@@ -217,7 +202,7 @@ pub fn assert_header_value(
 
 fn value_to_text(value: &Value) -> String {
 	match value {
-		Value::String(v) => v.to_string(),
+		Value::String(v) => v.clone(),
 		_ => value.to_string(),
 	}
 }

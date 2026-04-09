@@ -1,169 +1,71 @@
-DEFINE TABLE OVERWRITE _surrealkit_sync SCHEMAFULL
+DEFINE TABLE OVERWRITE __entity SCHEMAFULL
 	PERMISSIONS NONE;
 
-DEFINE FIELD OVERWRITE path ON _surrealkit_sync
+DEFINE FIELD OVERWRITE ns ON __entity
 	TYPE string;
 
-DEFINE FIELD OVERWRITE hash ON _surrealkit_sync
+DEFINE FIELD OVERWRITE key ON __entity
 	TYPE string;
 
-DEFINE FIELD OVERWRITE synced_at ON _surrealkit_sync
-	TYPE datetime
-	DEFAULT time::now();
-
-DEFINE INDEX OVERWRITE by_path ON _surrealkit_sync
-	FIELDS path
-	UNIQUE;
-
-DEFINE TABLE OVERWRITE _surrealkit_sync_meta SCHEMAFULL
-	PERMISSIONS NONE;
-
-DEFINE FIELD OVERWRITE key ON _surrealkit_sync_meta
-	TYPE string;
-
-DEFINE FIELD OVERWRITE value ON _surrealkit_sync_meta
+DEFINE FIELD OVERWRITE val ON __entity
 	TYPE any;
 
-DEFINE FIELD OVERWRITE updated_at ON _surrealkit_sync_meta
+DEFINE FIELD OVERWRITE updated_at ON __entity
 	TYPE datetime
 	DEFAULT time::now();
 
-DEFINE INDEX OVERWRITE by_key ON _surrealkit_sync_meta
-	FIELDS key
+DEFINE INDEX OVERWRITE by_ns_key ON __entity
+	FIELDS ns, key
 	UNIQUE;
 
-DEFINE TABLE OVERWRITE _surrealkit_managed_entity SCHEMAFULL
+DEFINE TABLE OVERWRITE __rollout SCHEMAFULL
 	PERMISSIONS NONE;
 
-DEFINE FIELD OVERWRITE kind ON _surrealkit_managed_entity
+DEFINE FIELD OVERWRITE id ON __rollout
 	TYPE string;
 
-DEFINE FIELD OVERWRITE scope ON _surrealkit_managed_entity
-	TYPE option<string>;
-
-DEFINE FIELD OVERWRITE name ON _surrealkit_managed_entity
+DEFINE FIELD OVERWRITE name ON __rollout
 	TYPE string;
 
-DEFINE FIELD OVERWRITE source_path ON _surrealkit_managed_entity
+DEFINE FIELD OVERWRITE manifest_path ON __rollout
 	TYPE string;
 
-DEFINE FIELD OVERWRITE statement_hash ON _surrealkit_managed_entity
+DEFINE FIELD OVERWRITE manifest_checksum ON __rollout
 	TYPE string;
 
-DEFINE FIELD OVERWRITE file_hash ON _surrealkit_managed_entity
+DEFINE FIELD OVERWRITE source_schema_hash ON __rollout
 	TYPE string;
 
-DEFINE FIELD OVERWRITE active_rollout_id ON _surrealkit_managed_entity
-	TYPE option<string>;
+DEFINE FIELD OVERWRITE target_schema_hash ON __rollout
+	TYPE string;
 
-DEFINE FIELD OVERWRITE state ON _surrealkit_managed_entity
-	TYPE string
-	DEFAULT "active";
+DEFINE FIELD OVERWRITE status ON __rollout
+	TYPE string;
 
-DEFINE FIELD OVERWRITE updated_at ON _surrealkit_managed_entity
+DEFINE FIELD OVERWRITE source_entities ON __rollout
+	TYPE any;
+
+DEFINE FIELD OVERWRITE target_entities ON __rollout
+	TYPE any;
+
+DEFINE FIELD OVERWRITE steps ON __rollout
+	TYPE any
+	DEFAULT [];
+
+DEFINE FIELD OVERWRITE started_at ON __rollout
 	TYPE datetime
 	DEFAULT time::now();
 
-DEFINE INDEX OVERWRITE by_entity_key ON _surrealkit_managed_entity
-	FIELDS kind, scope, name
-	UNIQUE;
-
-DEFINE TABLE OVERWRITE _surrealkit_rollout SCHEMAFULL
-	PERMISSIONS NONE;
-
-DEFINE FIELD OVERWRITE id ON _surrealkit_rollout
-	TYPE string;
-
-DEFINE FIELD OVERWRITE name ON _surrealkit_rollout
-	TYPE string;
-
-DEFINE FIELD OVERWRITE manifest_path ON _surrealkit_rollout
-	TYPE string;
-
-DEFINE FIELD OVERWRITE manifest_checksum ON _surrealkit_rollout
-	TYPE string;
-
-DEFINE FIELD OVERWRITE source_schema_hash ON _surrealkit_rollout
-	TYPE string;
-
-DEFINE FIELD OVERWRITE target_schema_hash ON _surrealkit_rollout
-	TYPE string;
-
-DEFINE FIELD OVERWRITE status ON _surrealkit_rollout
-	TYPE string;
-
-DEFINE FIELD OVERWRITE source_entities ON _surrealkit_rollout
-	TYPE any;
-
-DEFINE FIELD OVERWRITE target_entities ON _surrealkit_rollout
-	TYPE any;
-
-DEFINE FIELD OVERWRITE started_at ON _surrealkit_rollout
-	TYPE datetime
-	DEFAULT time::now();
-
-DEFINE FIELD OVERWRITE completed_at ON _surrealkit_rollout
+DEFINE FIELD OVERWRITE completed_at ON __rollout
 	TYPE option<datetime>;
 
-DEFINE FIELD OVERWRITE updated_at ON _surrealkit_rollout
+DEFINE FIELD OVERWRITE updated_at ON __rollout
 	TYPE datetime
 	DEFAULT time::now();
 
-DEFINE FIELD OVERWRITE last_error ON _surrealkit_rollout
+DEFINE FIELD OVERWRITE last_error ON __rollout
 	TYPE option<string>;
 
-DEFINE INDEX OVERWRITE by_rollout_id ON _surrealkit_rollout
+DEFINE INDEX OVERWRITE by_rollout_id ON __rollout
 	FIELDS id
-	UNIQUE;
-
-DEFINE TABLE OVERWRITE _surrealkit_rollout_step SCHEMAFULL
-	PERMISSIONS NONE;
-
-DEFINE FIELD OVERWRITE rollout_id ON _surrealkit_rollout_step
-	TYPE string;
-
-DEFINE FIELD OVERWRITE step_id ON _surrealkit_rollout_step
-	TYPE string;
-
-DEFINE FIELD OVERWRITE phase ON _surrealkit_rollout_step
-	TYPE string;
-
-DEFINE FIELD OVERWRITE kind ON _surrealkit_rollout_step
-	TYPE string;
-
-DEFINE FIELD OVERWRITE checksum ON _surrealkit_rollout_step
-	TYPE string;
-
-DEFINE FIELD OVERWRITE status ON _surrealkit_rollout_step
-	TYPE string;
-
-DEFINE FIELD OVERWRITE started_at ON _surrealkit_rollout_step
-	TYPE datetime
-	DEFAULT time::now();
-
-DEFINE FIELD OVERWRITE finished_at ON _surrealkit_rollout_step
-	TYPE option<datetime>;
-
-DEFINE FIELD OVERWRITE error ON _surrealkit_rollout_step
-	TYPE option<string>;
-
-DEFINE INDEX OVERWRITE by_rollout_step ON _surrealkit_rollout_step
-	FIELDS rollout_id, step_id
-	UNIQUE;
-
-DEFINE TABLE OVERWRITE _surrealkit_lock SCHEMAFULL
-	PERMISSIONS NONE;
-
-DEFINE FIELD OVERWRITE key ON _surrealkit_lock
-	TYPE string;
-
-DEFINE FIELD OVERWRITE owner ON _surrealkit_lock
-	TYPE string;
-
-DEFINE FIELD OVERWRITE created_at ON _surrealkit_lock
-	TYPE datetime
-	DEFAULT time::now();
-
-DEFINE INDEX OVERWRITE by_lock_key ON _surrealkit_lock
-	FIELDS key
 	UNIQUE;

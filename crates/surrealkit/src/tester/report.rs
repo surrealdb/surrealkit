@@ -7,10 +7,7 @@ use super::types::RunReport;
 
 pub fn print_human_report(report: &RunReport) {
 	println!("Test run summary:");
-	println!(
-		"  suites: {} total, {} failed",
-		report.suites_total, report.suites_failed
-	);
+	println!("  suites: {} total, {} failed", report.suites_total, report.suites_failed);
 	println!(
 		"  cases: {} total, {} passed, {} failed",
 		report.cases_total, report.cases_passed, report.cases_failed
@@ -26,21 +23,16 @@ pub fn print_human_report(report: &RunReport) {
 			suite.cases_passed,
 			suite.cases_failed
 		);
-		for case in &suite.cases {
+		for (index, case) in suite.cases.iter().enumerate() {
 			if case.passed {
 				continue;
 			}
-			println!(
-				"  FAIL {} ({}) {}",
-				case.name,
-				case.kind,
-				case.message.as_deref().unwrap_or("unknown failure")
-			);
+			println!("  FAIL case #{}", index + 1);
 			for assertion in &case.assertions {
 				if assertion.passed {
 					continue;
 				}
-				println!("    - {}: {}", assertion.name, assertion.message);
+				println!("    - {} (failed)", assertion.name);
 			}
 		}
 	}
