@@ -27,7 +27,7 @@ jobs:
               run: cargo clippy
 
             - name: Format
-              run: cargo fmt
+              run: cargo fmt --check
 
             - name: Test crate
               run: cargo test --manifest-path crates/surrealkit/Cargo.toml --all-features --locked
