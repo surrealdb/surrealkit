@@ -7,14 +7,14 @@ pub fn scaffold() -> Result<()> {
 	let database_dir = Path::new("database");
 	let schema_dir = database_dir.join("schema");
 	let rollouts_dir = database_dir.join("rollouts");
-	let state_dir = database_dir.join(".surrealkit");
+	let state_dir = database_dir.join("snapshots");
 	let tests_dir = database_dir.join("tests");
 	let test_suites_dir = tests_dir.join("suites");
 	let test_fixtures_dir = tests_dir.join("fixtures");
 
 	fs::create_dir_all(&schema_dir).context("creating database/schema")?;
 	fs::create_dir_all(&rollouts_dir).context("creating database/rollouts")?;
-	fs::create_dir_all(&state_dir).context("creating database/.surrealkit")?;
+	fs::create_dir_all(&state_dir).context("creating database/snapshots")?;
 	fs::create_dir_all(&tests_dir).context("creating database/tests")?;
 	fs::create_dir_all(&test_suites_dir).context("creating database/tests/suites")?;
 	fs::create_dir_all(&test_fixtures_dir).context("creating database/tests/fixtures")?;
@@ -43,9 +43,16 @@ pub fn scaffold() -> Result<()> {
 			.context("Writing database/tests/suites/smoke.toml")?;
 	}
 
-	println!(
-		"Scaffolded ./database, ./database/schema, ./database/rollouts, ./database/.surrealkit, ./database/tests, ./database/tests/suites, ./database/tests/fixtures, seed.surql, setup.surql"
-	);
+	println!("Scaffolded project in ./database\n");
+	println!("  database/");
+	println!("  ├── schema/");
+	println!("  ├── rollouts/");
+	println!("  ├── snapshots/");
+	println!("  ├── tests/");
+	println!("  │   ├── suites/");
+	println!("  │   └── fixtures/");
+	println!("  ├── seed.surql");
+	println!("  └── setup.surql");
 	Ok(())
 }
 

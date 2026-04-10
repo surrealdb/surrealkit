@@ -1,5 +1,0 @@
-[defaults]
-timeout_ms = 10000
-
-[actors.root]
-kind = 'root'

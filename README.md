@@ -3,11 +3,13 @@
 [![Crates.io](https://img.shields.io/crates/v/surrealkit.svg)](https://crates.io/crates/surrealkit) [![Documentation](https://docs.rs/surrealkit/badge.svg)](https://docs.rs/surrealkit)
 [![License](https://img.shields.io/badge/license-Unlicense-blue.svg)](https://unlicense.org/)
 
-Manage SurrealDB schema sync, phased rollouts, seeding, and testing for SurrealDB.
+SurrealKit is a schema management and migration tool for SurrealDB. It lets you define your schema as `.surql` files and keeps your database in sync with them.
 
-## Scope
+It provides two approaches to schema management:
+- **Sync**: a fast, declarative push for development. Your schema files are the source of truth - add a definition and it gets created, change it and it gets updated, remove it and it gets deleted.
+- **Rollouts**: controlled, phased migrations for shared and production databases. Changes are planned into reviewed manifests, applied in stages, and can be rolled back.
 
-This project manages SurrealDB schema sync, phased rollouts, seed data, testing, and database administration for SurrealDB v3. The rollout path is designed for shared and production-like databases, but should still be treated as experimental until it has broader field validation.
+SurrealKit also includes a seeding system and a declarative testing framework for validating schemas, permissions, and API endpoints.
 
 ## Usage
 
@@ -29,10 +31,10 @@ This creates a directory `/database` with the necessary scaffolding
 
 The following ENV variables will be picked up for your `.env` file, SurrealKit assumes you're using SurrealDB as a Web Database.
 
-- `PUBLIC_DATABASE_HOST`
-- `PUBLIC_DATABASE_NAME`
-- `PUBLIC_DATABASE_NAMESPACE`
-- `DATABASE_USERNAME`
+- `DATABASE_HOST` (or `PUBLIC_DATABASE_HOST`)
+- `DATABASE_NAME` (or `PUBLIC_DATABASE_NAME`)
+- `DATABASE_NAMESPACE` (or `PUBLIC_DATABASE_NAMESPACE`)
+- `DATABASE_USER`
 - `DATABASE_PASSWORD`
 
 SurrealKit creates and manages its internal sync and rollout metadata tables on your configured database.
@@ -92,8 +94,8 @@ surrealkit rollout rollback 20260302153045__add_customer_indexes
 Generated rollout manifests are written to `database/rollouts/*.toml`.
 Local snapshots are tracked in:
 
-- `database/.surrealkit/schema_snapshot.json`
-- `database/.surrealkit/catalog_snapshot.json`
+- `database/snapshots/schema_snapshot.json`
+- `database/snapshots/catalog_snapshot.json`
 
 To validate a rollout manifest without mutating the database:
 
@@ -177,7 +179,7 @@ Optional env fallbacks:
 
 - `SURREALKIT_TEST_BASE_URL`
 - `SURREALKIT_TEST_TIMEOUT_MS`
-- `PUBLIC_DATABASE_HOST` (used as API base URL fallback when test-specific base URL is not set)
+- `DATABASE_HOST` or `PUBLIC_DATABASE_HOST` (used as API base URL fallback when test-specific base URL is not set)
 
 ### Example Suite
 

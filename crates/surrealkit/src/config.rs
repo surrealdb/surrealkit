@@ -19,15 +19,20 @@ impl DbCfg {
 	pub fn from_env(_env: &DotEnv) -> Result<Self> {
 		let dotenv = DotEnv::new("");
 
-		// DotEnv has already populated std::env; pull from there.
 		let host = dotenv
 			.get_var("PUBLIC_DATABASE_HOST".to_string())
+			.or_else(|| dotenv.get_var("DATABASE_HOST".to_string()))
 			.unwrap_or(String::from("http://localhost:8000"));
 
-		let db = dotenv.get_var("PUBLIC_DATABASE_NAME".to_string()).unwrap_or(String::from("test"));
+		let db = dotenv
+			.get_var("PUBLIC_DATABASE_NAME".to_string())
+			.or_else(|| dotenv.get_var("DATABASE_NAME".to_string()))
+			.unwrap_or(String::from("test"));
 
-		let ns =
-			dotenv.get_var("PUBLIC_DATABASE_NAMESPACE".to_string()).unwrap_or(String::from("db"));
+		let ns = dotenv
+			.get_var("PUBLIC_DATABASE_NAMESPACE".to_string())
+			.or_else(|| dotenv.get_var("DATABASE_NAMESPACE".to_string()))
+			.unwrap_or(String::from("db"));
 
 		let user = dotenv.get_var("DATABASE_USER".to_string()).unwrap_or(String::from("root"));
 
