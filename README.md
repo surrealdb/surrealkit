@@ -3,11 +3,13 @@
 [![Crates.io](https://img.shields.io/crates/v/surrealkit.svg)](https://crates.io/crates/surrealkit) [![Documentation](https://docs.rs/surrealkit/badge.svg)](https://docs.rs/surrealkit)
 [![License](https://img.shields.io/badge/license-Unlicense-blue.svg)](https://unlicense.org/)
 
-Manage SurrealDB schema sync, phased rollouts, seeding, and testing for SurrealDB.
+SurrealKit is a schema management and migration tool for SurrealDB. It lets you define your schema as `.surql` files and keeps your database in sync with them.
 
-## Scope
+It provides two approaches to schema management:
+- **Sync**: a fast, declarative push for development. Your schema files are the source of truth — add a definition and it gets created, change it and it gets updated, remove it and it gets deleted.
+- **Rollouts**: controlled, phased migrations for shared and production databases. Changes are planned into reviewed manifests, applied in stages, and can be rolled back.
 
-This project manages SurrealDB schema sync, phased rollouts, seed data, testing, and database administration for SurrealDB v3. The rollout path is designed for shared and production-like databases, but should still be treated as experimental until it has broader field validation.
+SurrealKit also includes a seeding system and a declarative testing framework for validating schemas, permissions, and API endpoints.
 
 ## Usage
 
