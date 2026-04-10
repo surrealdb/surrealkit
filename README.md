@@ -29,10 +29,10 @@ This creates a directory `/database` with the necessary scaffolding
 
 The following ENV variables will be picked up for your `.env` file, SurrealKit assumes you're using SurrealDB as a Web Database.
 
-- `PUBLIC_DATABASE_HOST`
-- `PUBLIC_DATABASE_NAME`
-- `PUBLIC_DATABASE_NAMESPACE`
-- `DATABASE_USERNAME`
+- `DATABASE_HOST` (or `PUBLIC_DATABASE_HOST`)
+- `DATABASE_NAME` (or `PUBLIC_DATABASE_NAME`)
+- `DATABASE_NAMESPACE` (or `PUBLIC_DATABASE_NAMESPACE`)
+- `DATABASE_USER`
 - `DATABASE_PASSWORD`
 
 SurrealKit creates and manages its internal sync and rollout metadata tables on your configured database.
@@ -92,8 +92,8 @@ surrealkit rollout rollback 20260302153045__add_customer_indexes
 Generated rollout manifests are written to `database/rollouts/*.toml`.
 Local snapshots are tracked in:
 
-- `database/.surrealkit/schema_snapshot.json`
-- `database/.surrealkit/catalog_snapshot.json`
+- `database/snapshots/schema_snapshot.json`
+- `database/snapshots/catalog_snapshot.json`
 
 To validate a rollout manifest without mutating the database:
 
@@ -177,7 +177,7 @@ Optional env fallbacks:
 
 - `SURREALKIT_TEST_BASE_URL`
 - `SURREALKIT_TEST_TIMEOUT_MS`
-- `PUBLIC_DATABASE_HOST` (used as API base URL fallback when test-specific base URL is not set)
+- `DATABASE_HOST` or `PUBLIC_DATABASE_HOST` (used as API base URL fallback when test-specific base URL is not set)
 
 ### Example Suite
 
