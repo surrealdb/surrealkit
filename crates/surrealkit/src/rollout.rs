@@ -16,9 +16,9 @@ use crate::core::{exec_surql, sha256_hex};
 use crate::schema_state::{
 	CATALOG_SNAPSHOT_PATH, CatalogDiff, CatalogEntity, CatalogSnapshot, EntityKey, FileDiff,
 	ROLLOUTS_DIR, SchemaFile, build_catalog_snapshot, collect_schema_files, diff_catalog,
-	diff_schema, ensure_local_state_dirs, hash_schema_snapshot, load_catalog_snapshot,
-	load_schema_snapshot, render_remove_sql, save_catalog_snapshot, save_schema_snapshot,
-	snapshot_from_files,
+	diff_schema, ensure_local_state_dirs, ensure_overwrite, hash_schema_snapshot,
+	load_catalog_snapshot, load_schema_snapshot, render_remove_sql, save_catalog_snapshot,
+	save_schema_snapshot, snapshot_from_files,
 };
 use crate::setup::run_setup;
 
@@ -837,7 +837,8 @@ async fn execute_step(db: &Surreal<Any>, step: &RolloutStep) -> Result<()> {
 	match step.kind {
 		RolloutStepKind::ApplySchema => {
 			for file in &step.files {
-				let sql = fs::read_to_string(file).with_context(|| format!("reading {}", file))?;
+				let raw = fs::read_to_string(file).with_context(|| format!("reading {}", file))?;
+				let sql = ensure_overwrite(&raw);
 				exec_surql(db, &sql).await?;
 			}
 			Ok(())

@@ -6,7 +6,7 @@
 SurrealKit is a schema management and migration tool for SurrealDB. It lets you define your schema as `.surql` files and keeps your database in sync with them.
 
 It provides two approaches to schema management:
-- **Sync**: a fast, declarative push for development. Your schema files are the source of truth — add a definition and it gets created, change it and it gets updated, remove it and it gets deleted.
+- **Sync**: a fast, declarative push for development. Your schema files are the source of truth - add a definition and it gets created, change it and it gets updated, remove it and it gets deleted.
 - **Rollouts**: controlled, phased migrations for shared and production databases. Changes are planned into reviewed manifests, applied in stages, and can be rolled back.
 
 SurrealKit also includes a seeding system and a declarative testing framework for validating schemas, permissions, and API endpoints.
