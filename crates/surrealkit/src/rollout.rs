@@ -263,11 +263,7 @@ pub async fn run_status(db: &Surreal<Any>, selector: Option<String>) -> Result<(
 			println!("  last_error: {}", last_error);
 		}
 
-		let steps = row
-			.get("steps")
-			.and_then(|v| v.as_array())
-			.cloned()
-			.unwrap_or_default();
+		let steps = row.get("steps").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 		for step in steps {
 			let step_id = string_field(&step, "step_id").unwrap_or_else(|| "<step>".to_string());
 			let phase = string_field(&step, "phase").unwrap_or_else(|| "?".to_string());
@@ -477,9 +473,7 @@ pub async fn load_active_rollout_id(db: &Surreal<Any>) -> Result<Option<String>>
 }
 
 pub async fn load_managed_entities(db: &Surreal<Any>) -> Result<Vec<ManagedEntityRecord>> {
-	let mut resp = db
-		.query("SELECT key, val FROM __entity WHERE ns = 'schema';")
-		.await?;
+	let mut resp = db.query("SELECT key, val FROM __entity WHERE ns = 'schema';").await?;
 	let rows: Vec<Value> = resp.take(0)?;
 	let mut out = Vec::with_capacity(rows.len());
 	for row in rows {
@@ -492,31 +486,22 @@ pub async fn load_managed_entities(db: &Surreal<Any>) -> Result<Vec<ManagedEntit
 			continue;
 		}
 		let kind = parts[0].to_string();
-		let scope = if parts[1].is_empty() { None } else { Some(parts[1].to_string()) };
+		let scope = if parts[1].is_empty() {
+			None
+		} else {
+			Some(parts[1].to_string())
+		};
 		let name = parts[2].to_string();
 
-		let source_path = val
-			.get("source_path")
-			.and_then(|v| v.as_str())
-			.unwrap_or_default()
-			.to_string();
-		let statement_hash = val
-			.get("statement_hash")
-			.and_then(|v| v.as_str())
-			.unwrap_or_default()
-			.to_string();
-		let file_hash = val
-			.get("file_hash")
-			.and_then(|v| v.as_str())
-			.unwrap_or_default()
-			.to_string();
+		let source_path =
+			val.get("source_path").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+		let statement_hash =
+			val.get("statement_hash").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+		let file_hash =
+			val.get("file_hash").and_then(|v| v.as_str()).unwrap_or_default().to_string();
 		let active_rollout_id =
 			val.get("active_rollout_id").and_then(|v| v.as_str()).map(str::to_string);
-		let state = val
-			.get("state")
-			.and_then(|v| v.as_str())
-			.unwrap_or("active")
-			.to_string();
+		let state = val.get("state").and_then(|v| v.as_str()).unwrap_or("active").to_string();
 
 		out.push(ManagedEntityRecord {
 			entity: CatalogEntity {
@@ -542,11 +527,7 @@ pub async fn upsert_managed_entities(
 	state: &str,
 ) -> Result<()> {
 	for entity in entities {
-		let entity_key = entity_key_string(
-			&entity.kind,
-			entity.scope.as_deref(),
-			&entity.name,
-		);
+		let entity_key = entity_key_string(&entity.kind, entity.scope.as_deref(), &entity.name);
 		db.query(
 			"DELETE __entity WHERE ns = 'schema' AND key = $key; \
 			 CREATE __entity CONTENT { \
@@ -580,11 +561,7 @@ fn entity_key_string(kind: &str, scope: Option<&str>, name: &str) -> String {
 
 pub async fn delete_managed_entities(db: &Surreal<Any>, entities: &[EntityKey]) -> Result<()> {
 	for entity in entities {
-		let key = entity_key_string(
-			&entity.kind,
-			entity.scope.as_deref(),
-			&entity.name,
-		);
+		let key = entity_key_string(&entity.kind, entity.scope.as_deref(), &entity.name);
 		db.query("DELETE __entity WHERE ns = 'schema' AND key = $key;")
 			.bind(("key", key))
 			.await?
@@ -1005,7 +982,9 @@ async fn step_already_completed(
 	step_id: &str,
 ) -> Result<bool> {
 	let row = load_rollout_record(db, rollout_id).await?;
-	let Some(row) = row else { return Ok(false) };
+	let Some(row) = row else {
+		return Ok(false);
+	};
 	let steps = row.get("steps").and_then(|v| v.as_array());
 	Ok(steps
 		.map(|arr| {
@@ -1030,11 +1009,8 @@ async fn record_step_start(db: &Surreal<Any>, rollout_id: &str, step: &RolloutSt
 	let row = load_rollout_record(db, rollout_id)
 		.await?
 		.ok_or_else(|| anyhow!("rollout '{}' not found", rollout_id))?;
-	let mut steps: Vec<Value> = row
-		.get("steps")
-		.and_then(|v| v.as_array())
-		.cloned()
-		.unwrap_or_default();
+	let mut steps: Vec<Value> =
+		row.get("steps").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 	steps.retain(|s| s.get("step_id").and_then(|v| v.as_str()) != Some(&step.id));
 	steps.push(new_step);
 	db.query("UPDATE __rollout SET steps = $steps, updated_at = time::now() WHERE id = $id;")
@@ -1073,11 +1049,8 @@ async fn update_step_status(
 	let row = load_rollout_record(db, rollout_id)
 		.await?
 		.ok_or_else(|| anyhow!("rollout '{}' not found", rollout_id))?;
-	let mut steps: Vec<Value> = row
-		.get("steps")
-		.and_then(|v| v.as_array())
-		.cloned()
-		.unwrap_or_default();
+	let mut steps: Vec<Value> =
+		row.get("steps").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 	for s in &mut steps {
 		if s.get("step_id").and_then(|v| v.as_str()) == Some(step_id)
 			&& let Some(obj) = s.as_object_mut()

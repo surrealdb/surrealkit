@@ -194,12 +194,10 @@ impl RunnerContext {
 		let cases_passed = cases_total.saturating_sub(cases_failed);
 
 		if !self.opts.keep_db
-			&& let Err(err) = cleanup_suite_db(&self.cfg, &host, &namespace, &database).await {
-				eprintln!(
-					"warning: failed to clean up test db {}/{}: {:#}",
-					namespace, database, err
-				);
-			}
+			&& let Err(err) = cleanup_suite_db(&self.cfg, &host, &namespace, &database).await
+		{
+			eprintln!("warning: failed to clean up test db {}/{}: {:#}", namespace, database, err);
+		}
 
 		Ok(SuiteReport {
 			suite_file: suite.path.to_string_lossy().replace('\\', "/"),

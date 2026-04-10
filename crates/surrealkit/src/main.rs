@@ -117,7 +117,7 @@ enum RolloutCommands {
 
 fn load_env() -> DotEnv {
 	// Load .env in CWD if present, ignore missing
-	
+
 	DotEnv::new("")
 }
 

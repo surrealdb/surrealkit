@@ -401,9 +401,7 @@ pub fn ensure_overwrite(sql: &str) -> String {
 				let after_kind = &trimmed[tokens[0].len()..].trim_start();
 				let after_kind_word = &after_kind[tokens[1].len()..].trim_start();
 				let rest_upper = after_kind_word.to_ascii_uppercase();
-				if rest_upper.starts_with("OVERWRITE")
-					|| rest_upper.starts_with("IF NOT EXISTS")
-				{
+				if rest_upper.starts_with("OVERWRITE") || rest_upper.starts_with("IF NOT EXISTS") {
 					// Already has a creation modifier
 					out.push(format!("{};", trimmed));
 				} else {

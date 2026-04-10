@@ -236,19 +236,14 @@ async fn prune_managed_entities(db: &Surreal<Any>, stale_entities: &[EntityKey])
 }
 
 async fn load_sync_hashes(db: &Surreal<Any>) -> Result<BTreeMap<String, String>> {
-	let mut resp = db
-		.query("SELECT key, val FROM __entity WHERE ns = 'sync';")
-		.await?;
+	let mut resp = db.query("SELECT key, val FROM __entity WHERE ns = 'sync';").await?;
 	let rows: Vec<serde_json::Value> = resp.take(0)?;
 
 	let mut out = BTreeMap::new();
 	for row in rows {
 		let path = row.get("key").and_then(|v| v.as_str()).map(str::to_string);
-		let hash = row
-			.get("val")
-			.and_then(|v| v.get("hash"))
-			.and_then(|v| v.as_str())
-			.map(str::to_string);
+		let hash =
+			row.get("val").and_then(|v| v.get("hash")).and_then(|v| v.as_str()).map(str::to_string);
 		if let (Some(path), Some(hash)) = (path, hash) {
 			out.insert(path, hash);
 		}
@@ -270,28 +265,29 @@ async fn store_sync_hash(db: &Surreal<Any>, path: &str, hash: &str) -> Result<()
 
 async fn detect_shared_db(db: &Surreal<Any>) -> Result<bool> {
 	if let Ok(value) = env::var("SURREALKIT_SHARED_DB")
-		&& let Some(parsed) = parse_bool(&value) {
-			return Ok(parsed);
-		}
+		&& let Some(parsed) = parse_bool(&value)
+	{
+		return Ok(parsed);
+	}
 
-	let mut resp = db
-		.query("SELECT val FROM __entity WHERE ns = 'meta' AND key = 'shared' LIMIT 1;")
-		.await?;
+	let mut resp =
+		db.query("SELECT val FROM __entity WHERE ns = 'meta' AND key = 'shared' LIMIT 1;").await?;
 	let row: Option<serde_json::Value> = resp.take(0)?;
-	let shared =
-		row.as_ref().and_then(|v| v.get("val")).and_then(|v| v.as_bool()).unwrap_or(false);
+	let shared = row.as_ref().and_then(|v| v.get("val")).and_then(|v| v.as_bool()).unwrap_or(false);
 	Ok(shared)
 }
 
 async fn write_meta_from_env(db: &Surreal<Any>) -> Result<()> {
 	if let Ok(raw_shared) = env::var("SURREALKIT_SHARED_DB")
-		&& let Some(shared) = parse_bool(&raw_shared) {
-			upsert_meta(db, "shared", serde_json::json!(shared)).await?;
-		}
+		&& let Some(shared) = parse_bool(&raw_shared)
+	{
+		upsert_meta(db, "shared", serde_json::json!(shared)).await?;
+	}
 	if let Ok(owner) = env::var("SURREALKIT_OWNER")
-		&& !owner.trim().is_empty() {
-			upsert_meta(db, "owner", serde_json::json!(owner)).await?;
-		}
+		&& !owner.trim().is_empty()
+	{
+		upsert_meta(db, "owner", serde_json::json!(owner)).await?;
+	}
 	Ok(())
 }
 

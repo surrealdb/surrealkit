@@ -20,16 +20,17 @@ pub fn assert_json_value_with_context(
 	let exists = found.is_some();
 
 	if let Some(expected_exists) = assertion.exists
-		&& expected_exists != exists {
-			return Ok(AssertionReport {
-				name: label,
-				passed: false,
-				message: format!(
-					"path '{}' existence mismatch: expected {} got {}",
-					assertion.path, expected_exists, exists
-				),
-			});
-		}
+		&& expected_exists != exists
+	{
+		return Ok(AssertionReport {
+			name: label,
+			passed: false,
+			message: format!(
+				"path '{}' existence mismatch: expected {} got {}",
+				assertion.path, expected_exists, exists
+			),
+		});
+	}
 
 	if found.is_none() {
 		return Ok(AssertionReport {
@@ -42,16 +43,14 @@ pub fn assert_json_value_with_context(
 	let value = found.expect("checked above");
 
 	if let Some(expected) = &assertion.equals
-		&& value != expected {
-			return Ok(AssertionReport {
-				name: label,
-				passed: false,
-				message: format!(
-					"path '{}' expected {:?}, got {:?}",
-					assertion.path, expected, value
-				),
-			});
-		}
+		&& value != expected
+	{
+		return Ok(AssertionReport {
+			name: label,
+			passed: false,
+			message: format!("path '{}' expected {:?}, got {:?}", assertion.path, expected, value),
+		});
+	}
 
 	if let Some(auth_ref) = &assertion.equals_auth {
 		let Some(auth) = ctx.actor_auth.as_ref() else {
@@ -132,16 +131,17 @@ pub fn assert_header_value(
 	let exists = found.is_some();
 
 	if let Some(expected_exists) = assertion.exists
-		&& exists != expected_exists {
-			return Ok(AssertionReport {
-				name: label,
-				passed: false,
-				message: format!(
-					"header '{}' existence mismatch expected {} got {}",
-					assertion.name, expected_exists, exists
-				),
-			});
-		}
+		&& exists != expected_exists
+	{
+		return Ok(AssertionReport {
+			name: label,
+			passed: false,
+			message: format!(
+				"header '{}' existence mismatch expected {} got {}",
+				assertion.name, expected_exists, exists
+			),
+		});
+	}
 
 	if found.is_none() {
 		return Ok(AssertionReport {
@@ -154,28 +154,27 @@ pub fn assert_header_value(
 	let value = found.expect("checked above");
 
 	if let Some(expected) = &assertion.equals
-		&& &value != expected {
-			return Ok(AssertionReport {
-				name: label,
-				passed: false,
-				message: format!(
-					"header '{}' expected '{}' got '{}'",
-					assertion.name, expected, value
-				),
-			});
-		}
+		&& &value != expected
+	{
+		return Ok(AssertionReport {
+			name: label,
+			passed: false,
+			message: format!("header '{}' expected '{}' got '{}'", assertion.name, expected, value),
+		});
+	}
 
 	if let Some(part) = &assertion.contains
-		&& !value.contains(part) {
-			return Ok(AssertionReport {
-				name: label,
-				passed: false,
-				message: format!(
-					"header '{}' missing substring '{}' in '{}'",
-					assertion.name, part, value
-				),
-			});
-		}
+		&& !value.contains(part)
+	{
+		return Ok(AssertionReport {
+			name: label,
+			passed: false,
+			message: format!(
+				"header '{}' missing substring '{}' in '{}'",
+				assertion.name, part, value
+			),
+		});
+	}
 
 	if let Some(pattern) = &assertion.regex {
 		let re = Regex::new(pattern).map_err(|e| {
