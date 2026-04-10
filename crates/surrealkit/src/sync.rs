@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::env;
+use std::io::Write;
 use std::time::Duration;
 
 use anyhow::{Result, bail};
@@ -15,7 +16,7 @@ use crate::rollout::{
 };
 use crate::schema_state::{
 	CatalogEntity, EntityKey, build_catalog_snapshot, collect_schema_files,
-	ensure_local_state_dirs, render_remove_sql,
+	ensure_local_state_dirs, ensure_overwrite, render_remove_sql,
 };
 use crate::setup::run_setup;
 
@@ -39,10 +40,11 @@ pub async fn run_sync(db: &Surreal<Any>, opts: SyncOpts) -> Result<()> {
 			"Watch mode active ({}ms interval). Waiting for schema changes... (Ctrl+C to stop)",
 			opts.debounce_ms.max(250)
 		);
+		let _ = std::io::stdout().flush();
 		loop {
 			tokio::select! {
 				_ = tokio::signal::ctrl_c() => {
-					println!("Stopping schema watch.");
+					println!("\nStopping schema watch.");
 					break;
 				}
 				_ = tokio::time::sleep(Duration::from_millis(opts.debounce_ms.max(250))) => {
@@ -94,7 +96,8 @@ async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> 
 			continue;
 		}
 
-		match exec_surql(db, &file.sql).await {
+		let sql = ensure_overwrite(&file.sql);
+		match exec_surql(db, &sql).await {
 			Ok(_) => {
 				if !watch_mode {
 					println!("applied {}", file.path);
@@ -205,6 +208,7 @@ async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> 
 					removed_paths.len()
 				);
 			}
+			let _ = std::io::stdout().flush();
 		}
 	} else if changed_count == 0 && removed_paths.is_empty() && stale_count == 0 {
 		println!("schema already in sync");
