@@ -10,9 +10,9 @@ use crate::core::sha256_hex;
 
 pub const SCHEMA_DIR: &str = "database/schema";
 pub const ROLLOUTS_DIR: &str = "database/rollouts";
-pub const STATE_DIR: &str = "database/.surrealkit";
-pub const SCHEMA_SNAPSHOT_PATH: &str = "database/.surrealkit/schema_snapshot.json";
-pub const CATALOG_SNAPSHOT_PATH: &str = "database/.surrealkit/catalog_snapshot.json";
+pub const STATE_DIR: &str = "database/snapshots";
+pub const SCHEMA_SNAPSHOT_PATH: &str = "database/snapshots/schema_snapshot.json";
+pub const CATALOG_SNAPSHOT_PATH: &str = "database/snapshots/catalog_snapshot.json";
 
 #[derive(Debug, Clone)]
 pub struct SchemaFile {
@@ -383,6 +383,42 @@ where
 	Ok(())
 }
 
+/// Ensures every `DEFINE` statement includes the `OVERWRITE` modifier so that
+/// sync can re-apply schemas idempotently against an existing database.
+pub fn ensure_overwrite(sql: &str) -> String {
+	let stmts = split_statements(&strip_line_comments(sql));
+	let mut out = Vec::with_capacity(stmts.len());
+	for stmt in stmts {
+		let trimmed = stmt.trim();
+		if trimmed.is_empty() {
+			continue;
+		}
+		let upper = trimmed.to_ascii_uppercase();
+		if upper.starts_with("DEFINE ") {
+			let tokens: Vec<&str> = trimmed.splitn(4, char::is_whitespace).collect();
+			// tokens: ["DEFINE", "<KIND>", ...]
+			if tokens.len() >= 3 {
+				let after_kind = &trimmed[tokens[0].len()..].trim_start();
+				let after_kind_word = &after_kind[tokens[1].len()..].trim_start();
+				let rest_upper = after_kind_word.to_ascii_uppercase();
+				if rest_upper.starts_with("OVERWRITE")
+					|| rest_upper.starts_with("IF NOT EXISTS")
+				{
+					// Already has a creation modifier
+					out.push(format!("{};", trimmed));
+				} else {
+					out.push(format!("DEFINE {} OVERWRITE {};", tokens[1], after_kind_word));
+				}
+			} else {
+				out.push(format!("{};", trimmed));
+			}
+		} else {
+			out.push(format!("{};", trimmed));
+		}
+	}
+	out.join("\n")
+}
+
 fn strip_line_comments(sql: &str) -> String {
 	sql.lines()
 		.filter(|line| {
@@ -714,5 +750,30 @@ mod tests {
 		let snap = snapshot_from_files(&files);
 		assert_eq!(snap.files[0].path, "database/schema/a.surql");
 		assert_eq!(snap.files[1].path, "database/schema/z.surql");
+	}
+
+	#[test]
+	fn ensure_overwrite_injects_when_missing() {
+		let sql = "DEFINE TABLE post SCHEMAFULL;\nDEFINE FIELD name ON post TYPE string;";
+		let result = ensure_overwrite(sql);
+		assert!(result.contains("DEFINE TABLE OVERWRITE post SCHEMAFULL;"));
+		assert!(result.contains("DEFINE FIELD OVERWRITE name ON post TYPE string;"));
+	}
+
+	#[test]
+	fn ensure_overwrite_preserves_existing() {
+		let sql = "DEFINE TABLE OVERWRITE post SCHEMAFULL;";
+		let result = ensure_overwrite(sql);
+		assert!(result.contains("DEFINE TABLE OVERWRITE post SCHEMAFULL;"));
+		// Should not double up OVERWRITE
+		assert!(!result.contains("OVERWRITE OVERWRITE"));
+	}
+
+	#[test]
+	fn ensure_overwrite_preserves_if_not_exists() {
+		let sql = "DEFINE TABLE IF NOT EXISTS post SCHEMAFULL;";
+		let result = ensure_overwrite(sql);
+		assert!(result.contains("IF NOT EXISTS"));
+		assert!(!result.contains("OVERWRITE"));
 	}
 }
