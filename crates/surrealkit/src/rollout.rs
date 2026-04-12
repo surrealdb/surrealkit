@@ -120,7 +120,6 @@ pub struct LoadedRolloutSpec {
 	pub spec: RolloutSpec,
 }
 
-#[expect(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ManagedEntityRecord {
 	pub entity: CatalogEntity,

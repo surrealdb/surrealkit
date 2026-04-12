@@ -1,5 +1,5 @@
 [workspace]
-members = ['crates/surrealkit']
+members = ['crates/surrealkit', 'crates/surrealkit-macros']
 resolver = '2'
 
 [profile.release]

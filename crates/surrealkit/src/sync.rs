@@ -15,10 +15,10 @@ use crate::rollout::{
 	load_managed_entities, release_lock, upsert_managed_entities,
 };
 use crate::schema_state::{
-	CatalogEntity, EntityKey, build_catalog_snapshot, collect_schema_files,
+	CatalogEntity, EntityKey, SchemaFile, build_catalog_snapshot, collect_schema_files,
 	ensure_local_state_dirs, ensure_overwrite, render_remove_sql,
 };
-use crate::setup::run_setup;
+use crate::setup::{ensure_metadata_tables, run_setup};
 
 #[derive(Debug, Clone)]
 pub struct SyncOpts {
@@ -65,50 +65,382 @@ pub async fn run_sync(db: &Surreal<Any>, opts: SyncOpts) -> Result<()> {
 
 async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> Result<()> {
 	let files = collect_schema_files()?;
-	let desired_catalog = build_catalog_snapshot(&files)?;
-	let tracked = load_sync_hashes(db).await?;
-	let managed = load_managed_entities(db).await?;
 
 	if files.is_empty() && !watch_mode {
 		println!("No schema files found in database/schema");
 	}
 
+	let inner_opts = SyncInnerOpts {
+		dry_run: opts.dry_run,
+		fail_fast: opts.fail_fast,
+		prune: opts.prune,
+		allow_shared_prune: opts.allow_shared_prune,
+	};
+
+	let report = sync_files_to_db(db, &files, &inner_opts).await?;
+
+	if watch_mode {
+		let has_changes =
+			!report.applied.is_empty() || !report.pruned.is_empty() || report.stale_tracking_removed > 0;
+		if has_changes {
+			if opts.dry_run {
+				println!(
+					"Change detected (dry-run): {} schema file(s), {} stale entity(ies), {} stale tracking file(s) would be reconciled.",
+					report.applied.len() + report.skipped_dry_run.len(),
+					report.stale_entity_count,
+					report.stale_tracking_removed
+				);
+			} else {
+				println!(
+					"Change detected and pushed: {} schema file(s) synced, {} stale entity(ies) pruned, {} stale tracking file(s) removed.",
+					report.applied.len(),
+					report.pruned.len(),
+					report.stale_tracking_removed
+				);
+			}
+			let _ = std::io::stdout().flush();
+		}
+	} else if report.already_in_sync {
+		println!("schema already in sync");
+	}
+
+	if !report.failed.is_empty() {
+		eprintln!("sync completed with {} apply error(s)", report.failed.len());
+	}
+	if report.stale_entity_count > 0 && !opts.prune {
+		println!(
+			"detected {} stale managed entities; rerun without --no-prune to remove",
+			report.stale_entity_count
+		);
+	}
+
+	Ok(())
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SyncSchemaOpts {
+	pub dry_run: bool,
+	pub fail_fast: bool,
+	pub prune: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SyncReport {
+	pub applied: Vec<String>,
+	pub unchanged: Vec<String>,
+	pub failed: Vec<String>,
+	pub pruned: Vec<String>,
+	pub already_in_sync: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DataMigrationReport {
+	pub applied: Vec<String>,
+	pub skipped: Vec<String>,
+	pub reverted: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct MigrateReport {
+	pub schema: SyncReport,
+	pub data: DataMigrationReport,
+}
+
+#[derive(Debug, Clone)]
+pub struct AppliedDataMigration {
+	pub path: String,
+	pub hash: String,
+	pub applied_at: String,
+}
+
+pub async fn sync_schemas(
+	db: &Surreal<Any>,
+	files: &[SchemaFile],
+	opts: &SyncSchemaOpts,
+) -> Result<SyncReport> {
+	ensure_metadata_tables(db).await?;
+
+	let inner_opts = SyncInnerOpts {
+		dry_run: opts.dry_run,
+		fail_fast: opts.fail_fast,
+		prune: opts.prune,
+		allow_shared_prune: false,
+	};
+
+	let inner = sync_files_to_db(db, files, &inner_opts).await?;
+
+	Ok(SyncReport {
+		applied: inner.applied,
+		unchanged: inner.unchanged,
+		failed: inner.failed,
+		pruned: inner.pruned,
+		already_in_sync: inner.already_in_sync,
+	})
+}
+
+enum ApplyLimit<'a> {
+	All,
+	Next,
+	UpTo(&'a str),
+}
+
+pub async fn run_data_migrations(
+	db: &Surreal<Any>,
+	files: &[SchemaFile],
+) -> Result<DataMigrationReport> {
+	apply_data_migrations(db, files, ApplyLimit::All).await
+}
+
+pub async fn run_next_data_migration(
+	db: &Surreal<Any>,
+	files: &[SchemaFile],
+) -> Result<DataMigrationReport> {
+	apply_data_migrations(db, files, ApplyLimit::Next).await
+}
+
+pub async fn run_data_migrations_to(
+	db: &Surreal<Any>,
+	files: &[SchemaFile],
+	target: &str,
+) -> Result<DataMigrationReport> {
+	if !files.iter().any(|f| f.path == target) {
+		bail!("target migration not found: {target}");
+	}
+	apply_data_migrations(db, files, ApplyLimit::UpTo(target)).await
+}
+
+pub async fn revert_last_data_migration(db: &Surreal<Any>) -> Result<DataMigrationReport> {
+	ensure_metadata_tables(db).await?;
+	let applied = list_applied_data_migrations(db).await?;
+	let Some(last) = applied.last() else {
+		return Ok(DataMigrationReport::default());
+	};
+	delete_migration_record(db, &last.path).await?;
+	Ok(DataMigrationReport {
+		reverted: vec![last.path.clone()],
+		..Default::default()
+	})
+}
+
+pub async fn revert_data_migrations_to(
+	db: &Surreal<Any>,
+	target: &str,
+) -> Result<DataMigrationReport> {
+	ensure_metadata_tables(db).await?;
+	let applied = list_applied_data_migrations(db).await?;
+	if !applied.iter().any(|m| m.path == target) {
+		bail!("target migration not found in applied list: {target}");
+	}
+
+	let mut reverted = Vec::new();
+	for migration in applied.iter().rev() {
+		if migration.path == target {
+			break;
+		}
+		delete_migration_record(db, &migration.path).await?;
+		reverted.push(migration.path.clone());
+	}
+
+	Ok(DataMigrationReport {
+		reverted,
+		..Default::default()
+	})
+}
+
+pub async fn reset_data_migrations(db: &Surreal<Any>) -> Result<DataMigrationReport> {
+	ensure_metadata_tables(db).await?;
+	let applied = list_applied_data_migrations(db).await?;
+	let reverted: Vec<String> = applied.iter().rev().map(|m| m.path.clone()).collect();
+
+	if !reverted.is_empty() {
+		db.query("DELETE __entity WHERE ns = 'migration';")
+			.await?
+			.check()?;
+	}
+
+	Ok(DataMigrationReport {
+		reverted,
+		..Default::default()
+	})
+}
+
+pub async fn list_applied_data_migrations(
+	db: &Surreal<Any>,
+) -> Result<Vec<AppliedDataMigration>> {
+	ensure_metadata_tables(db).await?;
+	let mut resp = db
+		.query("SELECT key, val FROM __entity WHERE ns = 'migration' ORDER BY key ASC;")
+		.await?;
+	let rows: Vec<serde_json::Value> = resp.take(0)?;
+
+	let mut out = Vec::with_capacity(rows.len());
+	for row in rows {
+		let path = row.get("key").and_then(|v| v.as_str()).unwrap_or_default();
+		let val = row.get("val");
+		let hash = val
+			.and_then(|v| v.get("hash"))
+			.and_then(|v| v.as_str())
+			.unwrap_or_default();
+		let applied_at = val
+			.and_then(|v| v.get("applied_at"))
+			.and_then(|v| v.as_str())
+			.unwrap_or_default();
+		out.push(AppliedDataMigration {
+			path: path.to_string(),
+			hash: hash.to_string(),
+			applied_at: applied_at.to_string(),
+		});
+	}
+	Ok(out)
+}
+
+async fn apply_data_migrations(
+	db: &Surreal<Any>,
+	files: &[SchemaFile],
+	limit: ApplyLimit<'_>,
+) -> Result<DataMigrationReport> {
+	ensure_metadata_tables(db).await?;
+	let tracked = load_migration_hashes(db).await?;
+
+	let mut report = DataMigrationReport::default();
+
+	for file in files {
+		if let Some(stored_hash) = tracked.get(&file.path) {
+			if *stored_hash != file.hash {
+				bail!(
+					"migration '{}' was modified after being applied (stored hash: {}, current: {})",
+					file.path,
+					&stored_hash[..12],
+					&file.hash[..12]
+				);
+			}
+			report.skipped.push(file.path.clone());
+			continue;
+		}
+
+		exec_surql(db, &file.sql).await?;
+		store_migration_record(db, &file.path, &file.hash).await?;
+		report.applied.push(file.path.clone());
+
+		match limit {
+			ApplyLimit::Next => break,
+			ApplyLimit::UpTo(target) if file.path == target => break,
+			_ => {}
+		}
+	}
+
+	Ok(report)
+}
+
+pub async fn migrate(
+	db: &Surreal<Any>,
+	schemas: &[SchemaFile],
+	data: &[SchemaFile],
+	opts: &SyncSchemaOpts,
+) -> Result<MigrateReport> {
+	let schema = sync_schemas(db, schemas, opts).await?;
+	let data = run_data_migrations(db, data).await?;
+	Ok(MigrateReport { schema, data })
+}
+
+async fn load_migration_hashes(db: &Surreal<Any>) -> Result<BTreeMap<String, String>> {
+	let mut resp = db
+		.query("SELECT key, val FROM __entity WHERE ns = 'migration';")
+		.await?;
+	let rows: Vec<serde_json::Value> = resp.take(0)?;
+
+	let mut out = BTreeMap::new();
+	for row in rows {
+		let path = row.get("key").and_then(|v| v.as_str()).map(str::to_string);
+		let hash = row
+			.get("val")
+			.and_then(|v| v.get("hash"))
+			.and_then(|v| v.as_str())
+			.map(str::to_string);
+		if let (Some(path), Some(hash)) = (path, hash) {
+			out.insert(path, hash);
+		}
+	}
+	Ok(out)
+}
+
+async fn store_migration_record(db: &Surreal<Any>, path: &str, hash: &str) -> Result<()> {
+	db.query(
+		"DELETE __entity WHERE ns = 'migration' AND key = $path; \
+		 CREATE __entity CONTENT { ns: 'migration', key: $path, val: { hash: $hash, applied_at: time::now() }, updated_at: time::now() };",
+	)
+	.bind(("path", path.to_string()))
+	.bind(("hash", hash.to_string()))
+	.await?
+	.check()?;
+	Ok(())
+}
+
+async fn delete_migration_record(db: &Surreal<Any>, path: &str) -> Result<()> {
+	db.query("DELETE __entity WHERE ns = 'migration' AND key = $path;")
+		.bind(("path", path.to_string()))
+		.await?
+		.check()?;
+	Ok(())
+}
+
+#[derive(Debug, Clone)]
+struct SyncInnerOpts {
+	dry_run: bool,
+	fail_fast: bool,
+	prune: bool,
+	allow_shared_prune: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+struct SyncInnerReport {
+	applied: Vec<String>,
+	unchanged: Vec<String>,
+	skipped_dry_run: Vec<String>,
+	failed: Vec<String>,
+	pruned: Vec<String>,
+	stale_entity_count: usize,
+	stale_tracking_removed: usize,
+	already_in_sync: bool,
+}
+
+async fn sync_files_to_db(
+	db: &Surreal<Any>,
+	files: &[SchemaFile],
+	opts: &SyncInnerOpts,
+) -> Result<SyncInnerReport> {
+	let desired_catalog = build_catalog_snapshot(files)?;
+	let tracked = load_sync_hashes(db).await?;
+	let managed = load_managed_entities(db).await?;
+
 	let file_paths: BTreeSet<String> = files.iter().map(|file| file.path.clone()).collect();
 	let removed_paths: Vec<String> =
 		tracked.keys().filter(|path| !file_paths.contains(*path)).cloned().collect();
 
-	let mut changed_count = 0usize;
-	let mut apply_errors = 0usize;
-	let mut synced_paths = BTreeSet::new();
+	let mut report = SyncInnerReport::default();
 	let mut failed_paths = BTreeSet::new();
-	for file in &files {
+
+	for file in files {
 		let tracked_hash = tracked.get(&file.path);
 		if tracked_hash == Some(&file.hash) {
+			report.unchanged.push(file.path.clone());
 			continue;
 		}
 
-		changed_count += 1;
 		if opts.dry_run {
-			if !watch_mode {
-				println!("DRY RUN: would apply {}", file.path);
-			}
-			synced_paths.insert(file.path.clone());
+			report.skipped_dry_run.push(file.path.clone());
 			continue;
 		}
 
 		let sql = ensure_overwrite(&file.sql);
 		match exec_surql(db, &sql).await {
 			Ok(_) => {
-				if !watch_mode {
-					println!("applied {}", file.path);
-				}
 				store_sync_hash(db, &file.path, &file.hash).await?;
-				synced_paths.insert(file.path.clone());
+				report.applied.push(file.path.clone());
 			}
 			Err(err) => {
-				apply_errors += 1;
 				failed_paths.insert(file.path.clone());
-				eprintln!("error applying {}: {err:#}", file.path);
+				report.failed.push(file.path.clone());
 				if opts.fail_fast {
 					return Err(err);
 				}
@@ -136,6 +468,7 @@ async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> 
 	let stale_entities: Vec<EntityKey> =
 		stale_records.iter().map(|record| record.entity.key()).collect();
 	let stale_count = stale_entities.len();
+	report.stale_entity_count = stale_count;
 	let destructive_change = stale_count > 0;
 
 	let shared = if destructive_change {
@@ -156,33 +489,21 @@ async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> 
 		upsert_managed_entities(db, &effective_entities, None, "active").await?;
 		if !removed_paths.is_empty() {
 			delete_sync_hashes(db, &removed_paths).await?;
+			report.stale_tracking_removed = removed_paths.len();
 		}
 	}
 
-	let mut pruned_count = 0usize;
-	if opts.prune && stale_count > 0 {
-		let remove_sql = render_remove_sql(&stale_entities, true)?;
-		if opts.dry_run {
-			if !watch_mode {
-				println!("DRY RUN: would prune {} stale managed entities", remove_sql.len());
-				for stmt in &remove_sql {
-					println!("  {}", stmt);
-				}
-			}
-		} else if shared {
+	if opts.prune && stale_count > 0 && !opts.dry_run {
+		if shared {
 			acquire_lock(db, "global").await?;
 			let result = prune_managed_entities(db, &stale_entities).await;
 			let release = release_lock(db, "global").await;
-			match (result, release) {
-				(Err(err), _) => return Err(err),
-				(Ok(_), Err(err)) => return Err(err),
-				(Ok(()), Ok(())) => {}
-			}
-			pruned_count = stale_count;
+			result?;
+			release?;
 		} else {
 			prune_managed_entities(db, &stale_entities).await?;
-			pruned_count = stale_count;
 		}
+		report.pruned = format_entity_keys(&stale_entities);
 	}
 
 	if !opts.dry_run {
@@ -190,41 +511,27 @@ async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> 
 		store_last_sync_meta(db).await?;
 	}
 
-	if watch_mode {
-		let has_changes = changed_count > 0 || stale_count > 0 || !removed_paths.is_empty();
-		if has_changes {
-			if opts.dry_run {
-				println!(
-					"Change detected (dry-run): {} schema file(s), {} stale entity(ies), {} stale tracking file(s) would be reconciled.",
-					changed_count,
-					stale_count,
-					removed_paths.len()
-				);
-			} else {
-				println!(
-					"Change detected and pushed: {} schema file(s) synced, {} stale entity(ies) pruned, {} stale tracking file(s) removed.",
-					changed_count,
-					pruned_count,
-					removed_paths.len()
-				);
-			}
-			let _ = std::io::stdout().flush();
-		}
-	} else if changed_count == 0 && removed_paths.is_empty() && stale_count == 0 {
-		println!("schema already in sync");
-	}
+	report.already_in_sync = report.applied.is_empty()
+		&& report.failed.is_empty()
+		&& report.stale_entity_count == 0
+		&& removed_paths.is_empty()
+		&& report.skipped_dry_run.is_empty();
 
-	if apply_errors > 0 {
-		eprintln!("sync completed with {} apply error(s)", apply_errors);
-	}
-	if stale_count > 0 && !opts.prune {
-		println!(
-			"detected {} stale managed entities; rerun without --no-prune to remove",
-			stale_count
-		);
-	}
+	Ok(report)
+}
 
-	Ok(())
+fn format_entity_keys(entities: &[EntityKey]) -> Vec<String> {
+	entities
+		.iter()
+		.map(|e| {
+			format!(
+				"{}:{}:{}",
+				e.kind,
+				e.scope.as_deref().unwrap_or(""),
+				e.name
+			)
+		})
+		.collect()
 }
 
 async fn prune_managed_entities(db: &Surreal<Any>, stale_entities: &[EntityKey]) -> Result<()> {

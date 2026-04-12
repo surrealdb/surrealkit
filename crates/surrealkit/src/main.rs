@@ -5,23 +5,12 @@ use rust_dotenv::dotenv::DotEnv;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 
-mod config;
-mod core;
-mod rollout;
-mod scaffold;
-mod schema_state;
-mod seed;
-mod setup;
-mod sync;
-mod tester;
-
-use core::exec_surql;
-
-use config::{DbCfg, connect};
-use rollout::{RolloutExecutionOpts, RolloutPlanOpts};
-use setup::run_setup;
-use sync::SyncOpts;
-use tester::{TestOpts, run_test};
+use surrealkit::config::{DbCfg, connect};
+use surrealkit::core::exec_surql;
+use surrealkit::rollout::{RolloutExecutionOpts, RolloutPlanOpts};
+use surrealkit::setup::run_setup;
+use surrealkit::sync::SyncOpts;
+use surrealkit::tester::{TestOpts, run_test};
 
 #[derive(Parser, Debug)]
 #[command(version, about = "SurrealKit CLI")]
@@ -127,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let env = load_env();
 
 	match args.command {
-		Commands::Init => scaffold::scaffold()?,
+		Commands::Init => surrealkit::scaffold::scaffold()?,
 		Commands::Setup => {
 			let db = connect_from_env(&env).await?;
 			run_setup(&db).await?;
@@ -141,7 +130,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			allow_shared_prune,
 		} => {
 			let db = connect_from_env(&env).await?;
-			sync::run_sync(
+			surrealkit::sync::run_sync(
 				&db,
 				SyncOpts {
 					watch,
@@ -159,13 +148,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		} => match command {
 			RolloutCommands::Baseline => {
 				let db = connect_from_env(&env).await?;
-				rollout::run_baseline(&db).await?;
+				surrealkit::rollout::run_baseline(&db).await?;
 			}
 			RolloutCommands::Plan {
 				name,
 				dry_run,
 			} => {
-				rollout::run_plan(RolloutPlanOpts {
+				surrealkit::rollout::run_plan(RolloutPlanOpts {
 					name,
 					dry_run,
 				})
@@ -175,7 +164,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 				target,
 			} => {
 				let db = connect_from_env(&env).await?;
-				rollout::run_start(
+				surrealkit::rollout::run_start(
 					&db,
 					RolloutExecutionOpts {
 						selector: Some(target),
@@ -187,7 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 				target,
 			} => {
 				let db = connect_from_env(&env).await?;
-				rollout::run_complete(
+				surrealkit::rollout::run_complete(
 					&db,
 					RolloutExecutionOpts {
 						selector: Some(target),
@@ -199,7 +188,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 				target,
 			} => {
 				let db = connect_from_env(&env).await?;
-				rollout::run_rollback(
+				surrealkit::rollout::run_rollback(
 					&db,
 					RolloutExecutionOpts {
 						selector: Some(target),
@@ -211,12 +200,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 				target,
 			} => {
 				let db = connect_from_env(&env).await?;
-				rollout::run_status(&db, target).await?;
+				surrealkit::rollout::run_status(&db, target).await?;
 			}
 			RolloutCommands::Lint {
 				target,
 			} => {
-				rollout::run_lint(RolloutExecutionOpts {
+				surrealkit::rollout::run_lint(RolloutExecutionOpts {
 					selector: Some(target),
 				})
 				.await?;
@@ -224,11 +213,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		},
 		Commands::Seed => {
 			let db = connect_from_env(&env).await?;
-			seed::seed(&db).await?;
+			surrealkit::seed::seed(&db).await?;
 		}
 		Commands::Status => {
 			let db = connect_from_env(&env).await?;
-			rollout::run_status(&db, None).await?;
+			surrealkit::rollout::run_status(&db, None).await?;
 		}
 		Commands::Apply {
 			path,

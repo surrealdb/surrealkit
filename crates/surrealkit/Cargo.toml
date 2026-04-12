@@ -8,7 +8,16 @@ repository = 'https://github.com/surrealdb/surrealkit'
 license-file = 'LICENSE'
 keywords = ['surrealdb', 'migrations', 'seed', 'testing', 'manage']
 
+[lib]
+name = "surrealkit"
+path = "src/lib.rs"
+
+[[bin]]
+name = "surrealkit"
+path = "src/main.rs"
+
 [dependencies]
+surrealkit-macros = { path = '../surrealkit-macros' }
 anyhow = '1'
 clap = { version = '4.5.47', features = ['derive'] }
 hex = '0.4'
@@ -24,6 +33,9 @@ tokio = { version = '1.47', features = ['macros', 'rt-multi-thread', 'signal', '
 walkdir = '2.5'
 reqwest = { version = '0.12', default-features = false, features = ['json', 'rustls-tls'] }
 regex = '1'
+
+[dev-dependencies]
+surrealdb = { version = '3.0.5', features = ['kv-mem'] }
 
 [lints]
 workspace = true
