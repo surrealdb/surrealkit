@@ -463,7 +463,7 @@ pub async fn run_rollback(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Resu
 pub async fn load_active_rollout_id(db: &Surreal<Any>) -> Result<Option<String>> {
 	let mut resp = db
 		.query(
-			"SELECT id, status FROM __rollout \
+			"SELECT id, status, started_at FROM __rollout \
 			 WHERE status INSIDE ['planned', 'running_start', 'ready_to_complete', 'running_complete', 'running_rollback', 'failed'] \
 			 ORDER BY started_at DESC LIMIT 1;",
 		)
