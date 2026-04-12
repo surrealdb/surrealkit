@@ -228,6 +228,9 @@ pub fn parse_schema_statements(file: &SchemaFile) -> Result<Vec<CatalogEntity>> 
 				file.path
 			);
 		}
+		if upper.starts_with("LET ") {
+			continue;
+		}
 		if !upper.starts_with("DEFINE ") {
 			bail!(
 				"schema file '{}' contains a non-DEFINE statement: '{}'",
@@ -697,6 +700,19 @@ mod tests {
 
 		let err = parse_schema_statements(&file).expect_err("must reject create");
 		assert!(err.to_string().contains("non-DEFINE"));
+	}
+
+	#[test]
+	fn schema_allows_let_variables() {
+		let file = SchemaFile {
+			path: "database/schema/storage.surql".to_string(),
+			hash: "x".to_string(),
+			sql: "LET $types = ['image/png', 'image/jpeg'];\nDEFINE TABLE OVERWRITE storage SCHEMAFULL;".to_string(),
+		};
+
+		let entities = parse_schema_statements(&file).expect("LET should be allowed");
+		assert_eq!(entities.len(), 1);
+		assert_eq!(entities[0].kind, "table");
 	}
 
 	#[test]
