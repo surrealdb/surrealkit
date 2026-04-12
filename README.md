@@ -31,11 +31,11 @@ This creates a directory `/database` with the necessary scaffolding
 
 The following ENV variables will be picked up for your `.env` file, SurrealKit assumes you're using SurrealDB as a Web Database.
 
-- `DATABASE_HOST` (or `PUBLIC_DATABASE_HOST`)
-- `DATABASE_NAME` (or `PUBLIC_DATABASE_NAME`)
-- `DATABASE_NAMESPACE` (or `PUBLIC_DATABASE_NAMESPACE`)
-- `DATABASE_USER`
-- `DATABASE_PASSWORD`
+- `SURREALDB_HOST` (fallback: `DATABASE_HOST`)
+- `SURREALDB_NAME` (fallback: `DATABASE_NAME`)
+- `SURREALDB_NAMESPACE` (fallback: `DATABASE_NAMESPACE`)
+- `SURREALDB_USER` (fallback: `DATABASE_USER`)
+- `SURREALDB_PASSWORD` (fallback: `DATABASE_PASSWORD`)
 
 SurrealKit creates and manages its internal sync and rollout metadata tables on your configured database.
 
@@ -179,7 +179,7 @@ Optional env fallbacks:
 
 - `SURREALKIT_TEST_BASE_URL`
 - `SURREALKIT_TEST_TIMEOUT_MS`
-- `DATABASE_HOST` or `PUBLIC_DATABASE_HOST` (used as API base URL fallback when test-specific base URL is not set)
+- `SURREALDB_HOST` or `DATABASE_HOST` (used as API base URL fallback when test-specific base URL is not set)
 
 ### Example Suite
 
