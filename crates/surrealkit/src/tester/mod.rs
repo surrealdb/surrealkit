@@ -15,7 +15,7 @@ pub use types::TestOpts;
 use crate::config::DbCfg;
 
 pub async fn run_test(opts: TestOpts) -> Result<()> {
-	let cfg = DbCfg::from_env(&rust_dotenv::dotenv::DotEnv::new(""))?;
+	let cfg = DbCfg::from_env(&rust_dotenv::dotenv::DotEnv::new(""), &Default::default())?;
 	let loaded = loader::load_specs()?;
 	let filter_input = types::FilterInput {
 		suite_pattern: opts.suite.clone(),

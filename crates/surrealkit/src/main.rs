@@ -17,7 +17,7 @@ mod tester;
 
 use core::exec_surql;
 
-use config::{DbCfg, connect};
+use config::{DbCfg, DbOverrides, connect};
 use rollout::{RolloutExecutionOpts, RolloutPlanOpts};
 use setup::run_setup;
 use sync::SyncOpts;
@@ -29,6 +29,26 @@ pub struct Cli {
 	/// Increase output
 	#[arg(short, long, global = true)]
 	verbose: bool,
+
+	/// Database host URL
+	#[arg(long, global = true)]
+	host: Option<String>,
+
+	/// Database name
+	#[arg(long, global = true)]
+	db: Option<String>,
+
+	/// Database namespace
+	#[arg(long, global = true)]
+	ns: Option<String>,
+
+	/// Database user
+	#[arg(long, global = true)]
+	user: Option<String>,
+
+	/// Database password
+	#[arg(long, global = true)]
+	pass: Option<String>,
 
 	#[command(subcommand)]
 	command: Commands,
@@ -125,11 +145,18 @@ fn load_env() -> DotEnv {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args = Cli::parse();
 	let env = load_env();
+	let overrides = DbOverrides {
+		host: args.host,
+		ns: args.ns,
+		db: args.db,
+		user: args.user,
+		pass: args.pass,
+	};
 
 	match args.command {
 		Commands::Init => scaffold::scaffold()?,
 		Commands::Setup => {
-			let db = connect_from_env(&env).await?;
+			let db = connect_from_env(&env, &overrides).await?;
 			run_setup(&db).await?;
 		}
 		Commands::Sync {
@@ -140,7 +167,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			no_prune,
 			allow_shared_prune,
 		} => {
-			let db = connect_from_env(&env).await?;
+			let db = connect_from_env(&env, &overrides).await?;
 			sync::run_sync(
 				&db,
 				SyncOpts {
@@ -158,7 +185,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			command,
 		} => match command {
 			RolloutCommands::Baseline => {
-				let db = connect_from_env(&env).await?;
+				let db = connect_from_env(&env, &overrides).await?;
 				rollout::run_baseline(&db).await?;
 			}
 			RolloutCommands::Plan {
@@ -174,7 +201,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			RolloutCommands::Start {
 				target,
 			} => {
-				let db = connect_from_env(&env).await?;
+				let db = connect_from_env(&env, &overrides).await?;
 				rollout::run_start(
 					&db,
 					RolloutExecutionOpts {
@@ -186,7 +213,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			RolloutCommands::Complete {
 				target,
 			} => {
-				let db = connect_from_env(&env).await?;
+				let db = connect_from_env(&env, &overrides).await?;
 				rollout::run_complete(
 					&db,
 					RolloutExecutionOpts {
@@ -198,7 +225,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			RolloutCommands::Rollback {
 				target,
 			} => {
-				let db = connect_from_env(&env).await?;
+				let db = connect_from_env(&env, &overrides).await?;
 				rollout::run_rollback(
 					&db,
 					RolloutExecutionOpts {
@@ -210,7 +237,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			RolloutCommands::Status {
 				target,
 			} => {
-				let db = connect_from_env(&env).await?;
+				let db = connect_from_env(&env, &overrides).await?;
 				rollout::run_status(&db, target).await?;
 			}
 			RolloutCommands::Lint {
@@ -223,17 +250,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			}
 		},
 		Commands::Seed => {
-			let db = connect_from_env(&env).await?;
+			let db = connect_from_env(&env, &overrides).await?;
 			seed::seed(&db).await?;
 		}
 		Commands::Status => {
-			let db = connect_from_env(&env).await?;
+			let db = connect_from_env(&env, &overrides).await?;
 			rollout::run_status(&db, None).await?;
 		}
 		Commands::Apply {
 			path,
 		} => {
-			let db = connect_from_env(&env).await?;
+			let db = connect_from_env(&env, &overrides).await?;
 			let sql = std::fs::read_to_string(&path)?;
 			exec_surql(&db, &sql).await?;
 		}
@@ -272,7 +299,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	Ok(())
 }
 
-async fn connect_from_env(env: &DotEnv) -> anyhow::Result<Surreal<Any>> {
-	let cfg = DbCfg::from_env(env)?;
+async fn connect_from_env(env: &DotEnv, overrides: &DbOverrides) -> anyhow::Result<Surreal<Any>> {
+	let cfg = DbCfg::from_env(env, overrides)?;
 	connect(&cfg).await
 }
