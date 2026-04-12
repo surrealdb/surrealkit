@@ -47,7 +47,7 @@ fn resolve_base_url(opts: &TestOpts, global: &types::GlobalTestConfig) -> Option
 		.clone()
 		.or_else(|| global.defaults.base_url.clone())
 		.or_else(|| env::var("SURREALKIT_TEST_BASE_URL").ok())
-		.or_else(|| env::var("PUBLIC_DATABASE_HOST").ok())
+		.or_else(|| env::var("SURREALDB_HOST").ok())
 		.or_else(|| env::var("DATABASE_HOST").ok())
 		.map(normalize_base_url)
 }

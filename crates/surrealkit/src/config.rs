@@ -20,23 +20,29 @@ impl DbCfg {
 		let dotenv = DotEnv::new("");
 
 		let host = dotenv
-			.get_var("PUBLIC_DATABASE_HOST".to_string())
+			.get_var("SURREALDB_HOST".to_string())
 			.or_else(|| dotenv.get_var("DATABASE_HOST".to_string()))
 			.unwrap_or(String::from("http://localhost:8000"));
 
 		let db = dotenv
-			.get_var("PUBLIC_DATABASE_NAME".to_string())
+			.get_var("SURREALDB_NAME".to_string())
 			.or_else(|| dotenv.get_var("DATABASE_NAME".to_string()))
 			.unwrap_or(String::from("test"));
 
 		let ns = dotenv
-			.get_var("PUBLIC_DATABASE_NAMESPACE".to_string())
+			.get_var("SURREALDB_NAMESPACE".to_string())
 			.or_else(|| dotenv.get_var("DATABASE_NAMESPACE".to_string()))
 			.unwrap_or(String::from("db"));
 
-		let user = dotenv.get_var("DATABASE_USER".to_string()).unwrap_or(String::from("root"));
+		let user = dotenv
+			.get_var("SURREALDB_USER".to_string())
+			.or_else(|| dotenv.get_var("DATABASE_USER".to_string()))
+			.unwrap_or(String::from("root"));
 
-		let pass = dotenv.get_var("DATABASE_PASSWORD".to_string()).unwrap_or(String::from("root"));
+		let pass = dotenv
+			.get_var("SURREALDB_PASSWORD".to_string())
+			.or_else(|| dotenv.get_var("DATABASE_PASSWORD".to_string()))
+			.unwrap_or(String::from("root"));
 
 		Ok(Self {
 			host,
