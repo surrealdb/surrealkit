@@ -29,13 +29,31 @@ surrealkit init
 
 This creates a directory `/database` with the necessary scaffolding
 
-The following ENV variables will be picked up for your `.env` file, SurrealKit assumes you're using SurrealDB as a Web Database.
+Connection details can be provided via CLI arguments, environment variables, or a `.env` file. The resolution order is: CLI args > system env vars > `.env` file > defaults.
+
+### CLI Arguments
+
+```bash
+surrealkit --host http://localhost:8000 --ns my_ns --db my_db --user root --pass root sync
+```
+
+| Flag | Description | Default |
+|------|-------------|---------|
+| `--host` | Database host URL | `http://localhost:8000` |
+| `--ns` | Database namespace | `db` |
+| `--db` | Database name | `test` |
+| `--user` | Database user | `root` |
+| `--pass` | Database password | `root` |
+
+### Environment Variables
 
 - `SURREALDB_HOST` (fallback: `DATABASE_HOST`)
 - `SURREALDB_NAME` (fallback: `DATABASE_NAME`)
 - `SURREALDB_NAMESPACE` (fallback: `DATABASE_NAMESPACE`)
 - `SURREALDB_USER` (fallback: `DATABASE_USER`)
 - `SURREALDB_PASSWORD` (fallback: `DATABASE_PASSWORD`)
+
+These can be set as system environment variables or in a `.env` file.
 
 SurrealKit creates and manages its internal sync and rollout metadata tables on your configured database.
 
