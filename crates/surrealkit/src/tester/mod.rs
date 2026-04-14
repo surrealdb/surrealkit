@@ -15,7 +15,7 @@ pub use types::TestOpts;
 use crate::config::DbCfg;
 
 pub async fn run_test(opts: TestOpts) -> Result<()> {
-	let cfg = DbCfg::from_env(&rust_dotenv::dotenv::DotEnv::new(""))?;
+	let cfg = DbCfg::from_env(&rust_dotenv::dotenv::DotEnv::new(""), &Default::default())?;
 	let loaded = loader::load_specs()?;
 	let filter_input = types::FilterInput {
 		suite_pattern: opts.suite.clone(),
@@ -47,7 +47,7 @@ fn resolve_base_url(opts: &TestOpts, global: &types::GlobalTestConfig) -> Option
 		.clone()
 		.or_else(|| global.defaults.base_url.clone())
 		.or_else(|| env::var("SURREALKIT_TEST_BASE_URL").ok())
-		.or_else(|| env::var("PUBLIC_DATABASE_HOST").ok())
+		.or_else(|| env::var("SURREALDB_HOST").ok())
 		.or_else(|| env::var("DATABASE_HOST").ok())
 		.map(normalize_base_url)
 }
