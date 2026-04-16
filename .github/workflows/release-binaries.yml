@@ -22,10 +22,17 @@ jobs:
                 include:
                     - os: ubuntu-latest
                       target: x86_64-unknown-linux-gnu
+                    - os: ubuntu-latest
+                      target: x86_64-unknown-linux-musl
                     - os: ubuntu-24.04-arm
                       target: aarch64-unknown-linux-gnu
+                    - os: ubuntu-24.04-arm
+                      target: aarch64-unknown-linux-musl
                     - os: macos-26
                       target: aarch64-apple-darwin
+                    # Cross-compiled from the Apple Silicon runner
+                    - os: macos-26
+                      target: x86_64-apple-darwin
                     - os: windows-latest
                       target: x86_64-pc-windows-msvc
 
@@ -39,6 +46,10 @@ jobs:
                   toolchain: 1.94.0
                   targets: ${{ matrix.target }}
                   components: clippy, rustfmt
+
+            - name: Install musl toolchain
+              if: endsWith(matrix.target, '-musl')
+              run: sudo apt-get update && sudo apt-get install -y musl-tools
 
             - name: Cache Rust artifacts
               uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
@@ -57,7 +68,9 @@ jobs:
                   test -f "$BIN" || (echo "Missing binary: $BIN" && ls -la "target/${{ matrix.target }}/release" && exit 1)
                   ARCHIVE="${BINARY_NAME}-${TAG}-${{ matrix.target }}.tar.gz"
                   tar -C "target/${{ matrix.target }}/release" -czf "${ARCHIVE}" "${BINARY_NAME}"
+                  shasum -a 256 "${ARCHIVE}" > "${ARCHIVE}.sha256"
                   echo "archive=${ARCHIVE}" >> "${GITHUB_OUTPUT}"
+                  echo "checksum=${ARCHIVE}.sha256" >> "${GITHUB_OUTPUT}"
 
             - name: Package archive (windows)
               if: runner.os == 'Windows'
@@ -67,14 +80,20 @@ jobs:
                   $tag = if ("${{ github.ref_name }}") { "${{ github.ref_name }}" } else { "dev" }
                   $archive = "${env:BINARY_NAME}-$tag-${{ matrix.target }}.zip"
                   Compress-Archive -Path "target/${{ matrix.target }}/release/${env:BINARY_NAME}.exe" -DestinationPath $archive
+                  $hash = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLower()
+                  # Match the `shasum -a 256` format: "<hash>  <filename>\n"
+                  "$hash  $archive`n" | Out-File -FilePath "$archive.sha256" -Encoding ascii -NoNewline
                   Add-Content -Path $env:GITHUB_OUTPUT -Value "archive=$archive"
+                  Add-Content -Path $env:GITHUB_OUTPUT -Value "checksum=$archive.sha256"
 
             - name: Upload artifact (unix)
               if: runner.os != 'Windows'
               uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
               with:
                   name: ${{ matrix.target }}
-                  path: ${{ steps.package_unix.outputs.archive }}
+                  path: |
+                      ${{ steps.package_unix.outputs.archive }}
+                      ${{ steps.package_unix.outputs.checksum }}
                   if-no-files-found: error
 
             - name: Upload artifact (windows)
@@ -82,7 +101,9 @@ jobs:
               uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
               with:
                   name: ${{ matrix.target }}
-                  path: ${{ steps.package_windows.outputs.archive }}
+                  path: |
+                      ${{ steps.package_windows.outputs.archive }}
+                      ${{ steps.package_windows.outputs.checksum }}
                   if-no-files-found: error
 
     release:

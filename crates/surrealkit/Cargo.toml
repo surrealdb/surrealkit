@@ -1,7 +1,7 @@
 [package]
 name = 'surrealkit'
 description = 'Manage migrations, seeding and tests for your SurrealDB via CLI'
-version = '0.5.4'
+version = '0.5.5'
 edition = '2024'
 authors = ['Chiru Boggavarapu <chiru@foretag.co>', 'Tobie Morgan Hitchcock <tobie@surrealdb.com>']
 repository = 'https://github.com/surrealdb/surrealkit'
@@ -27,3 +27,11 @@ regex = '1'
 
 [lints]
 workspace = true
+
+# Enable installation of prebuilt release binaries via `cargo binstall surrealkit`.
+# Archives published by .github/workflows/release-binaries.yml are named
+#   surrealkit-vX.Y.Z-<target>.(tar.gz|zip)
+# and contain the binary at the archive root (no `{name}-{target}/` subfolder),
+# so we override `bin-dir` to skip binstall's default prefix.
+[package.metadata.binstall]
+bin-dir = "{ bin }{ binary-ext }"
