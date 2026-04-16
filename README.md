@@ -11,15 +11,65 @@ It provides two approaches to schema management:
 
 SurrealKit also includes a seeding system and a declarative testing framework for validating schemas, permissions, and API endpoints.
 
-## Usage
+## Installation
 
-Install via Cargo:
+| Method | Command | Notes |
+|---|---|---|
+| [`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) | `cargo binstall surrealkit` | Fastest, downloads a prebuilt binary. Recommended. |
+| Cargo (from source) | `cargo install surrealkit` | Compiles locally. Works anywhere Rust does. |
+| Prebuilt tarball | [GitHub Releases](https://github.com/surrealdb/surrealkit/releases) | Manual download. Each archive ships a matching `.sha256`. |
+| Docker | `docker pull ghcr.io/surrealdb/surrealkit:latest` | Multi-arch image on GHCR. Distroless base. |
+
+Prebuilt binaries are published for:
+
+- **Linux**: `x86_64-unknown-linux-gnu`, `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-gnu`, `aarch64-unknown-linux-musl`
+- **macOS**: `aarch64-apple-darwin` (Apple Silicon), `x86_64-apple-darwin` (Intel)
+- **Windows**: `x86_64-pc-windows-msvc`
+
+### Docker
+
+Multi-arch (`linux/amd64`, `linux/arm64`) images are published to GitHub Container Registry on every release. The image is based on `gcr.io/distroless/cc-debian12:nonroot` - minimal (~25 MB), no shell, runs as uid 65532.
 
 ```sh
-cargo install surrealkit
+docker pull ghcr.io/surrealdb/surrealkit:latest
+docker run --rm -v "$(pwd)/database:/database:ro" ghcr.io/surrealdb/surrealkit:latest \
+    --host http://host.docker.internal:8000 --ns my_ns --db my_db sync
 ```
 
-Or download a prebuilt binary from [GitHub Releases](https://github.com/ForetagInc/surrealkit/releases) (Linux, macOS Intel/Apple Silicon, Windows).
+Available tags: `X.Y.Z` (exact), `X.Y` (minor line), `latest`.
+
+Use in Docker Compose for E2E testing alongside SurrealDB:
+
+```yaml
+services:
+  surrealdb:
+    image: surrealdb/surrealdb:latest
+    command: start --user root --pass root memory
+    healthcheck:
+      test: ["CMD", "/surreal", "is-ready"]
+      interval: 1s
+      timeout: 5s
+      retries: 30
+
+  surrealkit:
+    image: ghcr.io/surrealdb/surrealkit:latest
+    depends_on:
+      surrealdb:
+        condition: service_healthy
+    volumes:
+      - ./database:/database:ro
+    command:
+      - --host=http://surrealdb:8000
+      - --ns=my_ns
+      - --db=my_db
+      - --user=root
+      - --pass=root
+      - sync
+```
+
+`surrealkit` exits on completion, so Compose moves on, ideal for "apply schema then run tests" pipelines.
+
+## Usage
 
 Initialise a new project:
 
