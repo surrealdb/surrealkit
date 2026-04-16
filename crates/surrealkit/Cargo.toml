@@ -27,3 +27,11 @@ regex = '1'
 
 [lints]
 workspace = true
+
+# Enable installation of prebuilt release binaries via `cargo binstall surrealkit`.
+# Archives published by .github/workflows/release-binaries.yml are named
+#   surrealkit-vX.Y.Z-<target>.(tar.gz|zip)
+# and contain the binary at the archive root (no `{name}-{target}/` subfolder),
+# so we override `bin-dir` to skip binstall's default prefix.
+[package.metadata.binstall]
+bin-dir = "{ bin }{ binary-ext }"
