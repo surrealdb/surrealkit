@@ -233,7 +233,7 @@ pub async fn run_status(db: &Surreal<Any>, selector: Option<String>) -> Result<(
 		"SELECT id, name, status, started_at, completed_at, last_error, steps FROM __rollout"
 			.to_string();
 	if selector.is_some() {
-		query.push_str(" WHERE id = $id");
+		query.push_str(" WHERE record::id(id) = $id");
 	}
 	query.push_str(" ORDER BY started_at DESC;");
 
@@ -888,7 +888,7 @@ async fn create_rollout_record(
 ) -> Result<()> {
 	let started_at = OffsetDateTime::now_utc().format(&Rfc3339)?;
 	db.query(
-		"DELETE __rollout WHERE id = $id; \
+		"DELETE __rollout WHERE record::id(id) = $id; \
 		 CREATE __rollout CONTENT { \
 		 	id: $id, \
 		 	name: $name, \
@@ -899,7 +899,7 @@ async fn create_rollout_record(
 		 	status: $status, \
 		 	source_entities: $source_entities, \
 		 	target_entities: $target_entities, \
-		 	started_at: $started_at, \
+		 	started_at: <datetime> $started_at, \
 		 	updated_at: time::now(), \
 		 	last_error: NONE \
 		 };",
@@ -921,7 +921,7 @@ async fn create_rollout_record(
 
 async fn load_rollout_record(db: &Surreal<Any>, rollout_id: &str) -> Result<Option<Value>> {
 	let mut resp = db
-		.query("SELECT * FROM __rollout WHERE id = $id LIMIT 1;")
+		.query("SELECT * FROM __rollout WHERE record::id(id) = $id LIMIT 1;")
 		.bind(("id", rollout_id.to_string()))
 		.await?;
 	let row: Option<Value> = resp.take(0)?;
@@ -963,9 +963,9 @@ async fn set_rollout_status(
 		"UPDATE __rollout SET \
 		 	status = $status, \
 		 	last_error = $last_error, \
-		 	completed_at = $completed_at, \
+		 	completed_at = IF $completed_at THEN <datetime> $completed_at ELSE NONE END, \
 		 	updated_at = time::now() \
-		 WHERE id = $id;",
+		 WHERE record::id(id) = $id;",
 	)
 	.bind(("id", rollout_id.to_string()))
 	.bind(("status", status.as_str().to_string()))
@@ -1013,7 +1013,10 @@ async fn record_step_start(db: &Surreal<Any>, rollout_id: &str, step: &RolloutSt
 		row.get("steps").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 	steps.retain(|s| s.get("step_id").and_then(|v| v.as_str()) != Some(&step.id));
 	steps.push(new_step);
-	db.query("UPDATE __rollout SET steps = $steps, updated_at = time::now() WHERE id = $id;")
+	db.query(
+		"UPDATE __rollout SET steps = $steps, updated_at = time::now() \
+		 WHERE record::id(id) = $id;",
+	)
 		.bind(("id", rollout_id.to_string()))
 		.bind(("steps", steps))
 		.await?
@@ -1062,7 +1065,10 @@ async fn update_step_status(
 			);
 		}
 	}
-	db.query("UPDATE __rollout SET steps = $steps, updated_at = time::now() WHERE id = $id;")
+	db.query(
+		"UPDATE __rollout SET steps = $steps, updated_at = time::now() \
+		 WHERE record::id(id) = $id;",
+	)
 		.bind(("id", rollout_id.to_string()))
 		.bind(("steps", steps))
 		.await?
@@ -1252,5 +1258,137 @@ mod tests {
 
 		let err = validate_rollout_spec(&spec).expect_err("must reject non-idempotent run_sql");
 		assert!(err.to_string().contains("idempotent = true"));
+	}
+
+	async fn connect_mem_db() -> Surreal<Any> {
+		use surrealdb::engine::any::connect;
+		use surrealdb::opt::Config;
+		use surrealdb::opt::capabilities::Capabilities;
+
+		let config = Config::new().capabilities(Capabilities::all());
+		let db = connect(("mem://", config)).await.expect("connect mem://");
+		db.use_ns("surrealkit_test").use_db("rollout_test").await.expect("use_ns/use_db");
+		db.query(crate::scaffold::DEFAULT_SETUP).await.expect("setup schema").check().expect("setup schema check");
+		db
+	}
+
+	fn sample_loaded_spec(id: &str) -> LoadedRolloutSpec {
+		LoadedRolloutSpec {
+			path: PathBuf::from(format!("database/rollouts/{id}.toml")),
+			checksum: "sum".to_string(),
+			spec: RolloutSpec {
+				id: id.to_string(),
+				name: "test".to_string(),
+				source_schema_hash: "src".to_string(),
+				target_schema_hash: "tgt".to_string(),
+				compatibility: "phased".to_string(),
+				renames: Vec::new(),
+				steps: Vec::new(),
+			},
+		}
+	}
+
+	async fn load_single_row(db: &Surreal<Any>) -> Value {
+		let mut resp =
+			db.query("SELECT * FROM __rollout LIMIT 1;").await.expect("select __rollout");
+		let rows: Vec<Value> = resp.take(0).expect("take rows");
+		rows.into_iter().next().expect("one row exists")
+	}
+
+	// Regression: CREATE __rollout used to bind started_at as a plain RFC3339 string,
+	// which the SCHEMAFULL `datetime` field rejected. Keep the SQL-side `<datetime>`
+	// cast so string bindings coerce server-side.
+	#[tokio::test]
+	async fn create_rollout_record_accepts_rfc3339_started_at() {
+		let db = connect_mem_db().await;
+		let loaded = sample_loaded_spec("20260417181055__initial_schema");
+
+		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned)
+			.await
+			.expect("create_rollout_record should coerce started_at string to datetime");
+
+		let row = load_single_row(&db).await;
+		let started = row
+			.get("started_at")
+			.and_then(|v| v.as_str())
+			.expect("started_at is serialized as a datetime string");
+		time::OffsetDateTime::parse(started, &Rfc3339)
+			.expect("started_at should round-trip through RFC3339");
+		assert_eq!(row.get("status").and_then(|v| v.as_str()), Some("planned"));
+	}
+
+	// Regression: set_rollout_status bound completed_at as Option<String>, which the
+	// SCHEMAFULL `option<datetime>` field rejected for the Some(rfc3339) case. The
+	// SQL-side `IF $completed_at THEN <datetime> $completed_at ELSE NONE END`
+	// pattern must accept both Some(rfc3339) and None.
+	#[tokio::test]
+	async fn set_rollout_status_accepts_rfc3339_completed_at() {
+		let db = connect_mem_db().await;
+		let loaded = sample_loaded_spec("20260417181055__complete_path");
+		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::RunningComplete)
+			.await
+			.expect("seed rollout record");
+
+		let completed_at = OffsetDateTime::now_utc().format(&Rfc3339).expect("format rfc3339");
+		set_rollout_status(
+			&db,
+			&loaded.spec.id,
+			RolloutStatus::Completed,
+			None,
+			Some(completed_at),
+		)
+		.await
+		.expect("set_rollout_status should coerce completed_at string to datetime");
+
+		let row = load_single_row(&db).await;
+		let completed = row
+			.get("completed_at")
+			.and_then(|v| v.as_str())
+			.expect("completed_at is serialized as a datetime string");
+		time::OffsetDateTime::parse(completed, &Rfc3339)
+			.expect("completed_at should round-trip through RFC3339");
+	}
+
+	// Regression: `completed_at = None` must clear the field to NONE rather than
+	// failing the `option<datetime>` coercion with an empty/null placeholder. Also
+	// verifies the UPDATE's WHERE clause matched (status transitions planned →
+	// running_start), which would silently no-op if the id lookup is broken.
+	#[tokio::test]
+	async fn set_rollout_status_accepts_none_completed_at() {
+		let db = connect_mem_db().await;
+		let loaded = sample_loaded_spec("20260417181055__running_path");
+		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned)
+			.await
+			.expect("seed rollout record");
+
+		set_rollout_status(&db, &loaded.spec.id, RolloutStatus::RunningStart, None, None)
+			.await
+			.expect("set_rollout_status with None completed_at should succeed");
+
+		let row = load_single_row(&db).await;
+		assert!(
+			row.get("completed_at").is_none_or(Value::is_null),
+			"completed_at should be NONE/null, got {:?}",
+			row.get("completed_at")
+		);
+		assert_eq!(row.get("status").and_then(|v| v.as_str()), Some("running_start"));
+	}
+
+	// Regression: `WHERE id = $id` against __rollout silently matched zero rows
+	// because the record id is a Thing (`__rollout:…`) and the bound string isn't
+	// auto-coerced. `load_rollout_record` must find the row it just created.
+	#[tokio::test]
+	async fn load_rollout_record_finds_created_row() {
+		let db = connect_mem_db().await;
+		let loaded = sample_loaded_spec("20260417181055__lookup");
+		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned)
+			.await
+			.expect("seed rollout record");
+
+		let row = load_rollout_record(&db, &loaded.spec.id)
+			.await
+			.expect("load_rollout_record query")
+			.expect("row must be found by rollout id");
+		assert_eq!(row.get("status").and_then(|v| v.as_str()), Some("planned"));
 	}
 }

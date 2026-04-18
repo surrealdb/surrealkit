@@ -27,7 +27,12 @@ pub struct DbCfg {
 }
 
 /// Resolve a config value with priority: CLI override → system env vars → .env file → default.
-fn resolve(cli: &Option<String>, env_keys: &[&str], dotenv: &DotEnv, default: &str) -> String {
+fn resolve(
+	cli: &Option<String>,
+	env_keys: &[&str],
+	dotenv: Option<&DotEnv>,
+	default: &str,
+) -> String {
 	if let Some(v) = cli {
 		return v.clone();
 	}
@@ -38,9 +43,11 @@ fn resolve(cli: &Option<String>, env_keys: &[&str], dotenv: &DotEnv, default: &s
 			}
 		}
 	}
-	for key in env_keys {
-		if let Some(v) = dotenv.get_var(key.to_string()) {
-			if !v.is_empty() {
+	if let Some(dotenv) = dotenv {
+		for key in env_keys {
+			if let Some(v) = dotenv.get_var(key.to_string())
+				&& !v.is_empty()
+			{
 				return v;
 			}
 		}
@@ -49,21 +56,19 @@ fn resolve(cli: &Option<String>, env_keys: &[&str], dotenv: &DotEnv, default: &s
 }
 
 impl DbCfg {
-	pub fn from_env(_env: &DotEnv, overrides: &DbOverrides) -> Result<Self> {
-		let dotenv = DotEnv::new("");
-
+	pub fn from_env(dotenv: Option<&DotEnv>, overrides: &DbOverrides) -> Result<Self> {
 		let host = resolve(
 			&overrides.host,
 			&["SURREALDB_HOST", "DATABASE_HOST"],
-			&dotenv,
+			dotenv,
 			"http://localhost:8000",
 		);
-		let db = resolve(&overrides.db, &["SURREALDB_NAME", "DATABASE_NAME"], &dotenv, "test");
+		let db = resolve(&overrides.db, &["SURREALDB_NAME", "DATABASE_NAME"], dotenv, "test");
 		let ns =
-			resolve(&overrides.ns, &["SURREALDB_NAMESPACE", "DATABASE_NAMESPACE"], &dotenv, "db");
-		let user = resolve(&overrides.user, &["SURREALDB_USER", "DATABASE_USER"], &dotenv, "root");
+			resolve(&overrides.ns, &["SURREALDB_NAMESPACE", "DATABASE_NAMESPACE"], dotenv, "db");
+		let user = resolve(&overrides.user, &["SURREALDB_USER", "DATABASE_USER"], dotenv, "root");
 		let pass =
-			resolve(&overrides.pass, &["SURREALDB_PASSWORD", "DATABASE_PASSWORD"], &dotenv, "root");
+			resolve(&overrides.pass, &["SURREALDB_PASSWORD", "DATABASE_PASSWORD"], dotenv, "root");
 
 		Ok(Self {
 			host,
@@ -104,10 +109,6 @@ mod tests {
 	/// don't race against each other or against tests that expect clean env.
 	static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-	fn empty_dotenv() -> DotEnv {
-		DotEnv::new("__nonexistent_test__")
-	}
-
 	unsafe fn set_env(key: &str, val: &str) {
 		unsafe { env::set_var(key, val) };
 	}
@@ -135,7 +136,7 @@ mod tests {
 
 	#[test]
 	fn resolve_returns_default_when_nothing_set() {
-		let result = resolve(&None, &["__TEST_UNSET_VAR__"], &empty_dotenv(), "fallback");
+		let result = resolve(&None, &["__TEST_UNSET_VAR__"], None, "fallback");
 		assert_eq!(result, "fallback");
 	}
 
@@ -143,7 +144,7 @@ mod tests {
 	fn resolve_cli_override_wins() {
 		unsafe { set_env("__TEST_CLI_WIN__", "from_env") };
 		let result =
-			resolve(&Some("from_cli".into()), &["__TEST_CLI_WIN__"], &empty_dotenv(), "default");
+			resolve(&Some("from_cli".into()), &["__TEST_CLI_WIN__"], None, "default");
 		assert_eq!(result, "from_cli");
 		unsafe { unset_env("__TEST_CLI_WIN__") };
 	}
@@ -151,7 +152,7 @@ mod tests {
 	#[test]
 	fn resolve_reads_system_env() {
 		unsafe { set_env("__TEST_SYS_ENV__", "from_system") };
-		let result = resolve(&None, &["__TEST_SYS_ENV__"], &empty_dotenv(), "default");
+		let result = resolve(&None, &["__TEST_SYS_ENV__"], None, "default");
 		assert_eq!(result, "from_system");
 		unsafe { unset_env("__TEST_SYS_ENV__") };
 	}
@@ -159,7 +160,7 @@ mod tests {
 	#[test]
 	fn resolve_skips_empty_env_var() {
 		unsafe { set_env("__TEST_EMPTY_ENV__", "") };
-		let result = resolve(&None, &["__TEST_EMPTY_ENV__"], &empty_dotenv(), "default");
+		let result = resolve(&None, &["__TEST_EMPTY_ENV__"], None, "default");
 		assert_eq!(result, "default");
 		unsafe { unset_env("__TEST_EMPTY_ENV__") };
 	}
@@ -171,7 +172,7 @@ mod tests {
 			set_env("__TEST_PRI_B__", "second");
 		}
 		let result =
-			resolve(&None, &["__TEST_PRI_A__", "__TEST_PRI_B__"], &empty_dotenv(), "default");
+			resolve(&None, &["__TEST_PRI_A__", "__TEST_PRI_B__"], None, "default");
 		assert_eq!(result, "first");
 		unsafe {
 			unset_env("__TEST_PRI_A__");
@@ -186,7 +187,7 @@ mod tests {
 			set_env("__TEST_FALL_B__", "second");
 		}
 		let result =
-			resolve(&None, &["__TEST_FALL_A__", "__TEST_FALL_B__"], &empty_dotenv(), "default");
+			resolve(&None, &["__TEST_FALL_A__", "__TEST_FALL_B__"], None, "default");
 		assert_eq!(result, "second");
 		unsafe { unset_env("__TEST_FALL_B__") };
 	}
@@ -197,8 +198,7 @@ mod tests {
 	fn from_env_uses_defaults_with_no_overrides() {
 		let _guard = ENV_LOCK.lock().unwrap();
 		clear_db_env();
-		let dotenv = empty_dotenv();
-		let cfg = DbCfg::from_env(&dotenv, &DbOverrides::default()).unwrap();
+		let cfg = DbCfg::from_env(None, &DbOverrides::default()).unwrap();
 		assert_eq!(cfg.host(), "http://localhost:8000");
 		assert_eq!(cfg.db(), "test");
 		assert_eq!(cfg.ns(), "db");
@@ -210,7 +210,6 @@ mod tests {
 	fn from_env_respects_all_overrides() {
 		let _guard = ENV_LOCK.lock().unwrap();
 		clear_db_env();
-		let dotenv = empty_dotenv();
 		let overrides = DbOverrides {
 			host: Some("http://custom:9000".into()),
 			db: Some("mydb".into()),
@@ -218,7 +217,7 @@ mod tests {
 			user: Some("admin".into()),
 			pass: Some("secret".into()),
 		};
-		let cfg = DbCfg::from_env(&dotenv, &overrides).unwrap();
+		let cfg = DbCfg::from_env(None, &overrides).unwrap();
 		assert_eq!(cfg.host(), "http://custom:9000");
 		assert_eq!(cfg.db(), "mydb");
 		assert_eq!(cfg.ns(), "myns");
@@ -238,8 +237,7 @@ mod tests {
 			set_env("SURREALDB_PASSWORD", "envpass");
 		}
 
-		let dotenv = empty_dotenv();
-		let cfg = DbCfg::from_env(&dotenv, &DbOverrides::default()).unwrap();
+		let cfg = DbCfg::from_env(None, &DbOverrides::default()).unwrap();
 		assert_eq!(cfg.host(), "http://envhost:8000");
 		assert_eq!(cfg.db(), "envdb");
 		assert_eq!(cfg.ns(), "envns");
@@ -254,12 +252,11 @@ mod tests {
 		let _guard = ENV_LOCK.lock().unwrap();
 		clear_db_env();
 		unsafe { set_env("SURREALDB_HOST", "http://envhost:8000") };
-		let dotenv = empty_dotenv();
 		let overrides = DbOverrides {
 			host: Some("http://clihost:9000".into()),
 			..Default::default()
 		};
-		let cfg = DbCfg::from_env(&dotenv, &overrides).unwrap();
+		let cfg = DbCfg::from_env(None, &overrides).unwrap();
 		assert_eq!(cfg.host(), "http://clihost:9000");
 		clear_db_env();
 	}
