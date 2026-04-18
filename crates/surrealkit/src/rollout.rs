@@ -1017,10 +1017,10 @@ async fn record_step_start(db: &Surreal<Any>, rollout_id: &str, step: &RolloutSt
 		"UPDATE __rollout SET steps = $steps, updated_at = time::now() \
 		 WHERE record::id(id) = $id;",
 	)
-		.bind(("id", rollout_id.to_string()))
-		.bind(("steps", steps))
-		.await?
-		.check()?;
+	.bind(("id", rollout_id.to_string()))
+	.bind(("steps", steps))
+	.await?
+	.check()?;
 	Ok(())
 }
 
@@ -1069,10 +1069,10 @@ async fn update_step_status(
 		"UPDATE __rollout SET steps = $steps, updated_at = time::now() \
 		 WHERE record::id(id) = $id;",
 	)
-		.bind(("id", rollout_id.to_string()))
-		.bind(("steps", steps))
-		.await?
-		.check()?;
+	.bind(("id", rollout_id.to_string()))
+	.bind(("steps", steps))
+	.await?
+	.check()?;
 	Ok(())
 }
 
@@ -1268,7 +1268,11 @@ mod tests {
 		let config = Config::new().capabilities(Capabilities::all());
 		let db = connect(("mem://", config)).await.expect("connect mem://");
 		db.use_ns("surrealkit_test").use_db("rollout_test").await.expect("use_ns/use_db");
-		db.query(crate::scaffold::DEFAULT_SETUP).await.expect("setup schema").check().expect("setup schema check");
+		db.query(crate::scaffold::DEFAULT_SETUP)
+			.await
+			.expect("setup schema")
+			.check()
+			.expect("setup schema check");
 		db
 	}
 

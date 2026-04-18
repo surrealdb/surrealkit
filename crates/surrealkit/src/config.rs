@@ -143,8 +143,7 @@ mod tests {
 	#[test]
 	fn resolve_cli_override_wins() {
 		unsafe { set_env("__TEST_CLI_WIN__", "from_env") };
-		let result =
-			resolve(&Some("from_cli".into()), &["__TEST_CLI_WIN__"], None, "default");
+		let result = resolve(&Some("from_cli".into()), &["__TEST_CLI_WIN__"], None, "default");
 		assert_eq!(result, "from_cli");
 		unsafe { unset_env("__TEST_CLI_WIN__") };
 	}
@@ -171,8 +170,7 @@ mod tests {
 			set_env("__TEST_PRI_A__", "first");
 			set_env("__TEST_PRI_B__", "second");
 		}
-		let result =
-			resolve(&None, &["__TEST_PRI_A__", "__TEST_PRI_B__"], None, "default");
+		let result = resolve(&None, &["__TEST_PRI_A__", "__TEST_PRI_B__"], None, "default");
 		assert_eq!(result, "first");
 		unsafe {
 			unset_env("__TEST_PRI_A__");
@@ -186,8 +184,7 @@ mod tests {
 			unset_env("__TEST_FALL_A__");
 			set_env("__TEST_FALL_B__", "second");
 		}
-		let result =
-			resolve(&None, &["__TEST_FALL_A__", "__TEST_FALL_B__"], None, "default");
+		let result = resolve(&None, &["__TEST_FALL_A__", "__TEST_FALL_B__"], None, "default");
 		assert_eq!(result, "second");
 		unsafe { unset_env("__TEST_FALL_B__") };
 	}
