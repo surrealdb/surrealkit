@@ -1,0 +1,25 @@
+name: Format Check
+
+on:
+    push:
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+jobs:
+    fmt:
+        name: Check Rust formatting
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+              with:
+                  toolchain: 1.94.0
+                  components: rustfmt
+
+            - name: Check formatting
+              run: cargo fmt --all --check

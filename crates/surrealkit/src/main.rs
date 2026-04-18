@@ -141,8 +141,8 @@ enum RolloutCommands {
 /// "Error: .env file not found" stderr message doesn't fire for users who
 /// configure via real env vars or CLI flags.
 fn load_env() -> Option<DotEnv> {
-	let has_env = std::path::Path::new(".env").exists()
-		|| std::path::Path::new(".env.local").exists();
+	let has_env =
+		std::path::Path::new(".env").exists() || std::path::Path::new(".env.local").exists();
 	if has_env {
 		Some(DotEnv::new(""))
 	} else {
