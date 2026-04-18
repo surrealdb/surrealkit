@@ -135,10 +135,19 @@ enum RolloutCommands {
 	},
 }
 
-fn load_env() -> DotEnv {
-	// Load .env in CWD if present, ignore missing
-
-	DotEnv::new("")
+/// Load `.env` / `.env.local` from the current working directory when present.
+///
+/// Returns `None` when neither file exists so that `rust_dotenv`'s noisy
+/// "Error: .env file not found" stderr message doesn't fire for users who
+/// configure via real env vars or CLI flags.
+fn load_env() -> Option<DotEnv> {
+	let has_env = std::path::Path::new(".env").exists()
+		|| std::path::Path::new(".env.local").exists();
+	if has_env {
+		Some(DotEnv::new(""))
+	} else {
+		None
+	}
 }
 
 #[tokio::main]
@@ -156,7 +165,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	match args.command {
 		Commands::Init => scaffold::scaffold()?,
 		Commands::Setup => {
-			let db = connect_from_env(&env, &overrides).await?;
+			let db = connect_from_env(env.as_ref(), &overrides).await?;
 			run_setup(&db).await?;
 		}
 		Commands::Sync {
@@ -167,7 +176,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			no_prune,
 			allow_shared_prune,
 		} => {
-			let db = connect_from_env(&env, &overrides).await?;
+			let db = connect_from_env(env.as_ref(), &overrides).await?;
 			sync::run_sync(
 				&db,
 				SyncOpts {
@@ -185,7 +194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			command,
 		} => match command {
 			RolloutCommands::Baseline => {
-				let db = connect_from_env(&env, &overrides).await?;
+				let db = connect_from_env(env.as_ref(), &overrides).await?;
 				rollout::run_baseline(&db).await?;
 			}
 			RolloutCommands::Plan {
@@ -201,7 +210,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			RolloutCommands::Start {
 				target,
 			} => {
-				let db = connect_from_env(&env, &overrides).await?;
+				let db = connect_from_env(env.as_ref(), &overrides).await?;
 				rollout::run_start(
 					&db,
 					RolloutExecutionOpts {
@@ -213,7 +222,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			RolloutCommands::Complete {
 				target,
 			} => {
-				let db = connect_from_env(&env, &overrides).await?;
+				let db = connect_from_env(env.as_ref(), &overrides).await?;
 				rollout::run_complete(
 					&db,
 					RolloutExecutionOpts {
@@ -225,7 +234,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			RolloutCommands::Rollback {
 				target,
 			} => {
-				let db = connect_from_env(&env, &overrides).await?;
+				let db = connect_from_env(env.as_ref(), &overrides).await?;
 				rollout::run_rollback(
 					&db,
 					RolloutExecutionOpts {
@@ -237,7 +246,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			RolloutCommands::Status {
 				target,
 			} => {
-				let db = connect_from_env(&env, &overrides).await?;
+				let db = connect_from_env(env.as_ref(), &overrides).await?;
 				rollout::run_status(&db, target).await?;
 			}
 			RolloutCommands::Lint {
@@ -250,17 +259,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			}
 		},
 		Commands::Seed => {
-			let db = connect_from_env(&env, &overrides).await?;
+			let db = connect_from_env(env.as_ref(), &overrides).await?;
 			seed::seed(&db).await?;
 		}
 		Commands::Status => {
-			let db = connect_from_env(&env, &overrides).await?;
+			let db = connect_from_env(env.as_ref(), &overrides).await?;
 			rollout::run_status(&db, None).await?;
 		}
 		Commands::Apply {
 			path,
 		} => {
-			let db = connect_from_env(&env, &overrides).await?;
+			let db = connect_from_env(env.as_ref(), &overrides).await?;
 			let sql = std::fs::read_to_string(&path)?;
 			exec_surql(&db, &sql).await?;
 		}
@@ -278,20 +287,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			timeout_ms,
 			keep_db,
 		} => {
-			run_test(TestOpts {
-				suite,
-				case,
-				tags: tag,
-				fail_fast,
-				parallel,
-				json_out,
-				no_setup,
-				no_sync,
-				no_seed,
-				base_url,
-				timeout_ms,
-				keep_db,
-			})
+			run_test(
+				env.as_ref(),
+				TestOpts {
+					suite,
+					case,
+					tags: tag,
+					fail_fast,
+					parallel,
+					json_out,
+					no_setup,
+					no_sync,
+					no_seed,
+					base_url,
+					timeout_ms,
+					keep_db,
+				},
+			)
 			.await?;
 		}
 	}
@@ -299,7 +311,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	Ok(())
 }
 
-async fn connect_from_env(env: &DotEnv, overrides: &DbOverrides) -> anyhow::Result<Surreal<Any>> {
+async fn connect_from_env(
+	env: Option<&DotEnv>,
+	overrides: &DbOverrides,
+) -> anyhow::Result<Surreal<Any>> {
 	let cfg = DbCfg::from_env(env, overrides)?;
 	connect(&cfg).await
 }

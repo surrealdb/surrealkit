@@ -10,12 +10,13 @@ mod types;
 use std::env;
 
 use anyhow::{Result, bail};
+use rust_dotenv::dotenv::DotEnv;
 pub use types::TestOpts;
 
 use crate::config::DbCfg;
 
-pub async fn run_test(opts: TestOpts) -> Result<()> {
-	let cfg = DbCfg::from_env(&rust_dotenv::dotenv::DotEnv::new(""), &Default::default())?;
+pub async fn run_test(dotenv: Option<&DotEnv>, opts: TestOpts) -> Result<()> {
+	let cfg = DbCfg::from_env(dotenv, &Default::default())?;
 	let loaded = loader::load_specs()?;
 	let filter_input = types::FilterInput {
 		suite_pattern: opts.suite.clone(),
