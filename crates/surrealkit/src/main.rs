@@ -152,6 +152,8 @@ fn load_env() -> Option<DotEnv> {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+	let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
 	let args = Cli::parse();
 	let env = load_env();
 	let overrides = DbOverrides {
