@@ -1,7 +1,7 @@
 [package]
 name = 'surrealkit'
 description = 'Manage migrations, seeding and tests for your SurrealDB via CLI'
-version = '0.5.7'
+version = '0.5.8'
 edition = '2024'
 authors = ['Chiru Boggavarapu <chiru@foretag.co>', 'Tobie Morgan Hitchcock <tobie@surrealdb.com>']
 repository = 'https://github.com/surrealdb/surrealkit'
@@ -28,6 +28,7 @@ rustls = { version = '0.23', default-features = false, features = ['aws-lc-rs'] 
 
 [dev-dependencies]
 surrealdb = { version = '3.0.5', features = ['kv-mem'] }
+tempfile = '3'
 
 [lints]
 workspace = true

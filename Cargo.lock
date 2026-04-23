@@ -4128,7 +4128,7 @@ dependencies = [
 
 [[package]]
 name = "surrealkit"
-version = "0.5.7"
+version = "0.5.8"
 dependencies = [
  "anyhow",
  "clap",
@@ -4142,6 +4142,7 @@ dependencies = [
  "sha2",
  "surrealdb",
  "surrealdb-types",
+ "tempfile",
  "time",
  "tokio",
  "toml",

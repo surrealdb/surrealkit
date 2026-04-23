@@ -19,10 +19,11 @@ pub fn scaffold() -> Result<()> {
 	fs::create_dir_all(&test_suites_dir).context("creating database/tests/suites")?;
 	fs::create_dir_all(&test_fixtures_dir).context("creating database/tests/fixtures")?;
 
-	// seed.surql (idempotent-ish example)
-	let seed_path = database_dir.join("seed.surql");
+	let seed_dir = database_dir.join("seed");
+	fs::create_dir_all(&seed_dir).context("creating database/seed")?;
+	let seed_path = seed_dir.join("seed.surql");
 	if !seed_path.exists() {
-		fs::write(&seed_path, "--- SEED\n").context("Writing seed.surql")?;
+		fs::write(&seed_path, "--- SEED\n").context("Writing database/seed/seed.surql")?;
 	}
 
 	// setup.surql defines SurrealKit metadata tables.
@@ -51,7 +52,8 @@ pub fn scaffold() -> Result<()> {
 	println!("  ├── tests/");
 	println!("  │   ├── suites/");
 	println!("  │   └── fixtures/");
-	println!("  ├── seed.surql");
+	println!("  ├── seed/");
+	println!("  │   └── seed.surql");
 	println!("  └── setup.surql");
 	Ok(())
 }
