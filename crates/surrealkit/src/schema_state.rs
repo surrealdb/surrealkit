@@ -404,9 +404,13 @@ pub fn ensure_overwrite(sql: &str) -> String {
 				let after_kind = &trimmed[tokens[0].len()..].trim_start();
 				let after_kind_word = &after_kind[tokens[1].len()..].trim_start();
 				let rest_upper = after_kind_word.to_ascii_uppercase();
-				if rest_upper.starts_with("OVERWRITE") || rest_upper.starts_with("IF NOT EXISTS") {
-					// Already has a creation modifier
+				if rest_upper.starts_with("OVERWRITE") {
 					out.push(format!("{};", trimmed));
+				} else if rest_upper.starts_with("IF NOT EXISTS") {
+					// Replace IF NOT EXISTS with OVERWRITE so sync always applies the latest
+					// schema; IF NOT EXISTS would silently skip updates to existing entities.
+					let after_ine = after_kind_word["IF NOT EXISTS".len()..].trim_start();
+					out.push(format!("DEFINE {} OVERWRITE {};", tokens[1], after_ine));
 				} else {
 					out.push(format!("DEFINE {} OVERWRITE {};", tokens[1], after_kind_word));
 				}
@@ -784,10 +788,280 @@ mod tests {
 	}
 
 	#[test]
-	fn ensure_overwrite_preserves_if_not_exists() {
+	fn ensure_overwrite_replaces_if_not_exists_with_overwrite() {
+		// IF NOT EXISTS prevents schema changes from being applied in sync;
+		// ensure_overwrite must replace it with OVERWRITE so updates are not silently skipped.
 		let sql = "DEFINE TABLE IF NOT EXISTS post SCHEMAFULL;";
 		let result = ensure_overwrite(sql);
-		assert!(result.contains("IF NOT EXISTS"));
-		assert!(!result.contains("OVERWRITE"));
+		assert!(result.contains("DEFINE TABLE OVERWRITE post SCHEMAFULL;"), "got: {result}");
+		assert!(!result.contains("IF NOT EXISTS"), "IF NOT EXISTS should be replaced: {result}");
+	}
+
+	#[test]
+	fn ensure_overwrite_replaces_if_not_exists_field() {
+		let sql = "DEFINE FIELD IF NOT EXISTS email ON person TYPE string;";
+		let result = ensure_overwrite(sql);
+		assert!(
+			result.contains("DEFINE FIELD OVERWRITE email ON person TYPE string;"),
+			"got: {result}"
+		);
+		assert!(!result.contains("IF NOT EXISTS"), "got: {result}");
+	}
+
+	#[test]
+	fn ensure_overwrite_replaces_if_not_exists_event() {
+		let sql = "DEFINE EVENT IF NOT EXISTS changed ON person WHEN true THEN ();";
+		let result = ensure_overwrite(sql);
+		assert!(
+			result.contains("DEFINE EVENT OVERWRITE changed ON person WHEN true THEN ();"),
+			"got: {result}"
+		);
+		assert!(!result.contains("IF NOT EXISTS"), "got: {result}");
+	}
+
+	#[test]
+	fn ensure_overwrite_replaces_if_not_exists_index() {
+		let sql = "DEFINE INDEX IF NOT EXISTS by_email ON TABLE person FIELDS email;";
+		let result = ensure_overwrite(sql);
+		assert!(
+			result.contains("DEFINE INDEX OVERWRITE by_email ON TABLE person FIELDS email;"),
+			"got: {result}"
+		);
+		assert!(!result.contains("IF NOT EXISTS"), "got: {result}");
+	}
+
+	#[test]
+	fn ensure_overwrite_replaces_if_not_exists_function() {
+		let sql = "DEFINE FUNCTION IF NOT EXISTS fn::greet($name: string) { RETURN $name; };";
+		let result = ensure_overwrite(sql);
+		assert!(!result.contains("IF NOT EXISTS"), "got: {result}");
+		assert!(result.contains("DEFINE FUNCTION OVERWRITE"), "got: {result}");
+	}
+
+	#[test]
+	fn ensure_overwrite_replaces_if_not_exists_param() {
+		let sql = "DEFINE PARAM IF NOT EXISTS $env VALUE 'dev';";
+		let result = ensure_overwrite(sql);
+		assert!(result.contains("DEFINE PARAM OVERWRITE $env VALUE 'dev';"), "got: {result}");
+		assert!(!result.contains("IF NOT EXISTS"), "got: {result}");
+	}
+
+	#[test]
+	fn ensure_overwrite_replaces_if_not_exists_analyzer() {
+		let sql = "DEFINE ANALYZER IF NOT EXISTS english TOKENIZERS blank, class;";
+		let result = ensure_overwrite(sql);
+		assert!(
+			result.contains("DEFINE ANALYZER OVERWRITE english TOKENIZERS blank, class;"),
+			"got: {result}"
+		);
+		assert!(!result.contains("IF NOT EXISTS"), "got: {result}");
+	}
+
+	#[test]
+	fn ensure_overwrite_replaces_if_not_exists_access() {
+		let sql = "DEFINE ACCESS IF NOT EXISTS admin ON DATABASE TYPE RECORD;";
+		let result = ensure_overwrite(sql);
+		assert!(!result.contains("IF NOT EXISTS"), "got: {result}");
+		assert!(result.contains("DEFINE ACCESS OVERWRITE"), "got: {result}");
+	}
+
+	#[test]
+	fn ensure_overwrite_replaces_if_not_exists_user() {
+		let sql = "DEFINE USER IF NOT EXISTS app ON DATABASE PASSHASH 'x';";
+		let result = ensure_overwrite(sql);
+		assert!(!result.contains("IF NOT EXISTS"), "got: {result}");
+		assert!(result.contains("DEFINE USER OVERWRITE"), "got: {result}");
+	}
+
+	#[test]
+	fn parse_schema_statements_accepts_if_not_exists_table() {
+		let file = SchemaFile {
+			path: "database/schema/test.surql".to_string(),
+			hash: "h".to_string(),
+			sql: "DEFINE TABLE IF NOT EXISTS person SCHEMAFULL;".to_string(),
+		};
+		let entities = parse_schema_statements(&file).expect("should parse IF NOT EXISTS table");
+		assert_eq!(entities.len(), 1);
+		assert_eq!(entities[0].kind, "table");
+		assert_eq!(entities[0].name, "person");
+		assert!(entities[0].scope.is_none());
+	}
+
+	#[test]
+	fn parse_schema_statements_accepts_if_not_exists_field() {
+		let file = SchemaFile {
+			path: "database/schema/test.surql".to_string(),
+			hash: "h".to_string(),
+			sql: "DEFINE FIELD IF NOT EXISTS email ON person TYPE string;".to_string(),
+		};
+		let entities = parse_schema_statements(&file).expect("should parse IF NOT EXISTS field");
+		assert_eq!(entities.len(), 1);
+		assert_eq!(entities[0].kind, "field");
+		assert_eq!(entities[0].name, "email");
+		assert_eq!(entities[0].scope.as_deref(), Some("person"));
+	}
+
+	#[test]
+	fn parse_schema_statements_accepts_if_not_exists_event() {
+		let file = SchemaFile {
+			path: "database/schema/test.surql".to_string(),
+			hash: "h".to_string(),
+			sql: "DEFINE EVENT IF NOT EXISTS changed ON person WHEN true THEN ();".to_string(),
+		};
+		let entities = parse_schema_statements(&file).expect("should parse IF NOT EXISTS event");
+		assert_eq!(entities.len(), 1);
+		assert_eq!(entities[0].kind, "event");
+		assert_eq!(entities[0].name, "changed");
+		assert_eq!(entities[0].scope.as_deref(), Some("person"));
+	}
+
+	#[test]
+	fn parse_schema_statements_accepts_if_not_exists_index() {
+		let file = SchemaFile {
+			path: "database/schema/test.surql".to_string(),
+			hash: "h".to_string(),
+			sql: "DEFINE INDEX IF NOT EXISTS by_email ON TABLE person FIELDS email;".to_string(),
+		};
+		let entities = parse_schema_statements(&file).expect("should parse IF NOT EXISTS index");
+		assert_eq!(entities.len(), 1);
+		assert_eq!(entities[0].kind, "index");
+		assert_eq!(entities[0].name, "by_email");
+		assert_eq!(entities[0].scope.as_deref(), Some("person"));
+	}
+
+	#[test]
+	fn parse_schema_statements_accepts_if_not_exists_function() {
+		let file = SchemaFile {
+			path: "database/schema/test.surql".to_string(),
+			hash: "h".to_string(),
+			sql: "DEFINE FUNCTION IF NOT EXISTS fn::greet($name: string) { RETURN $name; };"
+				.to_string(),
+		};
+		let entities = parse_schema_statements(&file).expect("should parse IF NOT EXISTS function");
+		assert_eq!(entities.len(), 1);
+		assert_eq!(entities[0].kind, "function");
+		assert_eq!(entities[0].name, "fn::greet");
+	}
+
+	#[test]
+	fn parse_schema_statements_accepts_if_not_exists_param() {
+		let file = SchemaFile {
+			path: "database/schema/test.surql".to_string(),
+			hash: "h".to_string(),
+			sql: "DEFINE PARAM IF NOT EXISTS $env VALUE 'dev';".to_string(),
+		};
+		let entities = parse_schema_statements(&file).expect("should parse IF NOT EXISTS param");
+		assert_eq!(entities.len(), 1);
+		assert_eq!(entities[0].kind, "param");
+		assert_eq!(entities[0].name, "$env");
+	}
+
+	#[test]
+	fn parse_schema_statements_accepts_if_not_exists_analyzer() {
+		let file = SchemaFile {
+			path: "database/schema/test.surql".to_string(),
+			hash: "h".to_string(),
+			sql: "DEFINE ANALYZER IF NOT EXISTS english TOKENIZERS blank, class;".to_string(),
+		};
+		let entities = parse_schema_statements(&file).expect("should parse IF NOT EXISTS analyzer");
+		assert_eq!(entities.len(), 1);
+		assert_eq!(entities[0].kind, "analyzer");
+		assert_eq!(entities[0].name, "english");
+	}
+
+	#[test]
+	fn parse_schema_statements_accepts_if_not_exists_access() {
+		let file = SchemaFile {
+			path: "database/schema/test.surql".to_string(),
+			hash: "h".to_string(),
+			sql: "DEFINE ACCESS IF NOT EXISTS admin ON DATABASE TYPE RECORD;".to_string(),
+		};
+		let entities = parse_schema_statements(&file).expect("should parse IF NOT EXISTS access");
+		assert_eq!(entities.len(), 1);
+		assert_eq!(entities[0].kind, "access");
+		assert_eq!(entities[0].name, "admin");
+		assert_eq!(entities[0].scope.as_deref(), Some("DATABASE"));
+	}
+
+	#[test]
+	fn parse_schema_statements_accepts_if_not_exists_user() {
+		let file = SchemaFile {
+			path: "database/schema/test.surql".to_string(),
+			hash: "h".to_string(),
+			sql: "DEFINE USER IF NOT EXISTS app ON DATABASE PASSHASH 'x';".to_string(),
+		};
+		let entities = parse_schema_statements(&file).expect("should parse IF NOT EXISTS user");
+		assert_eq!(entities.len(), 1);
+		assert_eq!(entities[0].kind, "user");
+		assert_eq!(entities[0].name, "app");
+		assert_eq!(entities[0].scope.as_deref(), Some("DATABASE"));
+	}
+
+	#[test]
+	fn build_catalog_snapshot_handles_all_if_not_exists_types() {
+		let files = vec![SchemaFile {
+			path: "database/schema/ine.surql".to_string(),
+			hash: "ine".to_string(),
+			sql: r#"
+				DEFINE TABLE IF NOT EXISTS person SCHEMAFULL;
+				DEFINE FIELD IF NOT EXISTS name ON person TYPE string;
+				DEFINE EVENT IF NOT EXISTS audit ON person WHEN true THEN ();
+				DEFINE INDEX IF NOT EXISTS by_name ON TABLE person FIELDS name;
+				DEFINE FUNCTION IF NOT EXISTS fn::greet($n: string) { RETURN $n; };
+				DEFINE PARAM IF NOT EXISTS $env VALUE 'dev';
+				DEFINE ACCESS IF NOT EXISTS admin ON DATABASE TYPE RECORD;
+				DEFINE ANALYZER IF NOT EXISTS eng TOKENIZERS blank;
+				DEFINE USER IF NOT EXISTS ops ON DATABASE PASSHASH 'x';
+			"#
+			.to_string(),
+		}];
+
+		let catalog = build_catalog_snapshot(&files).expect("catalog should handle IF NOT EXISTS");
+		assert_eq!(catalog.entities.len(), 9, "all 9 entity types should be extracted");
+
+		let kinds: Vec<&str> = catalog.entities.iter().map(|e| e.kind.as_str()).collect();
+		assert!(kinds.contains(&"table"));
+		assert!(kinds.contains(&"field"));
+		assert!(kinds.contains(&"event"));
+		assert!(kinds.contains(&"index"));
+		assert!(kinds.contains(&"function"));
+		assert!(kinds.contains(&"param"));
+		assert!(kinds.contains(&"access"));
+		assert!(kinds.contains(&"analyzer"));
+		assert!(kinds.contains(&"user"));
+	}
+
+	#[test]
+	fn catalog_diff_treats_if_not_exists_and_overwrite_as_different() {
+		// Changing from IF NOT EXISTS to OVERWRITE (or vice versa) should register
+		// as a modification so the updated statement is applied on next sync.
+		let ine_hash = sha256_hex("DEFINE TABLE IF NOT EXISTS person SCHEMAFULL".as_bytes());
+		let ow_hash = sha256_hex("DEFINE TABLE OVERWRITE person SCHEMAFULL".as_bytes());
+
+		let old = CatalogSnapshot {
+			version: 2,
+			entities: vec![CatalogEntity {
+				kind: "table".to_string(),
+				scope: None,
+				name: "person".to_string(),
+				source_path: "database/schema/a.surql".to_string(),
+				statement_hash: ine_hash,
+				file_hash: "f1".to_string(),
+			}],
+		};
+		let new = CatalogSnapshot {
+			version: 2,
+			entities: vec![CatalogEntity {
+				kind: "table".to_string(),
+				scope: None,
+				name: "person".to_string(),
+				source_path: "database/schema/a.surql".to_string(),
+				statement_hash: ow_hash,
+				file_hash: "f2".to_string(),
+			}],
+		};
+
+		let diff = diff_catalog(&old, &new);
+		assert_eq!(diff.modified.len(), 1, "modifier change should be a modification");
 	}
 }
