@@ -102,8 +102,9 @@ impl DbCfg {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use std::sync::Mutex;
+
+	use super::*;
 
 	/// Guards tests that mutate real SURREALDB_*/DATABASE_* env vars so they
 	/// don't race against each other or against tests that expect clean env.

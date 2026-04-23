@@ -22,9 +22,7 @@ pub async fn seed(db: &Surreal<Any>) -> Result<()> {
 			.with_context(|| format!("reading {}", display(seed_file)))?;
 		exec_surql(db, &sql).await
 	} else {
-		Err(anyhow!(
-			"no seed found: create database/seed.surql or a database/seed/ directory"
-		))
+		Err(anyhow!("no seed found: create database/seed.surql or a database/seed/ directory"))
 	}
 }
 
@@ -49,11 +47,8 @@ async fn seed_from_dir(db: &Surreal<Any>, dir: &Path) -> Result<()> {
 	files.sort();
 
 	for path in &files {
-		let sql = fs::read_to_string(path)
-			.with_context(|| format!("reading {}", display(path)))?;
-		exec_surql(db, &sql)
-			.await
-			.with_context(|| format!("executing {}", display(path)))?;
+		let sql = fs::read_to_string(path).with_context(|| format!("reading {}", display(path)))?;
+		exec_surql(db, &sql).await.with_context(|| format!("executing {}", display(path)))?;
 	}
 
 	Ok(())
@@ -61,11 +56,12 @@ async fn seed_from_dir(db: &Surreal<Any>, dir: &Path) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use surrealdb::engine::any::connect;
 	use surrealdb::opt::Config;
 	use surrealdb::opt::capabilities::Capabilities;
 	use tempfile::TempDir;
+
+	use super::*;
 
 	async fn mem_db() -> Surreal<Any> {
 		let config = Config::new().capabilities(Capabilities::all());
@@ -84,12 +80,8 @@ mod tests {
 		let db = mem_db().await;
 		seed_from_dir(&db, tmp.path()).await.unwrap();
 
-		let count: Option<serde_json::Value> = db
-			.query("SELECT count() FROM ordered GROUP ALL")
-			.await
-			.unwrap()
-			.take(0)
-			.unwrap();
+		let count: Option<serde_json::Value> =
+			db.query("SELECT count() FROM ordered GROUP ALL").await.unwrap().take(0).unwrap();
 		let n = count.and_then(|v| v["count"].as_u64()).unwrap_or(0);
 		assert_eq!(n, 2, "both files should have been seeded");
 	}
@@ -127,10 +119,7 @@ mod tests {
 
 		let db = mem_db().await;
 		let err = seed_from_dir(&db, tmp.path()).await.unwrap_err();
-		assert!(
-			err.to_string().contains("no .surql files found"),
-			"unexpected error: {err}"
-		);
+		assert!(err.to_string().contains("no .surql files found"), "unexpected error: {err}");
 	}
 
 	#[tokio::test]
@@ -158,7 +147,9 @@ mod tests {
 
 		for i in 0..file_count {
 			let sql: String = (0..records_per_file)
-				.map(|j| format!("CREATE chunk_{}:{} SET n = {};\n", i, j, i * records_per_file + j))
+				.map(|j| {
+					format!("CREATE chunk_{}:{} SET n = {};\n", i, j, i * records_per_file + j)
+				})
 				.collect();
 			fs::write(tmp.path().join(format!("{:03}_chunk.surql", i)), sql).unwrap();
 		}
@@ -166,12 +157,8 @@ mod tests {
 		let db = mem_db().await;
 		seed_from_dir(&db, tmp.path()).await.unwrap();
 
-		let count: Option<serde_json::Value> = db
-			.query("SELECT count() FROM chunk_0 GROUP ALL")
-			.await
-			.unwrap()
-			.take(0)
-			.unwrap();
+		let count: Option<serde_json::Value> =
+			db.query("SELECT count() FROM chunk_0 GROUP ALL").await.unwrap().take(0).unwrap();
 		let n = count.and_then(|v| v["count"].as_u64()).unwrap_or(0);
 		assert_eq!(n, records_per_file as u64);
 	}
