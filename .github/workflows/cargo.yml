@@ -1,9 +1,12 @@
-name: Publish Crate
+name: CI
 
 on:
     push:
+        branches:
+            - "**"
         tags:
             - "v*"
+    pull_request:
     workflow_dispatch:
 
 permissions:
@@ -11,7 +14,7 @@ permissions:
 
 jobs:
     publish:
-        name: Publish surrealkit to crates.io
+        name: Lint, test, and publish
         runs-on: ubuntu-latest
         steps:
             - name: Checkout repository
