@@ -4,24 +4,13 @@ use clap::{Parser, Subcommand};
 use rust_dotenv::dotenv::DotEnv;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
-
-mod config;
-mod core;
-mod rollout;
-mod scaffold;
-mod schema_state;
-mod seed;
-mod setup;
-mod sync;
-mod tester;
-
-use core::exec_surql;
-
-use config::{DbCfg, DbOverrides, connect};
-use rollout::{RolloutExecutionOpts, RolloutPlanOpts};
-use setup::run_setup;
-use sync::SyncOpts;
-use tester::{TestOpts, run_test};
+use surrealkit::config::{DbCfg, DbOverrides, connect};
+use surrealkit::core::exec_surql;
+use surrealkit::rollout::{self, RolloutExecutionOpts, RolloutPlanOpts};
+use surrealkit::setup::run_setup;
+use surrealkit::sync::{self, SyncOpts};
+use surrealkit::tester::{TestOpts, run_test};
+use surrealkit::{scaffold, seed};
 
 #[derive(Parser, Debug)]
 #[command(version, about = "SurrealKit CLI")]
@@ -49,6 +38,10 @@ pub struct Cli {
 	/// Database password
 	#[arg(long, global = true)]
 	pass: Option<String>,
+
+	/// Authentication level: root (default), namespace/ns, or database/db
+	#[arg(long, global = true)]
+	auth_level: Option<String>,
 
 	#[command(subcommand)]
 	command: Commands,
@@ -136,10 +129,6 @@ enum RolloutCommands {
 }
 
 /// Load `.env` / `.env.local` from the current working directory when present.
-///
-/// Returns `None` when neither file exists so that `rust_dotenv`'s noisy
-/// "Error: .env file not found" stderr message doesn't fire for users who
-/// configure via real env vars or CLI flags.
 fn load_env() -> Option<DotEnv> {
 	let has_env =
 		std::path::Path::new(".env").exists() || std::path::Path::new(".env.local").exists();
@@ -162,6 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		db: args.db,
 		user: args.user,
 		pass: args.pass,
+		auth_level: args.auth_level,
 	};
 
 	match args.command {

@@ -284,8 +284,7 @@ pub async fn run_start(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Result<
 	let rollout = load_rollout_spec(resolve_rollout_path(opts.selector.as_deref())?)?;
 	validate_rollout_spec(&rollout.spec)?;
 	let files = collect_schema_files()?;
-	let target_schema = snapshot_from_files(&files);
-	let target_hash = hash_schema_snapshot(&target_schema)?;
+	let target_hash = hash_schema_snapshot(&snapshot_from_files(&files))?;
 	if target_hash != rollout.spec.target_schema_hash {
 		bail!(
 			"target schema hash mismatch for '{}': manifest={}, current={}",
@@ -298,9 +297,53 @@ pub async fn run_start(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Result<
 	let source_entities = load_managed_entities(db).await?;
 	let source_catalog = CatalogSnapshot {
 		version: 2,
-		entities: source_entities.iter().map(|row| row.entity.clone()).collect(),
+		entities: source_entities.into_iter().map(|r| r.entity).collect(),
 	};
+	start_inner(db, &rollout, &source_catalog, &target_catalog).await
+}
 
+/// Runs the start phase of a rollout defined entirely in code.
+///
+/// `spec` describes the rollout steps. `target_files` is the desired schema state;
+/// it is used to build the entity catalog and verify `spec.target_schema_hash`
+/// when that field is non-empty.
+///
+/// `ApplySchema` steps in `spec` should carry their SurrealQL in the `sql` field
+/// rather than in `files`, since no filesystem is read during execution.
+pub async fn run_start_with_spec(
+	db: &Surreal<Any>,
+	spec: &RolloutSpec,
+	target_files: &[crate::sync::EmbeddedSchemaFile],
+) -> Result<()> {
+	run_setup(db).await?;
+	validate_rollout_spec(spec)?;
+	let schema_files = embedded_to_schema_files(target_files);
+	if !spec.target_schema_hash.is_empty() {
+		let hash = hash_schema_snapshot(&snapshot_from_files(&schema_files))?;
+		if hash != spec.target_schema_hash {
+			bail!(
+				"target schema hash mismatch for '{}': spec={}, files={}",
+				spec.id,
+				spec.target_schema_hash,
+				hash
+			);
+		}
+	}
+	let target_catalog = build_catalog_snapshot(&schema_files)?;
+	let source_entities = load_managed_entities(db).await?;
+	let source_catalog = CatalogSnapshot {
+		version: 2,
+		entities: source_entities.into_iter().map(|r| r.entity).collect(),
+	};
+	start_inner(db, &make_loaded_spec(spec), &source_catalog, &target_catalog).await
+}
+
+async fn start_inner(
+	db: &Surreal<Any>,
+	rollout: &LoadedRolloutSpec,
+	source_catalog: &CatalogSnapshot,
+	target_catalog: &CatalogSnapshot,
+) -> Result<()> {
 	acquire_lock(db, "global").await?;
 	let result = async {
 		ensure_no_conflicting_active_rollout(db, &rollout.spec.id).await?;
@@ -312,22 +355,20 @@ pub async fn run_start(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Result<
 			}
 			_ => {}
 		}
-
 		if let Some(ref row) = record {
-			verify_rollout_record_matches(row, &rollout)?;
+			verify_rollout_record_matches(row, rollout)?;
 		} else {
 			create_rollout_record(
 				db,
-				&rollout,
+				rollout,
 				&source_catalog.entities,
 				&target_catalog.entities,
 				RolloutStatus::Planned,
 			)
 			.await?;
 		}
-
 		set_rollout_status(db, &rollout.spec.id, RolloutStatus::RunningStart, None, None).await?;
-		if let Err(err) = execute_phase(db, &rollout, RolloutPhase::Start).await {
+		if let Err(err) = execute_phase(db, rollout, RolloutPhase::Start).await {
 			set_rollout_status(
 				db,
 				&rollout.spec.id,
@@ -356,12 +397,25 @@ pub async fn run_complete(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Resu
 	run_setup(db).await?;
 	let rollout = load_rollout_spec(resolve_rollout_path(opts.selector.as_deref())?)?;
 	validate_rollout_spec(&rollout.spec)?;
+	complete_inner(db, &rollout).await
+}
+
+/// Runs the complete phase of a rollout defined entirely in code.
+///
+/// The `spec` must be identical to the one passed to [`run_start_with_spec`].
+pub async fn run_complete_with_spec(db: &Surreal<Any>, spec: &RolloutSpec) -> Result<()> {
+	run_setup(db).await?;
+	validate_rollout_spec(spec)?;
+	complete_inner(db, &make_loaded_spec(spec)).await
+}
+
+async fn complete_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<()> {
 	acquire_lock(db, "global").await?;
 	let result = async {
 		let row = load_rollout_record(db, &rollout.spec.id)
 			.await?
 			.ok_or_else(|| anyhow!("rollout '{}' has not been started", rollout.spec.id))?;
-		verify_rollout_record_matches(&row, &rollout)?;
+		verify_rollout_record_matches(&row, rollout)?;
 		match string_field(&row, "status").as_deref() {
 			Some("ready_to_complete") | Some("running_complete") | Some("failed") => {}
 			Some(other) => {
@@ -369,10 +423,9 @@ pub async fn run_complete(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Resu
 			}
 			None => bail!("rollout '{}' has no status", rollout.spec.id),
 		}
-
 		set_rollout_status(db, &rollout.spec.id, RolloutStatus::RunningComplete, None, None)
 			.await?;
-		if let Err(err) = execute_phase(db, &rollout, RolloutPhase::Complete).await {
+		if let Err(err) = execute_phase(db, rollout, RolloutPhase::Complete).await {
 			set_rollout_status(
 				db,
 				&rollout.spec.id,
@@ -383,7 +436,6 @@ pub async fn run_complete(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Resu
 			.await?;
 			return Err(err);
 		}
-
 		let target_entities = deserialize_entities_field(&row, "target_entities")?;
 		replace_managed_entities(db, &target_entities, None, "active").await?;
 		set_rollout_status(
@@ -410,12 +462,25 @@ pub async fn run_rollback(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Resu
 	run_setup(db).await?;
 	let rollout = load_rollout_spec(resolve_rollout_path(opts.selector.as_deref())?)?;
 	validate_rollout_spec(&rollout.spec)?;
+	rollback_inner(db, &rollout).await
+}
+
+/// Runs the rollback phase of a rollout defined entirely in code.
+///
+/// The `spec` must be identical to the one passed to [`run_start_with_spec`].
+pub async fn run_rollback_with_spec(db: &Surreal<Any>, spec: &RolloutSpec) -> Result<()> {
+	run_setup(db).await?;
+	validate_rollout_spec(spec)?;
+	rollback_inner(db, &make_loaded_spec(spec)).await
+}
+
+async fn rollback_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<()> {
 	acquire_lock(db, "global").await?;
 	let result = async {
 		let row = load_rollout_record(db, &rollout.spec.id)
 			.await?
 			.ok_or_else(|| anyhow!("rollout '{}' has not been started", rollout.spec.id))?;
-		verify_rollout_record_matches(&row, &rollout)?;
+		verify_rollout_record_matches(&row, rollout)?;
 		match string_field(&row, "status").as_deref() {
 			Some("completed") => bail!("rollout '{}' is already completed", rollout.spec.id),
 			Some("rolled_back") => {
@@ -424,10 +489,9 @@ pub async fn run_rollback(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Resu
 			}
 			_ => {}
 		}
-
 		set_rollout_status(db, &rollout.spec.id, RolloutStatus::RunningRollback, None, None)
 			.await?;
-		if let Err(err) = execute_phase(db, &rollout, RolloutPhase::Rollback).await {
+		if let Err(err) = execute_phase(db, rollout, RolloutPhase::Rollback).await {
 			set_rollout_status(
 				db,
 				&rollout.spec.id,
@@ -711,6 +775,26 @@ fn changed_files(files: &[SchemaFile], diff: &FileDiff) -> Vec<String> {
 	out
 }
 
+fn make_loaded_spec(spec: &RolloutSpec) -> LoadedRolloutSpec {
+	let checksum = sha256_hex(toml::to_string_pretty(spec).unwrap_or_default().as_bytes());
+	LoadedRolloutSpec {
+		path: PathBuf::from(format!("embedded:{}", spec.id)),
+		checksum,
+		spec: spec.clone(),
+	}
+}
+
+fn embedded_to_schema_files(files: &[crate::sync::EmbeddedSchemaFile]) -> Vec<SchemaFile> {
+	files
+		.iter()
+		.map(|f| SchemaFile {
+			path: f.path.to_string(),
+			sql: f.sql.to_string(),
+			hash: sha256_hex(f.sql.as_bytes()),
+		})
+		.collect()
+}
+
 fn load_rollout_spec(path: PathBuf) -> Result<LoadedRolloutSpec> {
 	let raw = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
 	let spec: RolloutSpec =
@@ -757,8 +841,10 @@ fn validate_rollout_spec(spec: &RolloutSpec) -> Result<()> {
 		}
 		match step.kind {
 			RolloutStepKind::ApplySchema => {
-				if step.files.is_empty() {
-					bail!("apply_schema step '{}' requires files", step.id);
+				let has_files = !step.files.is_empty();
+				let has_sql = step.sql.as_deref().is_some_and(|s| !s.trim().is_empty());
+				if !has_files && !has_sql {
+					bail!("apply_schema step '{}' requires either files or sql", step.id);
 				}
 			}
 			RolloutStepKind::RunSql => {
@@ -813,10 +899,14 @@ async fn execute_phase(
 async fn execute_step(db: &Surreal<Any>, step: &RolloutStep) -> Result<()> {
 	match step.kind {
 		RolloutStepKind::ApplySchema => {
-			for file in &step.files {
-				let raw = fs::read_to_string(file).with_context(|| format!("reading {}", file))?;
-				let sql = ensure_overwrite(&raw);
-				exec_surql(db, &sql).await?;
+			if !step.files.is_empty() {
+				for file in &step.files {
+					let raw =
+						fs::read_to_string(file).with_context(|| format!("reading {}", file))?;
+					exec_surql(db, &ensure_overwrite(&raw)).await?;
+				}
+			} else if let Some(ref sql) = step.sql {
+				exec_surql(db, &ensure_overwrite(sql)).await?;
 			}
 			Ok(())
 		}

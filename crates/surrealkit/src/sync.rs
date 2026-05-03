@@ -9,13 +9,13 @@ use surrealdb::engine::any::Any;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
-use crate::core::exec_surql;
+use crate::core::{exec_surql, sha256_hex};
 use crate::rollout::{
 	acquire_lock, delete_managed_entities, delete_sync_hashes, load_active_rollout_id,
 	load_managed_entities, release_lock, upsert_managed_entities,
 };
 use crate::schema_state::{
-	CatalogEntity, EntityKey, build_catalog_snapshot, collect_schema_files,
+	CatalogEntity, EntityKey, SchemaFile, build_catalog_snapshot, collect_schema_files,
 	ensure_local_state_dirs, ensure_overwrite, render_remove_sql,
 };
 use crate::setup::run_setup;
@@ -28,6 +28,13 @@ pub struct SyncOpts {
 	pub fail_fast: bool,
 	pub prune: bool,
 	pub allow_shared_prune: bool,
+}
+
+/// Schema file embedded at compile time via [`embed_schema!`].
+pub struct EmbeddedSchemaFile {
+	/// Relative path used as the tracking key in the database.
+	pub path: &'static str,
+	pub sql: &'static str,
 }
 
 pub async fn run_sync(db: &Surreal<Any>, opts: SyncOpts) -> Result<()> {
@@ -63,9 +70,56 @@ pub async fn run_sync(db: &Surreal<Any>, opts: SyncOpts) -> Result<()> {
 	}
 }
 
+/// Syncs embedded schema files without reading from the filesystem.
+///
+/// Defaults to `prune = true`, `fail_fast = true`. Use [`run_sync_embedded_with_opts`]
+/// for custom options.
+pub async fn run_sync_embedded(db: &Surreal<Any>, files: &[EmbeddedSchemaFile]) -> Result<()> {
+	run_sync_embedded_with_opts(
+		db,
+		files,
+		&SyncOpts {
+			watch: false,
+			debounce_ms: 0,
+			dry_run: false,
+			fail_fast: true,
+			prune: true,
+			allow_shared_prune: false,
+		},
+	)
+	.await
+}
+
+/// Like [`run_sync_embedded`] but with caller-supplied [`SyncOpts`]. `watch` is ignored.
+pub async fn run_sync_embedded_with_opts(
+	db: &Surreal<Any>,
+	files: &[EmbeddedSchemaFile],
+	opts: &SyncOpts,
+) -> Result<()> {
+	run_setup(db).await?;
+	let schema_files: Vec<SchemaFile> = files
+		.iter()
+		.map(|f| SchemaFile {
+			path: f.path.to_string(),
+			sql: f.sql.to_string(),
+			hash: sha256_hex(f.sql.as_bytes()),
+		})
+		.collect();
+	run_sync_with_files(db, opts, &schema_files, false).await
+}
+
 async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> Result<()> {
 	let files = collect_schema_files()?;
-	let desired_catalog = build_catalog_snapshot(&files)?;
+	run_sync_with_files(db, opts, &files, watch_mode).await
+}
+
+async fn run_sync_with_files(
+	db: &Surreal<Any>,
+	opts: &SyncOpts,
+	files: &[SchemaFile],
+	watch_mode: bool,
+) -> Result<()> {
+	let desired_catalog = build_catalog_snapshot(files)?;
 	let tracked = load_sync_hashes(db).await?;
 	let managed = load_managed_entities(db).await?;
 
@@ -81,7 +135,7 @@ async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> 
 	let mut apply_errors = 0usize;
 	let mut synced_paths = BTreeSet::new();
 	let mut failed_paths = BTreeSet::new();
-	for file in &files {
+	for file in files {
 		let tracked_hash = tracked.get(&file.path);
 		if tracked_hash == Some(&file.hash) {
 			continue;
@@ -253,13 +307,13 @@ async fn load_sync_hashes(db: &Surreal<Any>) -> Result<BTreeMap<String, String>>
 
 async fn store_sync_hash(db: &Surreal<Any>, path: &str, hash: &str) -> Result<()> {
 	db.query(
-		"DELETE __entity WHERE ns = 'sync' AND key = $path; \
+        "DELETE __entity WHERE ns = 'sync' AND key = $path; \
 		 CREATE __entity CONTENT { ns: 'sync', key: $path, val: { hash: $hash }, updated_at: time::now() };",
-	)
-	.bind(("path", path.to_string()))
-	.bind(("hash", hash.to_string()))
-	.await?
-	.check()?;
+    )
+    .bind(("path", path.to_string()))
+    .bind(("hash", hash.to_string()))
+    .await?
+    .check()?;
 	Ok(())
 }
 

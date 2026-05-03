@@ -4142,10 +4142,21 @@ dependencies = [
  "sha2",
  "surrealdb",
  "surrealdb-types",
+ "surrealkit-macros",
  "tempfile",
  "time",
  "tokio",
  "toml",
+ "walkdir",
+]
+
+[[package]]
+name = "surrealkit-macros"
+version = "0.5.9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.106",
  "walkdir",
 ]
 

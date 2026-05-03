@@ -26,7 +26,7 @@ pub async fn seed(db: &Surreal<Any>) -> Result<()> {
 	}
 }
 
-async fn seed_from_dir(db: &Surreal<Any>, dir: &Path) -> Result<()> {
+pub async fn seed_from_dir(db: &Surreal<Any>, dir: &Path) -> Result<()> {
 	let mut files: Vec<_> = fs::read_dir(dir)
 		.with_context(|| format!("reading directory {}", display(dir)))?
 		.filter_map(|entry| {
@@ -46,10 +46,15 @@ async fn seed_from_dir(db: &Surreal<Any>, dir: &Path) -> Result<()> {
 
 	files.sort();
 
+	println!("Seeding from {} ({} files found)", display(dir), files.len());
+
 	for path in &files {
+		println!("  executing {}", display(path));
 		let sql = fs::read_to_string(path).with_context(|| format!("reading {}", display(path)))?;
 		exec_surql(db, &sql).await.with_context(|| format!("executing {}", display(path)))?;
 	}
+
+	println!("Seeded {} files", files.len());
 
 	Ok(())
 }

@@ -9,6 +9,7 @@ license-file = 'LICENSE'
 keywords = ['surrealdb', 'migrations', 'seed', 'testing', 'manage']
 
 [dependencies]
+surrealkit-macros = { path = '../surrealkit-macros', version = '0.5.8' }
 anyhow = '1'
 clap = { version = '4.5.47', features = ['derive'] }
 hex = '0.4'

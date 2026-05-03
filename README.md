@@ -69,6 +69,10 @@ services:
 
 `surrealkit` exits on completion, so Compose moves on, ideal for "apply schema then run tests" pipelines.
 
+## Library
+
+SurrealKit can also be used as a Rust library. See [`crates/surrealkit/README.md`](crates/surrealkit/README.md) for the full library API reference.
+
 ## Usage
 
 Initialise a new project:
@@ -94,6 +98,7 @@ surrealkit --host http://localhost:8000 --ns my_ns --db my_db --user root --pass
 | `--db` | Database name | `test` |
 | `--user` | Database user | `root` |
 | `--pass` | Database password | `root` |
+| `--auth-level` | Authentication level: `root`, `namespace` / `ns`, or `database` / `db` | `root` |
 
 ### Environment Variables
 
@@ -102,6 +107,7 @@ surrealkit --host http://localhost:8000 --ns my_ns --db my_db --user root --pass
 - `SURREALDB_NAMESPACE` (fallback: `DATABASE_NAMESPACE`)
 - `SURREALDB_USER` (fallback: `DATABASE_USER`)
 - `SURREALDB_PASSWORD` (fallback: `DATABASE_PASSWORD`)
+- `SURREALDB_AUTH_LEVEL` (fallback: `DATABASE_AUTH_LEVEL`) — accepted values: `root`, `namespace` / `ns`, `database` / `db`
 
 These can be set as system environment variables or in a `.env` file.
 
