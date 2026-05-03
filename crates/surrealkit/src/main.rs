@@ -39,6 +39,10 @@ pub struct Cli {
 	#[arg(long, global = true)]
 	pass: Option<String>,
 
+	/// Authentication level: root (default), namespace/ns, or database/db
+	#[arg(long, global = true)]
+	auth_level: Option<String>,
+
 	#[command(subcommand)]
 	command: Commands,
 }
@@ -147,6 +151,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		db: args.db,
 		user: args.user,
 		pass: args.pass,
+		auth_level: args.auth_level,
 	};
 
 	match args.command {

@@ -9,7 +9,7 @@ pub mod sync;
 pub mod tester;
 
 pub use anyhow;
-pub use config::{DbCfg, DbOverrides, connect};
+pub use config::{AuthLevel, DbCfg, DbOverrides, connect};
 pub use rollout::{
 	RolloutExecutionOpts, RolloutPhase, RolloutPlanOpts, RolloutSpec, RolloutStep, RolloutStepKind,
 	run_baseline, run_complete, run_complete_with_spec, run_lint, run_plan, run_rollback,
