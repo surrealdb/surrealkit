@@ -14,8 +14,9 @@ use rust_dotenv::dotenv::DotEnv;
 pub use types::TestOpts;
 
 use crate::config::DbCfg;
+use crate::variables::TemplateVars;
 
-pub async fn run_test(dotenv: Option<&DotEnv>, opts: TestOpts) -> Result<()> {
+pub async fn run_test(dotenv: Option<&DotEnv>, opts: TestOpts, vars: TemplateVars) -> Result<()> {
 	let cfg = DbCfg::from_env(dotenv, &Default::default())?;
 	let loaded = loader::load_specs()?;
 	let filter_input = types::FilterInput {
@@ -30,7 +31,8 @@ pub async fn run_test(dotenv: Option<&DotEnv>, opts: TestOpts) -> Result<()> {
 
 	let base_url = resolve_base_url(&opts, &loaded.global);
 	let timeout_ms = resolve_timeout_ms(&opts, &loaded.global);
-	let ctx = runner::RunnerContext::new(cfg, opts.clone(), loaded.global, base_url, timeout_ms);
+	let ctx =
+		runner::RunnerContext::new(cfg, opts.clone(), loaded.global, base_url, timeout_ms, vars);
 	let report = ctx.run(suites).await?;
 
 	report::print_human_report(&report);

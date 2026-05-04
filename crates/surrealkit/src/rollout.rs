@@ -13,6 +13,7 @@ use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 
 use crate::core::{exec_surql, sha256_hex};
+use crate::variables::TemplateVars;
 use crate::schema_state::{
 	CATALOG_SNAPSHOT_PATH, CatalogDiff, CatalogEntity, CatalogSnapshot, EntityKey, FileDiff,
 	ROLLOUTS_DIR, SchemaFile, build_catalog_snapshot, collect_schema_files, diff_catalog,
@@ -280,7 +281,11 @@ pub async fn run_status(db: &Surreal<Any>, selector: Option<String>) -> Result<(
 	Ok(())
 }
 
-pub async fn run_start(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Result<()> {
+pub async fn run_start(
+	db: &Surreal<Any>,
+	opts: RolloutExecutionOpts,
+	vars: &TemplateVars,
+) -> Result<()> {
 	run_setup(db).await?;
 	ensure_local_state_dirs()?;
 	let rollout = load_rollout_spec(resolve_rollout_path(opts.selector.as_deref())?)?;
@@ -301,7 +306,7 @@ pub async fn run_start(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Result<
 		version: 2,
 		entities: source_entities.into_iter().map(|r| r.entity).collect(),
 	};
-	start_inner(db, &rollout, &source_catalog, &target_catalog).await
+	start_inner(db, &rollout, &source_catalog, &target_catalog, vars).await
 }
 
 /// Runs the start phase of a rollout defined entirely in code.
@@ -312,10 +317,14 @@ pub async fn run_start(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Result<
 ///
 /// `ApplySchema` steps in `spec` should carry their SurrealQL in the `sql` field
 /// rather than in `files`, since no filesystem is read during execution.
+///
+/// `vars` is applied to step SQL (`ApplySchema`, `RunSql`, `AssertSql`) before execution.
+/// Pass `&TemplateVars::default()` if no substitution is needed.
 pub async fn run_start_with_spec(
 	db: &Surreal<Any>,
 	spec: &RolloutSpec,
 	target_files: &[crate::sync::EmbeddedSchemaFile],
+	vars: &TemplateVars,
 ) -> Result<()> {
 	run_setup(db).await?;
 	validate_rollout_spec(spec)?;
@@ -337,7 +346,7 @@ pub async fn run_start_with_spec(
 		version: 2,
 		entities: source_entities.into_iter().map(|r| r.entity).collect(),
 	};
-	start_inner(db, &make_loaded_spec(spec), &source_catalog, &target_catalog).await
+	start_inner(db, &make_loaded_spec(spec), &source_catalog, &target_catalog, vars).await
 }
 
 async fn start_inner(
@@ -345,6 +354,7 @@ async fn start_inner(
 	rollout: &LoadedRolloutSpec,
 	source_catalog: &CatalogSnapshot,
 	target_catalog: &CatalogSnapshot,
+	vars: &TemplateVars,
 ) -> Result<()> {
 	acquire_lock(db, "global").await?;
 	let result = async {
@@ -370,7 +380,7 @@ async fn start_inner(
 			.await?;
 		}
 		set_rollout_status(db, &rollout.spec.id, RolloutStatus::RunningStart, None, None).await?;
-		if let Err(err) = execute_phase(db, rollout, RolloutPhase::Start).await {
+		if let Err(err) = execute_phase(db, rollout, RolloutPhase::Start, vars).await {
 			set_rollout_status(
 				db,
 				&rollout.spec.id,
@@ -395,23 +405,37 @@ async fn start_inner(
 	}
 }
 
-pub async fn run_complete(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Result<()> {
+pub async fn run_complete(
+	db: &Surreal<Any>,
+	opts: RolloutExecutionOpts,
+	vars: &TemplateVars,
+) -> Result<()> {
 	run_setup(db).await?;
 	let rollout = load_rollout_spec(resolve_rollout_path(opts.selector.as_deref())?)?;
 	validate_rollout_spec(&rollout.spec)?;
-	complete_inner(db, &rollout).await
+	complete_inner(db, &rollout, vars).await
 }
 
 /// Runs the complete phase of a rollout defined entirely in code.
 ///
 /// The `spec` must be identical to the one passed to [`run_start_with_spec`].
-pub async fn run_complete_with_spec(db: &Surreal<Any>, spec: &RolloutSpec) -> Result<()> {
+/// `vars` is applied to step SQL before execution; pass `&TemplateVars::default()`
+/// if no substitution is needed.
+pub async fn run_complete_with_spec(
+	db: &Surreal<Any>,
+	spec: &RolloutSpec,
+	vars: &TemplateVars,
+) -> Result<()> {
 	run_setup(db).await?;
 	validate_rollout_spec(spec)?;
-	complete_inner(db, &make_loaded_spec(spec)).await
+	complete_inner(db, &make_loaded_spec(spec), vars).await
 }
 
-async fn complete_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<()> {
+async fn complete_inner(
+	db: &Surreal<Any>,
+	rollout: &LoadedRolloutSpec,
+	vars: &TemplateVars,
+) -> Result<()> {
 	acquire_lock(db, "global").await?;
 	let result = async {
 		let row = load_rollout_record(db, &rollout.spec.id)
@@ -427,7 +451,7 @@ async fn complete_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Resul
 		}
 		set_rollout_status(db, &rollout.spec.id, RolloutStatus::RunningComplete, None, None)
 			.await?;
-		if let Err(err) = execute_phase(db, rollout, RolloutPhase::Complete).await {
+		if let Err(err) = execute_phase(db, rollout, RolloutPhase::Complete, vars).await {
 			set_rollout_status(
 				db,
 				&rollout.spec.id,
@@ -460,23 +484,37 @@ async fn complete_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Resul
 	}
 }
 
-pub async fn run_rollback(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Result<()> {
+pub async fn run_rollback(
+	db: &Surreal<Any>,
+	opts: RolloutExecutionOpts,
+	vars: &TemplateVars,
+) -> Result<()> {
 	run_setup(db).await?;
 	let rollout = load_rollout_spec(resolve_rollout_path(opts.selector.as_deref())?)?;
 	validate_rollout_spec(&rollout.spec)?;
-	rollback_inner(db, &rollout).await
+	rollback_inner(db, &rollout, vars).await
 }
 
 /// Runs the rollback phase of a rollout defined entirely in code.
 ///
 /// The `spec` must be identical to the one passed to [`run_start_with_spec`].
-pub async fn run_rollback_with_spec(db: &Surreal<Any>, spec: &RolloutSpec) -> Result<()> {
+/// `vars` is applied to step SQL before execution; pass `&TemplateVars::default()`
+/// if no substitution is needed.
+pub async fn run_rollback_with_spec(
+	db: &Surreal<Any>,
+	spec: &RolloutSpec,
+	vars: &TemplateVars,
+) -> Result<()> {
 	run_setup(db).await?;
 	validate_rollout_spec(spec)?;
-	rollback_inner(db, &make_loaded_spec(spec)).await
+	rollback_inner(db, &make_loaded_spec(spec), vars).await
 }
 
-async fn rollback_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<()> {
+async fn rollback_inner(
+	db: &Surreal<Any>,
+	rollout: &LoadedRolloutSpec,
+	vars: &TemplateVars,
+) -> Result<()> {
 	acquire_lock(db, "global").await?;
 	let result = async {
 		let row = load_rollout_record(db, &rollout.spec.id)
@@ -493,7 +531,7 @@ async fn rollback_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Resul
 		}
 		set_rollout_status(db, &rollout.spec.id, RolloutStatus::RunningRollback, None, None)
 			.await?;
-		if let Err(err) = execute_phase(db, rollout, RolloutPhase::Rollback).await {
+		if let Err(err) = execute_phase(db, rollout, RolloutPhase::Rollback, vars).await {
 			set_rollout_status(
 				db,
 				&rollout.spec.id,
@@ -880,6 +918,7 @@ async fn execute_phase(
 	db: &Surreal<Any>,
 	rollout: &LoadedRolloutSpec,
 	phase: RolloutPhase,
+	vars: &TemplateVars,
 ) -> Result<()> {
 	for step in rollout.spec.steps.iter().filter(|step| step.phase == phase) {
 		if step_already_completed(db, &rollout.spec.id, &step.id).await? {
@@ -887,7 +926,7 @@ async fn execute_phase(
 		}
 
 		record_step_start(db, &rollout.spec.id, step).await?;
-		let result = execute_step(db, step).await;
+		let result = execute_step(db, step, vars).await;
 		match result {
 			Ok(()) => record_step_complete(db, &rollout.spec.id, step).await?,
 			Err(err) => {
@@ -899,28 +938,34 @@ async fn execute_phase(
 	Ok(())
 }
 
-async fn execute_step(db: &Surreal<Any>, step: &RolloutStep) -> Result<()> {
+async fn execute_step(db: &Surreal<Any>, step: &RolloutStep, vars: &TemplateVars) -> Result<()> {
 	match step.kind {
 		RolloutStepKind::ApplySchema => {
 			if !step.files.is_empty() {
 				for file in &step.files {
 					let raw =
 						fs::read_to_string(file).with_context(|| format!("reading {}", file))?;
-					exec_surql(db, &ensure_overwrite(&raw)).await?;
+					let substituted = vars.apply(&raw).with_context(|| {
+						format!("applying template variables in {}", file)
+					})?;
+					exec_surql(db, &ensure_overwrite(&substituted)).await?;
 				}
 			} else if let Some(ref sql) = step.sql {
-				exec_surql(db, &ensure_overwrite(sql)).await?;
+				let substituted = vars.apply(sql)?;
+				exec_surql(db, &ensure_overwrite(&substituted)).await?;
 			}
 			Ok(())
 		}
 		RolloutStepKind::RunSql => {
 			let sql = step.sql.as_deref().ok_or_else(|| anyhow!("missing sql"))?;
-			exec_surql(db, sql).await
+			let substituted = vars.apply(sql)?;
+			exec_surql(db, &substituted).await
 		}
 		RolloutStepKind::AssertSql => {
 			let sql = step.sql.as_deref().ok_or_else(|| anyhow!("missing sql"))?;
 			let expect = step.expect.as_deref().ok_or_else(|| anyhow!("missing expect"))?;
-			let actual = execute_sql_value(db, sql).await?;
+			let substituted = vars.apply(sql)?;
+			let actual = execute_sql_value(db, &substituted).await?;
 			if value_to_expect_string(&actual) != expect.trim() {
 				bail!(
 					"assert step '{}' failed: expected {}, got {}",

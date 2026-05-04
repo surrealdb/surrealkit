@@ -8,9 +8,9 @@ use surrealdb::opt::capabilities::Capabilities;
 use surrealkit::schema_state::EntityKey;
 use surrealkit::{
 	EmbeddedSchemaFile, RolloutExecutionOpts, RolloutPhase, RolloutPlanOpts, RolloutSpec,
-	RolloutStep, RolloutStepKind, SyncOpts, run_baseline, run_complete, run_complete_with_spec,
-	run_plan, run_rollback, run_rollback_with_spec, run_setup, run_start, run_start_with_spec,
-	run_status, run_sync_embedded, run_sync_embedded_with_opts, seed_from_dir,
+	RolloutStep, RolloutStepKind, SyncOpts, TemplateVars, run_baseline, run_complete,
+	run_complete_with_spec, run_plan, run_rollback, run_rollback_with_spec, run_setup, run_start,
+	run_start_with_spec, run_status, run_sync_embedded, run_sync_embedded_with_opts, seed_from_dir,
 };
 
 async fn mem_db() -> Surreal<Any> {
@@ -127,6 +127,7 @@ async fn sync_embedded_prunes_removed_files() {
 			fail_fast: true,
 			prune: true,
 			allow_shared_prune: false,
+			..Default::default()
 		},
 	)
 	.await
@@ -157,6 +158,7 @@ async fn sync_embedded_dry_run_makes_no_changes() {
 			fail_fast: true,
 			prune: true,
 			allow_shared_prune: false,
+			..Default::default()
 		},
 	)
 	.await
@@ -202,6 +204,7 @@ async fn rollout_status_does_not_crash_after_completed_rollout() {
 		RolloutExecutionOpts {
 			selector: Some(rollout_id.clone()),
 		},
+		&TemplateVars::default(),
 	)
 	.await
 	.expect("start");
@@ -211,6 +214,7 @@ async fn rollout_status_does_not_crash_after_completed_rollout() {
 		RolloutExecutionOpts {
 			selector: Some(rollout_id.clone()),
 		},
+		&TemplateVars::default(),
 	)
 	.await
 	.expect("complete");
@@ -262,6 +266,7 @@ async fn rollout_full_lifecycle_via_library() {
 		RolloutExecutionOpts {
 			selector: Some(rollout_id.clone()),
 		},
+		&TemplateVars::default(),
 	)
 	.await
 	.expect("start");
@@ -273,6 +278,7 @@ async fn rollout_full_lifecycle_via_library() {
 		RolloutExecutionOpts {
 			selector: Some(rollout_id.clone()),
 		},
+		&TemplateVars::default(),
 	)
 	.await
 	.expect("complete");
@@ -305,6 +311,7 @@ async fn rollout_rollback_after_start_via_library() {
 		RolloutExecutionOpts {
 			selector: Some(rollout_id.clone()),
 		},
+		&TemplateVars::default(),
 	)
 	.await
 	.expect("start");
@@ -314,6 +321,7 @@ async fn rollout_rollback_after_start_via_library() {
 		RolloutExecutionOpts {
 			selector: Some(rollout_id.clone()),
 		},
+		&TemplateVars::default(),
 	)
 	.await
 	.expect("rollback");
@@ -333,7 +341,7 @@ async fn seed_from_dir_is_accessible_via_library() {
 	std::fs::write(seed_dir.join("01_data.surql"), "CREATE person:alice SET name = 'Alice';")
 		.expect("write seed file");
 
-	seed_from_dir(&db, &seed_dir).await.expect("seed_from_dir");
+	seed_from_dir(&db, &seed_dir, &TemplateVars::default()).await.expect("seed_from_dir");
 
 	let mut resp = db.query("SELECT name FROM person WHERE id = person:alice;").await.expect("q");
 	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
@@ -425,10 +433,10 @@ async fn rollout_with_spec_full_lifecycle() {
 
 	let spec = add_table_spec("add_invoice", "invoice");
 
-	run_start_with_spec(&db, &spec, TARGET).await.expect("start_with_spec");
+	run_start_with_spec(&db, &spec, TARGET, &TemplateVars::default()).await.expect("start_with_spec");
 	assert_eq!(query_rollout_status(&db, &spec.id).await.as_deref(), Some("ready_to_complete"));
 
-	run_complete_with_spec(&db, &spec).await.expect("complete_with_spec");
+	run_complete_with_spec(&db, &spec, &TemplateVars::default()).await.expect("complete_with_spec");
 	assert_eq!(query_rollout_status(&db, &spec.id).await.as_deref(), Some("completed"));
 }
 
@@ -455,8 +463,8 @@ async fn rollout_with_spec_rollback() {
 
 	let spec = add_table_spec("add_variant", "variant");
 
-	run_start_with_spec(&db, &spec, TARGET).await.expect("start_with_spec");
-	run_rollback_with_spec(&db, &spec).await.expect("rollback_with_spec");
+	run_start_with_spec(&db, &spec, TARGET, &TemplateVars::default()).await.expect("start_with_spec");
+	run_rollback_with_spec(&db, &spec, &TemplateVars::default()).await.expect("rollback_with_spec");
 	assert_eq!(query_rollout_status(&db, &spec.id).await.as_deref(), Some("rolled_back"));
 }
 
@@ -492,12 +500,246 @@ async fn rollout_with_spec_blocks_concurrent_rollout() {
 	run_sync_embedded(&db, SOURCE).await.expect("baseline sync");
 
 	let spec_a = add_table_spec("add_session_x", "session");
-	run_start_with_spec(&db, &spec_a, TARGET_A).await.expect("first rollout starts");
+	run_start_with_spec(&db, &spec_a, TARGET_A, &TemplateVars::default())
+		.await
+		.expect("first rollout starts");
 
 	// A second, different rollout must be rejected while the first is active.
 	let spec_b = add_table_spec("add_token_x", "token");
-	let err = run_start_with_spec(&db, &spec_b, TARGET_B)
+	let err = run_start_with_spec(&db, &spec_b, TARGET_B, &TemplateVars::default())
 		.await
 		.expect_err("concurrent rollout must be rejected");
 	assert!(err.to_string().contains("active"), "error should mention active rollout: {err}");
+}
+
+// --- Template variable integration tests ---
+
+#[tokio::test]
+async fn sync_embedded_with_vars_substitutes_table_name() {
+	let db = mem_db().await;
+
+	let mut vars = std::collections::HashMap::new();
+	vars.insert("PREFIX".to_string(), "acme".to_string());
+	let template_vars = TemplateVars { vars };
+
+	static FILES: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/prefixed.surql",
+		sql: "DEFINE TABLE ${prefix}_users SCHEMALESS;",
+	}];
+
+	run_sync_embedded_with_opts(
+		&db,
+		FILES,
+		&SyncOpts { fail_fast: true, prune: true, vars: template_vars, ..Default::default() },
+	)
+	.await
+	.expect("sync with vars");
+
+	let mut resp = db.query("INFO FOR DB;").await.expect("INFO FOR DB");
+	let info: Option<serde_json::Value> = resp.take(0).expect("take");
+	let tables = info
+		.as_ref()
+		.and_then(|v| v.get("tables"))
+		.and_then(|v| v.as_object())
+		.map(|m| m.keys().cloned().collect::<Vec<_>>())
+		.unwrap_or_default();
+	assert!(
+		tables.iter().any(|t| t == "acme_users"),
+		"expected table 'acme_users' but got: {tables:?}"
+	);
+}
+
+#[tokio::test]
+async fn sync_embedded_with_undefined_var_returns_error() {
+	let db = mem_db().await;
+
+	static FILES: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/bad.surql",
+		sql: "DEFINE TABLE ${undefined_var} SCHEMALESS;",
+	}];
+
+	let err = run_sync_embedded_with_opts(
+		&db,
+		FILES,
+		&SyncOpts { fail_fast: true, prune: true, ..Default::default() },
+	)
+	.await
+	.expect_err("undefined var must error");
+
+	// Variable name is in the cause chain (wrapped by file-path context); use {:#} for full chain.
+	let chain = format!("{err:#}");
+	assert!(
+		chain.contains("UNDEFINED_VAR"),
+		"error chain should name the missing variable: {chain}"
+	);
+}
+
+#[tokio::test]
+async fn seed_with_vars_substitutes_in_seed_file() {
+	let _lock = FS_LOCK.lock().unwrap();
+	let (tmp, _cwd) = enter_tempdir();
+
+	let db = mem_db().await;
+
+	let seed_dir = tmp.path().join("custom_seed");
+	std::fs::create_dir_all(&seed_dir).expect("create seed dir");
+	std::fs::write(
+		seed_dir.join("01_data.surql"),
+		"CREATE person:1 SET role = '${role}';",
+	)
+	.expect("write seed file");
+
+	let mut vars = std::collections::HashMap::new();
+	vars.insert("ROLE".to_string(), "admin".to_string());
+	let template_vars = TemplateVars { vars };
+
+	seed_from_dir(&db, &seed_dir, &template_vars).await.expect("seed_from_dir with vars");
+
+	let mut resp = db.query("SELECT role FROM person WHERE id = person:1;").await.expect("q");
+	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
+	assert_eq!(rows.len(), 1);
+	assert_eq!(rows[0].get("role").and_then(|v| v.as_str()), Some("admin"));
+}
+
+#[tokio::test]
+async fn seed_with_undefined_var_returns_error() {
+	let _lock = FS_LOCK.lock().unwrap();
+	let (tmp, _cwd) = enter_tempdir();
+
+	let db = mem_db().await;
+
+	let seed_dir = tmp.path().join("seed");
+	std::fs::create_dir_all(&seed_dir).expect("create seed dir");
+	std::fs::write(seed_dir.join("01_bad.surql"), "CREATE x:1 SET y = '${NO_SUCH_VAR}';")
+		.expect("write seed file");
+
+	let err = seed_from_dir(&db, &seed_dir, &TemplateVars::default())
+		.await
+		.expect_err("undefined var must error");
+	assert!(
+		format!("{err:#}").contains("NO_SUCH_VAR"),
+		"error should name the missing variable: {err:#}"
+	);
+}
+
+#[tokio::test]
+async fn rollout_apply_schema_step_with_files_substitutes_vars() {
+	// ApplySchema steps that reference files on disk must apply template variables to
+	// the file contents before execution. This complements rollout_run_sql_step_with_vars
+	// (which covers inline `sql`) by exercising the file-reading code path.
+	let _lock = FS_LOCK.lock().unwrap();
+	let (tmp, _cwd) = enter_tempdir();
+
+	let db = mem_db().await;
+
+	let schema_path = tmp.path().join("schema_for_apply.surql");
+	std::fs::write(&schema_path, "DEFINE TABLE ${tbl_name} SCHEMALESS;")
+		.expect("write schema file");
+
+	let spec = RolloutSpec {
+		id: "apply_schema_with_vars".to_string(),
+		name: "apply_schema_with_vars".to_string(),
+		source_schema_hash: String::new(),
+		target_schema_hash: String::new(),
+		compatibility: "phased".to_string(),
+		renames: vec![],
+		steps: vec![RolloutStep {
+			id: "apply".to_string(),
+			phase: RolloutPhase::Start,
+			kind: RolloutStepKind::ApplySchema,
+			files: vec![schema_path.to_string_lossy().into_owned()],
+			sql: None,
+			expect: None,
+			entities: vec![],
+			idempotent: None,
+		}],
+	};
+
+	let mut vars = std::collections::HashMap::new();
+	vars.insert("TBL_NAME".to_string(), "applied_table".to_string());
+	let template_vars = TemplateVars { vars };
+
+	run_start_with_spec(&db, &spec, &[], &template_vars).await.expect("apply_schema with vars");
+
+	let mut resp = db.query("INFO FOR DB;").await.expect("INFO FOR DB");
+	let info: Option<serde_json::Value> = resp.take(0).expect("take");
+	let tables = info
+		.as_ref()
+		.and_then(|v| v.get("tables"))
+		.and_then(|v| v.as_object())
+		.map(|m| m.keys().cloned().collect::<Vec<_>>())
+		.unwrap_or_default();
+	assert!(
+		tables.iter().any(|t| t == "applied_table"),
+		"expected substituted table name in DB: {tables:?}"
+	);
+}
+
+#[tokio::test]
+async fn sync_error_context_includes_offending_file_path() {
+	// When a schema file references an undefined variable, the error chain must include
+	// the file path so operators can locate it without grepping. This is the
+	// debuggability contract for production rollouts.
+	let db = mem_db().await;
+
+	static FILES: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/needs_var.surql",
+		sql: "DEFINE TABLE ${ABSENT_VAR}_table SCHEMALESS;",
+	}];
+
+	let err = run_sync_embedded_with_opts(
+		&db,
+		FILES,
+		&SyncOpts { fail_fast: true, prune: true, ..Default::default() },
+	)
+	.await
+	.expect_err("undefined var must error");
+
+	let chain = format!("{err:#}");
+	assert!(chain.contains("ABSENT_VAR"), "error chain must name the variable: {chain}");
+	assert!(
+		chain.contains("database/schema/needs_var.surql"),
+		"error chain must include the file path for debugging: {chain}"
+	);
+}
+
+#[tokio::test]
+async fn rollout_run_sql_step_with_vars() {
+	let db = mem_db().await;
+
+	// A run_sql step that references a template variable.
+	// SurrealDB creates records in schemaless tables on demand, so no pre-setup needed.
+	let spec = RolloutSpec {
+		id: "rollout_with_var".to_string(),
+		name: "rollout_with_var".to_string(),
+		source_schema_hash: String::new(),
+		target_schema_hash: String::new(),
+		compatibility: "phased".to_string(),
+		renames: vec![],
+		steps: vec![RolloutStep {
+			id: "insert_record".to_string(),
+			phase: RolloutPhase::Start,
+			kind: RolloutStepKind::RunSql,
+			files: vec![],
+			sql: Some("CREATE vartest:1 SET marker = '${marker_value}';".to_string()),
+			expect: None,
+			entities: vec![],
+			idempotent: Some(true),
+		}],
+	};
+
+	let mut vars = std::collections::HashMap::new();
+	vars.insert("MARKER_VALUE".to_string(), "hello_from_var".to_string());
+	let template_vars = TemplateVars { vars };
+
+	run_start_with_spec(&db, &spec, &[], &template_vars).await.expect("start with var");
+
+	let mut resp = db.query("SELECT marker FROM vartest WHERE id = vartest:1;").await.expect("q");
+	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
+	assert_eq!(rows.len(), 1);
+	assert_eq!(
+		rows[0].get("marker").and_then(|v| v.as_str()),
+		Some("hello_from_var"),
+		"template variable should have been substituted in run_sql step"
+	);
 }

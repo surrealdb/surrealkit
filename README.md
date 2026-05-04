@@ -199,6 +199,92 @@ Seeding runs on demand:
 surrealkit seed
 ```
 
+## Template Variables
+
+Template variables let you embed environment-specific values — credentials, table prefixes, environment names — into `.surql` files without hardcoding them. Use `${VAR_NAME}` tokens in any schema, seed, or rollout SQL file.
+
+```sql
+-- database/schema/roles.surql
+DROP ROLE IF EXISTS ${talent_username};
+DEFINE ROLE ${talent_username} PERMISSIONS FULL;
+
+-- database/schema/tables.surql
+DEFINE TABLE ${schema_prefix}_users SCHEMAFULL;
+```
+
+### Resolution Priority
+
+Values are resolved in this order (highest wins):
+
+| Source | Example |
+|--------|---------|
+| `--var KEY=VALUE` CLI flag | `surrealkit sync --var schema_prefix=acme` |
+| `SURREALKIT_VAR_<KEY>` environment variable | `SURREALKIT_VAR_SCHEMA_PREFIX=acme surrealkit sync` |
+| `[variables]` section in `surrealkit.toml` | _(see below)_ |
+
+Variable names are case-insensitive: `${FOO}`, `${foo}`, and `${Foo}` all match the key `FOO`.
+
+### `surrealkit.toml`
+
+Place a `surrealkit.toml` at the project root (created automatically by `surrealkit init`):
+
+```toml
+[variables]
+schema_prefix = "myapp"
+talent_username = "talent_rw"
+environment = "development"
+```
+
+### CLI Flag
+
+The `--var` flag is available on `sync`, `seed`, `apply`, and `rollout start/complete/rollback`. It is repeatable:
+
+```sh
+surrealkit sync --var schema_prefix=acme --var talent_username=talent_rw
+surrealkit rollout start my_rollout --var schema_prefix=acme
+```
+
+### Environment Variables
+
+Prefix any environment variable with `SURREALKIT_VAR_` and it is automatically resolved:
+
+```sh
+export SURREALKIT_VAR_SCHEMA_PREFIX=acme
+export SURREALKIT_VAR_TALENT_USERNAME=talent_rw
+surrealkit sync
+```
+
+### Escape Sequence
+
+To emit a literal `${...}` in your SQL (not substituted), double the dollar sign:
+
+```sql
+-- $${literal} → ${literal} in the output sent to SurrealDB
+SET note = 'pass $${MY_VAR} literally';
+```
+
+### Commands That Apply Substitution
+
+Template variables are applied in: `sync`, `seed`, `apply`, `rollout start`, `rollout complete`, `rollout rollback`.
+
+They are **not** applied in: `rollout plan`, `rollout baseline`, `rollout status`, `rollout lint` (these do not execute user SQL).
+
+### Undefined Variables
+
+A missing variable is always a hard error — surrealkit will not silently skip or leave the token in the SQL:
+
+```
+error: template variable 'schema_prefix' is not defined
+       (set via --var SCHEMA_PREFIX=VALUE, SURREALKIT_VAR_SCHEMA_PREFIX env var, or surrealkit.toml [variables])
+```
+
+### Known Limitations
+
+- **Hash-based re-sync**: `surrealkit sync` tracks schema files by their content hash. Changing a variable value does not change the file hash, so sync will not re-apply the file. To force re-application, touch the file or remove its tracking entry.
+- **Watch mode**: variables are resolved once at startup. Changing `surrealkit.toml` during `--watch` mode requires a restart.
+- **Catalog snapshots**: entity names containing `${VAR}` tokens appear literally in `catalog_snapshot.json` (they are not substituted). This affects drift detection for template-named tables — prefer fixed entity names in production schemas.
+- **String literals**: substitution is textual, so `${VAR}` inside a SurrealQL string literal is also replaced.
+
 ## Testing Framework
 
 [Testing Example](https://github.com/ForetagInc/surrealkit/blob/main/examples/testing/README.md)

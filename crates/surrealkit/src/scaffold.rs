@@ -44,7 +44,14 @@ pub fn scaffold() -> Result<()> {
 			.context("Writing database/tests/suites/smoke.toml")?;
 	}
 
+	let project_config_path = Path::new("surrealkit.toml");
+	if !project_config_path.exists() {
+		fs::write(project_config_path, DEFAULT_PROJECT_CONFIG)
+			.context("Writing surrealkit.toml")?;
+	}
+
 	println!("Scaffolded project in ./database\n");
+	println!("  surrealkit.toml");
 	println!("  database/");
 	println!("  ├── schema/");
 	println!("  ├── rollouts/");
@@ -136,6 +143,15 @@ timeout_ms = 10000
 
 [actors.root]
 kind = "root"
+"#;
+
+pub const DEFAULT_PROJECT_CONFIG: &str = r#"# Template variables for use in .surql schema and seed files.
+# Values here have the lowest priority:
+#   --var KEY=VALUE  >  SURREALKIT_VAR_KEY env vars  >  this file
+#
+# [variables]
+# schema_prefix = "myapp"
+# environment   = "development"
 "#;
 
 pub const DEFAULT_TEST_SUITE: &str = r#"name = "smoke"
