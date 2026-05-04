@@ -53,7 +53,9 @@ pub async fn seed_from_dir(db: &Surreal<Any>, dir: &Path, vars: &TemplateVars) -
 	for path in &files {
 		println!("  executing {}", display(path));
 		let sql = fs::read_to_string(path).with_context(|| format!("reading {}", display(path)))?;
-		let sql = vars.apply(&sql).with_context(|| format!("applying template variables in {}", display(path)))?;
+		let sql = vars
+			.apply(&sql)
+			.with_context(|| format!("applying template variables in {}", display(path)))?;
 		exec_surql(db, &sql).await.with_context(|| format!("executing {}", display(path)))?;
 	}
 
@@ -69,9 +71,8 @@ mod tests {
 	use surrealdb::opt::capabilities::Capabilities;
 	use tempfile::TempDir;
 
-	use crate::variables::TemplateVars;
-
 	use super::*;
+	use crate::variables::TemplateVars;
 
 	async fn mem_db() -> Surreal<Any> {
 		let config = Config::new().capabilities(Capabilities::all());

@@ -433,7 +433,9 @@ async fn rollout_with_spec_full_lifecycle() {
 
 	let spec = add_table_spec("add_invoice", "invoice");
 
-	run_start_with_spec(&db, &spec, TARGET, &TemplateVars::default()).await.expect("start_with_spec");
+	run_start_with_spec(&db, &spec, TARGET, &TemplateVars::default())
+		.await
+		.expect("start_with_spec");
 	assert_eq!(query_rollout_status(&db, &spec.id).await.as_deref(), Some("ready_to_complete"));
 
 	run_complete_with_spec(&db, &spec, &TemplateVars::default()).await.expect("complete_with_spec");
@@ -463,7 +465,9 @@ async fn rollout_with_spec_rollback() {
 
 	let spec = add_table_spec("add_variant", "variant");
 
-	run_start_with_spec(&db, &spec, TARGET, &TemplateVars::default()).await.expect("start_with_spec");
+	run_start_with_spec(&db, &spec, TARGET, &TemplateVars::default())
+		.await
+		.expect("start_with_spec");
 	run_rollback_with_spec(&db, &spec, &TemplateVars::default()).await.expect("rollback_with_spec");
 	assert_eq!(query_rollout_status(&db, &spec.id).await.as_deref(), Some("rolled_back"));
 }
@@ -520,7 +524,9 @@ async fn sync_embedded_with_vars_substitutes_table_name() {
 
 	let mut vars = std::collections::HashMap::new();
 	vars.insert("PREFIX".to_string(), "acme".to_string());
-	let template_vars = TemplateVars { vars };
+	let template_vars = TemplateVars {
+		vars,
+	};
 
 	static FILES: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
 		path: "database/schema/prefixed.surql",
@@ -530,7 +536,12 @@ async fn sync_embedded_with_vars_substitutes_table_name() {
 	run_sync_embedded_with_opts(
 		&db,
 		FILES,
-		&SyncOpts { fail_fast: true, prune: true, vars: template_vars, ..Default::default() },
+		&SyncOpts {
+			fail_fast: true,
+			prune: true,
+			vars: template_vars,
+			..Default::default()
+		},
 	)
 	.await
 	.expect("sync with vars");
@@ -561,7 +572,11 @@ async fn sync_embedded_with_undefined_var_returns_error() {
 	let err = run_sync_embedded_with_opts(
 		&db,
 		FILES,
-		&SyncOpts { fail_fast: true, prune: true, ..Default::default() },
+		&SyncOpts {
+			fail_fast: true,
+			prune: true,
+			..Default::default()
+		},
 	)
 	.await
 	.expect_err("undefined var must error");
@@ -583,15 +598,14 @@ async fn seed_with_vars_substitutes_in_seed_file() {
 
 	let seed_dir = tmp.path().join("custom_seed");
 	std::fs::create_dir_all(&seed_dir).expect("create seed dir");
-	std::fs::write(
-		seed_dir.join("01_data.surql"),
-		"CREATE person:1 SET role = '${role}';",
-	)
-	.expect("write seed file");
+	std::fs::write(seed_dir.join("01_data.surql"), "CREATE person:1 SET role = '${role}';")
+		.expect("write seed file");
 
 	let mut vars = std::collections::HashMap::new();
 	vars.insert("ROLE".to_string(), "admin".to_string());
-	let template_vars = TemplateVars { vars };
+	let template_vars = TemplateVars {
+		vars,
+	};
 
 	seed_from_dir(&db, &seed_dir, &template_vars).await.expect("seed_from_dir with vars");
 
@@ -657,7 +671,9 @@ async fn rollout_apply_schema_step_with_files_substitutes_vars() {
 
 	let mut vars = std::collections::HashMap::new();
 	vars.insert("TBL_NAME".to_string(), "applied_table".to_string());
-	let template_vars = TemplateVars { vars };
+	let template_vars = TemplateVars {
+		vars,
+	};
 
 	run_start_with_spec(&db, &spec, &[], &template_vars).await.expect("apply_schema with vars");
 
@@ -690,7 +706,11 @@ async fn sync_error_context_includes_offending_file_path() {
 	let err = run_sync_embedded_with_opts(
 		&db,
 		FILES,
-		&SyncOpts { fail_fast: true, prune: true, ..Default::default() },
+		&SyncOpts {
+			fail_fast: true,
+			prune: true,
+			..Default::default()
+		},
 	)
 	.await
 	.expect_err("undefined var must error");
@@ -730,7 +750,9 @@ async fn rollout_run_sql_step_with_vars() {
 
 	let mut vars = std::collections::HashMap::new();
 	vars.insert("MARKER_VALUE".to_string(), "hello_from_var".to_string());
-	let template_vars = TemplateVars { vars };
+	let template_vars = TemplateVars {
+		vars,
+	};
 
 	run_start_with_spec(&db, &spec, &[], &template_vars).await.expect("start with var");
 

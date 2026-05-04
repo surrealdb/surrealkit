@@ -161,7 +161,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 	let raw_vars: Vec<(String, String)> =
 		args.var.iter().map(|s| parse_var_flag(s)).collect::<anyhow::Result<_>>()?;
-	let template_vars = TemplateVars { vars: build_vars(&raw_vars, None)? };
+	let template_vars = TemplateVars {
+		vars: build_vars(&raw_vars, None)?,
+	};
 
 	match args.command {
 		Commands::Init => scaffold::scaffold()?,

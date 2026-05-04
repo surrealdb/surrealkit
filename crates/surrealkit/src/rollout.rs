@@ -13,7 +13,6 @@ use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 
 use crate::core::{exec_surql, sha256_hex};
-use crate::variables::TemplateVars;
 use crate::schema_state::{
 	CATALOG_SNAPSHOT_PATH, CatalogDiff, CatalogEntity, CatalogSnapshot, EntityKey, FileDiff,
 	ROLLOUTS_DIR, SchemaFile, build_catalog_snapshot, collect_schema_files, diff_catalog,
@@ -22,6 +21,7 @@ use crate::schema_state::{
 	save_schema_snapshot, snapshot_from_files,
 };
 use crate::setup::run_setup;
+use crate::variables::TemplateVars;
 
 #[derive(Debug, Clone)]
 pub struct RolloutPlanOpts {
@@ -945,9 +945,9 @@ async fn execute_step(db: &Surreal<Any>, step: &RolloutStep, vars: &TemplateVars
 				for file in &step.files {
 					let raw =
 						fs::read_to_string(file).with_context(|| format!("reading {}", file))?;
-					let substituted = vars.apply(&raw).with_context(|| {
-						format!("applying template variables in {}", file)
-					})?;
+					let substituted = vars
+						.apply(&raw)
+						.with_context(|| format!("applying template variables in {}", file))?;
 					exec_surql(db, &ensure_overwrite(&substituted)).await?;
 				}
 			} else if let Some(ref sql) = step.sql {
@@ -1601,9 +1601,8 @@ mod tests {
 			.await
 			.expect("create rollout record");
 
-		let active = load_active_rollout_id(&db)
-			.await
-			.expect("load_active_rollout_id must not fail");
+		let active =
+			load_active_rollout_id(&db).await.expect("load_active_rollout_id must not fail");
 		// The id field is a SurrealDB Thing serialised as a string; the full record ID
 		// (table prefix included) is what the function returns.
 		assert!(active.is_some(), "should find the active rollout");
