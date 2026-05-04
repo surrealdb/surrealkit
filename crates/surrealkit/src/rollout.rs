@@ -242,7 +242,9 @@ pub async fn run_status(db: &Surreal<Any>, selector: Option<String>) -> Result<(
 		req = req.bind(("id", id));
 	}
 	let mut resp = req.await?;
-	let rows: Vec<Value> = resp.take(0)?;
+	let raw_rows: Vec<surrealdb_types::Value> = resp.take(0)?;
+	let rows: Vec<Value> =
+		raw_rows.into_iter().map(|v| Value::from_value(v).unwrap_or(Value::Null)).collect();
 	if rows.is_empty() {
 		println!("No rollout records found.");
 		return Ok(());
@@ -532,7 +534,8 @@ pub async fn load_active_rollout_id(db: &Surreal<Any>) -> Result<Option<String>>
 			 ORDER BY started_at DESC LIMIT 1;",
 		)
 		.await?;
-	let row: Option<Value> = resp.take(0)?;
+	let raw: Option<surrealdb_types::Value> = resp.take(0)?;
+	let row = raw.map(|v| Value::from_value(v).unwrap_or(Value::Null));
 	Ok(row.and_then(|value| string_field(&value, "id")))
 }
 
@@ -1014,8 +1017,8 @@ async fn load_rollout_record(db: &Surreal<Any>, rollout_id: &str) -> Result<Opti
 		.query("SELECT * FROM __rollout WHERE record::id(id) = $id LIMIT 1;")
 		.bind(("id", rollout_id.to_string()))
 		.await?;
-	let row: Option<Value> = resp.take(0)?;
-	Ok(row)
+	let raw: Option<surrealdb_types::Value> = resp.take(0)?;
+	Ok(raw.map(|v| Value::from_value(v).unwrap_or(Value::Null)))
 }
 
 fn verify_rollout_record_matches(row: &Value, rollout: &LoadedRolloutSpec) -> Result<()> {
@@ -1484,5 +1487,80 @@ mod tests {
 			.expect("load_rollout_record query")
 			.expect("row must be found by rollout id");
 		assert_eq!(row.get("status").and_then(|v| v.as_str()), Some("planned"));
+	}
+
+	// Regression: run_status used to call resp.take::<Vec<serde_json::Value>>(0) which
+	// panics over HTTP/CBOR when rows contain SurrealDB datetime values (started_at,
+	// completed_at). The fix deserialises via surrealdb_types::Value first and then
+	// converts, matching the pattern already used in execute_sql_value.
+	//
+	// This test exercises the exact SELECT used by run_status against a completed rollout
+	// record that has both started_at and completed_at populated.
+	#[tokio::test]
+	async fn run_status_select_does_not_panic_with_datetime_fields() {
+		let db = connect_mem_db().await;
+		let loaded = sample_loaded_spec("20260420101627__initial_schema");
+
+		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned)
+			.await
+			.expect("create rollout record");
+
+		let completed_at = OffsetDateTime::now_utc().format(&Rfc3339).expect("format rfc3339");
+		set_rollout_status(
+			&db,
+			&loaded.spec.id,
+			RolloutStatus::Completed,
+			None,
+			Some(completed_at),
+		)
+		.await
+		.expect("set completed status");
+
+		// Replicate the exact query run_status issues, including the datetime fields.
+		let mut resp = db
+			.query(
+				"SELECT id, name, status, started_at, completed_at, last_error, steps \
+				 FROM __rollout WHERE record::id(id) = $id ORDER BY started_at DESC;",
+			)
+			.bind(("id", loaded.spec.id.clone()))
+			.await
+			.expect("query");
+
+		// Fixed deserialization path (must not panic).
+		let raw_rows: Vec<surrealdb_types::Value> = resp.take(0).expect("take raw rows");
+		let rows: Vec<Value> =
+			raw_rows.into_iter().map(|v| Value::from_value(v).unwrap_or(Value::Null)).collect();
+
+		assert_eq!(rows.len(), 1, "expected one rollout row");
+		let row = &rows[0];
+		assert_eq!(row.get("status").and_then(|v| v.as_str()), Some("completed"));
+		assert!(
+			row.get("started_at").is_some(),
+			"started_at must survive the surrealdb_types→serde_json conversion"
+		);
+		assert!(
+			row.get("completed_at").is_some(),
+			"completed_at must survive the surrealdb_types→serde_json conversion"
+		);
+	}
+
+	// Regression: load_active_rollout_id selected started_at (a datetime field) into
+	// Option<serde_json::Value>, which can panic over HTTP/CBOR. Same root cause as
+	// run_status; verify the fixed deserialization path returns the correct id.
+	#[tokio::test]
+	async fn load_active_rollout_id_does_not_panic_with_datetime_field() {
+		let db = connect_mem_db().await;
+		let loaded = sample_loaded_spec("20260420101627__active_id_test");
+
+		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::RunningStart)
+			.await
+			.expect("create rollout record");
+
+		let active = load_active_rollout_id(&db)
+			.await
+			.expect("load_active_rollout_id must not fail");
+		// The id field is a SurrealDB Thing serialised as a string; the full record ID
+		// (table prefix included) is what the function returns.
+		assert!(active.is_some(), "should find the active rollout");
 	}
 }

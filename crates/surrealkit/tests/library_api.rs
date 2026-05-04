@@ -173,6 +173,59 @@ async fn rollout_status_is_empty_when_no_rollouts_exist() {
 	run_status(&db, None).await.expect("run_status on empty DB");
 }
 
+// Regression: run_status crashed (SIGABRT via panic=abort) when called after a rollout
+// had been completed, because resp.take::<Vec<serde_json::Value>> panics over HTTP/CBOR
+// when rows include SurrealDB datetime fields (started_at, completed_at).
+// Both the targeted selector and the list-all form must work without panicking.
+#[tokio::test]
+async fn rollout_status_does_not_crash_after_completed_rollout() {
+	let _guard = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (tmp, _restore) = enter_tempdir();
+
+	let db = mem_db().await;
+
+	write_schema_file(tmp.path(), "person.surql", "DEFINE TABLE person SCHEMALESS;");
+	run_baseline(&db).await.expect("baseline");
+
+	write_schema_file(tmp.path(), "account.surql", "DEFINE TABLE account SCHEMALESS;");
+	run_plan(RolloutPlanOpts {
+		name: Some("add_account_status_test".to_string()),
+		dry_run: false,
+	})
+	.await
+	.expect("plan");
+
+	let rollout_id = find_latest_rollout_id(tmp.path()).expect("rollout TOML not found");
+
+	run_start(
+		&db,
+		RolloutExecutionOpts {
+			selector: Some(rollout_id.clone()),
+		},
+	)
+	.await
+	.expect("start");
+
+	run_complete(
+		&db,
+		RolloutExecutionOpts {
+			selector: Some(rollout_id.clone()),
+		},
+	)
+	.await
+	.expect("complete");
+
+	// Targeted lookup — this is what the customer's CI script calls.
+	run_status(&db, Some(rollout_id.clone()))
+		.await
+		.expect("run_status with selector must not crash on completed rollout");
+
+	// List-all form.
+	run_status(&db, None)
+		.await
+		.expect("run_status without selector must not crash on completed rollout");
+}
+
 fn write_schema_file(dir: &Path, name: &str, sql: &str) {
 	let schema_dir = dir.join("database/schema");
 	std::fs::create_dir_all(&schema_dir).expect("create schema dir");
