@@ -13,15 +13,11 @@ fn var_regex() -> &'static Regex {
 		.get_or_init(|| Regex::new(r"\$\$\{[^}]+\}|\$\{([^}]+)\}").expect("invalid variable regex"))
 }
 
-/// Substitutes all `${VAR_NAME}` tokens in `content` using `vars`.
+/// Replace `${VAR_NAME}` tokens in `content` with values from `vars`.
 ///
-/// - Keys in `vars` must already be normalized to `UPPER_CASE`.
-/// - Variable name lookup is case-insensitive; `${foo}`, `${Foo}`, and `${FOO}` all match key
-///   `FOO`.
-/// - `$${VAR_NAME}` is an escape sequence that yields the literal `${VAR_NAME}` (no substitution).
-/// - Returns an error naming the first undefined variable encountered.
-///
-/// When `content` contains no `${`, this returns the original string without scanning further.
+/// Keys in `vars` must be `UPPER_CASE`. Lookup is case-insensitive: `${foo}`, `${Foo}`,
+/// and `${FOO}` all match key `FOO`. The escape `$${VAR}` yields a literal `${VAR}`.
+/// Errors on the first undefined variable. Skips the regex when `content` has no `${`.
 pub fn apply(content: &str, vars: &HashMap<String, String>) -> Result<String> {
 	// Fast path: no possible token in content. Skip regex entirely.
 	if !content.contains("${") {
@@ -37,7 +33,7 @@ pub fn apply(content: &str, vars: &HashMap<String, String>) -> Result<String> {
 
 		let matched = full.as_str();
 		if matched.starts_with("$$") {
-			// Escape: $${NAME} → literal ${NAME}. Strip the leading '$'.
+			// $${NAME} -> literal ${NAME}. Drop the leading '$'.
 			result.push_str(&matched[1..]);
 		} else {
 			let name = cap.get(1).expect("single-dollar branch has capture group 1").as_str();
@@ -63,12 +59,9 @@ pub fn apply(content: &str, vars: &HashMap<String, String>) -> Result<String> {
 	Ok(result)
 }
 
-/// Builds the merged variable map from all three sources in priority order.
-///
-/// Priority (highest wins): `cli_vars` > `SURREALKIT_VAR_*` env vars > `surrealkit.toml
-/// [variables]`. All keys are normalized to `UPPER_CASE`.
-///
-/// `toml_path` defaults to `./surrealkit.toml` when `None`.
+/// Merge variables from all three sources. Highest priority wins:
+/// `cli_vars` > `SURREALKIT_VAR_*` env vars > `surrealkit.toml [variables]`.
+/// Keys are uppercased. `toml_path` defaults to `./surrealkit.toml` when `None`.
 pub fn build_vars(
 	cli_vars: &[(String, String)],
 	toml_path: Option<&Path>,
@@ -105,9 +98,8 @@ pub fn build_vars(
 	Ok(map)
 }
 
-/// Parses a `KEY=VALUE` string from a `--var` CLI flag.
-///
-/// The split occurs at the first `=`. A missing `=` is an error; an empty value is allowed.
+/// Parse a `KEY=VALUE` string from a `--var` CLI flag. Splits at the first `=`.
+/// Missing `=` is an error. Empty value is allowed.
 pub fn parse_var_flag(raw: &str) -> Result<(String, String)> {
 	match raw.find('=') {
 		None => bail!("--var '{}' is missing '=' (expected KEY=VALUE)", raw),
@@ -127,10 +119,7 @@ pub struct TemplateVars {
 }
 
 impl TemplateVars {
-	/// Applies template variable substitution to `content`.
-	///
-	/// When `vars` is empty and `content` has no `${` tokens, returns the original string
-	/// without any allocation. Any undefined `${VAR}` token is an error.
+	/// Apply `${VAR}` substitution to `content`. Undefined variables are an error.
 	pub fn apply(&self, content: &str) -> Result<String> {
 		apply(content, &self.vars)
 	}
@@ -157,8 +146,6 @@ mod tests {
 	fn vars(pairs: &[(&str, &str)]) -> HashMap<String, String> {
 		pairs.iter().map(|(k, v)| (k.to_ascii_uppercase(), v.to_string())).collect()
 	}
-
-	// --- apply ---
 
 	#[test]
 	fn apply_substitutes_single_var() {
@@ -271,7 +258,7 @@ mod tests {
 
 	#[test]
 	fn apply_unterminated_token_passes_through() {
-		// ${FOO without closing } is not a token — emit literally.
+		// ${FOO without closing } is not a token; pass through.
 		let v = vars(&[("FOO", "bar")]);
 		assert_eq!(apply("${FOO no close", &v).unwrap(), "${FOO no close");
 	}
@@ -292,12 +279,10 @@ mod tests {
 
 	#[test]
 	fn apply_value_containing_dollar_brace_is_not_re_expanded() {
-		// Substitution result is not re-scanned, preventing accidental recursion attacks.
+		// Substitution result is not re-scanned, so values cannot reference other vars.
 		let v = vars(&[("OUTER", "${INNER}"), ("INNER", "should-not-leak")]);
 		assert_eq!(apply("${OUTER}", &v).unwrap(), "${INNER}");
 	}
-
-	// --- parse_var_flag ---
 
 	#[test]
 	fn parse_var_flag_valid() {
@@ -317,7 +302,7 @@ mod tests {
 
 	#[test]
 	fn parse_var_flag_preserves_key_case_for_caller_normalization() {
-		// parse_var_flag itself does not uppercase — that's build_vars' responsibility.
+		// parse_var_flag itself does not uppercase; that's build_vars' job.
 		let (k, _) = parse_var_flag("mykey=v").unwrap();
 		assert_eq!(k, "mykey");
 	}
@@ -333,11 +318,9 @@ mod tests {
 		assert!(parse_var_flag("=value").is_err());
 	}
 
-	// --- build_vars ---
-	//
-	// These tests pass `Some(<path>)` rather than `None` so they don't accidentally read
-	// from a `surrealkit.toml` in the cwd. They also use unique key prefixes so a
-	// developer-set `SURREALKIT_VAR_FOO` in their shell can't influence the result.
+	// build_vars tests pass `Some(<path>)` so they don't pick up a `surrealkit.toml`
+	// from the cwd, and use unique key prefixes so a developer's `SURREALKIT_VAR_*`
+	// shell env can't influence assertions.
 
 	#[test]
 	fn build_vars_toml_fallback() {
@@ -399,11 +382,11 @@ mod tests {
 		let cfg = tmp.path().join("surrealkit.toml");
 		std::fs::write(&cfg, "this is = not = valid = toml [[[").unwrap();
 		let err = build_vars(&[], Some(&cfg)).unwrap_err();
-		let _ = err; // we don't assert on the message — just that it errors
+		let _ = err;
 	}
 
-	// Note: `SURREALKIT_VAR_*` env var pickup is exercised by integration usage and is hard
-	// to test deterministically here without process-wide env mutation (which races other
-	// tests). The behavior is straightforward: `std::env::vars()` is filtered for the
-	// prefix, the prefix is stripped, and the key is uppercased — see lines 86-91.
+	// `SURREALKIT_VAR_*` env var pickup is exercised by integration usage; testing it
+	// deterministically here requires process-wide env mutation, which races other tests.
+	// The logic is straightforward: filter `std::env::vars()` by the prefix, strip it,
+	// uppercase the key.
 }

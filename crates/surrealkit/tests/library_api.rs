@@ -516,7 +516,7 @@ async fn rollout_with_spec_blocks_concurrent_rollout() {
 	assert!(err.to_string().contains("active"), "error should mention active rollout: {err}");
 }
 
-// --- Template variable integration tests ---
+// Template variable tests below.
 
 #[tokio::test]
 async fn sync_embedded_with_vars_substitutes_table_name() {
@@ -581,7 +581,7 @@ async fn sync_embedded_with_undefined_var_returns_error() {
 	.await
 	.expect_err("undefined var must error");
 
-	// Variable name is in the cause chain (wrapped by file-path context); use {:#} for full chain.
+	// Variable name lives in the cause chain (wrapped by file-path context); {:#} prints full chain.
 	let chain = format!("{err:#}");
 	assert!(
 		chain.contains("UNDEFINED_VAR"),
@@ -638,9 +638,7 @@ async fn seed_with_undefined_var_returns_error() {
 
 #[tokio::test]
 async fn rollout_apply_schema_step_with_files_substitutes_vars() {
-	// ApplySchema steps that reference files on disk must apply template variables to
-	// the file contents before execution. This complements rollout_run_sql_step_with_vars
-	// (which covers inline `sql`) by exercising the file-reading code path.
+	// ApplySchema with files reads from disk; rollout_run_sql_step_with_vars covers inline sql.
 	let _lock = FS_LOCK.lock().unwrap();
 	let (tmp, _cwd) = enter_tempdir();
 
@@ -693,9 +691,7 @@ async fn rollout_apply_schema_step_with_files_substitutes_vars() {
 
 #[tokio::test]
 async fn sync_error_context_includes_offending_file_path() {
-	// When a schema file references an undefined variable, the error chain must include
-	// the file path so operators can locate it without grepping. This is the
-	// debuggability contract for production rollouts.
+	// Error chain must include the file path so operators can locate the bad file.
 	let db = mem_db().await;
 
 	static FILES: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
@@ -719,7 +715,7 @@ async fn sync_error_context_includes_offending_file_path() {
 	assert!(chain.contains("ABSENT_VAR"), "error chain must name the variable: {chain}");
 	assert!(
 		chain.contains("database/schema/needs_var.surql"),
-		"error chain must include the file path for debugging: {chain}"
+		"error chain must include the file path: {chain}"
 	);
 }
 
@@ -728,7 +724,7 @@ async fn rollout_run_sql_step_with_vars() {
 	let db = mem_db().await;
 
 	// A run_sql step that references a template variable.
-	// SurrealDB creates records in schemaless tables on demand, so no pre-setup needed.
+	// SurrealDB creates schemaless tables on demand, so no pre-setup needed.
 	let spec = RolloutSpec {
 		id: "rollout_with_var".to_string(),
 		name: "rollout_with_var".to_string(),
