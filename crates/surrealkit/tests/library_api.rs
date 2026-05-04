@@ -581,7 +581,8 @@ async fn sync_embedded_with_undefined_var_returns_error() {
 	.await
 	.expect_err("undefined var must error");
 
-	// Variable name lives in the cause chain (wrapped by file-path context); {:#} prints full chain.
+	// Variable name lives in the cause chain (wrapped by file-path context); {:#} prints full
+	// chain.
 	let chain = format!("{err:#}");
 	assert!(
 		chain.contains("UNDEFINED_VAR"),
