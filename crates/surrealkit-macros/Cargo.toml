@@ -5,7 +5,7 @@ edition = '2024'
 authors = ['Chiru Boggavarapu <chiru@foretag.co>', 'Tobie Morgan Hitchcock <tobie@surrealdb.com>']
 repository = 'https://github.com/surrealdb/surrealkit'
 license-file = 'LICENSE'
-description = 'Proc-macros for SurrealKit — embed schema files at compile time'
+description = 'Proc-macros for SurrealKit - embed schema files at compile time'
 
 [lib]
 proc-macro = true
