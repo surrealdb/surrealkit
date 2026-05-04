@@ -516,7 +516,7 @@ async fn rollout_with_spec_blocks_concurrent_rollout() {
 	assert!(err.to_string().contains("active"), "error should mention active rollout: {err}");
 }
 
-// Template variable tests below.
+// Template variable tests
 
 #[tokio::test]
 async fn sync_embedded_with_vars_substitutes_table_name() {
