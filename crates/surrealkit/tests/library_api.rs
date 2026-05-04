@@ -40,6 +40,8 @@ fn enter_tempdir() -> (tempfile::TempDir, RestoreCwd) {
 
 #[tokio::test]
 async fn setup_initialises_metadata_tables() {
+	let _lock = FS_LOCK.lock().unwrap();
+	let (_tmp, _cwd) = enter_tempdir();
 	let db = mem_db().await;
 	run_setup(&db).await.expect("run_setup");
 

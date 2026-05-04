@@ -4128,7 +4128,7 @@ dependencies = [
 
 [[package]]
 name = "surrealkit"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -4152,7 +4152,7 @@ dependencies = [
 
 [[package]]
 name = "surrealkit-macros"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "proc-macro2",
  "quote",
