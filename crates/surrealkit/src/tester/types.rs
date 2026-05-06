@@ -74,9 +74,9 @@ pub struct ActorSpec {
 	pub database_env: Option<String>,
 	pub access: Option<String>,
 	pub access_env: Option<String>,
-	pub signup_params: Option<serde_json::Value>,
-	pub signin_params: Option<serde_json::Value>,
-	pub params: Option<serde_json::Value>,
+	pub signup_params: Option<toml::Value>,
+	pub signin_params: Option<toml::Value>,
+	pub params: Option<toml::Value>,
 	pub token: Option<String>,
 	pub token_env: Option<String>,
 	#[serde(default)]
@@ -306,7 +306,33 @@ fn default_get() -> String {
 
 #[cfg(test)]
 mod tests {
-	use super::{CaseKind, SuiteSpec};
+	use super::{CaseKind, GlobalTestConfig, SuiteSpec};
+
+	#[test]
+	fn signup_params_toml_native_datetime_preserved() {
+		// Regression test for https://github.com/surrealdb/surrealkit/issues/35:
+		// TOML native datetimes in signup_params must survive deserialization as
+		// toml::Value::Datetime so they can later be converted to a proper SurrealDB
+		// datetime (not a plain string).
+		let raw = r#"
+[actors.member]
+kind = "record"
+access = "test_access"
+
+[actors.member.signup_params]
+birth_date = 1968-10-18T00:00:00Z
+email = "user@example.com"
+"#;
+		let config: GlobalTestConfig = toml::from_str(raw).expect("config should parse");
+		let actor = config.actors.get("member").expect("actor must exist");
+		let params = actor.signup_params.as_ref().expect("signup_params must be present");
+		let table = params.as_table().expect("signup_params must be a table");
+		assert!(
+			table["birth_date"].is_datetime(),
+			"native TOML datetime must parse as toml::Value::Datetime, not a string"
+		);
+		assert!(table["email"].is_str());
+	}
 
 	#[test]
 	fn parses_case_kind_inside_cases_array() {
