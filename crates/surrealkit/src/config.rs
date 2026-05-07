@@ -62,10 +62,10 @@ fn resolve(
 		return v.clone();
 	}
 	for key in env_keys {
-		if let Ok(v) = env::var(key) {
-			if !v.is_empty() {
-				return v;
-			}
+		if let Ok(v) = env::var(key)
+			&& !v.is_empty()
+		{
+			return v;
 		}
 	}
 	if let Some(dotenv) = dotenv {

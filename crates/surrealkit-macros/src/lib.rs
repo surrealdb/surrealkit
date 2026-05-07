@@ -52,7 +52,8 @@ pub fn embed_schema(input: TokenStream) -> TokenStream {
 			let abs_str = abs_path.to_str().expect("non-UTF8 path in schema dir");
 			let rel = abs_path.strip_prefix(&abs_schema_dir).expect("path not under schema dir");
 			let rel_display =
-				format!("{}/{}", schema_dir, rel.to_str().unwrap()).replace('\\', "/");
+				format!("{}/{}", schema_dir, rel.to_str().expect("non-UTF8 path in schema dir"))
+					.replace('\\', "/");
 
 			quote! {
 				::surrealkit::EmbeddedSchemaFile {

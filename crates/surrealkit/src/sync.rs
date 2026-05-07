@@ -22,18 +22,29 @@ use crate::setup::run_setup;
 
 #[derive(Debug, Clone)]
 pub struct SyncOpts {
+	/// When `true`, re-run sync on an interval instead of once. Ignored for embedded sync.
 	pub watch: bool,
+	/// Milliseconds between sync passes in watch mode (minimum 250 ms).
 	pub debounce_ms: u64,
+	/// Preview what would change without writing anything to the database.
 	pub dry_run: bool,
+	/// Stop after the first error instead of continuing with remaining files.
 	pub fail_fast: bool,
+	/// Remove database objects that belong to files no longer in the schema slice.
 	pub prune: bool,
+	/// Allow pruning on a database marked as shared across multiple processes.
+	/// Without this flag, pruning on a shared database is refused as a safety guard.
 	pub allow_shared_prune: bool,
 }
 
-/// Schema file embedded at compile time via [`embed_schema!`].
+/// A schema fragment embedded at compile time via [`embed_schema!`].
 pub struct EmbeddedSchemaFile {
-	/// Relative path used as the tracking key in the database.
+	/// Stable tracking key stored in `__entity`. Typically the original relative
+	/// file path (e.g. `"database/schema/person.surql"`), but any unique, consistent
+	/// string works. SurrealKit uses this key to detect which fragments have changed
+	/// between restarts without re-reading a filesystem.
 	pub path: &'static str,
+	/// The SurrealQL DDL content to apply when this fragment's hash changes.
 	pub sql: &'static str,
 }
 

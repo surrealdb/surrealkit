@@ -245,8 +245,8 @@ pub fn parse_schema_statements(file: &SchemaFile) -> Result<Vec<CatalogEntity>> 
 				truncate_stmt(normalized)
 			);
 		};
-		entity.source_path = file.path.clone();
-		entity.file_hash = file.hash.clone();
+		entity.source_path.clone_from(&file.path);
+		entity.file_hash.clone_from(&file.hash);
 		entity.statement_hash = sha256_hex(normalize_statement(normalized).as_bytes());
 		entities.push(entity);
 	}
