@@ -3,7 +3,7 @@ use std::env;
 use std::io::Write;
 use std::time::Duration;
 
-use anyhow::{Result, bail};
+use anyhow::{Context, Result, bail};
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use time::OffsetDateTime;
@@ -19,8 +19,9 @@ use crate::schema_state::{
 	ensure_local_state_dirs, ensure_overwrite, render_remove_sql,
 };
 use crate::setup::run_setup;
+use crate::variables::TemplateVars;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SyncOpts {
 	pub watch: bool,
 	pub debounce_ms: u64,
@@ -28,6 +29,8 @@ pub struct SyncOpts {
 	pub fail_fast: bool,
 	pub prune: bool,
 	pub allow_shared_prune: bool,
+	/// Template variables substituted into `.surql` content before execution.
+	pub vars: TemplateVars,
 }
 
 /// Schema file embedded at compile time via [`embed_schema!`].
@@ -85,6 +88,7 @@ pub async fn run_sync_embedded(db: &Surreal<Any>, files: &[EmbeddedSchemaFile]) 
 			fail_fast: true,
 			prune: true,
 			allow_shared_prune: false,
+			vars: TemplateVars::default(),
 		},
 	)
 	.await
@@ -99,12 +103,20 @@ pub async fn run_sync_embedded_with_opts(
 	run_setup(db).await?;
 	let schema_files: Vec<SchemaFile> = files
 		.iter()
-		.map(|f| SchemaFile {
-			path: f.path.to_string(),
-			sql: f.sql.to_string(),
-			hash: sha256_hex(f.sql.as_bytes()),
+		.map(|f| {
+			let sql = opts
+				.vars
+				.apply(f.sql)
+				.with_context(|| format!("applying template variables in {}", f.path))?;
+			Ok(SchemaFile {
+				path: f.path.to_string(),
+				// Hash is computed from the raw template so that variable value changes
+				// don't invalidate the sync hash (variables are env-specific config).
+				hash: sha256_hex(f.sql.as_bytes()),
+				sql,
+			})
 		})
-		.collect();
+		.collect::<anyhow::Result<Vec<_>>>()?;
 	run_sync_with_files(db, opts, &schema_files, false).await
 }
 
@@ -150,7 +162,11 @@ async fn run_sync_with_files(
 			continue;
 		}
 
-		let sql = ensure_overwrite(&file.sql);
+		let substituted = opts
+			.vars
+			.apply(&file.sql)
+			.with_context(|| format!("applying template variables in {}", file.path))?;
+		let sql = ensure_overwrite(&substituted);
 		match exec_surql(db, &sql).await {
 			Ok(_) => {
 				if !watch_mode {

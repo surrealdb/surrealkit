@@ -7,6 +7,7 @@ pub mod seed;
 pub mod setup;
 pub mod sync;
 pub mod tester;
+pub mod variables;
 
 pub use anyhow;
 pub use config::{AuthLevel, DbCfg, DbOverrides, connect};
@@ -22,3 +23,4 @@ pub use surrealkit_macros::embed_schema;
 pub use sync::{
 	EmbeddedSchemaFile, SyncOpts, run_sync, run_sync_embedded, run_sync_embedded_with_opts,
 };
+pub use variables::{TemplateVars, build_vars, parse_var_flag};

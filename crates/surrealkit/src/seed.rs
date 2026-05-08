@@ -6,13 +6,14 @@ use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 
 use crate::core::{display, exec_surql};
+use crate::variables::TemplateVars;
 
-pub async fn seed(db: &Surreal<Any>) -> Result<()> {
+pub async fn seed(db: &Surreal<Any>, vars: &TemplateVars) -> Result<()> {
 	let seed_dir = Path::new("database/seed");
 	let seed_file = Path::new("database/seed.surql");
 
 	if seed_dir.is_dir() {
-		seed_from_dir(db, seed_dir).await
+		seed_from_dir(db, seed_dir, vars).await
 	} else if seed_file.exists() {
 		eprintln!(
 			"warning: database/seed.surql is deprecated and will be removed in v1. \
@@ -20,13 +21,14 @@ pub async fn seed(db: &Surreal<Any>) -> Result<()> {
 		);
 		let sql = fs::read_to_string(seed_file)
 			.with_context(|| format!("reading {}", display(seed_file)))?;
+		let sql = vars.apply(&sql)?;
 		exec_surql(db, &sql).await
 	} else {
 		Err(anyhow!("no seed found: create database/seed.surql or a database/seed/ directory"))
 	}
 }
 
-pub async fn seed_from_dir(db: &Surreal<Any>, dir: &Path) -> Result<()> {
+pub async fn seed_from_dir(db: &Surreal<Any>, dir: &Path, vars: &TemplateVars) -> Result<()> {
 	let mut files: Vec<_> = fs::read_dir(dir)
 		.with_context(|| format!("reading directory {}", display(dir)))?
 		.filter_map(|entry| {
@@ -51,6 +53,9 @@ pub async fn seed_from_dir(db: &Surreal<Any>, dir: &Path) -> Result<()> {
 	for path in &files {
 		println!("  executing {}", display(path));
 		let sql = fs::read_to_string(path).with_context(|| format!("reading {}", display(path)))?;
+		let sql = vars
+			.apply(&sql)
+			.with_context(|| format!("applying template variables in {}", display(path)))?;
 		exec_surql(db, &sql).await.with_context(|| format!("executing {}", display(path)))?;
 	}
 
@@ -67,6 +72,7 @@ mod tests {
 	use tempfile::TempDir;
 
 	use super::*;
+	use crate::variables::TemplateVars;
 
 	async fn mem_db() -> Surreal<Any> {
 		let config = Config::new().capabilities(Capabilities::all());
@@ -83,7 +89,7 @@ mod tests {
 		fs::write(tmp.path().join("01_a.surql"), "CREATE ordered:1 SET step = 1;").unwrap();
 
 		let db = mem_db().await;
-		seed_from_dir(&db, tmp.path()).await.unwrap();
+		seed_from_dir(&db, tmp.path(), &TemplateVars::default()).await.unwrap();
 
 		let count: Option<serde_json::Value> =
 			db.query("SELECT count() FROM ordered GROUP ALL").await.unwrap().take(0).unwrap();
@@ -99,7 +105,7 @@ mod tests {
 		fs::write(tmp.path().join("data.sql"), "CREATE ignored:1;").unwrap();
 
 		let db = mem_db().await;
-		seed_from_dir(&db, tmp.path()).await.unwrap();
+		seed_from_dir(&db, tmp.path(), &TemplateVars::default()).await.unwrap();
 
 		// Only the .surql file's table should exist
 		let kept: Vec<serde_json::Value> =
@@ -123,7 +129,7 @@ mod tests {
 		fs::write(tmp.path().join("notes.txt"), "nothing here").unwrap();
 
 		let db = mem_db().await;
-		let err = seed_from_dir(&db, tmp.path()).await.unwrap_err();
+		let err = seed_from_dir(&db, tmp.path(), &TemplateVars::default()).await.unwrap_err();
 		assert!(err.to_string().contains("no .surql files found"), "unexpected error: {err}");
 	}
 
@@ -134,7 +140,7 @@ mod tests {
 		fs::write(tmp.path().join("02_bad.surql"), "THIS IS NOT VALID SURQL @@@").unwrap();
 
 		let db = mem_db().await;
-		let err = seed_from_dir(&db, tmp.path()).await.unwrap_err();
+		let err = seed_from_dir(&db, tmp.path(), &TemplateVars::default()).await.unwrap_err();
 		assert!(
 			err.to_string().contains("02_bad.surql"),
 			"error should name the failing file, got: {err}"
@@ -160,7 +166,7 @@ mod tests {
 		}
 
 		let db = mem_db().await;
-		seed_from_dir(&db, tmp.path()).await.unwrap();
+		seed_from_dir(&db, tmp.path(), &TemplateVars::default()).await.unwrap();
 
 		let count: Option<serde_json::Value> =
 			db.query("SELECT count() FROM chunk_0 GROUP ALL").await.unwrap().take(0).unwrap();

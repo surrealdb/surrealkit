@@ -10,6 +10,7 @@ use surrealkit::rollout::{self, RolloutExecutionOpts, RolloutPlanOpts};
 use surrealkit::setup::run_setup;
 use surrealkit::sync::{self, SyncOpts};
 use surrealkit::tester::{TestOpts, run_test};
+use surrealkit::variables::{TemplateVars, build_vars, parse_var_flag};
 use surrealkit::{scaffold, seed};
 
 #[derive(Parser, Debug)]
@@ -42,6 +43,10 @@ pub struct Cli {
 	/// Authentication level: root (default), namespace/ns, or database/db
 	#[arg(long, global = true)]
 	auth_level: Option<String>,
+
+	/// Set a template variable (repeatable): --var KEY=VALUE
+	#[arg(long = "var", global = true, value_name = "KEY=VALUE")]
+	var: Vec<String>,
 
 	#[command(subcommand)]
 	command: Commands,
@@ -154,6 +159,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		auth_level: args.auth_level,
 	};
 
+	let raw_vars: Vec<(String, String)> =
+		args.var.iter().map(|s| parse_var_flag(s)).collect::<anyhow::Result<_>>()?;
+	let template_vars = TemplateVars {
+		vars: build_vars(&raw_vars, None)?,
+	};
+
 	match args.command {
 		Commands::Init => scaffold::scaffold()?,
 		Commands::Setup => {
@@ -178,6 +189,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 					fail_fast,
 					prune: !no_prune,
 					allow_shared_prune,
+					vars: template_vars,
 				},
 			)
 			.await?;
@@ -208,6 +220,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 					RolloutExecutionOpts {
 						selector: Some(target),
 					},
+					&template_vars,
 				)
 				.await?;
 			}
@@ -220,6 +233,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 					RolloutExecutionOpts {
 						selector: Some(target),
 					},
+					&template_vars,
 				)
 				.await?;
 			}
@@ -232,6 +246,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 					RolloutExecutionOpts {
 						selector: Some(target),
 					},
+					&template_vars,
 				)
 				.await?;
 			}
@@ -252,7 +267,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		},
 		Commands::Seed => {
 			let db = connect_from_env(env.as_ref(), &overrides).await?;
-			seed::seed(&db).await?;
+			seed::seed(&db, &template_vars).await?;
 		}
 		Commands::Status => {
 			let db = connect_from_env(env.as_ref(), &overrides).await?;
@@ -263,6 +278,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		} => {
 			let db = connect_from_env(env.as_ref(), &overrides).await?;
 			let sql = std::fs::read_to_string(&path)?;
+			let sql = template_vars.apply(&sql)?;
 			exec_surql(&db, &sql).await?;
 		}
 		Commands::Test {
@@ -295,6 +311,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 					timeout_ms,
 					keep_db,
 				},
+				template_vars,
+				&overrides,
 			)
 			.await?;
 		}

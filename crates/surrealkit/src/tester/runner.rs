@@ -27,6 +27,7 @@ use crate::core::create_surreal_client;
 use crate::seed;
 use crate::setup::run_setup;
 use crate::sync::{self, SyncOpts};
+use crate::variables::TemplateVars;
 
 pub struct RunnerContext {
 	pub cfg: DbCfg,
@@ -34,6 +35,7 @@ pub struct RunnerContext {
 	pub global: GlobalTestConfig,
 	pub base_url: Option<String>,
 	pub timeout_ms: u64,
+	pub vars: TemplateVars,
 	run_id: String,
 }
 
@@ -44,6 +46,7 @@ impl RunnerContext {
 		global: GlobalTestConfig,
 		base_url: Option<String>,
 		timeout_ms: u64,
+		vars: TemplateVars,
 	) -> Self {
 		Self {
 			cfg,
@@ -51,6 +54,7 @@ impl RunnerContext {
 			global,
 			base_url,
 			timeout_ms,
+			vars,
 			run_id: unique_run_id(),
 		}
 	}
@@ -146,6 +150,7 @@ impl RunnerContext {
 			global: self.global.clone(),
 			base_url: self.base_url.clone(),
 			timeout_ms: self.timeout_ms,
+			vars: self.vars.clone(),
 			run_id: self.run_id.clone(),
 		}
 	}
@@ -237,12 +242,13 @@ impl RunnerContext {
 					fail_fast: true,
 					prune: true,
 					allow_shared_prune: true,
+					vars: self.vars.clone(),
 				},
 			)
 			.await?;
 		}
 		if !self.opts.no_seed {
-			seed::seed(&root.db).await?;
+			seed::seed(&root.db, &self.vars).await?;
 		}
 
 		for fixture in self.global.fixtures.iter().filter(|f| fixture_targets_root(f)) {

@@ -8,6 +8,31 @@ use surrealdb::engine::any::Any;
 use surrealdb::opt::auth::{Database, Namespace, Record, Root};
 use surrealdb_types::SurrealValue;
 
+fn toml_to_surreal(val: toml::Value) -> surrealdb_types::Value {
+	match val {
+		toml::Value::String(s) => surrealdb_types::Value::String(s),
+		toml::Value::Integer(i) => surrealdb_types::Value::Number(surrealdb_types::Number::Int(i)),
+		toml::Value::Float(f) => surrealdb_types::Value::Number(surrealdb_types::Number::Float(f)),
+		toml::Value::Boolean(b) => surrealdb_types::Value::Bool(b),
+		toml::Value::Datetime(dt) => {
+			let s = dt.to_string();
+			s.parse::<surrealdb_types::Datetime>()
+				.map(surrealdb_types::Value::Datetime)
+				.unwrap_or_else(|_| surrealdb_types::Value::String(s))
+		}
+		toml::Value::Array(a) => surrealdb_types::Value::Array(
+			a.into_iter().map(toml_to_surreal).collect::<surrealdb_types::Array>(),
+		),
+		toml::Value::Table(t) => {
+			let mut obj = surrealdb_types::Object::new();
+			for (k, v) in t {
+				obj.insert(k, toml_to_surreal(v));
+			}
+			surrealdb_types::Value::Object(obj)
+		}
+	}
+}
+
 use super::types::{ActorKind, ActorSpec};
 use crate::config::DbCfg;
 use crate::core::create_surreal_client;
@@ -176,7 +201,7 @@ async fn build_session(
 					namespace: actor_ns.clone(),
 					database: actor_db.clone(),
 					access: access.clone(),
-					params,
+					params: toml_to_surreal(params),
 				})
 				.await
 				.with_context(|| format!("actor '{name}' record signup failed"))?;
@@ -185,7 +210,8 @@ async fn build_session(
 				.signin_params
 				.clone()
 				.or_else(|| spec.params.clone())
-				.unwrap_or_else(|| serde_json::json!({}));
+				.map(toml_to_surreal)
+				.unwrap_or_else(|| surrealdb_types::Value::Object(surrealdb_types::Object::new()));
 			let token = db
 				.signin(Record {
 					namespace: actor_ns.clone(),
@@ -288,4 +314,65 @@ fn required_string(literal: Option<&str>, env_name: Option<&str>, label: String)
 
 fn some_default(value: &str) -> Option<&str> {
 	Some(value)
+}
+
+#[cfg(test)]
+mod tests {
+	use super::toml_to_surreal;
+
+	#[test]
+	fn toml_datetime_converts_to_surreal_datetime() {
+		let val: toml::Value = toml::from_str("key = 1968-10-18T00:00:00Z\n").unwrap();
+		let result = toml_to_surreal(val);
+		match result {
+			surrealdb_types::Value::Object(obj) => {
+				let dt = obj.get("key").unwrap();
+				assert!(
+					matches!(dt, surrealdb_types::Value::Datetime(_)),
+					"TOML native datetime must become Value::Datetime, got: {dt:?}"
+				);
+			}
+			other => panic!("expected Object, got {other:?}"),
+		}
+	}
+
+	#[test]
+	fn toml_string_stays_string() {
+		let val: toml::Value = toml::from_str(r#"email = "user@example.com""#).unwrap();
+		let result = toml_to_surreal(val);
+		match result {
+			surrealdb_types::Value::Object(obj) => {
+				assert!(matches!(obj.get("email").unwrap(), surrealdb_types::Value::String(_)));
+			}
+			other => panic!("expected Object, got {other:?}"),
+		}
+	}
+
+	#[test]
+	fn toml_quoted_datetime_string_stays_string() {
+		// Single-quoted TOML literal strings must not be silently promoted to datetime.
+		let val: toml::Value = toml::from_str(r#"birth_date = '1968-10-18T00:00:00Z'"#).unwrap();
+		let result = toml_to_surreal(val);
+		match result {
+			surrealdb_types::Value::Object(obj) => {
+				assert!(
+					matches!(obj.get("birth_date").unwrap(), surrealdb_types::Value::String(_)),
+					"literal strings must stay as Value::String"
+				);
+			}
+			other => panic!("expected Object, got {other:?}"),
+		}
+	}
+
+	#[test]
+	fn toml_integer_converts_to_number_int() {
+		let val: toml::Value = toml::from_str("age = 42\n").unwrap();
+		let result = toml_to_surreal(val);
+		match result {
+			surrealdb_types::Value::Object(obj) => {
+				assert!(matches!(obj.get("age").unwrap(), surrealdb_types::Value::Number(_)));
+			}
+			other => panic!("expected Object, got {other:?}"),
+		}
+	}
 }
