@@ -7,7 +7,7 @@ use surrealdb::engine::any::Any;
 use surrealkit::config::{DbCfg, DbOverrides, connect};
 use surrealkit::core::exec_surql;
 use surrealkit::rollout::{self, RolloutExecutionOpts, RolloutPlanOpts};
-use surrealkit::setup::run_setup;
+use surrealkit::setup::run_setup_from_file;
 use surrealkit::sync::{self, SyncOpts};
 use surrealkit::tester::{TestOpts, run_test};
 use surrealkit::{scaffold, seed};
@@ -158,7 +158,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		Commands::Init => scaffold::scaffold()?,
 		Commands::Setup => {
 			let db = connect_from_env(env.as_ref(), &overrides).await?;
-			run_setup(&db).await?;
+			run_setup_from_file(&db).await?;
 		}
 		Commands::Sync {
 			watch,

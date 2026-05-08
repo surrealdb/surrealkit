@@ -466,6 +466,7 @@ async fn run_case(
 	}
 }
 
+#[expect(clippy::too_many_arguments)]
 fn report_sql_expect(
 	name: String,
 	kind: String,

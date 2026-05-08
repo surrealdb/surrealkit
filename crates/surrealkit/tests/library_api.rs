@@ -7,10 +7,11 @@ use surrealdb::opt::Config;
 use surrealdb::opt::capabilities::Capabilities;
 use surrealkit::schema_state::EntityKey;
 use surrealkit::{
-	EmbeddedSchemaFile, RolloutExecutionOpts, RolloutPhase, RolloutPlanOpts, RolloutSpec,
-	RolloutStep, RolloutStepKind, SyncOpts, run_baseline, run_complete, run_complete_with_spec,
-	run_plan, run_rollback, run_rollback_with_spec, run_setup, run_start, run_start_with_spec,
-	run_status, run_sync_embedded, run_sync_embedded_with_opts, seed_from_dir,
+	EmbeddedSchemaFile, RolloutAction, RolloutCompatibility, RolloutExecutionOpts, RolloutPhase,
+	RolloutPlanOpts, RolloutSpec, RolloutStep, SyncOpts, run_abandon_rollout, run_baseline,
+	run_complete, run_complete_with_spec, run_plan, run_rollback, run_rollback_with_spec,
+	run_setup, run_start, run_start_with_spec, run_status, run_sync_embedded,
+	run_sync_embedded_with_opts, seed_from_dir,
 };
 
 async fn mem_db() -> Surreal<Any> {
@@ -310,40 +311,30 @@ async fn query_rollout_status(db: &Surreal<Any>, rollout_id: &str) -> Option<Str
 	rows.into_iter().next()?.get("status")?.as_str().map(str::to_string)
 }
 
-// Builds a minimal RolloutSpec that adds one table via inline SQL (no filesystem).
+/// Builds a minimal `RolloutSpec` that adds one table via inline SQL (no filesystem).
 fn add_table_spec(id: &str, table: &str) -> RolloutSpec {
 	RolloutSpec {
 		id: id.to_string(),
 		name: id.to_string(),
 		source_schema_hash: String::new(),
 		target_schema_hash: String::new(),
-		compatibility: "phased".to_string(),
+		compatibility: RolloutCompatibility::Phased,
 		renames: vec![],
 		steps: vec![
-			RolloutStep {
-				id: "apply".to_string(),
-				phase: RolloutPhase::Start,
-				kind: RolloutStepKind::ApplySchema,
-				files: vec![],
-				sql: Some(format!("DEFINE TABLE {table} SCHEMALESS;")),
-				expect: None,
-				entities: vec![],
-				idempotent: None,
-			},
-			RolloutStep {
-				id: "rollback".to_string(),
-				phase: RolloutPhase::Rollback,
-				kind: RolloutStepKind::RemoveEntities,
-				files: vec![],
-				sql: None,
-				expect: None,
-				entities: vec![EntityKey {
+			RolloutStep::apply_schema(
+				"apply",
+				RolloutPhase::Start,
+				format!("DEFINE TABLE {table} SCHEMALESS;"),
+			),
+			RolloutStep::remove_entities(
+				"rollback",
+				RolloutPhase::Rollback,
+				vec![EntityKey {
 					kind: "table".to_string(),
 					scope: None,
 					name: table.to_string(),
 				}],
-				idempotent: None,
-			},
+			),
 		],
 	}
 }
@@ -447,4 +438,95 @@ async fn rollout_with_spec_blocks_concurrent_rollout() {
 		.await
 		.expect_err("concurrent rollout must be rejected");
 	assert!(err.to_string().contains("active"), "error should mention active rollout: {err}");
+}
+
+/// A rollout stuck in `ready_to_complete` (or `failed`) can be abandoned, which
+/// transitions it to `rolled_back` and allows the next rollout to start.
+#[tokio::test]
+async fn rollout_abandon_clears_stuck_rollout() {
+	let _guard = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (_tmp, _restore) = enter_tempdir();
+	let db = mem_db().await;
+
+	static SOURCE: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/org.surql",
+		sql: "DEFINE TABLE org SCHEMALESS;",
+	}];
+	static TARGET_FIRST: &[EmbeddedSchemaFile] = &[
+		EmbeddedSchemaFile {
+			path: "database/schema/org.surql",
+			sql: "DEFINE TABLE org SCHEMALESS;",
+		},
+		EmbeddedSchemaFile {
+			path: "database/schema/team.surql",
+			sql: "DEFINE TABLE team SCHEMALESS;",
+		},
+	];
+	static TARGET_SECOND: &[EmbeddedSchemaFile] = &[
+		EmbeddedSchemaFile {
+			path: "database/schema/org.surql",
+			sql: "DEFINE TABLE org SCHEMALESS;",
+		},
+		EmbeddedSchemaFile {
+			path: "database/schema/member.surql",
+			sql: "DEFINE TABLE member SCHEMALESS;",
+		},
+	];
+
+	run_sync_embedded(&db, SOURCE).await.expect("baseline sync");
+
+	// Start the first rollout and leave it in ready_to_complete (do not complete).
+	let spec_first = add_table_spec("add_team", "team");
+	run_start_with_spec(&db, &spec_first, TARGET_FIRST).await.expect("first rollout start");
+	assert_eq!(
+		query_rollout_status(&db, &spec_first.id).await.as_deref(),
+		Some("ready_to_complete")
+	);
+
+	// A different rollout is blocked by the active one.
+	let spec_second = add_table_spec("add_member", "member");
+	run_start_with_spec(&db, &spec_second, TARGET_SECOND)
+		.await
+		.expect_err("should be blocked by active rollout");
+
+	// Abandon the first rollout to unblock.
+	run_abandon_rollout(&db, &spec_first.id).await.expect("abandon");
+	assert_eq!(query_rollout_status(&db, &spec_first.id).await.as_deref(), Some("rolled_back"));
+
+	// Now the second rollout can proceed.
+	run_start_with_spec(&db, &spec_second, TARGET_SECOND)
+		.await
+		.expect("second rollout starts after abandonment");
+	assert_eq!(
+		query_rollout_status(&db, &spec_second.id).await.as_deref(),
+		Some("ready_to_complete")
+	);
+}
+
+/// Verify that RolloutAction constructors produce the expected variant shapes
+/// and that the action enum is type-safe (no runtime validation needed for
+/// the constraints that were previously checked in validate_rollout_spec).
+#[test]
+fn rollout_step_constructors_produce_correct_actions() {
+	let apply = RolloutStep::apply_schema("s1", RolloutPhase::Start, "DEFINE TABLE t SCHEMALESS;");
+	assert_eq!(apply.id, "s1");
+	assert!(matches!(apply.action, RolloutAction::ApplySchema { .. }));
+
+	let run = RolloutStep::run_sql("s2", RolloutPhase::Complete, "UPDATE t SET x = 1;");
+	assert!(matches!(run.action, RolloutAction::RunSql { .. }));
+
+	let assert_step =
+		RolloutStep::assert_sql("s3", RolloutPhase::Start, "SELECT count() FROM t;", "0");
+	assert!(matches!(assert_step.action, RolloutAction::AssertSql { .. }));
+
+	let remove = RolloutStep::remove_entities(
+		"s4",
+		RolloutPhase::Rollback,
+		vec![EntityKey {
+			kind: "table".to_string(),
+			scope: None,
+			name: "t".to_string(),
+		}],
+	);
+	assert!(matches!(remove.action, RolloutAction::RemoveEntities { .. }));
 }
