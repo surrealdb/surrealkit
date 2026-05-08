@@ -13,11 +13,16 @@ use anyhow::{Result, bail};
 use rust_dotenv::dotenv::DotEnv;
 pub use types::TestOpts;
 
-use crate::config::DbCfg;
+use crate::config::{DbCfg, DbOverrides};
 use crate::variables::TemplateVars;
 
-pub async fn run_test(dotenv: Option<&DotEnv>, opts: TestOpts, vars: TemplateVars) -> Result<()> {
-	let cfg = DbCfg::from_env(dotenv, &Default::default())?;
+pub async fn run_test(
+	dotenv: Option<&DotEnv>,
+	opts: TestOpts,
+	vars: TemplateVars,
+	overrides: &DbOverrides,
+) -> Result<()> {
+	let cfg = DbCfg::from_env(dotenv, overrides)?;
 	let loaded = loader::load_specs()?;
 	let filter_input = types::FilterInput {
 		suite_pattern: opts.suite.clone(),
