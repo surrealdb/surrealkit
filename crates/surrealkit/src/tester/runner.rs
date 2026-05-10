@@ -667,8 +667,11 @@ async fn cleanup_suite_db(cfg: &DbCfg, host: &str, namespace: &str, database: &s
 	.await
 	.context("cleanup root signin failed")?;
 	db.use_ns(namespace).await?;
-	let drop_db = format!("REMOVE DATABASE {};", database);
+	let drop_db = format!("REMOVE DATABASE IF EXISTS {};", database);
 	let resp = db.query(drop_db).await?;
+	let _ = resp.check();
+	let drop_ns = format!("REMOVE NAMESPACE IF EXISTS {};", namespace);
+	let resp = db.query(drop_ns).await?;
 	let _ = resp.check();
 	Ok(())
 }
