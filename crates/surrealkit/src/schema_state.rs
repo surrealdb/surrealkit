@@ -216,7 +216,7 @@ pub fn build_catalog_snapshot(files: &[SchemaFile]) -> Result<CatalogSnapshot> {
 
 pub fn parse_schema_statements(file: &SchemaFile) -> Result<Vec<CatalogEntity>> {
 	let mut entities = Vec::new();
-	for stmt in split_statements(&strip_line_comments(&file.sql)) {
+	for stmt in split_statements(&strip_comments(&file.sql)) {
 		let normalized = stmt.trim();
 		if normalized.is_empty() {
 			continue;
@@ -389,7 +389,7 @@ where
 /// Ensures every `DEFINE` statement includes the `OVERWRITE` modifier so that
 /// sync can re-apply schemas idempotently against an existing database.
 pub fn ensure_overwrite(sql: &str) -> String {
-	let stmts = split_statements(&strip_line_comments(sql));
+	let stmts = split_statements(&strip_comments(sql));
 	let mut out = Vec::with_capacity(stmts.len());
 	for stmt in stmts {
 		let trimmed = stmt.trim();
@@ -424,14 +424,67 @@ pub fn ensure_overwrite(sql: &str) -> String {
 	out.join("\n")
 }
 
-fn strip_line_comments(sql: &str) -> String {
-	sql.lines()
-		.filter(|line| {
-			let t = line.trim_start();
-			!(t.starts_with("--") || t.starts_with("//"))
-		})
-		.collect::<Vec<_>>()
-		.join("\n")
+fn strip_comments(sql: &str) -> String {
+	let mut out = String::with_capacity(sql.len());
+	let mut chars = sql.chars().peekable();
+	let mut in_single = false;
+	let mut in_double = false;
+	let mut in_backtick = false;
+	let mut prev_escape = false;
+
+	while let Some(ch) = chars.next() {
+		let in_string = in_single || in_double || in_backtick;
+		if !in_string && !prev_escape {
+			// Line comments: --, //, #
+			if (ch == '-' || ch == '/') && chars.peek() == Some(&ch) {
+				chars.next();
+				for c in chars.by_ref() {
+					if c == '\n' {
+						out.push('\n');
+						break;
+					}
+				}
+				prev_escape = false;
+				continue;
+			}
+			if ch == '#' {
+				for c in chars.by_ref() {
+					if c == '\n' {
+						out.push('\n');
+						break;
+					}
+				}
+				prev_escape = false;
+				continue;
+			}
+			// Block comment: /* ... */ (non-nesting, preserves newlines so line numbers stay sane)
+			if ch == '/' && chars.peek() == Some(&'*') {
+				chars.next();
+				let mut prev = '\0';
+				for c in chars.by_ref() {
+					if c == '\n' {
+						out.push('\n');
+					}
+					if prev == '*' && c == '/' {
+						break;
+					}
+					prev = c;
+				}
+				prev_escape = false;
+				continue;
+			}
+		}
+
+		match ch {
+			'\'' if !in_double && !in_backtick && !prev_escape => in_single = !in_single,
+			'"' if !in_single && !in_backtick && !prev_escape => in_double = !in_double,
+			'`' if !in_single && !in_double && !prev_escape => in_backtick = !in_backtick,
+			_ => {}
+		}
+		prev_escape = ch == '\\' && !prev_escape;
+		out.push(ch);
+	}
+	out
 }
 
 fn split_statements(sql: &str) -> Vec<String> {
@@ -704,6 +757,294 @@ mod tests {
 
 		let err = parse_schema_statements(&file).expect_err("must reject create");
 		assert!(err.to_string().contains("non-DEFINE"));
+	}
+
+	#[test]
+	fn schema_allows_inline_dash_dash_comments() {
+		let sql = "DEFINE TABLE foo SCHEMAFULL;\n\
+		           DEFINE FIELD kind ON foo TYPE string; -- enum: A, B, C\n\
+		           DEFINE FIELD name ON foo TYPE string;";
+		let file = SchemaFile {
+			path: "database/schema/foo.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+
+		let entities = parse_schema_statements(&file).expect("inline -- comments must parse");
+		assert_eq!(entities.len(), 3);
+	}
+
+	#[test]
+	fn schema_allows_inline_slash_slash_comments() {
+		let sql = "DEFINE TABLE foo SCHEMAFULL;\n\
+		           DEFINE FIELD kind ON foo TYPE string; // enum: A, B, C\n\
+		           DEFINE FIELD name ON foo TYPE string;";
+		let file = SchemaFile {
+			path: "database/schema/foo.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+
+		let entities = parse_schema_statements(&file).expect("inline // comments must parse");
+		assert_eq!(entities.len(), 3);
+	}
+
+	#[test]
+	fn schema_preserves_dash_dash_inside_string_literal() {
+		let sql = "DEFINE TABLE foo SCHEMAFULL;\n\
+		           DEFINE FIELD note ON foo TYPE string DEFAULT 'a -- b // c';";
+		let file = SchemaFile {
+			path: "database/schema/foo.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+
+		let entities = parse_schema_statements(&file).expect("string literal must be preserved");
+		assert_eq!(entities.len(), 2);
+		assert!(entities.iter().any(|e| e.name == "note"));
+	}
+
+	#[test]
+	fn schema_allows_full_line_comments_everywhere() {
+		let sql = "-- file header comment\n\
+		           // second header line\n\
+		           DEFINE TABLE foo SCHEMAFULL;\n\
+		           -- between statements\n\
+		           DEFINE FIELD a ON foo TYPE string;\n\
+		           // also between\n\
+		           DEFINE FIELD b ON foo TYPE string;\n\
+		           -- trailing comment";
+		let file = SchemaFile {
+			path: "database/schema/foo.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+
+		let entities = parse_schema_statements(&file).expect("full-line comments must parse");
+		assert_eq!(entities.len(), 3);
+	}
+
+	#[test]
+	fn schema_allows_comment_at_end_of_file_without_newline() {
+		let sql = "DEFINE TABLE foo SCHEMAFULL; -- no trailing newline";
+		let file = SchemaFile {
+			path: "database/schema/foo.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+
+		let entities =
+			parse_schema_statements(&file).expect("trailing comment without newline must parse");
+		assert_eq!(entities.len(), 1);
+	}
+
+	#[test]
+	fn schema_allows_inline_comment_with_no_space_after_semicolon() {
+		let sql = "DEFINE TABLE foo SCHEMAFULL;--tight\n\
+		           DEFINE FIELD a ON foo TYPE string;//also tight\n\
+		           DEFINE FIELD b ON foo TYPE string;";
+		let file = SchemaFile {
+			path: "database/schema/foo.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+
+		let entities = parse_schema_statements(&file).expect("tight inline comments must parse");
+		assert_eq!(entities.len(), 3);
+	}
+
+	#[test]
+	fn schema_allows_mid_statement_comment_across_newline() {
+		let sql = "DEFINE TABLE foo SCHEMAFULL;\n\
+		           DEFINE FIELD a ON foo -- mid-statement\n\
+		           TYPE string;";
+		let file = SchemaFile {
+			path: "database/schema/foo.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+
+		let entities = parse_schema_statements(&file).expect("mid-statement comment must parse");
+		assert_eq!(entities.len(), 2);
+		assert!(entities.iter().any(|e| e.name == "a"));
+	}
+
+	#[test]
+	fn schema_does_not_strip_single_dash_or_slash() {
+		// Single '-' (e.g. in DEFAULT -1) and single '/' (division) must not be treated as
+		// comments.
+		let sql = "DEFINE TABLE foo SCHEMAFULL;\n\
+		           DEFINE FIELD n ON foo TYPE number DEFAULT -1;\n\
+		           DEFINE FIELD m ON foo TYPE number VALUE 10 / 2;";
+		let file = SchemaFile {
+			path: "database/schema/foo.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+
+		let entities = parse_schema_statements(&file).expect("single - and / must not be stripped");
+		assert_eq!(entities.len(), 3);
+	}
+
+	#[test]
+	fn schema_preserves_comment_markers_inside_double_and_backtick_strings() {
+		let sql = "DEFINE TABLE foo SCHEMAFULL;\n\
+		           DEFINE FIELD a ON foo TYPE string DEFAULT \"x -- y // z\";\n\
+		           DEFINE FIELD b ON `foo--bar` TYPE string;";
+		let file = SchemaFile {
+			path: "database/schema/foo.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+
+		let entities = parse_schema_statements(&file)
+			.expect("comment markers inside \"...\" and `...` must be preserved");
+		assert_eq!(entities.len(), 3);
+		// The field 'b' must survive — if '--' inside backticks were stripped, the table
+		// scope token would be truncated and the statement would fail to parse.
+		assert!(entities.iter().any(|e| e.name == "b"));
+	}
+
+	#[test]
+	fn schema_handles_empty_comments() {
+		let sql = "DEFINE TABLE foo SCHEMAFULL; --\n\
+		           DEFINE FIELD a ON foo TYPE string; //\n\
+		           DEFINE FIELD b ON foo TYPE string;";
+		let file = SchemaFile {
+			path: "database/schema/foo.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+
+		let entities = parse_schema_statements(&file).expect("empty comments must parse");
+		assert_eq!(entities.len(), 3);
+	}
+
+	#[test]
+	fn schema_handles_triple_dash_marker() {
+		// '---' is a comment ('--' then '-' which is part of the comment body).
+		let sql = "DEFINE TABLE foo SCHEMAFULL; --- triple dash\n\
+		           DEFINE FIELD a ON foo TYPE string;";
+		let file = SchemaFile {
+			path: "database/schema/foo.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+
+		let entities = parse_schema_statements(&file).expect("triple-dash must parse");
+		assert_eq!(entities.len(), 2);
+	}
+
+	#[test]
+	fn schema_allows_hash_line_comments() {
+		let sql = "# header\n\
+		           DEFINE TABLE foo SCHEMAFULL; # inline hash\n\
+		           DEFINE FIELD a ON foo TYPE string;\n\
+		           # trailing\n\
+		           DEFINE FIELD b ON foo TYPE string;";
+		let file = SchemaFile {
+			path: "database/schema/foo.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+
+		let entities = parse_schema_statements(&file).expect("# comments must parse");
+		assert_eq!(entities.len(), 3);
+	}
+
+	#[test]
+	fn schema_preserves_hash_inside_string_literal() {
+		let sql = "DEFINE TABLE foo SCHEMAFULL;\n\
+		           DEFINE FIELD a ON foo TYPE string DEFAULT '#1 ranked';";
+		let file = SchemaFile {
+			path: "database/schema/foo.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+
+		let entities = parse_schema_statements(&file).expect("# inside string must be preserved");
+		assert_eq!(entities.len(), 2);
+	}
+
+	#[test]
+	fn schema_allows_block_comments_inline() {
+		let sql = "DEFINE TABLE foo SCHEMAFULL; /* inline block */\n\
+		           DEFINE FIELD a ON foo /* mid */ TYPE string;\n\
+		           DEFINE FIELD b ON foo TYPE string;";
+		let file = SchemaFile {
+			path: "database/schema/foo.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+
+		let entities = parse_schema_statements(&file).expect("inline block comments must parse");
+		assert_eq!(entities.len(), 3);
+	}
+
+	#[test]
+	fn schema_allows_block_comments_spanning_multiple_lines() {
+		let sql = "/*\n\
+		            file header\n\
+		            second line\n\
+		           */\n\
+		           DEFINE TABLE foo SCHEMAFULL;\n\
+		           /* between\n\
+		              statements */\n\
+		           DEFINE FIELD a ON foo TYPE string;";
+		let file = SchemaFile {
+			path: "database/schema/foo.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+
+		let entities =
+			parse_schema_statements(&file).expect("multi-line block comments must parse");
+		assert_eq!(entities.len(), 2);
+	}
+
+	#[test]
+	fn schema_preserves_block_comment_markers_inside_string() {
+		let sql = "DEFINE TABLE foo SCHEMAFULL;\n\
+		           DEFINE FIELD a ON foo TYPE string DEFAULT '/* not a comment */';";
+		let file = SchemaFile {
+			path: "database/schema/foo.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+
+		let entities = parse_schema_statements(&file).expect("/* inside string must be preserved");
+		assert_eq!(entities.len(), 2);
+	}
+
+	#[test]
+	fn schema_handles_unterminated_block_comment() {
+		// An unterminated /* swallows the rest of input — same as treating the rest as comment.
+		let sql = "DEFINE TABLE foo SCHEMAFULL;\n/* never closes";
+		let file = SchemaFile {
+			path: "database/schema/foo.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+
+		let entities = parse_schema_statements(&file).expect("unterminated block must parse");
+		assert_eq!(entities.len(), 1);
+	}
+
+	#[test]
+	fn schema_handles_escaped_quote_before_comment() {
+		// Escaped quote inside a string should not terminate the string, so any '--' that
+		// follows on the same line (still inside the string) must not be treated as a comment.
+		let sql = "DEFINE TABLE foo SCHEMAFULL;\n\
+		           DEFINE FIELD a ON foo TYPE string DEFAULT 'it\\'s -- still in string';";
+		let file = SchemaFile {
+			path: "database/schema/foo.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+
+		let entities =
+			parse_schema_statements(&file).expect("escaped quote inside string must parse");
+		assert_eq!(entities.len(), 2);
 	}
 
 	#[test]
