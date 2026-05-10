@@ -470,6 +470,7 @@ fn strip_comments(sql: &str) -> String {
 					}
 					prev = c;
 				}
+				out.push(' ');
 				prev_escape = false;
 				continue;
 			}
