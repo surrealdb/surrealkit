@@ -18,6 +18,8 @@ use surrealdb::opt::auth::Root;
 use surrealdb::opt::capabilities::Capabilities;
 use surrealkit::config::{AuthLevel, DbCfg, DbOverrides};
 use surrealkit::connect;
+use surrealkit::tester::{TestOpts, run_test};
+use surrealkit::variables::TemplateVars;
 
 /// Serialises tests that mutate SURREALDB_AUTH_LEVEL / DATABASE_AUTH_LEVEL.
 static ENV_LOCK: Mutex<()> = Mutex::new(());
@@ -233,4 +235,38 @@ async fn connect_database_auth_wrong_password_fails() {
 		msg.contains("signin") || msg.contains("auth") || msg.contains("invalid"),
 		"unexpected error: {err}"
 	);
+}
+
+#[tokio::test]
+async fn test_runner_rejects_database_auth_level() {
+	let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	unsafe { std::env::remove_var("SURREALDB_AUTH_LEVEL") };
+	unsafe { std::env::remove_var("DATABASE_AUTH_LEVEL") };
+	let overrides = DbOverrides {
+		auth_level: Some("database".into()),
+		..Default::default()
+	};
+	let opts = TestOpts {
+		suite: None,
+		case: None,
+		tags: Vec::new(),
+		fail_fast: false,
+		parallel: 1,
+		json_out: None,
+		no_setup: true,
+		no_sync: true,
+		no_seed: true,
+		base_url: None,
+		timeout_ms: None,
+		keep_db: false,
+	};
+	let err = run_test(None, opts, TemplateVars::default(), &overrides)
+		.await
+		.expect_err("expected database auth level to be rejected");
+	let msg = err.to_string();
+	assert!(
+		msg.contains("auth level 'root' or 'namespace'"),
+		"unexpected error message: {msg}"
+	);
+	assert!(msg.contains("got 'database'"), "unexpected error message: {msg}");
 }
