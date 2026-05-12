@@ -264,9 +264,6 @@ async fn test_runner_rejects_database_auth_level() {
 		.await
 		.expect_err("expected database auth level to be rejected");
 	let msg = err.to_string();
-	assert!(
-		msg.contains("auth level 'root' or 'namespace'"),
-		"unexpected error message: {msg}"
-	);
+	assert!(msg.contains("auth level 'root' or 'namespace'"), "unexpected error message: {msg}");
 	assert!(msg.contains("got 'database'"), "unexpected error message: {msg}");
 }
