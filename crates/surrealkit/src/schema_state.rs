@@ -238,6 +238,14 @@ pub fn parse_schema_statements(file: &SchemaFile) -> Result<Vec<CatalogEntity>> 
 				truncate_stmt(normalized)
 			);
 		}
+		let after_define = upper["DEFINE ".len()..].trim_start();
+		if after_define.starts_with("NAMESPACE") || after_define.starts_with("DATABASE") {
+			bail!(
+				"schema file '{}' contains DEFINE NAMESPACE/DATABASE, which surrealkit does not manage: \
+sync runs inside an already-selected namespace/database. Provision these out-of-band.",
+				file.path
+			);
+		}
 		let Some(mut entity) = parse_define_entity(normalized) else {
 			bail!(
 				"schema file '{}' contains an unsupported DEFINE statement: '{}'",
@@ -326,6 +334,10 @@ Use a manual migration or upgrade server support.",
 					);
 				}
 			}
+			"bucket" => format!("REMOVE BUCKET {};", entity.name),
+			"model" => format!("REMOVE MODEL {};", entity.name),
+			"sequence" => format!("REMOVE SEQUENCE {};", entity.name),
+			"config" => format!("REMOVE CONFIG {};", entity.name),
 			_ => continue,
 		};
 		out.push(stmt);
@@ -350,8 +362,12 @@ fn removal_sort_key(entity: &EntityKey) -> (usize, Option<String>, String, Strin
 		"param" => 6,
 		"api" => 7,
 		"analyzer" => 8,
-		"table" => 9,
-		_ => 10,
+		"bucket" => 9,
+		"model" => 10,
+		"sequence" => 11,
+		"config" => 12,
+		"table" => 13,
+		_ => 14,
 	};
 	(weight, entity.scope.clone(), entity.kind.clone(), entity.name.clone())
 }
@@ -555,7 +571,9 @@ fn parse_define_entity(stmt: &str) -> Option<CatalogEntity> {
 			}
 			(Some(clean_ident(tokens[scope_idx])), name)
 		}
-		"function" | "param" | "analyzer" | "api" => (None, clean_ident(tokens[idx])),
+		"function" | "param" | "analyzer" | "api" | "bucket" | "model" | "sequence" | "config" => {
+			(None, clean_ident(tokens[idx]))
+		}
 		"access" | "user" => {
 			let name = clean_ident(tokens[idx]);
 			let scope = find_token(&tokens, idx + 1, "ON").and_then(|on_idx| {
@@ -697,6 +715,9 @@ mod tests {
 				DEFINE ANALYZER english TOKENIZERS blank, class;
 				DEFINE USER app ON DATABASE PASSHASH "x";
 				DEFINE API v1;
+				DEFINE BUCKET assets;
+				DEFINE SEQUENCE order_no;
+				DEFINE CONFIG GRAPHQL AUTO;
 			"#
 			.to_string(),
 		}];
@@ -717,6 +738,66 @@ mod tests {
 				&& entity.source_path == "database/schema/root.surql"
 		}));
 		assert!(catalog.entities.iter().any(|entity| entity.kind == "api" && entity.name == "v1"));
+		assert!(
+			catalog.entities.iter().any(|e| e.kind == "bucket" && e.name == "assets"),
+			"bucket should be captured"
+		);
+		assert!(
+			catalog.entities.iter().any(|e| e.kind == "sequence" && e.name == "order_no"),
+			"sequence should be captured"
+		);
+		assert!(
+			catalog.entities.iter().any(|e| e.kind == "config" && e.name == "GRAPHQL"),
+			"config should be captured by its kind keyword"
+		);
+	}
+
+	#[test]
+	fn schema_rejects_define_namespace_and_database() {
+		for stmt in ["DEFINE NAMESPACE prod;", "DEFINE DATABASE prod;"] {
+			let file = SchemaFile {
+				path: "database/schema/root.surql".to_string(),
+				hash: "x".to_string(),
+				sql: stmt.to_string(),
+			};
+			let err = parse_schema_statements(&file)
+				.expect_err("DEFINE NAMESPACE/DATABASE must be rejected");
+			assert!(
+				err.to_string().contains("DEFINE NAMESPACE/DATABASE"),
+				"unexpected error for {stmt}: {err}"
+			);
+		}
+	}
+
+	#[test]
+	fn render_remove_sql_covers_new_kinds() {
+		let entities = vec![
+			EntityKey {
+				kind: "bucket".to_string(),
+				scope: None,
+				name: "assets".to_string(),
+			},
+			EntityKey {
+				kind: "sequence".to_string(),
+				scope: None,
+				name: "order_no".to_string(),
+			},
+			EntityKey {
+				kind: "config".to_string(),
+				scope: None,
+				name: "GRAPHQL".to_string(),
+			},
+			EntityKey {
+				kind: "model".to_string(),
+				scope: None,
+				name: "ml::sentiment".to_string(),
+			},
+		];
+		let out = render_remove_sql(&entities, true).expect("remove sql");
+		assert!(out.iter().any(|l| l == "REMOVE BUCKET assets;"));
+		assert!(out.iter().any(|l| l == "REMOVE SEQUENCE order_no;"));
+		assert!(out.iter().any(|l| l == "REMOVE CONFIG GRAPHQL;"));
+		assert!(out.iter().any(|l| l == "REMOVE MODEL ml::sentiment;"));
 	}
 
 	#[test]
