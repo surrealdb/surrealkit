@@ -13,7 +13,7 @@ use anyhow::{Result, bail};
 use rust_dotenv::dotenv::DotEnv;
 pub use types::TestOpts;
 
-use crate::config::{DbCfg, DbOverrides};
+use crate::config::{AuthLevel, DbCfg, DbOverrides};
 use crate::variables::TemplateVars;
 
 pub async fn run_test(
@@ -23,6 +23,12 @@ pub async fn run_test(
 	overrides: &DbOverrides,
 ) -> Result<()> {
 	let cfg = DbCfg::from_env(dotenv, overrides)?;
+	if matches!(cfg.auth_level(), AuthLevel::Database) {
+		bail!(
+			"`surrealkit test` requires auth level 'root' or 'namespace'/'ns'; got 'database'. \
+			 Database-scoped users cannot create the per-suite database needed for test isolation."
+		);
+	}
 	let loaded = loader::load_specs()?;
 	let filter_input = types::FilterInput {
 		suite_pattern: opts.suite.clone(),

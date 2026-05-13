@@ -34,7 +34,7 @@ fn toml_to_surreal(val: toml::Value) -> surrealdb_types::Value {
 }
 
 use super::types::{ActorKind, ActorSpec};
-use crate::config::DbCfg;
+use crate::config::{AuthLevel, DbCfg};
 use crate::core::create_surreal_client;
 
 #[derive(Debug, Clone)]
@@ -64,7 +64,7 @@ pub async fn build_actor_sessions(
 ) -> Result<HashMap<String, ActorSession>> {
 	let mut out = HashMap::new();
 
-	let root = build_default_root_session(cfg, host, namespace, database).await?;
+	let root = build_default_bootstrap_session(cfg, host, namespace, database).await?;
 	out.insert("root".to_string(), root);
 
 	for (name, spec) in specs {
@@ -75,7 +75,7 @@ pub async fn build_actor_sessions(
 	Ok(out)
 }
 
-async fn build_default_root_session(
+async fn build_default_bootstrap_session(
 	cfg: &DbCfg,
 	host: &str,
 	namespace: &str,
@@ -83,18 +83,35 @@ async fn build_default_root_session(
 ) -> Result<ActorSession> {
 	let db = create_surreal_client(&host.to_string())
 		.await
-		.with_context(|| format!("connecting root actor to {host}"))?;
-	let _token = db
-		.signin(Root {
-			username: cfg.user().to_string(),
-			password: cfg.pass().to_string(),
-		})
-		.await
-		.context("root signin failed")?;
-	db.use_ns(namespace)
-		.use_db(database)
-		.await
-		.with_context(|| format!("switching root actor to ns={namespace} db={database}"))?;
+		.with_context(|| format!("connecting bootstrap actor to {host}"))?;
+	match cfg.auth_level() {
+		AuthLevel::Root => {
+			db.signin(Root {
+				username: cfg.user().to_string(),
+				password: cfg.pass().to_string(),
+			})
+			.await
+			.context("bootstrap signin failed (auth_level=root)")?;
+			db.use_ns(namespace).use_db(database).await.with_context(|| {
+				format!("switching bootstrap actor to ns={namespace} db={database}")
+			})?;
+		}
+		AuthLevel::Namespace => {
+			db.signin(Namespace {
+				namespace: namespace.to_string(),
+				username: cfg.user().to_string(),
+				password: cfg.pass().to_string(),
+			})
+			.await
+			.context("bootstrap signin failed (auth_level=namespace)")?;
+			db.use_db(database)
+				.await
+				.with_context(|| format!("switching bootstrap actor to db={database}"))?;
+		}
+		AuthLevel::Database => {
+			unreachable!("AuthLevel::Database is rejected by tester::run_test before reaching here")
+		}
+	}
 
 	Ok(ActorSession {
 		auth: fetch_auth(&db).await?,

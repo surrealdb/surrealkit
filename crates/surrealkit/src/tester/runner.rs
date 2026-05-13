@@ -22,7 +22,7 @@ use super::types::{
 	AssertionReport, CaseKind, CaseReport, FilterInput, GlobalTestConfig, JsonAssertionSpec,
 	LoadedSuite, PermissionAction, RunReport, SuiteReport, TestOpts,
 };
-use crate::config::DbCfg;
+use crate::config::{AuthLevel, DbCfg};
 use crate::core::create_surreal_client;
 use crate::seed;
 use crate::setup::run_setup;
@@ -160,8 +160,19 @@ impl RunnerContext {
 		let suite_name =
 			suite.spec.name.clone().unwrap_or_else(|| suite.path.to_string_lossy().to_string());
 		let slug = slugify(&format!("{}-{}", suite_name, suite.path.display()));
-		let namespace = format!("{}_sk_test_{}_{}", self.cfg.ns(), self.run_id, slug);
-		let database = format!("{}_sk_test_{}_{}", self.cfg.db(), self.run_id, slug);
+		let (namespace, database) = match self.cfg.auth_level() {
+			AuthLevel::Root => (
+				format!("{}_sk_test_{}_{}", self.cfg.ns(), self.run_id, slug),
+				format!("{}_sk_test_{}_{}", self.cfg.db(), self.run_id, slug),
+			),
+			AuthLevel::Namespace => (
+				self.cfg.ns().to_string(),
+				format!("{}_sk_test_{}_{}", self.cfg.db(), self.run_id, slug),
+			),
+			AuthLevel::Database => {
+				unreachable!("AuthLevel::Database is rejected by tester::run_test")
+			}
+		};
 		let host = self.cfg.host().to_string();
 
 		let actors = self.prepare_suite(&suite, &host, &namespace, &database).await?;
@@ -660,19 +671,38 @@ async fn cleanup_suite_db(cfg: &DbCfg, host: &str, namespace: &str, database: &s
 	let db = create_surreal_client(&host.to_string())
 		.await
 		.with_context(|| format!("connecting for cleanup {host}"))?;
-	db.signin(surrealdb::opt::auth::Root {
-		username: cfg.user().to_string(),
-		password: cfg.pass().to_string(),
-	})
-	.await
-	.context("cleanup root signin failed")?;
-	db.use_ns(namespace).await?;
-	let drop_db = format!("REMOVE DATABASE IF EXISTS {};", database);
-	let resp = db.query(drop_db).await?;
-	let _ = resp.check();
-	let drop_ns = format!("REMOVE NAMESPACE IF EXISTS {};", namespace);
-	let resp = db.query(drop_ns).await?;
-	let _ = resp.check();
+	match cfg.auth_level() {
+		AuthLevel::Root => {
+			db.signin(surrealdb::opt::auth::Root {
+				username: cfg.user().to_string(),
+				password: cfg.pass().to_string(),
+			})
+			.await
+			.context("cleanup signin failed (auth_level=root)")?;
+			db.use_ns(namespace).await?;
+			let drop_db = format!("REMOVE DATABASE IF EXISTS {};", database);
+			let resp = db.query(drop_db).await?;
+			let _ = resp.check();
+			let drop_ns = format!("REMOVE NAMESPACE IF EXISTS {};", namespace);
+			let resp = db.query(drop_ns).await?;
+			let _ = resp.check();
+		}
+		AuthLevel::Namespace => {
+			db.signin(surrealdb::opt::auth::Namespace {
+				namespace: namespace.to_string(),
+				username: cfg.user().to_string(),
+				password: cfg.pass().to_string(),
+			})
+			.await
+			.context("cleanup signin failed (auth_level=namespace)")?;
+			let drop_db = format!("REMOVE DATABASE IF EXISTS {};", database);
+			let resp = db.query(drop_db).await?;
+			let _ = resp.check();
+		}
+		AuthLevel::Database => {
+			unreachable!("AuthLevel::Database is rejected by tester::run_test")
+		}
+	}
 	Ok(())
 }
 
