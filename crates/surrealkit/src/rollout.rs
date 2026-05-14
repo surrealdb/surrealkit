@@ -138,7 +138,7 @@ pub async fn run_baseline(db: &Surreal<Any>) -> Result<()> {
 
 	let files = collect_schema_files()?;
 	let schema_snapshot = snapshot_from_files(&files);
-	let catalog_snapshot = build_catalog_snapshot(&files)?;
+	let catalog_snapshot = build_catalog_snapshot(&files, false)?;
 
 	replace_managed_entities(db, &catalog_snapshot.entities, None, "active").await?;
 	replace_sync_hashes(db, &files).await?;
@@ -159,7 +159,7 @@ pub async fn run_plan(opts: RolloutPlanOpts) -> Result<()> {
 	let old_schema = load_schema_snapshot()?;
 	let old_catalog = load_catalog_snapshot()?;
 	let new_schema = snapshot_from_files(&files);
-	let new_catalog = build_catalog_snapshot(&files)?;
+	let new_catalog = build_catalog_snapshot(&files, false)?;
 	let file_diff = diff_schema(&old_schema, &new_schema);
 	let catalog_diff = diff_catalog(&old_catalog, &new_catalog);
 
@@ -300,11 +300,12 @@ pub async fn run_start(
 			target_hash
 		);
 	}
-	let target_catalog = build_catalog_snapshot(&files)?;
+	let target_catalog = build_catalog_snapshot(&files, false)?;
 	let source_entities = load_managed_entities(db).await?;
 	let source_catalog = CatalogSnapshot {
 		version: 2,
 		entities: source_entities.into_iter().map(|r| r.entity).collect(),
+		operations: Vec::new(),
 	};
 	start_inner(db, &rollout, &source_catalog, &target_catalog, vars).await
 }
@@ -340,11 +341,12 @@ pub async fn run_start_with_spec(
 			);
 		}
 	}
-	let target_catalog = build_catalog_snapshot(&schema_files)?;
+	let target_catalog = build_catalog_snapshot(&schema_files, false)?;
 	let source_entities = load_managed_entities(db).await?;
 	let source_catalog = CatalogSnapshot {
 		version: 2,
 		entities: source_entities.into_iter().map(|r| r.entity).collect(),
+		operations: Vec::new(),
 	};
 	start_inner(db, &make_loaded_spec(spec), &source_catalog, &target_catalog, vars).await
 }

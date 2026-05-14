@@ -37,6 +37,8 @@ pub struct SchemaSnapshotEntry {
 pub struct CatalogSnapshot {
 	pub version: u32,
 	pub entities: Vec<CatalogEntity>,
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub operations: Vec<Operation>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -84,6 +86,14 @@ impl CatalogEntity {
 			name: self.name.clone(),
 		}
 	}
+}
+
+/// A non-DEFINE SQL statement collected from a schema file when
+/// `allow_all_statements` is enabled (e.g. INSERT, UPDATE, CREATE).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Operation {
+	pub sql: String,
+	pub source_path: String,
 }
 
 pub fn ensure_local_state_dirs() -> Result<()> {
@@ -160,6 +170,7 @@ pub fn load_catalog_snapshot() -> Result<CatalogSnapshot> {
 		CatalogSnapshot {
 			version: 2,
 			entities: Vec::new(),
+			operations: Vec::new(),
 		},
 	)
 }
@@ -199,23 +210,40 @@ pub fn diff_schema(old: &SchemaSnapshot, new: &SchemaSnapshot) -> FileDiff {
 	}
 }
 
-pub fn build_catalog_snapshot(files: &[SchemaFile]) -> Result<CatalogSnapshot> {
+pub fn build_catalog_snapshot(
+	files: &[SchemaFile],
+	allow_all_statements: bool,
+) -> Result<CatalogSnapshot> {
 	let mut entities = BTreeSet::new();
+	let mut operations = Vec::new();
 	for file in files {
-		let statements = parse_schema_statements(file)?;
-		for entity in statements {
+		let (file_entities, file_ops) = parse_schema_statements(file, allow_all_statements)?;
+		for entity in file_entities {
 			entities.insert(entity);
 		}
+		operations.extend(file_ops);
 	}
 
 	Ok(CatalogSnapshot {
 		version: 2,
 		entities: entities.into_iter().collect(),
+		operations,
 	})
 }
 
-pub fn parse_schema_statements(file: &SchemaFile) -> Result<Vec<CatalogEntity>> {
+/// Parse statements from a schema file.
+///
+/// Returns a tuple of `(entities, operations)`:
+/// - `entities`: catalog entities extracted from `DEFINE` statements
+/// - `operations`: raw SQL strings for non-`DEFINE` statements (only populated
+///   when `allow_all_statements` is `true`; otherwise any non-`DEFINE` statement
+///   is a hard error)
+pub fn parse_schema_statements(
+	file: &SchemaFile,
+	allow_all_statements: bool,
+) -> Result<(Vec<CatalogEntity>, Vec<Operation>)> {
 	let mut entities = Vec::new();
+	let mut operations = Vec::new();
 	for stmt in split_statements(&strip_comments(&file.sql)) {
 		let normalized = stmt.trim();
 		if normalized.is_empty() {
@@ -232,6 +260,13 @@ pub fn parse_schema_statements(file: &SchemaFile) -> Result<Vec<CatalogEntity>> 
 			continue;
 		}
 		if !upper.starts_with("DEFINE ") {
+			if allow_all_statements {
+				operations.push(Operation {
+					sql: normalized.to_string(),
+					source_path: file.path.clone(),
+				});
+				continue;
+			}
 			bail!(
 				"schema file '{}' contains a non-DEFINE statement: '{}'",
 				file.path,
@@ -258,7 +293,7 @@ sync runs inside an already-selected namespace/database. Provision these out-of-
 		entity.statement_hash = sha256_hex(normalize_statement(normalized).as_bytes());
 		entities.push(entity);
 	}
-	Ok(entities)
+	Ok((entities, operations))
 }
 
 pub fn catalog_snapshot_to_map(snapshot: &CatalogSnapshot) -> BTreeMap<EntityKey, CatalogEntity> {
@@ -663,6 +698,7 @@ fn truncate_stmt(stmt: &str) -> String {
 #[cfg(test)]
 mod tests {
 	use super::*;
+	use test_case::test_case;
 
 	#[test]
 	fn schema_diff_detects_added_modified_removed() {
@@ -722,7 +758,7 @@ mod tests {
 			.to_string(),
 		}];
 
-		let catalog = build_catalog_snapshot(&files).expect("catalog build");
+		let catalog = build_catalog_snapshot(&files, false).expect("catalog build");
 		assert!(catalog.entities.contains(&CatalogEntity {
 			kind: "table".to_string(),
 			scope: None,
@@ -752,21 +788,20 @@ mod tests {
 		);
 	}
 
-	#[test]
-	fn schema_rejects_define_namespace_and_database() {
-		for stmt in ["DEFINE NAMESPACE prod;", "DEFINE DATABASE prod;"] {
-			let file = SchemaFile {
-				path: "database/schema/root.surql".to_string(),
-				hash: "x".to_string(),
-				sql: stmt.to_string(),
-			};
-			let err = parse_schema_statements(&file)
-				.expect_err("DEFINE NAMESPACE/DATABASE must be rejected");
-			assert!(
-				err.to_string().contains("DEFINE NAMESPACE/DATABASE"),
-				"unexpected error for {stmt}: {err}"
-			);
-		}
+	#[test_case("DEFINE NAMESPACE prod;")]
+	#[test_case("DEFINE DATABASE prod;")]
+	fn schema_rejects_define_namespace_and_database(stmt: &str) {
+		let file = SchemaFile {
+			path: "database/schema/root.surql".to_string(),
+			hash: "x".to_string(),
+			sql: stmt.to_string(),
+		};
+		let err = parse_schema_statements(&file, false)
+			.expect_err("DEFINE NAMESPACE/DATABASE must be rejected");
+		assert!(
+			err.to_string().contains("DEFINE NAMESPACE/DATABASE"),
+			"unexpected error for {stmt}: {err}"
+		);
 	}
 
 	#[test]
@@ -829,16 +864,78 @@ mod tests {
 		assert!(unsupported.is_err());
 	}
 
-	#[test]
-	fn schema_rejects_non_define_sql() {
+	#[test_case("CREATE person SET name = 'a';")]
+	#[test_case("INSERT INTO person (name) VALUES ('Alice');")]
+	#[test_case("UPDATE person SET name = 'Bob';")]
+	#[test_case("DELETE FROM person WHERE name = 'Bob';")]
+	#[test_case("SELECT * FROM person;")]
+	fn schema_rejects_non_define_sql(stmt: &str) {
 		let file = SchemaFile {
 			path: "database/schema/root.surql".to_string(),
 			hash: "x".to_string(),
-			sql: "CREATE person SET name = 'a';".to_string(),
+			sql: stmt.to_string(),
 		};
+		let err = parse_schema_statements(&file, false)
+			.expect_err(&format!("must reject non-DEFINE: {stmt}"));
+		assert!(err.to_string().contains("non-DEFINE"), "unexpected error for {stmt}: {err}");
+	}
 
-		let err = parse_schema_statements(&file).expect_err("must reject create");
-		assert!(err.to_string().contains("non-DEFINE"));
+	#[test]
+	fn ensure_overwrite_passes_through_non_define_statements() {
+		// When --allow-all-statements is used, schema files may contain INSERT/UPDATE/etc.
+		// ensure_overwrite must pass these through unchanged (no OVERWRITE injection).
+		let sql = "DEFINE TABLE person SCHEMAFULL;\n\
+		           INSERT INTO person (name) VALUES ('seed');";
+		let result = ensure_overwrite(sql);
+		assert!(result.contains("DEFINE TABLE OVERWRITE person SCHEMAFULL;"));
+		assert!(result.contains("INSERT INTO person (name) VALUES ('seed');"));
+	}
+
+	#[test_case("CREATE person SET name = 'a';")]
+	#[test_case("INSERT INTO person (name) VALUES ('Alice');")]
+	#[test_case("UPDATE person SET name = 'Bob';")]
+	#[test_case("DELETE FROM person WHERE name = 'Bob';")]
+	#[test_case("SELECT * FROM person;")]
+	fn allow_all_statements_collects_non_define_as_operations(stmt: &str) {
+		let file = SchemaFile {
+			path: "database/schema/root.surql".to_string(),
+			hash: "x".to_string(),
+			sql: stmt.to_string(),
+		};
+		let (entities, ops) = parse_schema_statements(&file, true)
+			.expect(&format!("allow_all_statements should not fail for: {stmt}"));
+		assert!(entities.is_empty(), "no catalog entity expected for: {stmt}");
+		assert_eq!(ops.len(), 1, "expected one operation for: {stmt}");
+		assert_eq!(ops[0].source_path, "database/schema/root.surql");
+	}
+
+	#[test]
+	fn allow_all_statements_mixed_define_and_operations() {
+		let sql = "DEFINE TABLE person SCHEMAFULL;\n\
+		           INSERT INTO person (name) VALUES ('seed');";
+		let file = SchemaFile {
+			path: "database/schema/mixed.surql".to_string(),
+			hash: "x".to_string(),
+			sql: sql.to_string(),
+		};
+		let (entities, ops) = parse_schema_statements(&file, true)
+			.expect("allow_all_statements should parse mixed file");
+		assert_eq!(entities.len(), 1);
+		assert_eq!(entities[0].kind, "table");
+		assert_eq!(ops.len(), 1);
+		assert!(ops[0].sql.contains("INSERT INTO person"));
+	}
+
+	#[test]
+	fn allow_all_statements_still_rejects_remove() {
+		let file = SchemaFile {
+			path: "database/schema/root.surql".to_string(),
+			hash: "x".to_string(),
+			sql: "REMOVE TABLE person;".to_string(),
+		};
+		let err = parse_schema_statements(&file, true)
+			.expect_err("REMOVE must still be rejected even with allow_all_statements");
+		assert!(err.to_string().contains("REMOVE statement"));
 	}
 
 	#[test]
@@ -852,7 +949,8 @@ mod tests {
 			sql: sql.to_string(),
 		};
 
-		let entities = parse_schema_statements(&file).expect("inline -- comments must parse");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("inline -- comments must parse");
 		assert_eq!(entities.len(), 3);
 	}
 
@@ -867,7 +965,8 @@ mod tests {
 			sql: sql.to_string(),
 		};
 
-		let entities = parse_schema_statements(&file).expect("inline // comments must parse");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("inline // comments must parse");
 		assert_eq!(entities.len(), 3);
 	}
 
@@ -881,7 +980,8 @@ mod tests {
 			sql: sql.to_string(),
 		};
 
-		let entities = parse_schema_statements(&file).expect("string literal must be preserved");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("string literal must be preserved");
 		assert_eq!(entities.len(), 2);
 		assert!(entities.iter().any(|e| e.name == "note"));
 	}
@@ -902,7 +1002,8 @@ mod tests {
 			sql: sql.to_string(),
 		};
 
-		let entities = parse_schema_statements(&file).expect("full-line comments must parse");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("full-line comments must parse");
 		assert_eq!(entities.len(), 3);
 	}
 
@@ -915,8 +1016,8 @@ mod tests {
 			sql: sql.to_string(),
 		};
 
-		let entities =
-			parse_schema_statements(&file).expect("trailing comment without newline must parse");
+		let (entities, _ops) = parse_schema_statements(&file, false)
+			.expect("trailing comment without newline must parse");
 		assert_eq!(entities.len(), 1);
 	}
 
@@ -931,7 +1032,8 @@ mod tests {
 			sql: sql.to_string(),
 		};
 
-		let entities = parse_schema_statements(&file).expect("tight inline comments must parse");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("tight inline comments must parse");
 		assert_eq!(entities.len(), 3);
 	}
 
@@ -946,7 +1048,8 @@ mod tests {
 			sql: sql.to_string(),
 		};
 
-		let entities = parse_schema_statements(&file).expect("mid-statement comment must parse");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("mid-statement comment must parse");
 		assert_eq!(entities.len(), 2);
 		assert!(entities.iter().any(|e| e.name == "a"));
 	}
@@ -964,7 +1067,8 @@ mod tests {
 			sql: sql.to_string(),
 		};
 
-		let entities = parse_schema_statements(&file).expect("single - and / must not be stripped");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("single - and / must not be stripped");
 		assert_eq!(entities.len(), 3);
 	}
 
@@ -979,7 +1083,7 @@ mod tests {
 			sql: sql.to_string(),
 		};
 
-		let entities = parse_schema_statements(&file)
+		let (entities, _ops) = parse_schema_statements(&file, false)
 			.expect("comment markers inside \"...\" and `...` must be preserved");
 		assert_eq!(entities.len(), 3);
 		// The field 'b' must survive — if '--' inside backticks were stripped, the table
@@ -998,7 +1102,8 @@ mod tests {
 			sql: sql.to_string(),
 		};
 
-		let entities = parse_schema_statements(&file).expect("empty comments must parse");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("empty comments must parse");
 		assert_eq!(entities.len(), 3);
 	}
 
@@ -1013,7 +1118,8 @@ mod tests {
 			sql: sql.to_string(),
 		};
 
-		let entities = parse_schema_statements(&file).expect("triple-dash must parse");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("triple-dash must parse");
 		assert_eq!(entities.len(), 2);
 	}
 
@@ -1030,7 +1136,8 @@ mod tests {
 			sql: sql.to_string(),
 		};
 
-		let entities = parse_schema_statements(&file).expect("# comments must parse");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("# comments must parse");
 		assert_eq!(entities.len(), 3);
 	}
 
@@ -1044,7 +1151,8 @@ mod tests {
 			sql: sql.to_string(),
 		};
 
-		let entities = parse_schema_statements(&file).expect("# inside string must be preserved");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("# inside string must be preserved");
 		assert_eq!(entities.len(), 2);
 	}
 
@@ -1059,7 +1167,8 @@ mod tests {
 			sql: sql.to_string(),
 		};
 
-		let entities = parse_schema_statements(&file).expect("inline block comments must parse");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("inline block comments must parse");
 		assert_eq!(entities.len(), 3);
 	}
 
@@ -1079,8 +1188,8 @@ mod tests {
 			sql: sql.to_string(),
 		};
 
-		let entities =
-			parse_schema_statements(&file).expect("multi-line block comments must parse");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("multi-line block comments must parse");
 		assert_eq!(entities.len(), 2);
 	}
 
@@ -1094,7 +1203,8 @@ mod tests {
 			sql: sql.to_string(),
 		};
 
-		let entities = parse_schema_statements(&file).expect("/* inside string must be preserved");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("/* inside string must be preserved");
 		assert_eq!(entities.len(), 2);
 	}
 
@@ -1108,7 +1218,8 @@ mod tests {
 			sql: sql.to_string(),
 		};
 
-		let entities = parse_schema_statements(&file).expect("unterminated block must parse");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("unterminated block must parse");
 		assert_eq!(entities.len(), 1);
 	}
 
@@ -1124,8 +1235,8 @@ mod tests {
 			sql: sql.to_string(),
 		};
 
-		let entities =
-			parse_schema_statements(&file).expect("escaped quote inside string must parse");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("escaped quote inside string must parse");
 		assert_eq!(entities.len(), 2);
 	}
 
@@ -1137,7 +1248,8 @@ mod tests {
 			sql: "LET $types = ['image/png', 'image/jpeg'];\nDEFINE TABLE OVERWRITE storage SCHEMAFULL;".to_string(),
 		};
 
-		let entities = parse_schema_statements(&file).expect("LET should be allowed");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("LET should be allowed");
 		assert_eq!(entities.len(), 1);
 		assert_eq!(entities[0].kind, "table");
 	}
@@ -1154,6 +1266,7 @@ mod tests {
 				statement_hash: "a".to_string(),
 				file_hash: "file-a".to_string(),
 			}],
+			operations: Vec::new(),
 		};
 		let new = CatalogSnapshot {
 			version: 2,
@@ -1165,6 +1278,7 @@ mod tests {
 				statement_hash: "b".to_string(),
 				file_hash: "file-b".to_string(),
 			}],
+			operations: Vec::new(),
 		};
 
 		let diff = diff_catalog(&old, &new);
@@ -1303,7 +1417,8 @@ mod tests {
 			hash: "h".to_string(),
 			sql: "DEFINE TABLE IF NOT EXISTS person SCHEMAFULL;".to_string(),
 		};
-		let entities = parse_schema_statements(&file).expect("should parse IF NOT EXISTS table");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS table");
 		assert_eq!(entities.len(), 1);
 		assert_eq!(entities[0].kind, "table");
 		assert_eq!(entities[0].name, "person");
@@ -1317,7 +1432,8 @@ mod tests {
 			hash: "h".to_string(),
 			sql: "DEFINE FIELD IF NOT EXISTS email ON person TYPE string;".to_string(),
 		};
-		let entities = parse_schema_statements(&file).expect("should parse IF NOT EXISTS field");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS field");
 		assert_eq!(entities.len(), 1);
 		assert_eq!(entities[0].kind, "field");
 		assert_eq!(entities[0].name, "email");
@@ -1331,7 +1447,8 @@ mod tests {
 			hash: "h".to_string(),
 			sql: "DEFINE EVENT IF NOT EXISTS changed ON person WHEN true THEN ();".to_string(),
 		};
-		let entities = parse_schema_statements(&file).expect("should parse IF NOT EXISTS event");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS event");
 		assert_eq!(entities.len(), 1);
 		assert_eq!(entities[0].kind, "event");
 		assert_eq!(entities[0].name, "changed");
@@ -1345,7 +1462,8 @@ mod tests {
 			hash: "h".to_string(),
 			sql: "DEFINE INDEX IF NOT EXISTS by_email ON TABLE person FIELDS email;".to_string(),
 		};
-		let entities = parse_schema_statements(&file).expect("should parse IF NOT EXISTS index");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS index");
 		assert_eq!(entities.len(), 1);
 		assert_eq!(entities[0].kind, "index");
 		assert_eq!(entities[0].name, "by_email");
@@ -1360,7 +1478,8 @@ mod tests {
 			sql: "DEFINE FUNCTION IF NOT EXISTS fn::greet($name: string) { RETURN $name; };"
 				.to_string(),
 		};
-		let entities = parse_schema_statements(&file).expect("should parse IF NOT EXISTS function");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS function");
 		assert_eq!(entities.len(), 1);
 		assert_eq!(entities[0].kind, "function");
 		assert_eq!(entities[0].name, "fn::greet");
@@ -1373,7 +1492,8 @@ mod tests {
 			hash: "h".to_string(),
 			sql: "DEFINE PARAM IF NOT EXISTS $env VALUE 'dev';".to_string(),
 		};
-		let entities = parse_schema_statements(&file).expect("should parse IF NOT EXISTS param");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS param");
 		assert_eq!(entities.len(), 1);
 		assert_eq!(entities[0].kind, "param");
 		assert_eq!(entities[0].name, "$env");
@@ -1386,7 +1506,8 @@ mod tests {
 			hash: "h".to_string(),
 			sql: "DEFINE ANALYZER IF NOT EXISTS english TOKENIZERS blank, class;".to_string(),
 		};
-		let entities = parse_schema_statements(&file).expect("should parse IF NOT EXISTS analyzer");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS analyzer");
 		assert_eq!(entities.len(), 1);
 		assert_eq!(entities[0].kind, "analyzer");
 		assert_eq!(entities[0].name, "english");
@@ -1399,7 +1520,8 @@ mod tests {
 			hash: "h".to_string(),
 			sql: "DEFINE ACCESS IF NOT EXISTS admin ON DATABASE TYPE RECORD;".to_string(),
 		};
-		let entities = parse_schema_statements(&file).expect("should parse IF NOT EXISTS access");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS access");
 		assert_eq!(entities.len(), 1);
 		assert_eq!(entities[0].kind, "access");
 		assert_eq!(entities[0].name, "admin");
@@ -1413,7 +1535,8 @@ mod tests {
 			hash: "h".to_string(),
 			sql: "DEFINE USER IF NOT EXISTS app ON DATABASE PASSHASH 'x';".to_string(),
 		};
-		let entities = parse_schema_statements(&file).expect("should parse IF NOT EXISTS user");
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS user");
 		assert_eq!(entities.len(), 1);
 		assert_eq!(entities[0].kind, "user");
 		assert_eq!(entities[0].name, "app");
@@ -1439,7 +1562,8 @@ mod tests {
 			.to_string(),
 		}];
 
-		let catalog = build_catalog_snapshot(&files).expect("catalog should handle IF NOT EXISTS");
+		let catalog =
+			build_catalog_snapshot(&files, false).expect("catalog should handle IF NOT EXISTS");
 		assert_eq!(catalog.entities.len(), 9, "all 9 entity types should be extracted");
 
 		let kinds: Vec<&str> = catalog.entities.iter().map(|e| e.kind.as_str()).collect();
@@ -1471,6 +1595,7 @@ mod tests {
 				statement_hash: ine_hash,
 				file_hash: "f1".to_string(),
 			}],
+			operations: Vec::new(),
 		};
 		let new = CatalogSnapshot {
 			version: 2,
@@ -1482,6 +1607,7 @@ mod tests {
 				statement_hash: ow_hash,
 				file_hash: "f2".to_string(),
 			}],
+			operations: Vec::new(),
 		};
 
 		let diff = diff_catalog(&old, &new);
