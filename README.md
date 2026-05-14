@@ -6,6 +6,7 @@
 SurrealKit is a schema management and migration tool for SurrealDB. It lets you define your schema as `.surql` files and keeps your database in sync with them.
 
 It provides two approaches to schema management:
+
 - **Sync**: a fast, declarative push for development. Your schema files are the source of truth - add a definition and it gets created, change it and it gets updated, remove it and it gets deleted.
 - **Rollouts**: controlled, phased migrations for shared and production databases. Changes are planned into reviewed manifests, applied in stages, and can be rolled back.
 
@@ -13,12 +14,12 @@ SurrealKit also includes a seeding system and a declarative testing framework fo
 
 ## Installation
 
-| Method | Command | Notes |
-|---|---|---|
-| [`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) | `cargo binstall surrealkit` | Fastest, downloads a prebuilt binary. Recommended. |
-| Cargo (from source) | `cargo install surrealkit` | Compiles locally. Works anywhere Rust does. |
-| Prebuilt tarball | [GitHub Releases](https://github.com/surrealdb/surrealkit/releases) | Manual download. Each archive ships a matching `.sha256`. |
-| Docker | `docker pull ghcr.io/surrealdb/surrealkit:latest` | Multi-arch image on GHCR. Distroless base. |
+| Method                                                           | Command                                                             | Notes                                                     |
+| ---------------------------------------------------------------- | ------------------------------------------------------------------- | --------------------------------------------------------- |
+| [`cargo binstall`](https://github.com/cargo-bins/cargo-binstall) | `cargo binstall surrealkit`                                         | Fastest, downloads a prebuilt binary. Recommended.        |
+| Cargo (from source)                                              | `cargo install surrealkit`                                          | Compiles locally. Works anywhere Rust does.               |
+| Prebuilt tarball                                                 | [GitHub Releases](https://github.com/surrealdb/surrealkit/releases) | Manual download. Each archive ships a matching `.sha256`. |
+| Docker                                                           | `docker pull ghcr.io/surrealdb/surrealkit:latest`                   | Multi-arch image on GHCR. Distroless base.                |
 
 Prebuilt binaries are published for:
 
@@ -91,14 +92,14 @@ Connection details can be provided via CLI arguments, environment variables, or 
 surrealkit --host http://localhost:8000 --ns my_ns --db my_db --user root --pass root sync
 ```
 
-| Flag | Description | Default |
-|------|-------------|---------|
-| `--host` | Database host URL | `http://localhost:8000` |
-| `--ns` | Database namespace | `db` |
-| `--db` | Database name | `test` |
-| `--user` | Database user | `root` |
-| `--pass` | Database password | `root` |
-| `--auth-level` | Authentication level: `root`, `namespace` / `ns`, or `database` / `db` | `root` |
+| Flag           | Description                                                            | Default                 |
+| -------------- | ---------------------------------------------------------------------- | ----------------------- |
+| `--host`       | Database host URL                                                      | `http://localhost:8000` |
+| `--ns`         | Database namespace                                                     | `db`                    |
+| `--db`         | Database name                                                          | `test`                  |
+| `--user`       | Database user                                                          | `root`                  |
+| `--pass`       | Database password                                                      | `root`                  |
+| `--auth-level` | Authentication level: `root`, `namespace` / `ns`, or `database` / `db` | `root`                  |
 
 ### Environment Variables
 
@@ -108,6 +109,7 @@ surrealkit --host http://localhost:8000 --ns my_ns --db my_db --user root --pass
 - `SURREALDB_USER` (fallback: `DATABASE_USER`)
 - `SURREALDB_PASSWORD` (fallback: `DATABASE_PASSWORD`)
 - `SURREALDB_AUTH_LEVEL` (fallback: `DATABASE_AUTH_LEVEL`) — accepted values: `root`, `namespace` / `ns`, `database` / `db`
+- `SURREALDB_FOLDER` — root folder for schema, rollouts, snapshots, seed, and tests (default: `./database`)
 
 These can be set as system environment variables or in a `.env` file.
 
@@ -216,11 +218,11 @@ DEFINE TABLE ${schema_prefix}_users SCHEMAFULL;
 
 Values are resolved in this order (highest wins):
 
-| Source | Example |
-|--------|---------|
-| `--var KEY=VALUE` CLI flag | `surrealkit sync --var schema_prefix=acme` |
+| Source                                      | Example                                             |
+| ------------------------------------------- | --------------------------------------------------- |
+| `--var KEY=VALUE` CLI flag                  | `surrealkit sync --var schema_prefix=acme`          |
 | `SURREALKIT_VAR_<KEY>` environment variable | `SURREALKIT_VAR_SCHEMA_PREFIX=acme surrealkit sync` |
-| `[variables]` section in `surrealkit.toml` | _(see below)_ |
+| `[variables]` section in `surrealkit.toml`  | _(see below)_                                       |
 
 Variable names are case-insensitive: `${FOO}`, `${foo}`, and `${Foo}` all match key `FOO`.
 

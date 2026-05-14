@@ -31,6 +31,8 @@ pub struct SyncOpts {
 	pub allow_shared_prune: bool,
 	/// Template variables substituted into `.surql` content before execution.
 	pub vars: TemplateVars,
+	/// Root folder for the database directory (default: `./database`).
+	pub folder: String,
 }
 
 /// Schema file embedded at compile time via [`embed_schema!`].
@@ -40,9 +42,9 @@ pub struct EmbeddedSchemaFile {
 	pub sql: &'static str,
 }
 
-pub async fn run_sync(db: &Surreal<Any>, opts: SyncOpts) -> Result<()> {
-	run_setup(db).await?;
-	ensure_local_state_dirs()?;
+pub async fn run_sync(db: &Surreal<Any>, folder: &str, opts: SyncOpts) -> Result<()> {
+	run_setup(db, folder).await?;
+	ensure_local_state_dirs(&opts.folder)?;
 
 	if opts.watch {
 		run_sync_once(db, &opts, true).await?;
@@ -77,9 +79,14 @@ pub async fn run_sync(db: &Surreal<Any>, opts: SyncOpts) -> Result<()> {
 ///
 /// Defaults to `prune = true`, `fail_fast = true`. Use [`run_sync_embedded_with_opts`]
 /// for custom options.
-pub async fn run_sync_embedded(db: &Surreal<Any>, files: &[EmbeddedSchemaFile]) -> Result<()> {
+pub async fn run_sync_embedded(
+	db: &Surreal<Any>,
+	folder: &str,
+	files: &[EmbeddedSchemaFile],
+) -> Result<()> {
 	run_sync_embedded_with_opts(
 		db,
+		folder,
 		files,
 		&SyncOpts {
 			watch: false,
@@ -89,6 +96,7 @@ pub async fn run_sync_embedded(db: &Surreal<Any>, files: &[EmbeddedSchemaFile]) 
 			prune: true,
 			allow_shared_prune: false,
 			vars: TemplateVars::default(),
+			folder: String::new(),
 		},
 	)
 	.await
@@ -97,10 +105,11 @@ pub async fn run_sync_embedded(db: &Surreal<Any>, files: &[EmbeddedSchemaFile]) 
 /// Like [`run_sync_embedded`] but with caller-supplied [`SyncOpts`]. `watch` is ignored.
 pub async fn run_sync_embedded_with_opts(
 	db: &Surreal<Any>,
+	folder: &str,
 	files: &[EmbeddedSchemaFile],
 	opts: &SyncOpts,
 ) -> Result<()> {
-	run_setup(db).await?;
+	run_setup(db, folder).await?;
 	let schema_files: Vec<SchemaFile> = files
 		.iter()
 		.map(|f| {
@@ -121,7 +130,7 @@ pub async fn run_sync_embedded_with_opts(
 }
 
 async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> Result<()> {
-	let files = collect_schema_files()?;
+	let files = collect_schema_files(&opts.folder)?;
 	run_sync_with_files(db, opts, &files, watch_mode).await
 }
 
@@ -136,7 +145,7 @@ async fn run_sync_with_files(
 	let managed = load_managed_entities(db).await?;
 
 	if files.is_empty() && !watch_mode {
-		println!("No schema files found in database/schema");
+		println!("No schema files found in {}/schema", opts.folder);
 	}
 
 	let file_paths: BTreeSet<String> = files.iter().map(|file| file.path.clone()).collect();

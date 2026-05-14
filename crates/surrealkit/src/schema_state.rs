@@ -6,13 +6,10 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use walkdir::WalkDir;
 
+use crate::constants::{
+	catalog_snapshot_path, rollouts_dir, schema_dir, schema_snapshot_path, state_dir,
+};
 use crate::core::sha256_hex;
-
-pub const SCHEMA_DIR: &str = "database/schema";
-pub const ROLLOUTS_DIR: &str = "database/rollouts";
-pub const STATE_DIR: &str = "database/snapshots";
-pub const SCHEMA_SNAPSHOT_PATH: &str = "database/snapshots/schema_snapshot.json";
-pub const CATALOG_SNAPSHOT_PATH: &str = "database/snapshots/catalog_snapshot.json";
 
 #[derive(Debug, Clone)]
 pub struct SchemaFile {
@@ -86,15 +83,19 @@ impl CatalogEntity {
 	}
 }
 
-pub fn ensure_local_state_dirs() -> Result<()> {
-	fs::create_dir_all(SCHEMA_DIR).with_context(|| format!("creating {}", SCHEMA_DIR))?;
-	fs::create_dir_all(ROLLOUTS_DIR).with_context(|| format!("creating {}", ROLLOUTS_DIR))?;
-	fs::create_dir_all(STATE_DIR).with_context(|| format!("creating {}", STATE_DIR))?;
+pub fn ensure_local_state_dirs(folder: &str) -> Result<()> {
+	let sd = schema_dir(folder);
+	let rd = rollouts_dir(folder);
+	let std = state_dir(folder);
+	fs::create_dir_all(&sd).with_context(|| format!("creating {}", sd.display()))?;
+	fs::create_dir_all(&rd).with_context(|| format!("creating {}", rd.display()))?;
+	fs::create_dir_all(&std).with_context(|| format!("creating {}", std.display()))?;
 	Ok(())
 }
 
-pub fn collect_schema_files() -> Result<Vec<SchemaFile>> {
-	let mut files: Vec<PathBuf> = WalkDir::new(SCHEMA_DIR)
+pub fn collect_schema_files(folder: &str) -> Result<Vec<SchemaFile>> {
+	let sd = schema_dir(folder);
+	let mut files: Vec<PathBuf> = WalkDir::new(&sd)
 		.follow_links(true)
 		.into_iter()
 		.filter_map(|e| e.ok())
@@ -140,9 +141,9 @@ pub fn hash_schema_snapshot(snapshot: &SchemaSnapshot) -> Result<String> {
 	Ok(sha256_hex(&canonical))
 }
 
-pub fn load_schema_snapshot() -> Result<SchemaSnapshot> {
+pub fn load_schema_snapshot(folder: &str) -> Result<SchemaSnapshot> {
 	load_json_or_default(
-		SCHEMA_SNAPSHOT_PATH,
+		schema_snapshot_path(folder),
 		SchemaSnapshot {
 			version: 1,
 			files: Vec::new(),
@@ -150,13 +151,13 @@ pub fn load_schema_snapshot() -> Result<SchemaSnapshot> {
 	)
 }
 
-pub fn save_schema_snapshot(snapshot: &SchemaSnapshot) -> Result<()> {
-	save_json_pretty(SCHEMA_SNAPSHOT_PATH, snapshot)
+pub fn save_schema_snapshot(folder: &str, snapshot: &SchemaSnapshot) -> Result<()> {
+	save_json_pretty(schema_snapshot_path(folder), snapshot)
 }
 
-pub fn load_catalog_snapshot() -> Result<CatalogSnapshot> {
+pub fn load_catalog_snapshot(folder: &str) -> Result<CatalogSnapshot> {
 	load_json_or_default(
-		CATALOG_SNAPSHOT_PATH,
+		catalog_snapshot_path(folder),
 		CatalogSnapshot {
 			version: 2,
 			entities: Vec::new(),
@@ -164,8 +165,8 @@ pub fn load_catalog_snapshot() -> Result<CatalogSnapshot> {
 	)
 }
 
-pub fn save_catalog_snapshot(snapshot: &CatalogSnapshot) -> Result<()> {
-	save_json_pretty(CATALOG_SNAPSHOT_PATH, snapshot)
+pub fn save_catalog_snapshot(folder: &str, snapshot: &CatalogSnapshot) -> Result<()> {
+	save_json_pretty(catalog_snapshot_path(folder), snapshot)
 }
 
 pub fn diff_schema(old: &SchemaSnapshot, new: &SchemaSnapshot) -> FileDiff {
@@ -378,27 +379,30 @@ fn normalize_path(path: &Path) -> Result<String> {
 	Ok(rel.to_string_lossy().replace('\\', "/"))
 }
 
-fn load_json_or_default<T>(path: &str, default: T) -> Result<T>
+fn load_json_or_default<T>(path: impl AsRef<std::path::Path>, default: T) -> Result<T>
 where
 	T: for<'de> Deserialize<'de>,
 {
-	let p = Path::new(path);
+	let p = path.as_ref();
 	if !p.exists() {
 		return Ok(default);
 	}
 
-	let raw = fs::read_to_string(p).with_context(|| format!("reading {}", path))?;
-	let parsed = serde_json::from_str(&raw).with_context(|| format!("parsing {}", path))?;
+	let raw = fs::read_to_string(p).with_context(|| format!("reading {}", p.display()))?;
+	let parsed = serde_json::from_str(&raw).with_context(|| format!("parsing {}", p.display()))?;
 	Ok(parsed)
 }
 
-fn save_json_pretty<T>(path: &str, value: &T) -> Result<()>
+fn save_json_pretty<T>(path: impl AsRef<std::path::Path>, value: &T) -> Result<()>
 where
 	T: Serialize,
 {
-	ensure_local_state_dirs()?;
+	let p = path.as_ref();
+	if let Some(parent) = p.parent() {
+		fs::create_dir_all(parent).with_context(|| format!("creating dir {}", parent.display()))?;
+	}
 	let raw = serde_json::to_string_pretty(value).context("serializing json")?;
-	fs::write(path, format!("{raw}\n")).with_context(|| format!("writing {}", path))?;
+	fs::write(p, format!("{raw}\n")).with_context(|| format!("writing {}", p.display()))?;
 	Ok(())
 }
 
