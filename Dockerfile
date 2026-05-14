@@ -20,4 +20,6 @@ FROM gcr.io/distroless/cc-debian12:nonroot
 
 COPY --from=builder /surrealkit /usr/local/bin/surrealkit
 
+ENV SURREALDB_FOLDER=/database
+
 ENTRYPOINT ["/usr/local/bin/surrealkit"]

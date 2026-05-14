@@ -2,9 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use rust_dotenv::dotenv::DotEnv;
-use surrealdb::Surreal;
-use surrealdb::engine::any::Any;
-use surrealkit::config::{DbCfg, DbOverrides, connect};
+use surrealkit::config::{Cfg, ConfigOverrides, connect};
 use surrealkit::core::exec_surql;
 use surrealkit::rollout::{self, RolloutExecutionOpts, RolloutPlanOpts};
 use surrealkit::setup::run_setup;
@@ -43,6 +41,10 @@ pub struct Cli {
 	/// Authentication level: root (default), namespace/ns, or database/db
 	#[arg(long, global = true)]
 	auth_level: Option<String>,
+
+	/// Root folder for the database directory (default: `./database`).
+	#[arg(long, global = true)]
+	folder: Option<String>,
 
 	/// Set a template variable (repeatable): --var KEY=VALUE
 	#[arg(long = "var", global = true, value_name = "KEY=VALUE")]
@@ -150,13 +152,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 	let args = Cli::parse();
 	let env = load_env();
-	let overrides = DbOverrides {
+	let overrides = ConfigOverrides {
 		host: args.host,
 		ns: args.ns,
 		db: args.db,
 		user: args.user,
 		pass: args.pass,
 		auth_level: args.auth_level,
+		folder: args.folder,
 	};
 
 	let raw_vars: Vec<(String, String)> =
@@ -165,11 +168,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		vars: build_vars(&raw_vars, None)?,
 	};
 
+	let cfg = Cfg::from_env(env.as_ref(), &overrides)?;
+	let folder = cfg.folder().to_owned();
+
 	match args.command {
-		Commands::Init => scaffold::scaffold()?,
+		Commands::Init => scaffold::scaffold(&folder)?,
 		Commands::Setup => {
-			let db = connect_from_env(env.as_ref(), &overrides).await?;
-			run_setup(&db).await?;
+			let db = connect(&cfg).await?;
+			run_setup(&db, &folder).await?;
 		}
 		Commands::Sync {
 			watch,
@@ -179,9 +185,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			no_prune,
 			allow_shared_prune,
 		} => {
-			let db = connect_from_env(env.as_ref(), &overrides).await?;
+			let db = connect(&cfg).await?;
 			sync::run_sync(
 				&db,
+				&folder,
 				SyncOpts {
 					watch,
 					debounce_ms,
@@ -190,6 +197,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 					prune: !no_prune,
 					allow_shared_prune,
 					vars: template_vars,
+					folder: folder.clone(),
 				},
 			)
 			.await?;
@@ -198,25 +206,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			command,
 		} => match command {
 			RolloutCommands::Baseline => {
-				let db = connect_from_env(env.as_ref(), &overrides).await?;
-				rollout::run_baseline(&db).await?;
+				let db = connect(&cfg).await?;
+				rollout::run_baseline(&db, &folder).await?;
 			}
 			RolloutCommands::Plan {
 				name,
 				dry_run,
 			} => {
-				rollout::run_plan(RolloutPlanOpts {
-					name,
-					dry_run,
-				})
+				rollout::run_plan(
+					&folder,
+					RolloutPlanOpts {
+						name,
+						dry_run,
+					},
+				)
 				.await?;
 			}
 			RolloutCommands::Start {
 				target,
 			} => {
-				let db = connect_from_env(env.as_ref(), &overrides).await?;
+				let db = connect(&cfg).await?;
 				rollout::run_start(
 					&db,
+					&folder,
 					RolloutExecutionOpts {
 						selector: Some(target),
 					},
@@ -227,9 +239,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			RolloutCommands::Complete {
 				target,
 			} => {
-				let db = connect_from_env(env.as_ref(), &overrides).await?;
+				let db = connect(&cfg).await?;
 				rollout::run_complete(
 					&db,
+					&folder,
 					RolloutExecutionOpts {
 						selector: Some(target),
 					},
@@ -240,9 +253,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			RolloutCommands::Rollback {
 				target,
 			} => {
-				let db = connect_from_env(env.as_ref(), &overrides).await?;
+				let db = connect(&cfg).await?;
 				rollout::run_rollback(
 					&db,
+					&folder,
 					RolloutExecutionOpts {
 						selector: Some(target),
 					},
@@ -253,30 +267,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			RolloutCommands::Status {
 				target,
 			} => {
-				let db = connect_from_env(env.as_ref(), &overrides).await?;
-				rollout::run_status(&db, target).await?;
+				let db = connect(&cfg).await?;
+				rollout::run_status(&db, &folder, target).await?;
 			}
 			RolloutCommands::Lint {
 				target,
 			} => {
-				rollout::run_lint(RolloutExecutionOpts {
-					selector: Some(target),
-				})
+				rollout::run_lint(
+					&folder,
+					RolloutExecutionOpts {
+						selector: Some(target),
+					},
+				)
 				.await?;
 			}
 		},
 		Commands::Seed => {
-			let db = connect_from_env(env.as_ref(), &overrides).await?;
-			seed::seed(&db, &template_vars).await?;
+			let db = connect(&cfg).await?;
+			seed::seed(&db, &folder, &template_vars).await?;
 		}
 		Commands::Status => {
-			let db = connect_from_env(env.as_ref(), &overrides).await?;
-			rollout::run_status(&db, None).await?;
+			let db = connect(&cfg).await?;
+			rollout::run_status(&db, &folder, None).await?;
 		}
 		Commands::Apply {
 			path,
 		} => {
-			let db = connect_from_env(env.as_ref(), &overrides).await?;
+			let db = connect(&cfg).await?;
 			let sql = std::fs::read_to_string(&path)?;
 			let sql = template_vars.apply(&sql)?;
 			exec_surql(&db, &sql).await?;
@@ -319,12 +336,4 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	}
 
 	Ok(())
-}
-
-async fn connect_from_env(
-	env: Option<&DotEnv>,
-	overrides: &DbOverrides,
-) -> anyhow::Result<Surreal<Any>> {
-	let cfg = DbCfg::from_env(env, overrides)?;
-	connect(&cfg).await
 }
