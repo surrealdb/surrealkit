@@ -29,6 +29,10 @@ pub struct SyncOpts {
 	pub fail_fast: bool,
 	pub prune: bool,
 	pub allow_shared_prune: bool,
+	/// Allow non-DEFINE statements (e.g. INSERT, UPDATE) in schema files.
+	/// When set, schema files are not parsed for catalog entity tracking;
+	/// they are applied as-is and only file-level hashes are tracked.
+	pub allow_all_statements: bool,
 	/// Template variables substituted into `.surql` content before execution.
 	pub vars: TemplateVars,
 	/// Root folder for the database directory (default: `./database`).
@@ -95,6 +99,7 @@ pub async fn run_sync_embedded(
 			fail_fast: true,
 			prune: true,
 			allow_shared_prune: false,
+			allow_all_statements: false,
 			vars: TemplateVars::default(),
 			folder: String::new(),
 		},
@@ -140,7 +145,7 @@ async fn run_sync_with_files(
 	files: &[SchemaFile],
 	watch_mode: bool,
 ) -> Result<()> {
-	let desired_catalog = build_catalog_snapshot(files)?;
+	let desired_catalog = build_catalog_snapshot(files, opts.allow_all_statements)?;
 	let tracked = load_sync_hashes(db).await?;
 	let managed = load_managed_entities(db).await?;
 
@@ -261,6 +266,37 @@ async fn run_sync_with_files(
 		} else {
 			prune_managed_entities(db, &stale_entities).await?;
 			pruned_count = stale_count;
+		}
+	}
+
+	// Run operations (non-DEFINE statements) after all entities have been applied.
+	let pending_operations: Vec<_> = desired_catalog
+		.operations
+		.iter()
+		.filter(|op| !failed_paths.contains(&op.source_path))
+		.collect();
+	if !pending_operations.is_empty() {
+		if opts.dry_run {
+			if !watch_mode {
+				println!("DRY RUN: would run {} operation(s)", pending_operations.len());
+			}
+		} else {
+			for op in &pending_operations {
+				match exec_surql(db, &op.sql).await {
+					Ok(_) => {
+						if !watch_mode {
+							println!("ran operation from {}", op.source_path);
+						}
+					}
+					Err(err) => {
+						apply_errors += 1;
+						eprintln!("error running operation from {}: {err:#}", op.source_path);
+						if opts.fail_fast {
+							return Err(err);
+						}
+					}
+				}
+			}
 		}
 	}
 

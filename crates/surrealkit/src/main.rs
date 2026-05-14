@@ -71,6 +71,10 @@ enum Commands {
 		no_prune: bool,
 		#[arg(long)]
 		allow_shared_prune: bool,
+		/// Allow non-DEFINE statements in schema files (e.g. INSERT, UPDATE, CREATE).
+		/// Disables catalog entity tracking; only file-level hashes are tracked.
+		#[arg(long)]
+		allow_all_statements: bool,
 	},
 	Rollout {
 		#[command(subcommand)]
@@ -190,6 +194,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			fail_fast,
 			no_prune,
 			allow_shared_prune,
+			allow_all_statements,
 		} => {
 			let db = connect(&cfg).await?;
 			sync::run_sync(
@@ -202,6 +207,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 					fail_fast,
 					prune: !no_prune,
 					allow_shared_prune,
+					allow_all_statements,
 					vars: template_vars,
 					folder: folder.clone(),
 				},
