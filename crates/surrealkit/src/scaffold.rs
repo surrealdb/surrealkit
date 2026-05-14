@@ -3,45 +3,53 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 
-pub fn scaffold() -> Result<()> {
-	let database_dir = Path::new("database");
-	let schema_dir = database_dir.join("schema");
-	let rollouts_dir = database_dir.join("rollouts");
-	let state_dir = database_dir.join("snapshots");
-	let tests_dir = database_dir.join("tests");
-	let test_suites_dir = tests_dir.join("suites");
-	let test_fixtures_dir = tests_dir.join("fixtures");
+use crate::constants::{
+	fixtures_dir, rollouts_dir, schema_dir, seed_dir, seed_surql_path, setup_surql_path, state_dir,
+	suites_dir, tests_dir,
+};
 
-	fs::create_dir_all(&schema_dir).context("creating database/schema")?;
-	fs::create_dir_all(&rollouts_dir).context("creating database/rollouts")?;
-	fs::create_dir_all(&state_dir).context("creating database/snapshots")?;
-	fs::create_dir_all(&tests_dir).context("creating database/tests")?;
-	fs::create_dir_all(&test_suites_dir).context("creating database/tests/suites")?;
-	fs::create_dir_all(&test_fixtures_dir).context("creating database/tests/fixtures")?;
+pub fn scaffold(folder: &str) -> Result<()> {
+	let schema_dir = schema_dir(folder);
+	let rollouts_dir = rollouts_dir(folder);
+	let state_dir = state_dir(folder);
+	let tests_dir = tests_dir(folder);
+	let test_suites_dir = suites_dir(folder);
+	let test_fixtures_dir = fixtures_dir(folder);
 
-	let seed_dir = database_dir.join("seed");
-	fs::create_dir_all(&seed_dir).context("creating database/seed")?;
-	let seed_path = seed_dir.join("seed.surql");
+	fs::create_dir_all(&schema_dir).with_context(|| format!("creating {}/schema", folder))?;
+	fs::create_dir_all(&rollouts_dir).with_context(|| format!("creating {}/rollouts", folder))?;
+	fs::create_dir_all(&state_dir).with_context(|| format!("creating {}/snapshots", folder))?;
+	fs::create_dir_all(&tests_dir).with_context(|| format!("creating {}/tests", folder))?;
+	fs::create_dir_all(&test_suites_dir)
+		.with_context(|| format!("creating {}/tests/suites", folder))?;
+	fs::create_dir_all(&test_fixtures_dir)
+		.with_context(|| format!("creating {}/tests/fixtures", folder))?;
+
+	let seed_dir = seed_dir(folder);
+	fs::create_dir_all(&seed_dir).with_context(|| format!("creating {}/seed", folder))?;
+	let seed_path = seed_surql_path(folder);
 	if !seed_path.exists() {
-		fs::write(&seed_path, "--- SEED\n").context("Writing database/seed/seed.surql")?;
+		fs::write(&seed_path, "--- SEED\n")
+			.with_context(|| format!("Writing {}/seed/seed.surql", folder))?;
 	}
 
 	// setup.surql defines SurrealKit metadata tables.
-	let setup_path = database_dir.join("setup.surql");
+	let setup_path = setup_surql_path(folder);
 	if !setup_path.exists() {
-		fs::write(&setup_path, DEFAULT_SETUP).context("Writing setup.surql")?;
+		fs::write(&setup_path, DEFAULT_SETUP)
+			.with_context(|| format!("Writing {}/setup.surql", folder))?;
 	}
 
 	let test_config_path = tests_dir.join("config.toml");
 	if !test_config_path.exists() {
 		fs::write(&test_config_path, DEFAULT_TEST_CONFIG)
-			.context("Writing database/tests/config.toml")?;
+			.with_context(|| format!("Writing {}/tests/config.toml", folder))?;
 	}
 
 	let test_suite_path = test_suites_dir.join("smoke.toml");
 	if !test_suite_path.exists() {
 		fs::write(&test_suite_path, DEFAULT_TEST_SUITE)
-			.context("Writing database/tests/suites/smoke.toml")?;
+			.with_context(|| format!("Writing {}/tests/suites/smoke.toml", folder))?;
 	}
 
 	let project_config_path = Path::new("surrealkit.toml");
@@ -50,9 +58,9 @@ pub fn scaffold() -> Result<()> {
 			.context("Writing surrealkit.toml")?;
 	}
 
-	println!("Scaffolded project in ./database\n");
+	println!("Scaffolded project in {}\n", folder);
 	println!("  surrealkit.toml");
-	println!("  database/");
+	println!("  {}/", folder);
 	println!("  ├── schema/");
 	println!("  ├── rollouts/");
 	println!("  ├── snapshots/");

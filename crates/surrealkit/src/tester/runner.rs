@@ -22,7 +22,8 @@ use super::types::{
 	AssertionReport, CaseKind, CaseReport, FilterInput, GlobalTestConfig, JsonAssertionSpec,
 	LoadedSuite, PermissionAction, RunReport, SuiteReport, TestOpts,
 };
-use crate::config::{AuthLevel, DbCfg};
+use crate::config::{AuthLevel, Cfg};
+use crate::constants::DEFAULT_ROOT_DIR;
 use crate::core::create_surreal_client;
 use crate::seed;
 use crate::setup::run_setup;
@@ -30,7 +31,7 @@ use crate::sync::{self, SyncOpts};
 use crate::variables::TemplateVars;
 
 pub struct RunnerContext {
-	pub cfg: DbCfg,
+	pub cfg: Cfg,
 	pub opts: TestOpts,
 	pub global: GlobalTestConfig,
 	pub base_url: Option<String>,
@@ -41,7 +42,7 @@ pub struct RunnerContext {
 
 impl RunnerContext {
 	pub fn new(
-		cfg: DbCfg,
+		cfg: Cfg,
 		opts: TestOpts,
 		global: GlobalTestConfig,
 		base_url: Option<String>,
@@ -175,7 +176,8 @@ impl RunnerContext {
 		};
 		let host = self.cfg.host().to_string();
 
-		let actors = self.prepare_suite(&suite, &host, &namespace, &database).await?;
+		let actors =
+			self.prepare_suite(&suite, &host, &namespace, &database, DEFAULT_ROOT_DIR).await?;
 		let mut cases = Vec::new();
 
 		for case in &suite.spec.cases {
@@ -234,6 +236,7 @@ impl RunnerContext {
 		host: &str,
 		namespace: &str,
 		database: &str,
+		folder: &str,
 	) -> Result<HashMap<String, ActorSession>> {
 		let merged = merged_actor_specs(&self.global.actors, &suite.spec.actors);
 		let bootstrap_actors =
@@ -241,11 +244,12 @@ impl RunnerContext {
 		let root = require_actor(&bootstrap_actors, "root")?;
 
 		if !self.opts.no_setup {
-			run_setup(&root.db).await?;
+			run_setup(&root.db, folder).await?;
 		}
 		if !self.opts.no_sync {
 			sync::run_sync(
 				&root.db,
+				folder,
 				SyncOpts {
 					watch: false,
 					debounce_ms: 250,
@@ -254,32 +258,32 @@ impl RunnerContext {
 					prune: true,
 					allow_shared_prune: true,
 					vars: self.vars.clone(),
+					folder: self.cfg.folder().to_owned(),
 				},
 			)
 			.await?;
 		}
 		if !self.opts.no_seed {
-			seed::seed(&root.db, &self.vars).await?;
+			seed::seed(&root.db, self.cfg.folder(), &self.vars).await?;
 		}
 
+		let tests_dir = PathBuf::from(self.cfg.folder()).join("tests");
+		let tests_suites_dir = tests_dir.join("suites");
 		for fixture in self.global.fixtures.iter().filter(|f| fixture_targets_root(f)) {
-			apply_fixture(fixture, &bootstrap_actors, Path::new("database/tests"), &self.vars)
-				.await?;
+			apply_fixture(fixture, &bootstrap_actors, &tests_dir, &self.vars).await?;
 		}
 		for fixture in suite.spec.fixtures.iter().filter(|f| fixture_targets_root(f)) {
-			let suite_base =
-				suite.path.parent().unwrap_or_else(|| Path::new("database/tests/suites"));
+			let suite_base = suite.path.parent().unwrap_or(&tests_suites_dir);
 			apply_fixture(fixture, &bootstrap_actors, suite_base, &self.vars).await?;
 		}
 
 		let actors = build_actor_sessions(&self.cfg, host, namespace, database, &merged).await?;
 
 		for fixture in self.global.fixtures.iter().filter(|f| !fixture_targets_root(f)) {
-			apply_fixture(fixture, &actors, Path::new("database/tests"), &self.vars).await?;
+			apply_fixture(fixture, &actors, &tests_dir, &self.vars).await?;
 		}
 		for fixture in suite.spec.fixtures.iter().filter(|f| !fixture_targets_root(f)) {
-			let suite_base =
-				suite.path.parent().unwrap_or_else(|| Path::new("database/tests/suites"));
+			let suite_base = suite.path.parent().unwrap_or(&tests_suites_dir);
 			apply_fixture(fixture, &actors, suite_base, &self.vars).await?;
 		}
 
@@ -675,7 +679,7 @@ fn fixture_targets_root(fixture: &crate::tester::types::FixtureSpec) -> bool {
 	matches!(fixture.actor.as_deref(), None | Some("root"))
 }
 
-async fn cleanup_suite_db(cfg: &DbCfg, host: &str, namespace: &str, database: &str) -> Result<()> {
+async fn cleanup_suite_db(cfg: &Cfg, host: &str, namespace: &str, database: &str) -> Result<()> {
 	let db = create_surreal_client(&host.to_string())
 		.await
 		.with_context(|| format!("connecting for cleanup {host}"))?;
