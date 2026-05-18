@@ -807,20 +807,18 @@ mod tests {
 
 		let mut map = HashMap::new();
 		map.insert("FIXTURE_PATH".to_string(), "/test/kb".to_string());
-		let vars = TemplateVars { vars: map };
+		let vars = TemplateVars {
+			vars: map,
+		};
 
 		let fixture = FixtureSpec {
 			name: Some("inline-substitution".into()),
 			actor: None,
-			sql: Some(
-				"CREATE marker:fixture_subst SET path = '${FIXTURE_PATH}';".into(),
-			),
+			sql: Some("CREATE marker:fixture_subst SET path = '${FIXTURE_PATH}';".into()),
 			file: None,
 		};
 
-		apply_fixture(&fixture, &actors, Path::new("."), &vars)
-			.await
-			.expect("apply_fixture");
+		apply_fixture(&fixture, &actors, Path::new("."), &vars).await.expect("apply_fixture");
 
 		let mut resp = db
 			.query("SELECT path FROM marker:fixture_subst;")
@@ -870,9 +868,6 @@ mod tests {
 			.await
 			.expect_err("undefined variable must error");
 		let msg = err.to_string();
-		assert!(
-			msg.contains("missing-var"),
-			"error should name the fixture: {err}"
-		);
+		assert!(msg.contains("missing-var"), "error should name the fixture: {err}");
 	}
 }
