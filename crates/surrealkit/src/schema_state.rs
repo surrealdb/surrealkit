@@ -836,10 +836,7 @@ mod tests {
 		let supported = render_remove_sql(&entities, true).expect("api should be supported");
 		assert_eq!(supported[0], "REMOVE FIELD IF EXISTS nickname ON person;");
 		assert!(supported.iter().any(|line| line == "REMOVE API IF EXISTS v1;"));
-		assert_eq!(
-			supported.last().expect("table removal"),
-			"REMOVE TABLE IF EXISTS person;"
-		);
+		assert_eq!(supported.last().expect("table removal"), "REMOVE TABLE IF EXISTS person;");
 
 		let unsupported = render_remove_sql(&entities, false);
 		assert!(unsupported.is_err());
