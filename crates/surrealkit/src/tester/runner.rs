@@ -263,23 +263,24 @@ impl RunnerContext {
 		}
 
 		for fixture in self.global.fixtures.iter().filter(|f| fixture_targets_root(f)) {
-			apply_fixture(fixture, &bootstrap_actors, Path::new("database/tests")).await?;
+			apply_fixture(fixture, &bootstrap_actors, Path::new("database/tests"), &self.vars)
+				.await?;
 		}
 		for fixture in suite.spec.fixtures.iter().filter(|f| fixture_targets_root(f)) {
 			let suite_base =
 				suite.path.parent().unwrap_or_else(|| Path::new("database/tests/suites"));
-			apply_fixture(fixture, &bootstrap_actors, suite_base).await?;
+			apply_fixture(fixture, &bootstrap_actors, suite_base, &self.vars).await?;
 		}
 
 		let actors = build_actor_sessions(&self.cfg, host, namespace, database, &merged).await?;
 
 		for fixture in self.global.fixtures.iter().filter(|f| !fixture_targets_root(f)) {
-			apply_fixture(fixture, &actors, Path::new("database/tests")).await?;
+			apply_fixture(fixture, &actors, Path::new("database/tests"), &self.vars).await?;
 		}
 		for fixture in suite.spec.fixtures.iter().filter(|f| !fixture_targets_root(f)) {
 			let suite_base =
 				suite.path.parent().unwrap_or_else(|| Path::new("database/tests/suites"));
-			apply_fixture(fixture, &actors, suite_base).await?;
+			apply_fixture(fixture, &actors, suite_base, &self.vars).await?;
 		}
 
 		Ok(actors)
@@ -624,10 +625,17 @@ async fn apply_fixture(
 	fixture: &crate::tester::types::FixtureSpec,
 	actors: &HashMap<String, ActorSession>,
 	base_dir: &Path,
+	vars: &TemplateVars,
 ) -> Result<()> {
 	let actor_name = actor_name_or_default(fixture.actor.as_deref());
 	let actor = require_actor(actors, actor_name)?;
-	let sql = fixture_sql(fixture, base_dir)?;
+	let raw_sql = fixture_sql(fixture, base_dir)?;
+	let sql = vars.apply(&raw_sql).with_context(|| {
+		format!(
+			"applying template variables to fixture '{}'",
+			fixture.name.as_deref().unwrap_or("unnamed")
+		)
+	})?;
 	execute_sql_value(&actor.db, &sql).await.with_context(|| {
 		format!("fixture '{}' failed", fixture.name.as_deref().unwrap_or("unnamed"))
 	})?;
@@ -743,11 +751,128 @@ pub fn build_filter_input(opts: &TestOpts) -> FilterInput {
 
 #[cfg(test)]
 mod tests {
+	use std::collections::{BTreeMap, HashMap};
+	use std::path::Path;
+
+	use surrealdb::engine::any::connect;
+	use surrealdb::opt::Config;
+	use surrealdb::opt::capabilities::Capabilities;
+
+	use super::super::actors::ActorSession;
+	use super::super::types::FixtureSpec;
 	use super::slugify;
+	use super::{apply_fixture, fixture_sql};
+	use crate::variables::TemplateVars;
 
 	#[test]
 	fn slugify_is_safe() {
 		assert_eq!(slugify("Hello World"), "hello_world");
 		assert_eq!(slugify("***"), "suite");
+	}
+
+	#[test]
+	fn fixture_sql_returns_inline_sql_verbatim() {
+		// Substitution is the job of apply_fixture, not fixture_sql — sanity check.
+		let f = FixtureSpec {
+			name: Some("inline".into()),
+			actor: None,
+			sql: Some("SELECT ${KB_ROOT};".into()),
+			file: None,
+		};
+		assert_eq!(fixture_sql(&f, Path::new(".")).unwrap(), "SELECT ${KB_ROOT};");
+	}
+
+	#[tokio::test]
+	async fn apply_fixture_substitutes_template_vars_in_inline_sql() {
+		// Regression test: shared/suite fixtures used to receive `${VAR}` tokens
+		// verbatim because apply_fixture skipped TemplateVars::apply. Other fixture
+		// flows (rollouts, seeds, schema apply) already substitute, so behavior
+		// across flows was inconsistent.
+		let cfg = Config::new().capabilities(Capabilities::all());
+		let db = connect(("mem://", cfg)).await.expect("connect mem://");
+		db.use_ns("surrealkit_test")
+			.use_db("apply_fixture_substitution")
+			.await
+			.expect("use_ns/use_db");
+
+		let mut actors = HashMap::new();
+		actors.insert(
+			"root".to_string(),
+			ActorSession {
+				db: db.clone(),
+				headers: BTreeMap::new(),
+				auth: None,
+			},
+		);
+
+		let mut map = HashMap::new();
+		map.insert("FIXTURE_PATH".to_string(), "/test/kb".to_string());
+		let vars = TemplateVars { vars: map };
+
+		let fixture = FixtureSpec {
+			name: Some("inline-substitution".into()),
+			actor: None,
+			sql: Some(
+				"CREATE marker:fixture_subst SET path = '${FIXTURE_PATH}';".into(),
+			),
+			file: None,
+		};
+
+		apply_fixture(&fixture, &actors, Path::new("."), &vars)
+			.await
+			.expect("apply_fixture");
+
+		let mut resp = db
+			.query("SELECT path FROM marker:fixture_subst;")
+			.await
+			.expect("query marker")
+			.check()
+			.expect("check");
+		let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
+		assert_eq!(rows.len(), 1, "marker row must exist");
+		assert_eq!(
+			rows[0].get("path").and_then(|v| v.as_str()),
+			Some("/test/kb"),
+			"fixture SQL must have ${{FIXTURE_PATH}} substituted before reaching the DB"
+		);
+	}
+
+	#[tokio::test]
+	async fn apply_fixture_propagates_undefined_var_error() {
+		// When a fixture references a variable that wasn't provided, the failure
+		// should surface as an error from apply_fixture (not silently send `${...}`
+		// to the DB, where it would fail with a confusing syntax/parser error).
+		let cfg = Config::new().capabilities(Capabilities::all());
+		let db = connect(("mem://", cfg)).await.expect("connect mem://");
+		db.use_ns("surrealkit_test")
+			.use_db("apply_fixture_undefined_var")
+			.await
+			.expect("use_ns/use_db");
+
+		let mut actors = HashMap::new();
+		actors.insert(
+			"root".to_string(),
+			ActorSession {
+				db: db.clone(),
+				headers: BTreeMap::new(),
+				auth: None,
+			},
+		);
+
+		let fixture = FixtureSpec {
+			name: Some("missing-var".into()),
+			actor: None,
+			sql: Some("SELECT '${UNDEFINED_VAR}';".into()),
+			file: None,
+		};
+
+		let err = apply_fixture(&fixture, &actors, Path::new("."), &TemplateVars::default())
+			.await
+			.expect_err("undefined variable must error");
+		let msg = err.to_string();
+		assert!(
+			msg.contains("missing-var"),
+			"error should name the fixture: {err}"
+		);
 	}
 }
