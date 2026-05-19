@@ -140,6 +140,58 @@ async fn sync_embedded_prunes_removed_files() {
 }
 
 #[tokio::test]
+async fn sync_embedded_self_heals_catalog_drift() {
+	// Catalog drift: an entity tracked in __entity is already missing from the
+	// live DB (e.g., a `run_sql REMOVE …` rollout step dropped it but didn't
+	// update the catalog). On the next sync, the pruner emits REMOVE for that
+	// entity. Without `IF EXISTS` the REMOVE fails with "X does not exist" and
+	// halts the whole prune batch (sync.rs::prune_managed_entities joins all
+	// statements). With `IF EXISTS` the prune succeeds and the catalog row is
+	// reaped, so drift self-heals on the next sync.
+
+	let db = mem_db().await;
+
+	static WITH_FIELD: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/drift.surql",
+		sql: "DEFINE TABLE drift_target SCHEMAFULL;\n\
+		      DEFINE FIELD nickname ON drift_target TYPE string;",
+	}];
+	run_sync_embedded(&db, WITH_FIELD).await.expect("initial sync");
+
+	// Simulate the rollout step that dropped the field by raw `run_sql`:
+	// the live DB no longer has it, but __entity still tracks it.
+	db.query("REMOVE FIELD nickname ON drift_target;")
+		.await
+		.expect("manual remove query")
+		.check()
+		.expect("manual remove succeeded");
+
+	// Drop the file entirely so the pruner is asked to remove BOTH the table
+	// (still present) AND the field (already gone). Pre-fix, the field prune
+	// errors and the table is never reached.
+	static EMPTY: &[EmbeddedSchemaFile] = &[];
+	run_sync_embedded_with_opts(
+		&db,
+		EMPTY,
+		&SyncOpts {
+			watch: false,
+			debounce_ms: 0,
+			dry_run: false,
+			fail_fast: true,
+			prune: true,
+			allow_shared_prune: false,
+			..Default::default()
+		},
+	)
+	.await
+	.expect("pruning sync should self-heal drift, not error on missing field");
+
+	let mut resp = db.query("SELECT * FROM __entity WHERE ns = 'sync';").await.expect("query");
+	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
+	assert!(rows.is_empty(), "catalog must be fully reaped: {rows:?}");
+}
+
+#[tokio::test]
 async fn sync_embedded_dry_run_makes_no_changes() {
 	let db = mem_db().await;
 

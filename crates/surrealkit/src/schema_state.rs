@@ -299,33 +299,46 @@ pub fn render_remove_sql(entities: &[EntityKey], api_supported: bool) -> Result<
 	let mut ordered = entities.to_vec();
 	ordered.sort_by_key(removal_sort_key);
 
+	// All emitted statements include `IF EXISTS` so the pruner is idempotent
+	// against catalog drift. If an entity was removed from the live DB outside
+	// of surrealkit (e.g., a `run_sql REMOVE …` rollout step that bypassed the
+	// catalog), the next sync would otherwise fail with `X does not exist` and
+	// halt — leaving the catalog and DB stuck out of sync. With `IF EXISTS` the
+	// prune succeeds, the catalog row is deleted by the surrounding code, and
+	// drift self-heals.
 	let mut out = Vec::new();
 	for entity in ordered {
 		let stmt = match entity.kind.as_str() {
-			"field" => {
-				format!("REMOVE FIELD {} ON {};", entity.name, scope_or_err(&entity, "FIELD")?)
-			}
-			"event" => {
-				format!("REMOVE EVENT {} ON {};", entity.name, scope_or_err(&entity, "EVENT")?)
-			}
-			"index" => {
-				format!("REMOVE INDEX {} ON {};", entity.name, scope_or_err(&entity, "INDEX")?)
-			}
-			"table" => format!("REMOVE TABLE {};", entity.name),
-			"function" => format!("REMOVE FUNCTION {};", entity.name),
-			"param" => format!("REMOVE PARAM {};", entity.name),
+			"field" => format!(
+				"REMOVE FIELD IF EXISTS {} ON {};",
+				entity.name,
+				scope_or_err(&entity, "FIELD")?
+			),
+			"event" => format!(
+				"REMOVE EVENT IF EXISTS {} ON {};",
+				entity.name,
+				scope_or_err(&entity, "EVENT")?
+			),
+			"index" => format!(
+				"REMOVE INDEX IF EXISTS {} ON {};",
+				entity.name,
+				scope_or_err(&entity, "INDEX")?
+			),
+			"table" => format!("REMOVE TABLE IF EXISTS {};", entity.name),
+			"function" => format!("REMOVE FUNCTION IF EXISTS {};", entity.name),
+			"param" => format!("REMOVE PARAM IF EXISTS {};", entity.name),
 			"access" => match &entity.scope {
-				Some(scope) => format!("REMOVE ACCESS {} ON {};", entity.name, scope),
-				None => format!("REMOVE ACCESS {};", entity.name),
+				Some(scope) => format!("REMOVE ACCESS IF EXISTS {} ON {};", entity.name, scope),
+				None => format!("REMOVE ACCESS IF EXISTS {};", entity.name),
 			},
-			"analyzer" => format!("REMOVE ANALYZER {};", entity.name),
+			"analyzer" => format!("REMOVE ANALYZER IF EXISTS {};", entity.name),
 			"user" => match &entity.scope {
-				Some(scope) => format!("REMOVE USER {} ON {};", entity.name, scope),
-				None => format!("REMOVE USER {};", entity.name),
+				Some(scope) => format!("REMOVE USER IF EXISTS {} ON {};", entity.name, scope),
+				None => format!("REMOVE USER IF EXISTS {};", entity.name),
 			},
 			"api" => {
 				if api_supported {
-					format!("REMOVE API {};", entity.name)
+					format!("REMOVE API IF EXISTS {};", entity.name)
 				} else {
 					bail!(
 						"API removal requested for '{}' but this SurrealDB server does not support `REMOVE API`. \
@@ -334,10 +347,10 @@ Use a manual migration or upgrade server support.",
 					);
 				}
 			}
-			"bucket" => format!("REMOVE BUCKET {};", entity.name),
-			"model" => format!("REMOVE MODEL {};", entity.name),
-			"sequence" => format!("REMOVE SEQUENCE {};", entity.name),
-			"config" => format!("REMOVE CONFIG {};", entity.name),
+			"bucket" => format!("REMOVE BUCKET IF EXISTS {};", entity.name),
+			"model" => format!("REMOVE MODEL IF EXISTS {};", entity.name),
+			"sequence" => format!("REMOVE SEQUENCE IF EXISTS {};", entity.name),
+			"config" => format!("REMOVE CONFIG IF EXISTS {};", entity.name),
 			_ => continue,
 		};
 		out.push(stmt);
@@ -794,10 +807,10 @@ mod tests {
 			},
 		];
 		let out = render_remove_sql(&entities, true).expect("remove sql");
-		assert!(out.iter().any(|l| l == "REMOVE BUCKET assets;"));
-		assert!(out.iter().any(|l| l == "REMOVE SEQUENCE order_no;"));
-		assert!(out.iter().any(|l| l == "REMOVE CONFIG GRAPHQL;"));
-		assert!(out.iter().any(|l| l == "REMOVE MODEL ml::sentiment;"));
+		assert!(out.iter().any(|l| l == "REMOVE BUCKET IF EXISTS assets;"));
+		assert!(out.iter().any(|l| l == "REMOVE SEQUENCE IF EXISTS order_no;"));
+		assert!(out.iter().any(|l| l == "REMOVE CONFIG IF EXISTS GRAPHQL;"));
+		assert!(out.iter().any(|l| l == "REMOVE MODEL IF EXISTS ml::sentiment;"));
 	}
 
 	#[test]
@@ -821,12 +834,100 @@ mod tests {
 		];
 
 		let supported = render_remove_sql(&entities, true).expect("api should be supported");
-		assert_eq!(supported[0], "REMOVE FIELD nickname ON person;");
-		assert!(supported.iter().any(|line| line == "REMOVE API v1;"));
-		assert_eq!(supported.last().expect("table removal"), "REMOVE TABLE person;");
+		assert_eq!(supported[0], "REMOVE FIELD IF EXISTS nickname ON person;");
+		assert!(supported.iter().any(|line| line == "REMOVE API IF EXISTS v1;"));
+		assert_eq!(supported.last().expect("table removal"), "REMOVE TABLE IF EXISTS person;");
 
 		let unsupported = render_remove_sql(&entities, false);
 		assert!(unsupported.is_err());
+	}
+
+	#[test]
+	fn render_remove_sql_emits_if_exists_for_every_kind() {
+		// Without IF EXISTS, a single missing entity would halt the whole prune
+		// batch in sync.rs::prune_managed_entities (REMOVEs are joined and
+		// executed together). Verify every kind we render carries IF EXISTS so
+		// catalog drift is self-healing.
+		let entities = vec![
+			EntityKey {
+				kind: "field".into(),
+				scope: Some("person".into()),
+				name: "nickname".into(),
+			},
+			EntityKey {
+				kind: "event".into(),
+				scope: Some("person".into()),
+				name: "audit".into(),
+			},
+			EntityKey {
+				kind: "index".into(),
+				scope: Some("person".into()),
+				name: "name_idx".into(),
+			},
+			EntityKey {
+				kind: "table".into(),
+				scope: None,
+				name: "person".into(),
+			},
+			EntityKey {
+				kind: "function".into(),
+				scope: None,
+				name: "fn::greet".into(),
+			},
+			EntityKey {
+				kind: "param".into(),
+				scope: None,
+				name: "$greeting".into(),
+			},
+			EntityKey {
+				kind: "access".into(),
+				scope: Some("DATABASE".into()),
+				name: "user_jwt".into(),
+			},
+			EntityKey {
+				kind: "analyzer".into(),
+				scope: None,
+				name: "blank".into(),
+			},
+			EntityKey {
+				kind: "user".into(),
+				scope: Some("DATABASE".into()),
+				name: "admin".into(),
+			},
+			EntityKey {
+				kind: "api".into(),
+				scope: None,
+				name: "v1".into(),
+			},
+			EntityKey {
+				kind: "bucket".into(),
+				scope: None,
+				name: "assets".into(),
+			},
+			EntityKey {
+				kind: "model".into(),
+				scope: None,
+				name: "ml::sentiment".into(),
+			},
+			EntityKey {
+				kind: "sequence".into(),
+				scope: None,
+				name: "order_no".into(),
+			},
+			EntityKey {
+				kind: "config".into(),
+				scope: None,
+				name: "GRAPHQL".into(),
+			},
+		];
+		let out = render_remove_sql(&entities, true).expect("render");
+		for stmt in &out {
+			assert!(
+				stmt.contains("IF EXISTS"),
+				"every REMOVE must include IF EXISTS so prune is idempotent against catalog drift; offending: {stmt}"
+			);
+		}
+		assert_eq!(out.len(), entities.len(), "every kind should produce a stmt");
 	}
 
 	#[test]
