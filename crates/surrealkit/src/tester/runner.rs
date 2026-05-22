@@ -760,8 +760,7 @@ mod tests {
 
 	use super::super::actors::ActorSession;
 	use super::super::types::FixtureSpec;
-	use super::slugify;
-	use super::{apply_fixture, fixture_sql};
+	use super::{apply_fixture, fixture_sql, slugify};
 	use crate::variables::TemplateVars;
 
 	#[test]
