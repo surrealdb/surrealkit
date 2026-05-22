@@ -1,7 +1,10 @@
+use std::collections::HashMap;
 use std::env;
+use std::path::Path;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use rust_dotenv::dotenv::DotEnv;
+use serde::Deserialize;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::opt::auth::{Database, Namespace, Root};
@@ -34,6 +37,7 @@ impl AuthLevel {
 
 #[derive(Debug, Clone, Default)]
 pub struct ConfigOverrides {
+	pub connection: Option<String>,
 	pub host: Option<String>,
 	pub ns: Option<String>,
 	pub db: Option<String>,
@@ -41,6 +45,22 @@ pub struct ConfigOverrides {
 	pub pass: Option<String>,
 	pub auth_level: Option<String>,
 	pub folder: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ProjectConfig {
+	#[serde(default)]
+	connections: HashMap<String, ConnectionDefinition>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ConnectionDefinition {
+	host: Option<String>,
+	user: Option<String>,
+	#[serde(alias = "password")]
+	pass: Option<String>,
+	auth_level: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -83,10 +103,132 @@ fn resolve(
 	default.to_string()
 }
 
+fn read_project_config(toml_path: Option<&Path>) -> Result<ProjectConfig> {
+	let cfg_path = toml_path.unwrap_or_else(|| Path::new("surrealkit.toml"));
+	if !cfg_path.exists() {
+		return Ok(ProjectConfig::default());
+	}
+
+	let raw = std::fs::read_to_string(cfg_path)
+		.with_context(|| format!("reading {}", cfg_path.display()))?;
+	let cfg: ProjectConfig =
+		toml::from_str(&raw).with_context(|| format!("parsing {}", cfg_path.display()))?;
+	Ok(cfg)
+}
+
+fn normalized_connection_env_name(connection: &str) -> Result<String> {
+	let mut out = String::new();
+	let mut last_was_separator = false;
+
+	for ch in connection.chars() {
+		if ch.is_ascii_alphanumeric() {
+			out.push(ch.to_ascii_uppercase());
+			last_was_separator = false;
+		} else if !out.is_empty() && !last_was_separator {
+			out.push('_');
+			last_was_separator = true;
+		}
+	}
+
+	while out.ends_with('_') {
+		out.pop();
+	}
+
+	if out.is_empty() {
+		bail!(
+			"invalid connection {:?}: connection names must contain at least one ASCII letter or digit",
+			connection
+		);
+	}
+
+	Ok(out)
+}
+
+fn connection_env_key(connection_env_name: &str, field: &str) -> String {
+	format!("SURREALDB_CONNECTION_{connection_env_name}_{field}")
+}
+
+fn read_system_env(key: &str) -> Option<String> {
+	env::var(key).ok().filter(|v| !v.is_empty())
+}
+
+fn read_dotenv(dotenv: Option<&DotEnv>, key: &str) -> Option<String> {
+	dotenv.and_then(|dotenv| dotenv.get_var(key.to_string()).filter(|v| !v.is_empty()))
+}
+
+fn has_connection_env(connection_env_name: &str, dotenv: Option<&DotEnv>) -> bool {
+	["HOST", "USER", "PASSWORD", "AUTH_LEVEL"].iter().any(|field| {
+		let key = connection_env_key(connection_env_name, field);
+		read_system_env(&key).is_some() || read_dotenv(dotenv, &key).is_some()
+	})
+}
+
+fn resolve_connection_value(
+	cli: &Option<String>,
+	connection_env_name: Option<&str>,
+	connection_value: Option<&String>,
+	field: &str,
+	global_env_keys: &[&str],
+	dotenv: Option<&DotEnv>,
+	default: &str,
+) -> String {
+	if let Some(v) = cli {
+		return v.clone();
+	}
+
+	if let Some(connection_env_name) = connection_env_name {
+		let key = connection_env_key(connection_env_name, field);
+		if let Some(v) = read_system_env(&key) {
+			return v;
+		}
+		if let Some(v) = read_dotenv(dotenv, &key) {
+			return v;
+		}
+	}
+
+	if let Some(v) = connection_value {
+		return v.clone();
+	}
+
+	resolve(&None, global_env_keys, dotenv, default)
+}
+
 impl Cfg {
 	pub fn from_env(dotenv: Option<&DotEnv>, overrides: &ConfigOverrides) -> Result<Self> {
-		let host = resolve(
+		Self::from_env_with_project_config_path(dotenv, overrides, None)
+	}
+
+	fn from_env_with_project_config_path(
+		dotenv: Option<&DotEnv>,
+		overrides: &ConfigOverrides,
+		toml_path: Option<&Path>,
+	) -> Result<Self> {
+		let project_config = read_project_config(toml_path)?;
+		let connection_env_name =
+			overrides.connection.as_deref().map(normalized_connection_env_name).transpose()?;
+		let connection = if let Some(connection_name) = overrides.connection.as_deref() {
+			let connection = project_config.connections.get(connection_name);
+			if connection.is_none()
+				&& !connection_env_name
+					.as_deref()
+					.is_some_and(|env_name| has_connection_env(env_name, dotenv))
+			{
+				bail!(
+					"connection {:?} was not found in surrealkit.toml and no SURREALDB_CONNECTION_{}_* env vars were set",
+					connection_name,
+					connection_env_name.as_deref().unwrap_or("UNKNOWN")
+				);
+			}
+			connection
+		} else {
+			None
+		};
+
+		let host = resolve_connection_value(
 			&overrides.host,
+			connection_env_name.as_deref(),
+			connection.and_then(|connection| connection.host.as_ref()),
+			"HOST",
 			&["SURREALDB_HOST", "DATABASE_HOST"],
 			dotenv,
 			"http://localhost:8000",
@@ -94,11 +236,29 @@ impl Cfg {
 		let db = resolve(&overrides.db, &["SURREALDB_NAME", "DATABASE_NAME"], dotenv, "test");
 		let ns =
 			resolve(&overrides.ns, &["SURREALDB_NAMESPACE", "DATABASE_NAMESPACE"], dotenv, "db");
-		let user = resolve(&overrides.user, &["SURREALDB_USER", "DATABASE_USER"], dotenv, "root");
-		let pass =
-			resolve(&overrides.pass, &["SURREALDB_PASSWORD", "DATABASE_PASSWORD"], dotenv, "root");
-		let auth_level_str = resolve(
+		let user = resolve_connection_value(
+			&overrides.user,
+			connection_env_name.as_deref(),
+			connection.and_then(|connection| connection.user.as_ref()),
+			"USER",
+			&["SURREALDB_USER", "DATABASE_USER"],
+			dotenv,
+			"root",
+		);
+		let pass = resolve_connection_value(
+			&overrides.pass,
+			connection_env_name.as_deref(),
+			connection.and_then(|connection| connection.pass.as_ref()),
+			"PASSWORD",
+			&["SURREALDB_PASSWORD", "DATABASE_PASSWORD"],
+			dotenv,
+			"root",
+		);
+		let auth_level_str = resolve_connection_value(
 			&overrides.auth_level,
+			connection_env_name.as_deref(),
+			connection.and_then(|connection| connection.auth_level.as_ref()),
+			"AUTH_LEVEL",
 			&["SURREALDB_AUTH_LEVEL", "DATABASE_AUTH_LEVEL"],
 			dotenv,
 			"root",
@@ -183,7 +343,21 @@ mod tests {
 			unset_env("DATABASE_USER");
 			unset_env("DATABASE_PASSWORD");
 			unset_env("DATABASE_AUTH_LEVEL");
+			unset_env("SURREALDB_CONNECTION_LOCAL_HOST");
+			unset_env("SURREALDB_CONNECTION_LOCAL_USER");
+			unset_env("SURREALDB_CONNECTION_LOCAL_PASSWORD");
+			unset_env("SURREALDB_CONNECTION_LOCAL_AUTH_LEVEL");
+			unset_env("SURREALDB_CONNECTION_LOCAL_NAME");
+			unset_env("SURREALDB_CONNECTION_LOCAL_NAMESPACE");
+			unset_env("SURREALDB_CONNECTION_STAGING_US_HOST");
 		}
+	}
+
+	fn write_project_config(raw: &str) -> (tempfile::TempDir, std::path::PathBuf) {
+		let tmp = tempfile::tempdir().unwrap();
+		let path = tmp.path().join("surrealkit.toml");
+		std::fs::write(&path, raw).unwrap();
+		(tmp, path)
 	}
 
 	// resolve() unit tests use unique key names, safe to run in parallel
@@ -262,6 +436,7 @@ mod tests {
 		let _guard = ENV_LOCK.lock().unwrap();
 		clear_db_env();
 		let overrides = ConfigOverrides {
+			connection: None,
 			host: Some("http://custom:9000".into()),
 			db: Some("mydb".into()),
 			ns: Some("myns".into()),
@@ -365,6 +540,250 @@ mod tests {
 		};
 		let cfg = Cfg::from_env(None, &overrides).unwrap();
 		assert_eq!(cfg.host(), "http://clihost:9000");
+		clear_db_env();
+	}
+
+	#[test]
+	fn from_env_reads_toml_connection_values() {
+		let _guard = ENV_LOCK.lock().unwrap();
+		clear_db_env();
+		let (_tmp, cfg_path) = write_project_config(
+			r#"
+[connections.local]
+host = "http://tomlhost:8000"
+user = "tomluser"
+pass = "tomlpass"
+auth_level = "namespace"
+"#,
+		);
+		let overrides = ConfigOverrides {
+			connection: Some("local".into()),
+			..Default::default()
+		};
+
+		let cfg =
+			Cfg::from_env_with_project_config_path(None, &overrides, Some(&cfg_path)).unwrap();
+
+		assert_eq!(cfg.host(), "http://tomlhost:8000");
+		assert_eq!(cfg.user(), "tomluser");
+		assert_eq!(cfg.pass(), "tomlpass");
+		assert_eq!(cfg.auth_level(), &AuthLevel::Namespace);
+		assert_eq!(cfg.ns(), "db");
+		assert_eq!(cfg.db(), "test");
+	}
+
+	#[test]
+	fn from_env_accepts_password_alias_in_toml_connection() {
+		let _guard = ENV_LOCK.lock().unwrap();
+		clear_db_env();
+		let (_tmp, cfg_path) = write_project_config(
+			r#"
+[connections.local]
+password = "tomlpass"
+"#,
+		);
+		let overrides = ConfigOverrides {
+			connection: Some("local".into()),
+			..Default::default()
+		};
+
+		let cfg =
+			Cfg::from_env_with_project_config_path(None, &overrides, Some(&cfg_path)).unwrap();
+
+		assert_eq!(cfg.pass(), "tomlpass");
+	}
+
+	#[test]
+	fn from_env_rejects_unknown_toml_connection_fields() {
+		let _guard = ENV_LOCK.lock().unwrap();
+		clear_db_env();
+
+		for field in ["ns", "namespace", "db", "database"] {
+			let raw = format!(
+				r#"
+[connections.local]
+{field} = "not_allowed"
+"#
+			);
+			let (_tmp, cfg_path) = write_project_config(&raw);
+			let overrides = ConfigOverrides {
+				connection: Some("local".into()),
+				..Default::default()
+			};
+
+			let err = Cfg::from_env_with_project_config_path(None, &overrides, Some(&cfg_path))
+				.unwrap_err();
+			let err = format!("{err:#}");
+
+			assert!(err.contains("unknown field"), "got: {err}");
+			assert!(err.contains(field));
+		}
+	}
+
+	#[test]
+	fn connection_specific_env_overrides_toml_connection_values() {
+		let _guard = ENV_LOCK.lock().unwrap();
+		clear_db_env();
+		let (_tmp, cfg_path) = write_project_config(
+			r#"
+[connections.local]
+host = "http://tomlhost:8000"
+"#,
+		);
+		unsafe { set_env("SURREALDB_CONNECTION_LOCAL_HOST", "http://connection-env:8000") };
+		let overrides = ConfigOverrides {
+			connection: Some("local".into()),
+			..Default::default()
+		};
+
+		let cfg =
+			Cfg::from_env_with_project_config_path(None, &overrides, Some(&cfg_path)).unwrap();
+
+		assert_eq!(cfg.host(), "http://connection-env:8000");
+		clear_db_env();
+	}
+
+	#[test]
+	fn connection_specific_dotenv_overrides_toml_connection_values() {
+		let _guard = ENV_LOCK.lock().unwrap();
+		clear_db_env();
+		let (tmp, cfg_path) = write_project_config(
+			r#"
+[connections.local]
+user = "tomluser"
+"#,
+		);
+		std::fs::write(tmp.path().join(".env"), "SURREALDB_CONNECTION_LOCAL_USER=dotenvuser\n")
+			.unwrap();
+		let original_dir = env::current_dir().unwrap();
+		env::set_current_dir(tmp.path()).unwrap();
+		let dotenv = DotEnv::new("");
+		env::set_current_dir(original_dir).unwrap();
+		let overrides = ConfigOverrides {
+			connection: Some("local".into()),
+			..Default::default()
+		};
+
+		let cfg =
+			Cfg::from_env_with_project_config_path(Some(&dotenv), &overrides, Some(&cfg_path))
+				.unwrap();
+
+		assert_eq!(cfg.user(), "dotenvuser");
+	}
+
+	#[test]
+	fn cli_overrides_beat_connection_values() {
+		let _guard = ENV_LOCK.lock().unwrap();
+		clear_db_env();
+		let (_tmp, cfg_path) = write_project_config(
+			r#"
+[connections.local]
+host = "http://tomlhost:8000"
+user = "tomluser"
+"#,
+		);
+		let overrides = ConfigOverrides {
+			connection: Some("local".into()),
+			host: Some("http://clihost:8000".into()),
+			user: Some("cliuser".into()),
+			..Default::default()
+		};
+
+		let cfg =
+			Cfg::from_env_with_project_config_path(None, &overrides, Some(&cfg_path)).unwrap();
+
+		assert_eq!(cfg.host(), "http://clihost:8000");
+		assert_eq!(cfg.user(), "cliuser");
+	}
+
+	#[test]
+	fn selected_connection_values_override_global_env_values() {
+		let _guard = ENV_LOCK.lock().unwrap();
+		clear_db_env();
+		let (_tmp, cfg_path) = write_project_config(
+			r#"
+[connections.local]
+host = "http://tomlhost:8000"
+user = "tomluser"
+"#,
+		);
+		unsafe {
+			set_env("SURREALDB_HOST", "http://global-env:8000");
+			set_env("SURREALDB_USER", "globaluser");
+		}
+		let overrides = ConfigOverrides {
+			connection: Some("local".into()),
+			..Default::default()
+		};
+
+		let cfg =
+			Cfg::from_env_with_project_config_path(None, &overrides, Some(&cfg_path)).unwrap();
+
+		assert_eq!(cfg.host(), "http://tomlhost:8000");
+		assert_eq!(cfg.user(), "tomluser");
+		clear_db_env();
+	}
+
+	#[test]
+	fn selected_connection_does_not_affect_namespace_or_database() {
+		let _guard = ENV_LOCK.lock().unwrap();
+		clear_db_env();
+		let (_tmp, cfg_path) = write_project_config(
+			r#"
+[connections.local]
+host = "http://tomlhost:8000"
+"#,
+		);
+		unsafe {
+			set_env("SURREALDB_NAMESPACE", "globalns");
+			set_env("SURREALDB_NAME", "globaldb");
+			set_env("SURREALDB_CONNECTION_LOCAL_NAMESPACE", "ignoredns");
+			set_env("SURREALDB_CONNECTION_LOCAL_NAME", "ignoreddb");
+		}
+		let overrides = ConfigOverrides {
+			connection: Some("local".into()),
+			..Default::default()
+		};
+
+		let cfg =
+			Cfg::from_env_with_project_config_path(None, &overrides, Some(&cfg_path)).unwrap();
+
+		assert_eq!(cfg.ns(), "globalns");
+		assert_eq!(cfg.db(), "globaldb");
+		clear_db_env();
+	}
+
+	#[test]
+	fn missing_selected_connection_returns_error() {
+		let _guard = ENV_LOCK.lock().unwrap();
+		clear_db_env();
+		let (_tmp, cfg_path) = write_project_config("");
+		let overrides = ConfigOverrides {
+			connection: Some("missing".into()),
+			..Default::default()
+		};
+
+		let err =
+			Cfg::from_env_with_project_config_path(None, &overrides, Some(&cfg_path)).unwrap_err();
+
+		assert!(err.to_string().contains("connection \"missing\" was not found"));
+	}
+
+	#[test]
+	fn connection_names_normalize_for_env_keys() {
+		let _guard = ENV_LOCK.lock().unwrap();
+		clear_db_env();
+		let (_tmp, cfg_path) = write_project_config("");
+		unsafe { set_env("SURREALDB_CONNECTION_STAGING_US_HOST", "http://staging-us:8000") };
+		let overrides = ConfigOverrides {
+			connection: Some("staging-us".into()),
+			..Default::default()
+		};
+
+		let cfg =
+			Cfg::from_env_with_project_config_path(None, &overrides, Some(&cfg_path)).unwrap();
+
+		assert_eq!(cfg.host(), "http://staging-us:8000");
 		clear_db_env();
 	}
 }

@@ -50,6 +50,7 @@ fn make_cfg(url: &str, auth_level: AuthLevel, user: &str, pass: &str) -> Cfg {
 	Cfg::from_env(
 		None,
 		&ConfigOverrides {
+			connection: None,
 			host: Some(url.into()),
 			ns: Some(NS.into()),
 			db: Some(DB.into()),

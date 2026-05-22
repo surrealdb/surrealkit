@@ -160,6 +160,16 @@ pub const DEFAULT_PROJECT_CONFIG: &str = r#"# Template variables for use in .sur
 # [variables]
 # schema_prefix = "myapp"
 # environment   = "development"
+#
+# Named connections for host/auth defaults.
+# Use with: surrealkit --connection local sync (or --conn local).
+# Connection-specific CLI flags such as --host, --user, and --pass override target-level values.
+#
+# [connections.local]
+# host       = "http://localhost:8000"
+# user       = "root"
+# pass       = "root"
+# auth_level = "root"
 "#;
 
 pub const DEFAULT_TEST_SUITE: &str = r#"name = "smoke"

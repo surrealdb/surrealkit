@@ -18,6 +18,10 @@ pub struct Cli {
 	#[arg(short, long, global = true)]
 	verbose: bool,
 
+	/// Named connection from surrealkit.toml or SURREALDB_CONNECTION_<NAME>_* env vars
+	#[arg(long, visible_alias = "conn", global = true)]
+	connection: Option<String>,
+
 	/// Database host URL
 	#[arg(long, global = true)]
 	host: Option<String>,
@@ -159,6 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let args = Cli::parse();
 	let env = load_env();
 	let overrides = ConfigOverrides {
+		connection: args.connection,
 		host: args.host,
 		ns: args.ns,
 		db: args.db,

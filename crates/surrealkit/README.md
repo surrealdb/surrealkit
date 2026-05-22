@@ -200,14 +200,16 @@ seed_from_dir(&db, std::path::Path::new("fixtures/seed")).await?;
 
 ## Connecting
 
-`DbCfg` reads connection details from environment variables (with CLI-argument overrides). `connect` wraps `surrealdb::Surreal` construction and authentication:
+`Cfg` reads connection details from environment variables, optional named connections, and explicit overrides. `connect` wraps `surrealdb::Surreal` construction and authentication:
 
 ```rust
-use surrealkit::{DbCfg, DbOverrides, connect};
+use surrealkit::{Cfg, ConfigOverrides, connect};
 
-let cfg = DbCfg::from_env(None, &DbOverrides::default())?;
+let cfg = Cfg::from_env(None, &ConfigOverrides::default())?;
 let db = connect(&cfg).await?;
 ```
+
+To resolve host/auth defaults from `[connections.local]` in `surrealkit.toml` or `SURREALDB_CONNECTION_LOCAL_*` env vars, set `ConfigOverrides { connection: Some("local".into()), ..Default::default() }`.
 
 For in-process SurrealDB (e.g. `kv-mem`, `kv-rocksdb`), construct a `surrealdb::Surreal` directly and pass it to any of the library functions:
 
