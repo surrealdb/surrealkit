@@ -564,6 +564,91 @@ async fn rollback_inner(
 	}
 }
 
+/// Heal a rollout left in an intermediate state without re-running SQL steps.
+pub async fn run_repair(db: &Surreal<Any>, opts: RolloutExecutionOpts) -> Result<()> {
+	run_setup(db).await?;
+	let rollout = load_rollout_spec(resolve_rollout_path(opts.selector.as_deref())?)?;
+	validate_rollout_spec(&rollout.spec)?;
+	repair_inner(db, &rollout).await
+}
+
+async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<()> {
+	acquire_lock(db, "global").await?;
+	let result = async {
+		let row = load_rollout_record(db, &rollout.spec.id)
+			.await?
+			.ok_or_else(|| anyhow!("rollout '{}' has no __rollout record", rollout.spec.id))?;
+		verify_rollout_record_matches(&row, rollout)?;
+		let status = string_field(&row, "status").unwrap_or_default();
+		match status.as_str() {
+			"running_complete" => {
+				let target_entities = deserialize_entities_field(&row, "target_entities")?;
+				replace_managed_entities(db, &target_entities, None, "active").await?;
+				set_rollout_status(
+					db,
+					&rollout.spec.id,
+					RolloutStatus::Completed,
+					None,
+					Some(OffsetDateTime::now_utc().format(&Rfc3339)?),
+				)
+				.await?;
+				println!(
+					"Repaired rollout {}: running_complete → completed.",
+					rollout.spec.id
+				);
+			}
+			"running_rollback" => {
+				let source_entities = deserialize_entities_field(&row, "source_entities")?;
+				replace_managed_entities(db, &source_entities, None, "active").await?;
+				set_rollout_status(
+					db,
+					&rollout.spec.id,
+					RolloutStatus::RolledBack,
+					None,
+					Some(OffsetDateTime::now_utc().format(&Rfc3339)?),
+				)
+				.await?;
+				println!(
+					"Repaired rollout {}: running_rollback → rolled_back.",
+					rollout.spec.id
+				);
+			}
+			"running_start" => {
+				set_rollout_status(
+					db,
+					&rollout.spec.id,
+					RolloutStatus::Failed,
+					Some(
+						"repair: rollout was killed mid-start; re-run `rollout start` (idempotent) or `rollout rollback`",
+					),
+					None,
+				)
+				.await?;
+				println!(
+					"Repaired rollout {}: running_start → failed (re-run start or rollback).",
+					rollout.spec.id
+				);
+			}
+			"completed" | "rolled_back" => {
+				println!("Rollout {} is already in a terminal state ({}); nothing to repair.", rollout.spec.id, status);
+			}
+			other => bail!(
+				"rollout '{}' is not in a repairable state (status={})",
+				rollout.spec.id,
+				other
+			),
+		}
+		Ok(())
+	}
+	.await;
+	let release = release_lock(db, "global").await;
+	match (result, release) {
+		(Err(err), _) => Err(err),
+		(Ok(_), Err(err)) => Err(err),
+		(Ok(value), Ok(())) => Ok(value),
+	}
+}
+
 pub async fn load_active_rollout_id(db: &Surreal<Any>) -> Result<Option<String>> {
 	let mut resp = db
 		.query(
@@ -625,38 +710,59 @@ pub async fn load_managed_entities(db: &Surreal<Any>) -> Result<Vec<ManagedEntit
 	Ok(out)
 }
 
+// All entity catalog writes go through a single bound query so a rollout with
+// N managed entities is N HTTP round-trips → 1. This fixes a hang against
+// SurrealDB Cloud where the per-entity loop in `complete` would stall the
+// final `__rollout` status flip (issue #55).
+fn entities_payload(entities: &[CatalogEntity]) -> Vec<Value> {
+	entities
+		.iter()
+		.map(|e| {
+			serde_json::json!({
+				"key": entity_key_string(&e.kind, e.scope.as_deref(), &e.name),
+				"source_path": e.source_path,
+				"statement_hash": e.statement_hash,
+				"file_hash": e.file_hash,
+			})
+		})
+		.collect()
+}
+
+fn entity_keys_payload(entities: &[EntityKey]) -> Vec<String> {
+	entities.iter().map(|e| entity_key_string(&e.kind, e.scope.as_deref(), &e.name)).collect()
+}
+
 pub async fn upsert_managed_entities(
 	db: &Surreal<Any>,
 	entities: &[CatalogEntity],
 	active_rollout_id: Option<&str>,
 	state: &str,
 ) -> Result<()> {
-	for entity in entities {
-		let entity_key = entity_key_string(&entity.kind, entity.scope.as_deref(), &entity.name);
-		db.query(
-			"DELETE __entity WHERE ns = 'schema' AND key = $key; \
-			 CREATE __entity CONTENT { \
-			 	ns: 'schema', \
-			 	key: $key, \
-			 	val: { \
-			 		source_path: $source_path, \
-			 		statement_hash: $statement_hash, \
-			 		file_hash: $file_hash, \
-			 		active_rollout_id: $active_rollout_id, \
-			 		state: $state \
-			 	}, \
-			 	updated_at: time::now() \
-			 };",
-		)
-		.bind(("key", entity_key))
-		.bind(("source_path", entity.source_path.clone()))
-		.bind(("statement_hash", entity.statement_hash.clone()))
-		.bind(("file_hash", entity.file_hash.clone()))
-		.bind(("active_rollout_id", active_rollout_id.map(str::to_string)))
-		.bind(("state", state.to_string()))
-		.await?
-		.check()?;
+	if entities.is_empty() {
+		return Ok(());
 	}
+	db.query(
+		"FOR $e IN $entities { \
+		 	DELETE __entity WHERE ns = 'schema' AND key = $e.key; \
+		 	CREATE __entity CONTENT { \
+		 		ns: 'schema', \
+		 		key: $e.key, \
+		 		val: { \
+		 			source_path: $e.source_path, \
+		 			statement_hash: $e.statement_hash, \
+		 			file_hash: $e.file_hash, \
+		 			active_rollout_id: $active_rollout_id, \
+		 			state: $state \
+		 		}, \
+		 		updated_at: time::now() \
+		 	}; \
+		 };",
+	)
+	.bind(("entities", entities_payload(entities)))
+	.bind(("active_rollout_id", active_rollout_id.map(str::to_string)))
+	.bind(("state", state.to_string()))
+	.await?
+	.check()?;
 	Ok(())
 }
 
@@ -665,13 +771,13 @@ fn entity_key_string(kind: &str, scope: Option<&str>, name: &str) -> String {
 }
 
 pub async fn delete_managed_entities(db: &Surreal<Any>, entities: &[EntityKey]) -> Result<()> {
-	for entity in entities {
-		let key = entity_key_string(&entity.kind, entity.scope.as_deref(), &entity.name);
-		db.query("DELETE __entity WHERE ns = 'schema' AND key = $key;")
-			.bind(("key", key))
-			.await?
-			.check()?;
+	if entities.is_empty() {
+		return Ok(());
 	}
+	db.query("DELETE __entity WHERE ns = 'schema' AND key INSIDE $keys;")
+		.bind(("keys", entity_keys_payload(entities)))
+		.await?
+		.check()?;
 	Ok(())
 }
 
@@ -681,8 +787,29 @@ pub async fn replace_managed_entities(
 	active_rollout_id: Option<&str>,
 	state: &str,
 ) -> Result<()> {
-	db.query("DELETE __entity WHERE ns = 'schema';").await?.check()?;
-	upsert_managed_entities(db, entities, active_rollout_id, state).await
+	db.query(
+		"DELETE __entity WHERE ns = 'schema'; \
+		 FOR $e IN $entities { \
+		 	CREATE __entity CONTENT { \
+		 		ns: 'schema', \
+		 		key: $e.key, \
+		 		val: { \
+		 			source_path: $e.source_path, \
+		 			statement_hash: $e.statement_hash, \
+		 			file_hash: $e.file_hash, \
+		 			active_rollout_id: $active_rollout_id, \
+		 			state: $state \
+		 		}, \
+		 		updated_at: time::now() \
+		 	}; \
+		 };",
+	)
+	.bind(("entities", entities_payload(entities)))
+	.bind(("active_rollout_id", active_rollout_id.map(str::to_string)))
+	.bind(("state", state.to_string()))
+	.await?
+	.check()?;
+	Ok(())
 }
 
 pub async fn replace_sync_hashes(db: &Surreal<Any>, files: &[SchemaFile]) -> Result<()> {
@@ -1606,5 +1733,116 @@ mod tests {
 		// The id field is a SurrealDB Thing serialised as a string; the full record ID
 		// (table prefix included) is what the function returns.
 		assert!(active.is_some(), "should find the active rollout");
+	}
+
+	fn sample_entity(name: &str) -> CatalogEntity {
+		CatalogEntity {
+			kind: "field".to_string(),
+			scope: Some("person".to_string()),
+			name: name.to_string(),
+			source_path: format!("database/schema/{name}.surql"),
+			statement_hash: format!("stmt-{name}"),
+			file_hash: format!("file-{name}"),
+		}
+	}
+
+	async fn entity_row_count(db: &Surreal<Any>) -> usize {
+		let mut resp = db
+			.query("SELECT count() AS c FROM __entity WHERE ns = 'schema' GROUP ALL;")
+			.await
+			.expect("count __entity");
+		let rows: Vec<Value> = resp.take(0).expect("take count rows");
+		rows.first().and_then(|v| v.get("c")).and_then(|v| v.as_u64()).unwrap_or(0) as usize
+	}
+
+	// Regression for issue #55: complete used to do one HTTP round-trip per
+	// managed entity, which hung indefinitely against SurrealDB Cloud once the
+	// rollout grew past a handful of DEFINE statements. The batched form must
+	// land every entity in a single query and survive a re-run (idempotent).
+	#[tokio::test]
+	async fn replace_managed_entities_batched_writes_all_entities() {
+		let db = connect_mem_db().await;
+		let entities: Vec<CatalogEntity> =
+			(0..25).map(|i| sample_entity(&format!("col_{i:02}"))).collect();
+
+		replace_managed_entities(&db, &entities, Some("r-1"), "active")
+			.await
+			.expect("first batched replace");
+		assert_eq!(entity_row_count(&db).await, 25, "all entities land on first call");
+
+		// Re-running should still be idempotent — delete-all + recreate via the
+		// FOR loop should produce the same row count, not duplicates.
+		replace_managed_entities(&db, &entities, Some("r-1"), "active")
+			.await
+			.expect("second batched replace");
+		assert_eq!(entity_row_count(&db).await, 25, "no duplicates on re-run");
+
+		// Empty replacement clears the schema namespace.
+		replace_managed_entities(&db, &[], None, "active").await.expect("empty replace");
+		assert_eq!(entity_row_count(&db).await, 0, "empty entities clears ns=schema");
+	}
+
+	// Issue #55: when `complete` hangs after executing all SQL steps,
+	// `__rollout.status` stays at `running_complete`. `run_repair` heals the
+	// metadata transition (replace_managed_entities + status flip) without
+	// re-running any SQL.
+	#[tokio::test]
+	async fn repair_heals_running_complete() {
+		let db = connect_mem_db().await;
+		let loaded = sample_loaded_spec("20260522000000__repair_complete_path");
+		let target_entities = vec![sample_entity("a"), sample_entity("b")];
+
+		create_rollout_record(&db, &loaded, &[], &target_entities, RolloutStatus::RunningComplete)
+			.await
+			.expect("seed rollout record");
+
+		repair_inner(&db, &loaded).await.expect("repair_inner should succeed");
+
+		let row = load_single_row(&db).await;
+		assert_eq!(row.get("status").and_then(|v| v.as_str()), Some("completed"));
+		assert!(
+			row.get("completed_at").and_then(|v| v.as_str()).is_some(),
+			"completed_at populated after repair",
+		);
+		assert_eq!(entity_row_count(&db).await, 2, "target_entities materialised");
+	}
+
+	// Repair on a `running_rollback` rollout flips it to `rolled_back` and
+	// restores `source_entities`.
+	#[tokio::test]
+	async fn repair_heals_running_rollback() {
+		let db = connect_mem_db().await;
+		let loaded = sample_loaded_spec("20260522000001__repair_rollback_path");
+		let source_entities = vec![sample_entity("old_a")];
+
+		create_rollout_record(
+			&db,
+			&loaded,
+			&source_entities,
+			&[sample_entity("new_a")],
+			RolloutStatus::RunningRollback,
+		)
+		.await
+		.expect("seed rollout record");
+
+		repair_inner(&db, &loaded).await.expect("repair_inner should succeed");
+
+		let row = load_single_row(&db).await;
+		assert_eq!(row.get("status").and_then(|v| v.as_str()), Some("rolled_back"));
+		assert_eq!(entity_row_count(&db).await, 1, "source_entities materialised");
+	}
+
+	// Repair refuses to touch rollouts that are not in an intermediate state
+	// so the user can't accidentally clobber a clean record.
+	#[tokio::test]
+	async fn repair_refuses_planned_rollout() {
+		let db = connect_mem_db().await;
+		let loaded = sample_loaded_spec("20260522000002__repair_planned_rejected");
+		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned)
+			.await
+			.expect("seed rollout record");
+
+		let err = repair_inner(&db, &loaded).await.expect_err("planned is not repairable");
+		assert!(err.to_string().contains("not in a repairable state"), "got: {err}",);
 	}
 }

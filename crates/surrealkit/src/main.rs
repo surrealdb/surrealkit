@@ -131,6 +131,12 @@ enum RolloutCommands {
 	Lint {
 		target: String,
 	},
+	/// Heal a rollout stuck in an intermediate state without re-running SQL
+	/// steps. Useful when `complete` was killed mid-flight (issue #55) and
+	/// `__rollout.status` is still `running_complete` / `running_rollback`.
+	Repair {
+		target: String,
+	},
 }
 
 /// Load `.env` / `.env.local` from the current working directory when present.
@@ -264,6 +270,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 				})
 				.await?;
 			}
+			RolloutCommands::Repair {
+				target,
+			} => {
+				let db = connect_from_env(env.as_ref(), &overrides).await?;
+				rollout::run_repair(
+					&db,
+					RolloutExecutionOpts {
+						selector: Some(target),
+					},
+				)
+				.await?;
+			}
 		},
 		Commands::Seed => {
 			let db = connect_from_env(env.as_ref(), &overrides).await?;
@@ -318,7 +336,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		}
 	}
 
-	Ok(())
+	// Belt-and-braces (issue #55): bypass tokio runtime shutdown so the HTTP
+	// client's background connection-pool tasks can't keep the process alive
+	// after a successful command. Errors bubble up via `?` above and still
+	// produce a non-zero exit code through the normal `Result` path.
+	use std::io::Write;
+	let _ = std::io::stdout().flush();
+	let _ = std::io::stderr().flush();
+	std::process::exit(0);
 }
 
 async fn connect_from_env(

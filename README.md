@@ -191,6 +191,30 @@ surrealkit sync --allow-shared-prune
 
 `surrealkit sync` is the local/dev reconciliation path. `surrealkit rollout ...` is the shared/prod migration path.
 
+### Recovering a stuck rollout
+
+If `surrealkit rollout complete` (or `rollback`) is killed mid-flight, the
+`__rollout` row can be left in an intermediate state — `running_complete`,
+`running_rollback`, or `running_start` — even though the schema is already
+materialised. Re-running `complete`/`rollback` will not always heal the
+metadata because the SQL steps are already applied.
+
+Use `repair` to finish the metadata transition without re-running any SQL:
+
+```sh
+surrealkit rollout repair 20260302153045__add_customer_indexes
+```
+
+Behaviour by stuck state:
+
+- `running_complete` → flips to `completed`, restores `target_entities`.
+- `running_rollback` → flips to `rolled_back`, restores `source_entities`.
+- `running_start` → flips to `failed` with a note; re-run `start`
+  (idempotent) or `rollback`.
+
+Repair never re-executes per-step SQL — it only reconciles `__rollout` and
+`__entity` so subsequent `sync` / `plan` runs see a clean state.
+
 ### Seeding
 
 Seeding runs on demand:
