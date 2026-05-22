@@ -5,26 +5,28 @@ use anyhow::{Context, Result, anyhow};
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 
+use crate::constants::seed_dir;
 use crate::core::{display, exec_surql};
 use crate::variables::TemplateVars;
 
-pub async fn seed(db: &Surreal<Any>, vars: &TemplateVars) -> Result<()> {
-	let seed_dir = Path::new("database/seed");
-	let seed_file = Path::new("database/seed.surql");
+pub async fn seed(db: &Surreal<Any>, folder: &str, vars: &TemplateVars) -> Result<()> {
+	let seed_dir = seed_dir(folder);
+	let seed_file = crate::constants::deprecated_seed_surql_path(folder);
 
 	if seed_dir.is_dir() {
-		seed_from_dir(db, seed_dir, vars).await
+		seed_from_dir(db, &seed_dir, vars).await
 	} else if seed_file.exists() {
 		eprintln!(
-			"warning: database/seed.surql is deprecated and will be removed in v1. \
-			Move your seed files into database/seed/ instead."
+			"warning: {}/seed.surql is deprecated and will be removed in v1. \
+			Move your seed files into {}/seed/ instead.",
+			folder, folder
 		);
-		let sql = fs::read_to_string(seed_file)
-			.with_context(|| format!("reading {}", display(seed_file)))?;
+		let sql = fs::read_to_string(&seed_file)
+			.with_context(|| format!("reading {}", display(&seed_file)))?;
 		let sql = vars.apply(&sql)?;
 		exec_surql(db, &sql).await
 	} else {
-		Err(anyhow!("no seed found: create database/seed.surql or a database/seed/ directory"))
+		Err(anyhow!("no seed found: create {}/seed.surql or a {}/seed/ directory", folder, folder))
 	}
 }
 

@@ -6,6 +6,7 @@ use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb::opt::auth::{Database, Namespace, Root};
 
+use crate::constants::DEFAULT_ROOT_DIR;
 use crate::core::create_surreal_client;
 
 /// The SurrealDB authentication level to use when connecting.
@@ -32,23 +33,25 @@ impl AuthLevel {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct DbOverrides {
+pub struct ConfigOverrides {
 	pub host: Option<String>,
 	pub ns: Option<String>,
 	pub db: Option<String>,
 	pub user: Option<String>,
 	pub pass: Option<String>,
 	pub auth_level: Option<String>,
+	pub folder: Option<String>,
 }
 
 #[derive(Debug, Clone)]
-pub struct DbCfg {
+pub struct Cfg {
 	host: String,
 	ns: String,
 	db: String,
 	user: String,
 	pass: String,
 	pub auth_level: AuthLevel,
+	pub folder: String,
 }
 
 /// Resolve a config value with priority: CLI override → system env vars → .env file → default.
@@ -80,8 +83,8 @@ fn resolve(
 	default.to_string()
 }
 
-impl DbCfg {
-	pub fn from_env(dotenv: Option<&DotEnv>, overrides: &DbOverrides) -> Result<Self> {
+impl Cfg {
+	pub fn from_env(dotenv: Option<&DotEnv>, overrides: &ConfigOverrides) -> Result<Self> {
 		let host = resolve(
 			&overrides.host,
 			&["SURREALDB_HOST", "DATABASE_HOST"],
@@ -106,6 +109,7 @@ impl DbCfg {
 				auth_level_str
 			)
 		})?;
+		let folder = resolve(&None, &["SURREALDB_FOLDER"], dotenv, DEFAULT_ROOT_DIR);
 
 		Ok(Self {
 			host,
@@ -114,6 +118,7 @@ impl DbCfg {
 			user,
 			pass,
 			auth_level,
+			folder,
 		})
 	}
 
@@ -139,6 +144,10 @@ impl DbCfg {
 
 	pub fn auth_level(&self) -> &AuthLevel {
 		&self.auth_level
+	}
+
+	pub fn folder(&self) -> &str {
+		&self.folder
 	}
 }
 
@@ -240,7 +249,7 @@ mod tests {
 	fn from_env_uses_defaults_with_no_overrides() {
 		let _guard = ENV_LOCK.lock().unwrap();
 		clear_db_env();
-		let cfg = DbCfg::from_env(None, &DbOverrides::default()).unwrap();
+		let cfg = Cfg::from_env(None, &ConfigOverrides::default()).unwrap();
 		assert_eq!(cfg.host(), "http://localhost:8000");
 		assert_eq!(cfg.db(), "test");
 		assert_eq!(cfg.ns(), "db");
@@ -252,15 +261,16 @@ mod tests {
 	fn from_env_respects_all_overrides() {
 		let _guard = ENV_LOCK.lock().unwrap();
 		clear_db_env();
-		let overrides = DbOverrides {
+		let overrides = ConfigOverrides {
 			host: Some("http://custom:9000".into()),
 			db: Some("mydb".into()),
 			ns: Some("myns".into()),
 			user: Some("admin".into()),
 			pass: Some("secret".into()),
 			auth_level: None,
+			folder: None,
 		};
-		let cfg = DbCfg::from_env(None, &overrides).unwrap();
+		let cfg = Cfg::from_env(None, &overrides).unwrap();
 		assert_eq!(cfg.host(), "http://custom:9000");
 		assert_eq!(cfg.db(), "mydb");
 		assert_eq!(cfg.ns(), "myns");
@@ -272,7 +282,7 @@ mod tests {
 	fn from_env_defaults_to_root_auth_level() {
 		let _guard = ENV_LOCK.lock().unwrap();
 		clear_db_env();
-		let cfg = DbCfg::from_env(None, &DbOverrides::default()).unwrap();
+		let cfg = Cfg::from_env(None, &ConfigOverrides::default()).unwrap();
 		assert_eq!(cfg.auth_level(), &AuthLevel::Root);
 	}
 
@@ -291,11 +301,11 @@ mod tests {
 			("db", AuthLevel::Database),
 			("DB", AuthLevel::Database),
 		] {
-			let overrides = DbOverrides {
+			let overrides = ConfigOverrides {
 				auth_level: Some(input.into()),
 				..Default::default()
 			};
-			let cfg = DbCfg::from_env(None, &overrides).unwrap();
+			let cfg = Cfg::from_env(None, &overrides).unwrap();
 			assert_eq!(cfg.auth_level(), &expected, "input={input}");
 		}
 	}
@@ -305,7 +315,7 @@ mod tests {
 		let _guard = ENV_LOCK.lock().unwrap();
 		clear_db_env();
 		unsafe { set_env("SURREALDB_AUTH_LEVEL", "namespace") };
-		let cfg = DbCfg::from_env(None, &DbOverrides::default()).unwrap();
+		let cfg = Cfg::from_env(None, &ConfigOverrides::default()).unwrap();
 		assert_eq!(cfg.auth_level(), &AuthLevel::Namespace);
 		unsafe { unset_env("SURREALDB_AUTH_LEVEL") };
 	}
@@ -314,11 +324,11 @@ mod tests {
 	fn from_env_rejects_unknown_auth_level() {
 		let _guard = ENV_LOCK.lock().unwrap();
 		clear_db_env();
-		let overrides = DbOverrides {
+		let overrides = ConfigOverrides {
 			auth_level: Some("superadmin".into()),
 			..Default::default()
 		};
-		let err = DbCfg::from_env(None, &overrides).unwrap_err();
+		let err = Cfg::from_env(None, &overrides).unwrap_err();
 		assert!(err.to_string().contains("invalid auth level"), "got: {err}");
 	}
 
@@ -334,7 +344,7 @@ mod tests {
 			set_env("SURREALDB_PASSWORD", "envpass");
 		}
 
-		let cfg = DbCfg::from_env(None, &DbOverrides::default()).unwrap();
+		let cfg = Cfg::from_env(None, &ConfigOverrides::default()).unwrap();
 		assert_eq!(cfg.host(), "http://envhost:8000");
 		assert_eq!(cfg.db(), "envdb");
 		assert_eq!(cfg.ns(), "envns");
@@ -349,17 +359,17 @@ mod tests {
 		let _guard = ENV_LOCK.lock().unwrap();
 		clear_db_env();
 		unsafe { set_env("SURREALDB_HOST", "http://envhost:8000") };
-		let overrides = DbOverrides {
+		let overrides = ConfigOverrides {
 			host: Some("http://clihost:9000".into()),
 			..Default::default()
 		};
-		let cfg = DbCfg::from_env(None, &overrides).unwrap();
+		let cfg = Cfg::from_env(None, &overrides).unwrap();
 		assert_eq!(cfg.host(), "http://clihost:9000");
 		clear_db_env();
 	}
 }
 
-pub async fn connect(cfg: &DbCfg) -> Result<Surreal<Any>> {
+pub async fn connect(cfg: &Cfg) -> Result<Surreal<Any>> {
 	let db = create_surreal_client(&cfg.host)
 		.await
 		.with_context(|| format!("Failed connecting to {}", cfg.host))?;

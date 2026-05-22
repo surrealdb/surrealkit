@@ -16,7 +16,7 @@ use surrealdb::engine::any::connect as surreal_connect;
 use surrealdb::opt::Config;
 use surrealdb::opt::auth::Root;
 use surrealdb::opt::capabilities::Capabilities;
-use surrealkit::config::{AuthLevel, DbCfg, DbOverrides};
+use surrealkit::config::{AuthLevel, Cfg, ConfigOverrides};
 use surrealkit::connect;
 use surrealkit::tester::{TestOpts, run_test};
 use surrealkit::variables::TemplateVars;
@@ -46,10 +46,10 @@ async fn root_conn(url: &str) -> surrealdb::Surreal<surrealdb::engine::any::Any>
 	db
 }
 
-fn make_cfg(url: &str, auth_level: AuthLevel, user: &str, pass: &str) -> DbCfg {
-	DbCfg::from_env(
+fn make_cfg(url: &str, auth_level: AuthLevel, user: &str, pass: &str) -> Cfg {
+	Cfg::from_env(
 		None,
-		&DbOverrides {
+		&ConfigOverrides {
 			host: Some(url.into()),
 			ns: Some(NS.into()),
 			db: Some(DB.into()),
@@ -63,6 +63,7 @@ fn make_cfg(url: &str, auth_level: AuthLevel, user: &str, pass: &str) -> DbCfg {
 				}
 				.into(),
 			),
+			folder: None,
 		},
 	)
 	.expect("DbCfg::from_env")
@@ -80,9 +81,9 @@ fn auth_level_parses_all_aliases() {
 		("db", AuthLevel::Database),
 		("DB", AuthLevel::Database),
 	] {
-		let cfg = DbCfg::from_env(
+		let cfg = Cfg::from_env(
 			None,
-			&DbOverrides {
+			&ConfigOverrides {
 				auth_level: Some(input.into()),
 				..Default::default()
 			},
@@ -96,7 +97,7 @@ fn auth_level_parses_all_aliases() {
 fn auth_level_reads_from_env_var() {
 	let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	unsafe { std::env::set_var("SURREALDB_AUTH_LEVEL", "namespace") };
-	let cfg = DbCfg::from_env(None, &DbOverrides::default()).unwrap();
+	let cfg = Cfg::from_env(None, &ConfigOverrides::default()).unwrap();
 	unsafe { std::env::remove_var("SURREALDB_AUTH_LEVEL") };
 	assert_eq!(cfg.auth_level(), &AuthLevel::Namespace);
 }
@@ -105,9 +106,9 @@ fn auth_level_reads_from_env_var() {
 fn auth_level_cli_beats_env_var() {
 	let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	unsafe { std::env::set_var("SURREALDB_AUTH_LEVEL", "namespace") };
-	let cfg = DbCfg::from_env(
+	let cfg = Cfg::from_env(
 		None,
-		&DbOverrides {
+		&ConfigOverrides {
 			auth_level: Some("database".into()),
 			..Default::default()
 		},
@@ -122,15 +123,15 @@ fn auth_level_default_is_root_no_env() {
 	let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	unsafe { std::env::remove_var("SURREALDB_AUTH_LEVEL") };
 	unsafe { std::env::remove_var("DATABASE_AUTH_LEVEL") };
-	let cfg = DbCfg::from_env(None, &DbOverrides::default()).unwrap();
+	let cfg = Cfg::from_env(None, &ConfigOverrides::default()).unwrap();
 	assert_eq!(cfg.auth_level(), &AuthLevel::Root);
 }
 
 #[test]
 fn auth_level_unknown_value_is_rejected() {
-	let err = DbCfg::from_env(
+	let err = Cfg::from_env(
 		None,
-		&DbOverrides {
+		&ConfigOverrides {
 			auth_level: Some("superadmin".into()),
 			..Default::default()
 		},
@@ -242,7 +243,7 @@ async fn test_runner_rejects_database_auth_level() {
 	let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	unsafe { std::env::remove_var("SURREALDB_AUTH_LEVEL") };
 	unsafe { std::env::remove_var("DATABASE_AUTH_LEVEL") };
-	let overrides = DbOverrides {
+	let overrides = ConfigOverrides {
 		auth_level: Some("database".into()),
 		..Default::default()
 	};

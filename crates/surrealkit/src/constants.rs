@@ -1,0 +1,54 @@
+use std::path::PathBuf;
+
+pub const DEFAULT_ROOT_DIR: &str = "./database";
+
+pub fn setup_surql_path(folder: &str) -> PathBuf {
+	PathBuf::from(folder).join("setup.surql")
+}
+
+pub fn schema_dir(folder: &str) -> PathBuf {
+	PathBuf::from(folder).join("schema")
+}
+
+pub fn rollouts_dir(folder: &str) -> PathBuf {
+	PathBuf::from(folder).join("rollouts")
+}
+
+pub fn state_dir(folder: &str) -> PathBuf {
+	PathBuf::from(folder).join("snapshots")
+}
+
+pub fn schema_snapshot_path(folder: &str) -> PathBuf {
+	state_dir(folder).join("schema_snapshot.json")
+}
+
+pub fn catalog_snapshot_path(folder: &str) -> PathBuf {
+	state_dir(folder).join("catalog_snapshot.json")
+}
+
+pub fn tests_dir(folder: &str) -> PathBuf {
+	PathBuf::from(folder).join("tests")
+}
+
+pub fn suites_dir(folder: &str) -> PathBuf {
+	tests_dir(folder).join("suites")
+}
+
+pub fn fixtures_dir(folder: &str) -> PathBuf {
+	tests_dir(folder).join("fixtures")
+}
+
+pub fn seed_dir(folder: &str) -> PathBuf {
+	PathBuf::from(folder).join("seed")
+}
+
+pub fn seed_surql_path(folder: &str) -> PathBuf {
+	seed_dir(folder).join("seed.surql")
+}
+
+#[deprecated(
+	note = "Deprecated path: `{folder}/seed.surql` (before the seed/ directory was introduced)"
+)]
+pub fn deprecated_seed_surql_path(folder: &str) -> PathBuf {
+	PathBuf::from(folder).join("seed.surql")
+}
