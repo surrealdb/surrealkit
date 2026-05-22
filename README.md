@@ -34,7 +34,7 @@ Multi-arch (`linux/amd64`, `linux/arm64`) images are published to GitHub Contain
 ```sh
 docker pull ghcr.io/surrealdb/surrealkit:latest
 docker run --rm -v "$(pwd)/database:/database:ro" ghcr.io/surrealdb/surrealkit:latest \
-    --host http://host.docker.internal:8000 --ns my_ns --db my_db sync
+    --host http://host.docker.internal:8000 sync --schema admin
 ```
 
 Available tags: `X.Y.Z` (exact), `X.Y` (minor line), `latest`.
@@ -61,11 +61,10 @@ services:
       - ./database:/database:ro
     command:
       - --host=http://surrealdb:8000
-      - --ns=my_ns
-      - --db=my_db
       - --user=root
       - --pass=root
       - sync
+      - --schema=admin
 ```
 
 `surrealkit` exits on completion, so Compose moves on, ideal for "apply schema then run tests" pipelines.
@@ -84,19 +83,17 @@ surrealkit init
 
 This creates a directory `/database` with the necessary scaffolding
 
-Connection details can be provided via CLI arguments, environment variables, or a `.env` file. The resolution order is: CLI args > system env vars > `.env` file > defaults.
+Connection details can be provided via CLI arguments, environment variables, or a `.env` file. Namespace/database targets are selected by schema commands such as `sync --schema admin`. The resolution order for host/auth is: CLI args > system env vars > `.env` file > defaults.
 
 ### CLI Arguments
 
 ```bash
-surrealkit --host http://localhost:8000 --ns my_ns --db my_db --user root --pass root sync
+surrealkit --host http://localhost:8000 --user root --pass root sync --schema admin
 ```
 
 | Flag           | Description                                                            | Default                 |
 | -------------- | ---------------------------------------------------------------------- | ----------------------- |
 | `--host`       | Database host URL                                                      | `http://localhost:8000` |
-| `--ns`         | Database namespace                                                     | `db`                    |
-| `--db`         | Database name                                                          | `test`                  |
 | `--user`       | Database user                                                          | `root`                  |
 | `--pass`       | Database password                                                      | `root`                  |
 | `--auth-level` | Authentication level: `root`, `namespace` / `ns`, or `database` / `db` | `root`                  |
@@ -104,8 +101,6 @@ surrealkit --host http://localhost:8000 --ns my_ns --db my_db --user root --pass
 ### Environment Variables
 
 - `SURREALDB_HOST` (fallback: `DATABASE_HOST`)
-- `SURREALDB_NAME` (fallback: `DATABASE_NAME`)
-- `SURREALDB_NAMESPACE` (fallback: `DATABASE_NAMESPACE`)
 - `SURREALDB_USER` (fallback: `DATABASE_USER`)
 - `SURREALDB_PASSWORD` (fallback: `DATABASE_PASSWORD`)
 - `SURREALDB_AUTH_LEVEL` (fallback: `DATABASE_AUTH_LEVEL`) — accepted values: `root`, `namespace` / `ns`, `database` / `db`
@@ -114,6 +109,36 @@ surrealkit --host http://localhost:8000 --ns my_ns --db my_db --user root --pass
 These can be set as system environment variables or in a `.env` file.
 
 SurrealKit creates and manages its internal sync and rollout metadata tables on your configured database.
+
+### Schemas
+
+Named schemas live in `surrealkit.toml` and select the namespace/database target for schema-aware commands. Schemas can extend a base schema, which composes files from `database/schemas/<name>/` and seeds from `database/seed/<name>/` in inheritance order.
+
+```toml
+[schema.base]
+
+[schema.admin]
+extends = "base"
+ns = "system"
+db = "main"
+
+[schema.org]
+extends = "base"
+ns = "org_{org_id}"
+db = "main"
+required_variables = ["org_id"]
+```
+
+```sh
+surrealkit sync --schema admin
+surrealkit sync --schema org --var org_id=acme
+surrealkit sync --all-schemas
+
+surrealkit seed --schema admin
+surrealkit seed --all-schemas
+```
+
+Schemas without a resolved `ns` and `db`, such as `base`, are abstract and are only applied through concrete child schemas.
 
 ## Team Workflow
 

@@ -35,8 +35,6 @@ impl AuthLevel {
 #[derive(Debug, Clone, Default)]
 pub struct ConfigOverrides {
 	pub host: Option<String>,
-	pub ns: Option<String>,
-	pub db: Option<String>,
 	pub user: Option<String>,
 	pub pass: Option<String>,
 	pub auth_level: Option<String>,
@@ -91,9 +89,8 @@ impl Cfg {
 			dotenv,
 			"http://localhost:8000",
 		);
-		let db = resolve(&overrides.db, &["SURREALDB_NAME", "DATABASE_NAME"], dotenv, "test");
-		let ns =
-			resolve(&overrides.ns, &["SURREALDB_NAMESPACE", "DATABASE_NAMESPACE"], dotenv, "db");
+		let db = "test".to_string();
+		let ns = "db".to_string();
 		let user = resolve(&overrides.user, &["SURREALDB_USER", "DATABASE_USER"], dotenv, "root");
 		let pass =
 			resolve(&overrides.pass, &["SURREALDB_PASSWORD", "DATABASE_PASSWORD"], dotenv, "root");
@@ -109,7 +106,7 @@ impl Cfg {
 				auth_level_str
 			)
 		})?;
-		let folder = resolve(&None, &["SURREALDB_FOLDER"], dotenv, DEFAULT_ROOT_DIR);
+		let folder = resolve(&overrides.folder, &["SURREALDB_FOLDER"], dotenv, DEFAULT_ROOT_DIR);
 
 		Ok(Self {
 			host,
@@ -149,6 +146,13 @@ impl Cfg {
 	pub fn folder(&self) -> &str {
 		&self.folder
 	}
+
+	pub fn with_target(&self, ns: impl Into<String>, db: impl Into<String>) -> Self {
+		let mut cfg = self.clone();
+		cfg.ns = ns.into();
+		cfg.db = db.into();
+		cfg
+	}
 }
 
 #[cfg(test)]
@@ -172,14 +176,10 @@ mod tests {
 	fn clear_db_env() {
 		unsafe {
 			unset_env("SURREALDB_HOST");
-			unset_env("SURREALDB_NAME");
-			unset_env("SURREALDB_NAMESPACE");
 			unset_env("SURREALDB_USER");
 			unset_env("SURREALDB_PASSWORD");
 			unset_env("SURREALDB_AUTH_LEVEL");
 			unset_env("DATABASE_HOST");
-			unset_env("DATABASE_NAME");
-			unset_env("DATABASE_NAMESPACE");
 			unset_env("DATABASE_USER");
 			unset_env("DATABASE_PASSWORD");
 			unset_env("DATABASE_AUTH_LEVEL");
@@ -263,8 +263,6 @@ mod tests {
 		clear_db_env();
 		let overrides = ConfigOverrides {
 			host: Some("http://custom:9000".into()),
-			db: Some("mydb".into()),
-			ns: Some("myns".into()),
 			user: Some("admin".into()),
 			pass: Some("secret".into()),
 			auth_level: None,
@@ -272,8 +270,8 @@ mod tests {
 		};
 		let cfg = Cfg::from_env(None, &overrides).unwrap();
 		assert_eq!(cfg.host(), "http://custom:9000");
-		assert_eq!(cfg.db(), "mydb");
-		assert_eq!(cfg.ns(), "myns");
+		assert_eq!(cfg.db(), "test");
+		assert_eq!(cfg.ns(), "db");
 		assert_eq!(cfg.user(), "admin");
 		assert_eq!(cfg.pass(), "secret");
 	}
@@ -338,16 +336,14 @@ mod tests {
 		clear_db_env();
 		unsafe {
 			set_env("SURREALDB_HOST", "http://envhost:8000");
-			set_env("SURREALDB_NAME", "envdb");
-			set_env("SURREALDB_NAMESPACE", "envns");
 			set_env("SURREALDB_USER", "envuser");
 			set_env("SURREALDB_PASSWORD", "envpass");
 		}
 
 		let cfg = Cfg::from_env(None, &ConfigOverrides::default()).unwrap();
 		assert_eq!(cfg.host(), "http://envhost:8000");
-		assert_eq!(cfg.db(), "envdb");
-		assert_eq!(cfg.ns(), "envns");
+		assert_eq!(cfg.db(), "test");
+		assert_eq!(cfg.ns(), "db");
 		assert_eq!(cfg.user(), "envuser");
 		assert_eq!(cfg.pass(), "envpass");
 

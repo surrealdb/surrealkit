@@ -12,14 +12,13 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use time::macros::format_description;
 
-use crate::constants::{catalog_snapshot_path, rollouts_dir};
 use crate::core::{exec_surql, sha256_hex};
 use crate::schema_state::{
-	CatalogDiff, CatalogEntity, CatalogSnapshot, EntityKey, FileDiff, SchemaFile,
-	build_catalog_snapshot, collect_schema_files, diff_catalog, diff_schema,
-	ensure_local_state_dirs, ensure_overwrite, hash_schema_snapshot, load_catalog_snapshot,
-	load_schema_snapshot, render_remove_sql, save_catalog_snapshot, save_schema_snapshot,
-	snapshot_from_files,
+	CatalogDiff, CatalogEntity, CatalogSnapshot, EntityKey, FileDiff, SchemaFile, SchemaWorkspace,
+	build_catalog_snapshot, collect_workspace_schema_files, diff_catalog, diff_schema,
+	ensure_overwrite, ensure_workspace_dirs, hash_schema_snapshot, load_workspace_catalog_snapshot,
+	load_workspace_schema_snapshot, render_remove_sql, save_workspace_catalog_snapshot,
+	save_workspace_schema_snapshot, snapshot_from_files,
 };
 use crate::setup::run_setup;
 use crate::variables::TemplateVars;
@@ -122,7 +121,6 @@ pub struct LoadedRolloutSpec {
 	pub spec: RolloutSpec,
 }
 
-#[expect(dead_code)]
 #[derive(Debug, Clone)]
 pub struct ManagedEntityRecord {
 	pub entity: CatalogEntity,
@@ -131,20 +129,28 @@ pub struct ManagedEntityRecord {
 }
 
 pub async fn run_baseline(db: &Surreal<Any>, folder: &str) -> Result<()> {
-	run_setup(db, folder).await?;
-	ensure_local_state_dirs(folder)?;
+	let workspace = SchemaWorkspace::legacy(folder);
+	run_baseline_with_workspace(db, &workspace).await
+}
+
+pub async fn run_baseline_with_workspace(
+	db: &Surreal<Any>,
+	workspace: &SchemaWorkspace,
+) -> Result<()> {
+	run_setup(db, &workspace.root_folder).await?;
+	ensure_workspace_dirs(workspace)?;
 	if rollout_rows_exist(db).await? {
 		bail!("rollout state already exists; baseline can only be run once");
 	}
 
-	let files = collect_schema_files(folder)?;
+	let files = collect_workspace_schema_files(workspace)?;
 	let schema_snapshot = snapshot_from_files(&files);
 	let catalog_snapshot = build_catalog_snapshot(&files, false)?;
 
 	replace_managed_entities(db, &catalog_snapshot.entities, None, "active").await?;
 	replace_sync_hashes(db, &files).await?;
-	save_schema_snapshot(folder, &schema_snapshot)?;
-	save_catalog_snapshot(folder, &catalog_snapshot)?;
+	save_workspace_schema_snapshot(workspace, &schema_snapshot)?;
+	save_workspace_catalog_snapshot(workspace, &catalog_snapshot)?;
 
 	println!(
 		"Seeded managed entity baseline with {} schema file(s) and {} managed object(s).",
@@ -155,10 +161,18 @@ pub async fn run_baseline(db: &Surreal<Any>, folder: &str) -> Result<()> {
 }
 
 pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
-	ensure_local_state_dirs(folder)?;
-	let files = collect_schema_files(folder)?;
-	let old_schema = load_schema_snapshot(folder)?;
-	let old_catalog = load_catalog_snapshot(folder)?;
+	let workspace = SchemaWorkspace::legacy(folder);
+	run_plan_with_workspace(&workspace, opts).await
+}
+
+pub async fn run_plan_with_workspace(
+	workspace: &SchemaWorkspace,
+	opts: RolloutPlanOpts,
+) -> Result<()> {
+	ensure_workspace_dirs(workspace)?;
+	let files = collect_workspace_schema_files(workspace)?;
+	let old_schema = load_workspace_schema_snapshot(workspace)?;
+	let old_catalog = load_workspace_catalog_snapshot(workspace)?;
 	let new_schema = snapshot_from_files(&files);
 	let new_catalog = build_catalog_snapshot(&files, false)?;
 	let file_diff = diff_schema(&old_schema, &new_schema);
@@ -171,7 +185,7 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 	let ts = OffsetDateTime::now_utc()
 		.format(&format_description!("[year][month][day][hour][minute][second]"))?;
 	let rollout_id = format!("{ts}__{slug}");
-	let path = rollouts_dir(folder).join(format!("{rollout_id}.toml"));
+	let path = workspace.rollouts_dir.join(format!("{rollout_id}.toml"));
 
 	let spec = build_rollout_spec(
 		&rollout_id,
@@ -203,19 +217,27 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 	}
 
 	fs::write(&path, raw).with_context(|| format!("writing rollout file {}", path.display()))?;
-	save_schema_snapshot(folder, &new_schema)?;
-	save_catalog_snapshot(folder, &new_catalog)?;
+	save_workspace_schema_snapshot(workspace, &new_schema)?;
+	save_workspace_catalog_snapshot(workspace, &new_catalog)?;
 
 	println!("Generated rollout manifest {}", path.display());
-	println!("Updated {}", catalog_snapshot_path(folder).display());
+	println!("Updated {}", workspace.catalog_snapshot_path().display());
 	Ok(())
 }
 
 pub async fn run_lint(folder: &str, opts: RolloutExecutionOpts) -> Result<()> {
-	ensure_local_state_dirs(folder)?;
-	let rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
+	let workspace = SchemaWorkspace::legacy(folder);
+	run_lint_with_workspace(&workspace, opts).await
+}
+
+pub async fn run_lint_with_workspace(
+	workspace: &SchemaWorkspace,
+	opts: RolloutExecutionOpts,
+) -> Result<()> {
+	ensure_workspace_dirs(workspace)?;
+	let rollout = load_rollout_spec(resolve_rollout_path(workspace, opts.selector.as_deref())?)?;
 	validate_rollout_spec(&rollout.spec)?;
-	let files = collect_schema_files(folder)?;
+	let files = collect_workspace_schema_files(workspace)?;
 	let current_hash = hash_schema_snapshot(&snapshot_from_files(&files))?;
 	if current_hash != rollout.spec.target_schema_hash {
 		bail!(
@@ -288,11 +310,21 @@ pub async fn run_start(
 	opts: RolloutExecutionOpts,
 	vars: &TemplateVars,
 ) -> Result<()> {
-	run_setup(db, folder).await?;
-	ensure_local_state_dirs(folder)?;
-	let rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
+	let workspace = SchemaWorkspace::legacy(folder);
+	run_start_with_workspace(db, &workspace, opts, vars).await
+}
+
+pub async fn run_start_with_workspace(
+	db: &Surreal<Any>,
+	workspace: &SchemaWorkspace,
+	opts: RolloutExecutionOpts,
+	vars: &TemplateVars,
+) -> Result<()> {
+	run_setup(db, &workspace.root_folder).await?;
+	ensure_workspace_dirs(workspace)?;
+	let rollout = load_rollout_spec(resolve_rollout_path(workspace, opts.selector.as_deref())?)?;
 	validate_rollout_spec(&rollout.spec)?;
-	let files = collect_schema_files(folder)?;
+	let files = collect_workspace_schema_files(workspace)?;
 	let target_hash = hash_schema_snapshot(&snapshot_from_files(&files))?;
 	if target_hash != rollout.spec.target_schema_hash {
 		bail!(
@@ -416,8 +448,18 @@ pub async fn run_complete(
 	opts: RolloutExecutionOpts,
 	vars: &TemplateVars,
 ) -> Result<()> {
-	run_setup(db, folder).await?;
-	let rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
+	let workspace = SchemaWorkspace::legacy(folder);
+	run_complete_with_workspace(db, &workspace, opts, vars).await
+}
+
+pub async fn run_complete_with_workspace(
+	db: &Surreal<Any>,
+	workspace: &SchemaWorkspace,
+	opts: RolloutExecutionOpts,
+	vars: &TemplateVars,
+) -> Result<()> {
+	run_setup(db, &workspace.root_folder).await?;
+	let rollout = load_rollout_spec(resolve_rollout_path(workspace, opts.selector.as_deref())?)?;
 	validate_rollout_spec(&rollout.spec)?;
 	complete_inner(db, &rollout, vars).await
 }
@@ -497,8 +539,18 @@ pub async fn run_rollback(
 	opts: RolloutExecutionOpts,
 	vars: &TemplateVars,
 ) -> Result<()> {
-	run_setup(db, folder).await?;
-	let rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
+	let workspace = SchemaWorkspace::legacy(folder);
+	run_rollback_with_workspace(db, &workspace, opts, vars).await
+}
+
+pub async fn run_rollback_with_workspace(
+	db: &Surreal<Any>,
+	workspace: &SchemaWorkspace,
+	opts: RolloutExecutionOpts,
+	vars: &TemplateVars,
+) -> Result<()> {
+	run_setup(db, &workspace.root_folder).await?;
+	let rollout = load_rollout_spec(resolve_rollout_path(workspace, opts.selector.as_deref())?)?;
 	validate_rollout_spec(&rollout.spec)?;
 	rollback_inner(db, &rollout, vars).await
 }
@@ -575,8 +627,17 @@ async fn rollback_inner(
 
 /// Heal a rollout left in an intermediate state without re-running SQL steps.
 pub async fn run_repair(db: &Surreal<Any>, folder: &str, opts: RolloutExecutionOpts) -> Result<()> {
-	run_setup(db, folder).await?;
-	let rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
+	let workspace = SchemaWorkspace::legacy(folder);
+	run_repair_with_workspace(db, &workspace, opts).await
+}
+
+pub async fn run_repair_with_workspace(
+	db: &Surreal<Any>,
+	workspace: &SchemaWorkspace,
+	opts: RolloutExecutionOpts,
+) -> Result<()> {
+	run_setup(db, &workspace.root_folder).await?;
+	let rollout = load_rollout_spec(resolve_rollout_path(workspace, opts.selector.as_deref())?)?;
 	validate_rollout_spec(&rollout.spec)?;
 	repair_inner(db, &rollout).await
 }
@@ -983,18 +1044,17 @@ fn load_rollout_spec(path: PathBuf) -> Result<LoadedRolloutSpec> {
 	})
 }
 
-fn resolve_rollout_path(folder: &str, selector: Option<&str>) -> Result<PathBuf> {
+fn resolve_rollout_path(workspace: &SchemaWorkspace, selector: Option<&str>) -> Result<PathBuf> {
 	let selector = selector.ok_or_else(|| anyhow!("rollout id or path is required"))?;
 	let path = Path::new(selector);
 	if path.exists() {
 		return Ok(path.to_path_buf());
 	}
-	let rd = rollouts_dir(folder);
-	let direct = rd.join(selector);
+	let direct = workspace.rollouts_dir.join(selector);
 	if direct.exists() {
 		return Ok(direct);
 	}
-	let with_ext = rd.join(format!("{selector}.toml"));
+	let with_ext = workspace.rollouts_dir.join(format!("{selector}.toml"));
 	if with_ext.exists() {
 		return Ok(with_ext);
 	}

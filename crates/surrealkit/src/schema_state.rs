@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -10,6 +10,35 @@ use crate::constants::{
 	catalog_snapshot_path, rollouts_dir, schema_dir, schema_snapshot_path, state_dir,
 };
 use crate::core::sha256_hex;
+
+#[derive(Debug, Clone)]
+pub struct SchemaWorkspace {
+	pub root_folder: String,
+	pub schema_dirs: Vec<PathBuf>,
+	pub rollouts_dir: PathBuf,
+	pub state_dir: PathBuf,
+	pub label: String,
+}
+
+impl SchemaWorkspace {
+	pub fn legacy(folder: &str) -> Self {
+		Self {
+			root_folder: folder.to_string(),
+			schema_dirs: vec![schema_dir(folder)],
+			rollouts_dir: rollouts_dir(folder),
+			state_dir: state_dir(folder),
+			label: "schema".to_string(),
+		}
+	}
+
+	pub fn schema_snapshot_path(&self) -> PathBuf {
+		self.state_dir.join("schema_snapshot.json")
+	}
+
+	pub fn catalog_snapshot_path(&self) -> PathBuf {
+		self.state_dir.join("catalog_snapshot.json")
+	}
+}
 
 #[derive(Debug, Clone)]
 pub struct SchemaFile {
@@ -94,27 +123,45 @@ pub struct Operation {
 }
 
 pub fn ensure_local_state_dirs(folder: &str) -> Result<()> {
-	let sd = schema_dir(folder);
-	let rd = rollouts_dir(folder);
-	let std = state_dir(folder);
-	fs::create_dir_all(&sd).with_context(|| format!("creating {}", sd.display()))?;
-	fs::create_dir_all(&rd).with_context(|| format!("creating {}", rd.display()))?;
-	fs::create_dir_all(&std).with_context(|| format!("creating {}", std.display()))?;
+	ensure_workspace_dirs(&SchemaWorkspace::legacy(folder))
+}
+
+pub fn ensure_workspace_dirs(workspace: &SchemaWorkspace) -> Result<()> {
+	for dir in &workspace.schema_dirs {
+		fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+	}
+	fs::create_dir_all(&workspace.rollouts_dir)
+		.with_context(|| format!("creating {}", workspace.rollouts_dir.display()))?;
+	fs::create_dir_all(&workspace.state_dir)
+		.with_context(|| format!("creating {}", workspace.state_dir.display()))?;
 	Ok(())
 }
 
 pub fn collect_schema_files(folder: &str) -> Result<Vec<SchemaFile>> {
-	let sd = schema_dir(folder);
-	let mut files: Vec<PathBuf> = WalkDir::new(&sd)
-		.follow_links(true)
-		.into_iter()
-		.filter_map(|e| e.ok())
-		.filter(|e| e.file_type().is_file())
-		.map(|e| e.into_path())
-		.filter(|p| p.extension().and_then(|s| s.to_str()) == Some("surql"))
-		.collect();
+	collect_schema_files_from_dirs(&[schema_dir(folder)])
+}
 
-	files.sort();
+pub fn collect_workspace_schema_files(workspace: &SchemaWorkspace) -> Result<Vec<SchemaFile>> {
+	collect_schema_files_from_dirs(&workspace.schema_dirs)
+}
+
+pub fn collect_schema_files_from_dirs(schema_dirs: &[PathBuf]) -> Result<Vec<SchemaFile>> {
+	let mut files = Vec::new();
+	for dir in schema_dirs {
+		if !dir.exists() {
+			continue;
+		}
+		let mut dir_files: Vec<PathBuf> = WalkDir::new(dir)
+			.follow_links(true)
+			.into_iter()
+			.filter_map(|e| e.ok())
+			.filter(|e| e.file_type().is_file())
+			.map(|e| e.into_path())
+			.filter(|p| p.extension().and_then(|s| s.to_str()) == Some("surql"))
+			.collect();
+		dir_files.sort();
+		files.extend(dir_files);
+	}
 
 	let mut out = Vec::with_capacity(files.len());
 	for path in files {
@@ -165,6 +212,23 @@ pub fn save_schema_snapshot(folder: &str, snapshot: &SchemaSnapshot) -> Result<(
 	save_json_pretty(schema_snapshot_path(folder), snapshot)
 }
 
+pub fn load_workspace_schema_snapshot(workspace: &SchemaWorkspace) -> Result<SchemaSnapshot> {
+	load_json_or_default(
+		workspace.schema_snapshot_path(),
+		SchemaSnapshot {
+			version: 1,
+			files: Vec::new(),
+		},
+	)
+}
+
+pub fn save_workspace_schema_snapshot(
+	workspace: &SchemaWorkspace,
+	snapshot: &SchemaSnapshot,
+) -> Result<()> {
+	save_json_pretty(workspace.schema_snapshot_path(), snapshot)
+}
+
 pub fn load_catalog_snapshot(folder: &str) -> Result<CatalogSnapshot> {
 	load_json_or_default(
 		catalog_snapshot_path(folder),
@@ -178,6 +242,23 @@ pub fn load_catalog_snapshot(folder: &str) -> Result<CatalogSnapshot> {
 
 pub fn save_catalog_snapshot(folder: &str, snapshot: &CatalogSnapshot) -> Result<()> {
 	save_json_pretty(catalog_snapshot_path(folder), snapshot)
+}
+
+pub fn load_workspace_catalog_snapshot(workspace: &SchemaWorkspace) -> Result<CatalogSnapshot> {
+	load_json_or_default(
+		workspace.catalog_snapshot_path(),
+		CatalogSnapshot {
+			version: 2,
+			entities: Vec::new(),
+		},
+	)
+}
+
+pub fn save_workspace_catalog_snapshot(
+	workspace: &SchemaWorkspace,
+	snapshot: &CatalogSnapshot,
+) -> Result<()> {
+	save_json_pretty(workspace.catalog_snapshot_path(), snapshot)
 }
 
 pub fn diff_schema(old: &SchemaSnapshot, new: &SchemaSnapshot) -> FileDiff {
@@ -215,19 +296,29 @@ pub fn build_catalog_snapshot(
 	files: &[SchemaFile],
 	allow_all_statements: bool,
 ) -> Result<CatalogSnapshot> {
-	let mut entities = BTreeSet::new();
+	let mut entities = BTreeMap::new();
 	let mut operations = Vec::new();
 	for file in files {
 		let (file_entities, file_ops) = parse_schema_statements(file, allow_all_statements)?;
 		for entity in file_entities {
-			entities.insert(entity);
+			let key = entity.key();
+			if let Some(existing) = entities.insert(key.clone(), entity.clone()) {
+				bail!(
+					"duplicate schema entity '{}:{}:{}' in '{}' and '{}'",
+					key.kind,
+					key.scope.as_deref().unwrap_or(""),
+					key.name,
+					existing.source_path,
+					entity.source_path
+				);
+			}
 		}
 		operations.extend(file_ops);
 	}
 
 	Ok(CatalogSnapshot {
 		version: 2,
-		entities: entities.into_iter().collect(),
+		entities: entities.into_values().collect(),
 		operations,
 	})
 }

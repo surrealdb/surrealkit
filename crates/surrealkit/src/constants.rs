@@ -10,12 +10,28 @@ pub fn schema_dir(folder: &str) -> PathBuf {
 	PathBuf::from(folder).join("schema")
 }
 
+pub fn schemas_dir(folder: &str) -> PathBuf {
+	PathBuf::from(folder).join("schemas")
+}
+
+pub fn named_schema_dir(folder: &str, schema: &str) -> PathBuf {
+	schemas_dir(folder).join(schema)
+}
+
 pub fn rollouts_dir(folder: &str) -> PathBuf {
 	PathBuf::from(folder).join("rollouts")
 }
 
+pub fn named_rollouts_dir(folder: &str, schema: &str) -> PathBuf {
+	rollouts_dir(folder).join("schemas").join(schema)
+}
+
 pub fn state_dir(folder: &str) -> PathBuf {
 	PathBuf::from(folder).join("snapshots")
+}
+
+pub fn named_state_dir(folder: &str, schema: &str) -> PathBuf {
+	state_dir(folder).join("schemas").join(schema)
 }
 
 pub fn schema_snapshot_path(folder: &str) -> PathBuf {
@@ -40,6 +56,10 @@ pub fn fixtures_dir(folder: &str) -> PathBuf {
 
 pub fn seed_dir(folder: &str) -> PathBuf {
 	PathBuf::from(folder).join("seed")
+}
+
+pub fn named_seed_dir(folder: &str, schema: &str) -> PathBuf {
+	seed_dir(folder).join(schema)
 }
 
 pub fn seed_surql_path(folder: &str) -> PathBuf {

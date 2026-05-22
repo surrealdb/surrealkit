@@ -3,6 +3,7 @@ pub mod constants;
 pub mod core;
 pub mod rollout;
 pub mod scaffold;
+pub mod schema;
 pub mod schema_state;
 pub mod seed;
 pub mod setup;
@@ -17,6 +18,7 @@ pub use rollout::{
 	run_baseline, run_complete, run_complete_with_spec, run_lint, run_plan, run_rollback,
 	run_rollback_with_spec, run_start, run_start_with_spec, run_status,
 };
+pub use schema::{ResolvedSchema, SchemaDefinition, load_schema_catalog};
 pub use seed::{seed, seed_from_dir};
 pub use setup::run_setup;
 pub use surrealdb::{self, Surreal, engine};

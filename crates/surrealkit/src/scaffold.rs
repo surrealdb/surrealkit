@@ -4,12 +4,13 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::constants::{
-	fixtures_dir, rollouts_dir, schema_dir, seed_dir, seed_surql_path, setup_surql_path, state_dir,
-	suites_dir, tests_dir,
+	fixtures_dir, rollouts_dir, schema_dir, schemas_dir, seed_dir, seed_surql_path,
+	setup_surql_path, state_dir, suites_dir, tests_dir,
 };
 
 pub fn scaffold(folder: &str) -> Result<()> {
 	let schema_dir = schema_dir(folder);
+	let schemas_dir = schemas_dir(folder);
 	let rollouts_dir = rollouts_dir(folder);
 	let state_dir = state_dir(folder);
 	let tests_dir = tests_dir(folder);
@@ -17,6 +18,7 @@ pub fn scaffold(folder: &str) -> Result<()> {
 	let test_fixtures_dir = fixtures_dir(folder);
 
 	fs::create_dir_all(&schema_dir).with_context(|| format!("creating {}/schema", folder))?;
+	fs::create_dir_all(&schemas_dir).with_context(|| format!("creating {}/schemas", folder))?;
 	fs::create_dir_all(&rollouts_dir).with_context(|| format!("creating {}/rollouts", folder))?;
 	fs::create_dir_all(&state_dir).with_context(|| format!("creating {}/snapshots", folder))?;
 	fs::create_dir_all(&tests_dir).with_context(|| format!("creating {}/tests", folder))?;
@@ -62,6 +64,7 @@ pub fn scaffold(folder: &str) -> Result<()> {
 	println!("  surrealkit.toml");
 	println!("  {}/", folder);
 	println!("  ├── schema/");
+	println!("  ├── schemas/");
 	println!("  ├── rollouts/");
 	println!("  ├── snapshots/");
 	println!("  ├── tests/");
@@ -160,6 +163,22 @@ pub const DEFAULT_PROJECT_CONFIG: &str = r#"# Template variables for use in .sur
 # [variables]
 # schema_prefix = "myapp"
 # environment   = "development"
+#
+# Named schemas compose files from database/schemas/<name>/ and seed files
+# from database/seed/<name>/ in inheritance order.
+#
+# [schema.base]
+#
+# [schema.admin]
+# extends = "base"
+# ns = "system"
+# db = "main"
+#
+# [schema.org]
+# extends = "base"
+# ns = "org_{org_id}"
+# db = "main"
+# required_variables = ["org_id"]
 "#;
 
 pub const DEFAULT_TEST_SUITE: &str = r#"name = "smoke"

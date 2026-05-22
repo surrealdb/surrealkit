@@ -5,6 +5,7 @@ use rust_dotenv::dotenv::DotEnv;
 use surrealkit::config::{Cfg, ConfigOverrides, connect};
 use surrealkit::core::exec_surql;
 use surrealkit::rollout::{self, RolloutExecutionOpts, RolloutPlanOpts};
+use surrealkit::schema::{ResolvedSchema, load_schema_catalog};
 use surrealkit::setup::run_setup;
 use surrealkit::sync::{self, SyncOpts};
 use surrealkit::tester::{TestOpts, run_test};
@@ -21,14 +22,6 @@ pub struct Cli {
 	/// Database host URL
 	#[arg(long, global = true)]
 	host: Option<String>,
-
-	/// Database name
-	#[arg(long, global = true)]
-	db: Option<String>,
-
-	/// Database namespace
-	#[arg(long, global = true)]
-	ns: Option<String>,
 
 	/// Database user
 	#[arg(long, global = true)]
@@ -59,6 +52,10 @@ enum Commands {
 	Init,
 	Setup,
 	Sync {
+		#[arg(long, conflicts_with = "all_schemas")]
+		schema: Option<String>,
+		#[arg(long)]
+		all_schemas: bool,
 		#[arg(long)]
 		watch: bool,
 		#[arg(long, default_value_t = 1000)]
@@ -77,10 +74,17 @@ enum Commands {
 		allow_all_statements: bool,
 	},
 	Rollout {
+		#[arg(long)]
+		schema: Option<String>,
 		#[command(subcommand)]
 		command: RolloutCommands,
 	},
-	Seed,
+	Seed {
+		#[arg(long, conflicts_with = "all_schemas")]
+		schema: Option<String>,
+		#[arg(long)]
+		all_schemas: bool,
+	},
 	Status,
 	Apply {
 		path: PathBuf,
@@ -156,6 +160,38 @@ fn load_env() -> Option<DotEnv> {
 	}
 }
 
+async fn connect_schema(
+	cfg: &Cfg,
+	schema: &ResolvedSchema,
+) -> anyhow::Result<surrealkit::Surreal<surrealkit::engine::any::Any>> {
+	let target_cfg = cfg.with_target(schema.ns.clone(), schema.db.clone());
+	connect(&target_cfg).await
+}
+
+fn sync_opts(
+	folder: &str,
+	watch: bool,
+	debounce_ms: u64,
+	dry_run: bool,
+	fail_fast: bool,
+	no_prune: bool,
+	allow_shared_prune: bool,
+	allow_all_statements: bool,
+	vars: TemplateVars,
+) -> SyncOpts {
+	SyncOpts {
+		watch,
+		debounce_ms,
+		dry_run,
+		fail_fast,
+		prune: !no_prune,
+		allow_shared_prune,
+		allow_all_statements,
+		vars,
+		folder: folder.to_string(),
+	}
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
@@ -164,8 +200,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let env = load_env();
 	let overrides = ConfigOverrides {
 		host: args.host,
-		ns: args.ns,
-		db: args.db,
 		user: args.user,
 		pass: args.pass,
 		auth_level: args.auth_level,
@@ -180,6 +214,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 	let cfg = Cfg::from_env(env.as_ref(), &overrides)?;
 	let folder = cfg.folder().to_owned();
+	let schema_catalog = load_schema_catalog(None)?;
 
 	match args.command {
 		Commands::Init => scaffold::scaffold(&folder)?,
@@ -188,6 +223,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			run_setup(&db, &folder).await?;
 		}
 		Commands::Sync {
+			schema,
+			all_schemas,
 			watch,
 			debounce_ms,
 			dry_run,
@@ -196,120 +233,236 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			allow_shared_prune,
 			allow_all_statements,
 		} => {
-			let db = connect(&cfg).await?;
-			sync::run_sync(
-				&db,
-				&folder,
-				SyncOpts {
-					watch,
-					debounce_ms,
-					dry_run,
-					fail_fast,
-					prune: !no_prune,
-					allow_shared_prune,
-					allow_all_statements,
-					vars: template_vars,
-					folder: folder.clone(),
-				},
-			)
-			.await?;
+			if let Some(schema_name) = schema {
+				let schema =
+					schema_catalog.resolve_concrete(&schema_name, &folder, &template_vars)?;
+				let db = connect_schema(&cfg, &schema).await?;
+				sync::run_sync_with_workspace(
+					&db,
+					&schema.workspace,
+					sync_opts(
+						&folder,
+						watch,
+						debounce_ms,
+						dry_run,
+						fail_fast,
+						no_prune,
+						allow_shared_prune,
+						allow_all_statements,
+						template_vars,
+					),
+				)
+				.await?;
+			} else if all_schemas {
+				let schemas = schema_catalog.resolve_all_concrete(&folder, &template_vars)?;
+				if schemas.is_empty() {
+					println!("No concrete schemas found.");
+				}
+				for schema in schemas {
+					println!(
+						"Syncing schema '{}' into ns={} db={}",
+						schema.name, schema.ns, schema.db
+					);
+					let db = connect_schema(&cfg, &schema).await?;
+					sync::run_sync_with_workspace(
+						&db,
+						&schema.workspace,
+						sync_opts(
+							&folder,
+							watch,
+							debounce_ms,
+							dry_run,
+							fail_fast,
+							no_prune,
+							allow_shared_prune,
+							allow_all_statements,
+							template_vars.clone(),
+						),
+					)
+					.await?;
+				}
+			} else {
+				let db = connect(&cfg).await?;
+				sync::run_sync(
+					&db,
+					&folder,
+					sync_opts(
+						&folder,
+						watch,
+						debounce_ms,
+						dry_run,
+						fail_fast,
+						no_prune,
+						allow_shared_prune,
+						allow_all_statements,
+						template_vars,
+					),
+				)
+				.await?;
+			}
 		}
 		Commands::Rollout {
+			schema,
 			command,
 		} => match command {
 			RolloutCommands::Baseline => {
-				let db = connect(&cfg).await?;
-				rollout::run_baseline(&db, &folder).await?;
+				if let Some(schema_name) = schema {
+					let schema =
+						schema_catalog.resolve_concrete(&schema_name, &folder, &template_vars)?;
+					let db = connect_schema(&cfg, &schema).await?;
+					rollout::run_baseline_with_workspace(&db, &schema.workspace).await?;
+				} else {
+					let db = connect(&cfg).await?;
+					rollout::run_baseline(&db, &folder).await?;
+				}
 			}
 			RolloutCommands::Plan {
 				name,
 				dry_run,
 			} => {
-				rollout::run_plan(
-					&folder,
-					RolloutPlanOpts {
-						name,
-						dry_run,
-					},
-				)
-				.await?;
+				let opts = RolloutPlanOpts {
+					name,
+					dry_run,
+				};
+				if let Some(schema_name) = schema {
+					let schema =
+						schema_catalog.resolve_concrete(&schema_name, &folder, &template_vars)?;
+					rollout::run_plan_with_workspace(&schema.workspace, opts).await?;
+				} else {
+					rollout::run_plan(&folder, opts).await?;
+				}
 			}
 			RolloutCommands::Start {
 				target,
 			} => {
-				let db = connect(&cfg).await?;
-				rollout::run_start(
-					&db,
-					&folder,
-					RolloutExecutionOpts {
-						selector: Some(target),
-					},
-					&template_vars,
-				)
-				.await?;
+				let opts = RolloutExecutionOpts {
+					selector: Some(target),
+				};
+				if let Some(schema_name) = schema {
+					let schema =
+						schema_catalog.resolve_concrete(&schema_name, &folder, &template_vars)?;
+					let db = connect_schema(&cfg, &schema).await?;
+					rollout::run_start_with_workspace(&db, &schema.workspace, opts, &template_vars)
+						.await?;
+				} else {
+					let db = connect(&cfg).await?;
+					rollout::run_start(&db, &folder, opts, &template_vars).await?;
+				}
 			}
 			RolloutCommands::Complete {
 				target,
 			} => {
-				let db = connect(&cfg).await?;
-				rollout::run_complete(
-					&db,
-					&folder,
-					RolloutExecutionOpts {
-						selector: Some(target),
-					},
-					&template_vars,
-				)
-				.await?;
+				let opts = RolloutExecutionOpts {
+					selector: Some(target),
+				};
+				if let Some(schema_name) = schema {
+					let schema =
+						schema_catalog.resolve_concrete(&schema_name, &folder, &template_vars)?;
+					let db = connect_schema(&cfg, &schema).await?;
+					rollout::run_complete_with_workspace(
+						&db,
+						&schema.workspace,
+						opts,
+						&template_vars,
+					)
+					.await?;
+				} else {
+					let db = connect(&cfg).await?;
+					rollout::run_complete(&db, &folder, opts, &template_vars).await?;
+				}
 			}
 			RolloutCommands::Rollback {
 				target,
 			} => {
-				let db = connect(&cfg).await?;
-				rollout::run_rollback(
-					&db,
-					&folder,
-					RolloutExecutionOpts {
-						selector: Some(target),
-					},
-					&template_vars,
-				)
-				.await?;
+				let opts = RolloutExecutionOpts {
+					selector: Some(target),
+				};
+				if let Some(schema_name) = schema {
+					let schema =
+						schema_catalog.resolve_concrete(&schema_name, &folder, &template_vars)?;
+					let db = connect_schema(&cfg, &schema).await?;
+					rollout::run_rollback_with_workspace(
+						&db,
+						&schema.workspace,
+						opts,
+						&template_vars,
+					)
+					.await?;
+				} else {
+					let db = connect(&cfg).await?;
+					rollout::run_rollback(&db, &folder, opts, &template_vars).await?;
+				}
 			}
 			RolloutCommands::Status {
 				target,
 			} => {
-				let db = connect(&cfg).await?;
-				rollout::run_status(&db, &folder, target).await?;
+				if let Some(schema_name) = schema {
+					let schema =
+						schema_catalog.resolve_concrete(&schema_name, &folder, &template_vars)?;
+					let db = connect_schema(&cfg, &schema).await?;
+					rollout::run_status(&db, &folder, target).await?;
+				} else {
+					let db = connect(&cfg).await?;
+					rollout::run_status(&db, &folder, target).await?;
+				}
 			}
 			RolloutCommands::Lint {
 				target,
 			} => {
-				rollout::run_lint(
-					&folder,
-					RolloutExecutionOpts {
-						selector: Some(target),
-					},
-				)
-				.await?;
+				let opts = RolloutExecutionOpts {
+					selector: Some(target),
+				};
+				if let Some(schema_name) = schema {
+					let schema =
+						schema_catalog.resolve_concrete(&schema_name, &folder, &template_vars)?;
+					rollout::run_lint_with_workspace(&schema.workspace, opts).await?;
+				} else {
+					rollout::run_lint(&folder, opts).await?;
+				}
 			}
 			RolloutCommands::Repair {
 				target,
 			} => {
-				let db = connect(&cfg).await?;
-				rollout::run_repair(
-					&db,
-					&folder,
-					RolloutExecutionOpts {
-						selector: Some(target),
-					},
-				)
-				.await?;
+				let opts = RolloutExecutionOpts {
+					selector: Some(target),
+				};
+				if let Some(schema_name) = schema {
+					let schema =
+						schema_catalog.resolve_concrete(&schema_name, &folder, &template_vars)?;
+					let db = connect_schema(&cfg, &schema).await?;
+					rollout::run_repair_with_workspace(&db, &schema.workspace, opts).await?;
+				} else {
+					let db = connect(&cfg).await?;
+					rollout::run_repair(&db, &folder, opts).await?;
+				}
 			}
 		},
-		Commands::Seed => {
-			let db = connect(&cfg).await?;
-			seed::seed(&db, &folder, &template_vars).await?;
+		Commands::Seed {
+			schema,
+			all_schemas,
+		} => {
+			if let Some(schema_name) = schema {
+				let schema =
+					schema_catalog.resolve_concrete(&schema_name, &folder, &template_vars)?;
+				let db = connect_schema(&cfg, &schema).await?;
+				seed::seed_from_dirs(&db, &schema.seed_dirs, &template_vars).await?;
+			} else if all_schemas {
+				let schemas = schema_catalog.resolve_all_concrete(&folder, &template_vars)?;
+				if schemas.is_empty() {
+					println!("No concrete schemas found.");
+				}
+				for schema in schemas {
+					println!(
+						"Seeding schema '{}' into ns={} db={}",
+						schema.name, schema.ns, schema.db
+					);
+					let db = connect_schema(&cfg, &schema).await?;
+					seed::seed_from_dirs(&db, &schema.seed_dirs, &template_vars).await?;
+				}
+			} else {
+				let db = connect(&cfg).await?;
+				seed::seed(&db, &folder, &template_vars).await?;
+			}
 		}
 		Commands::Status => {
 			let db = connect(&cfg).await?;
@@ -368,4 +521,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let _ = std::io::stdout().flush();
 	let _ = std::io::stderr().flush();
 	std::process::exit(0);
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn global_ns_and_db_flags_are_removed() {
+		assert!(Cli::try_parse_from(["surrealkit", "--ns", "app", "sync"]).is_err());
+		assert!(Cli::try_parse_from(["surrealkit", "--db", "main", "sync"]).is_err());
+	}
+
+	#[test]
+	fn sync_schema_and_all_schemas_are_mutually_exclusive() {
+		assert!(
+			Cli::try_parse_from(["surrealkit", "sync", "--schema", "admin", "--all-schemas",])
+				.is_err()
+		);
+	}
+
+	#[test]
+	fn seed_schema_and_all_schemas_are_mutually_exclusive() {
+		assert!(
+			Cli::try_parse_from(["surrealkit", "seed", "--schema", "admin", "--all-schemas",])
+				.is_err()
+		);
+	}
 }
