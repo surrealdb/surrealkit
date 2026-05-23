@@ -326,139 +326,173 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		Commands::Rollout {
 			schema,
 			command,
-		} => match command {
-			RolloutCommands::Baseline => {
-				if let Some(schema_name) = schema {
-					let schema =
-						schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
-					let db = connect_schema(&cfg, &schema).await?;
-					rollout::run_baseline_with_workspace(&db, &schema.workspace).await?;
-				} else {
-					let db = connect(&cfg).await?;
-					rollout::run_baseline(&db, &folder).await?;
+		} => {
+			// When named schemas are configured, --schema is required so the
+			// correct ns/db target and rollout/snapshot directories are used.
+			// Omitting it would silently operate on the legacy flat paths with
+			// the default connection, which is incorrect.
+			let require_schema = |schema_name: Option<String>| -> anyhow::Result<String> {
+				match schema_name {
+					Some(name) => Ok(name),
+					None if !schema_catalog.is_empty() => anyhow::bail!(
+						"surrealkit.toml defines named schemas; \
+						 --schema <name> is required for rollout commands.\n\
+						 \n\
+						 Available schemas: {}",
+						schema_catalog.names().join(", ")
+					),
+					None => Ok(String::new()),
 				}
-			}
-			RolloutCommands::Plan {
-				name,
-				dry_run,
-			} => {
-				let opts = RolloutPlanOpts {
+			};
+			match command {
+				RolloutCommands::Baseline => {
+					let schema_name = require_schema(schema)?;
+					if !schema_name.is_empty() {
+						let schema =
+							schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
+						let db = connect_schema(&cfg, &schema).await?;
+						rollout::run_baseline_with_workspace(&db, &schema.workspace).await?;
+					} else {
+						let db = connect(&cfg).await?;
+						rollout::run_baseline(&db, &folder).await?;
+					}
+				}
+				RolloutCommands::Plan {
 					name,
 					dry_run,
-				};
-				if let Some(schema_name) = schema {
-					let schema =
-						schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
-					rollout::run_plan_with_workspace(&schema.workspace, opts).await?;
-				} else {
-					rollout::run_plan(&folder, opts).await?;
+				} => {
+					let schema_name = require_schema(schema)?;
+					let opts = RolloutPlanOpts {
+						name,
+						dry_run,
+					};
+					if !schema_name.is_empty() {
+						let schema =
+							schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
+						rollout::run_plan_with_workspace(&schema.workspace, opts).await?;
+					} else {
+						rollout::run_plan(&folder, opts).await?;
+					}
 				}
-			}
-			RolloutCommands::Start {
-				target,
-			} => {
-				let opts = RolloutExecutionOpts {
-					selector: Some(target),
-				};
-				if let Some(schema_name) = schema {
-					let schema =
-						schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
-					let db = connect_schema(&cfg, &schema).await?;
-					rollout::run_start_with_workspace(&db, &schema.workspace, opts, &template_vars)
+				RolloutCommands::Start {
+					target,
+				} => {
+					let schema_name = require_schema(schema)?;
+					let opts = RolloutExecutionOpts {
+						selector: Some(target),
+					};
+					if !schema_name.is_empty() {
+						let schema =
+							schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
+						let db = connect_schema(&cfg, &schema).await?;
+						rollout::run_start_with_workspace(
+							&db,
+							&schema.workspace,
+							opts,
+							&template_vars,
+						)
 						.await?;
-				} else {
-					let db = connect(&cfg).await?;
-					rollout::run_start(&db, &folder, opts, &template_vars).await?;
+					} else {
+						let db = connect(&cfg).await?;
+						rollout::run_start(&db, &folder, opts, &template_vars).await?;
+					}
+				}
+				RolloutCommands::Complete {
+					target,
+				} => {
+					let schema_name = require_schema(schema)?;
+					let opts = RolloutExecutionOpts {
+						selector: Some(target),
+					};
+					if !schema_name.is_empty() {
+						let schema =
+							schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
+						let db = connect_schema(&cfg, &schema).await?;
+						rollout::run_complete_with_workspace(
+							&db,
+							&schema.workspace,
+							opts,
+							&template_vars,
+						)
+						.await?;
+					} else {
+						let db = connect(&cfg).await?;
+						rollout::run_complete(&db, &folder, opts, &template_vars).await?;
+					}
+				}
+				RolloutCommands::Rollback {
+					target,
+				} => {
+					let schema_name = require_schema(schema)?;
+					let opts = RolloutExecutionOpts {
+						selector: Some(target),
+					};
+					if !schema_name.is_empty() {
+						let schema =
+							schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
+						let db = connect_schema(&cfg, &schema).await?;
+						rollout::run_rollback_with_workspace(
+							&db,
+							&schema.workspace,
+							opts,
+							&template_vars,
+						)
+						.await?;
+					} else {
+						let db = connect(&cfg).await?;
+						rollout::run_rollback(&db, &folder, opts, &template_vars).await?;
+					}
+				}
+				RolloutCommands::Status {
+					target,
+				} => {
+					// Status reads __rollout rows from the DB; no workspace paths needed.
+					// When named schemas exist, require --schema so the right ns/db is queried.
+					let schema_name = require_schema(schema)?;
+					if !schema_name.is_empty() {
+						let schema =
+							schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
+						let db = connect_schema(&cfg, &schema).await?;
+						rollout::run_status(&db, &folder, target).await?;
+					} else {
+						let db = connect(&cfg).await?;
+						rollout::run_status(&db, &folder, target).await?;
+					}
+				}
+				RolloutCommands::Lint {
+					target,
+				} => {
+					let schema_name = require_schema(schema)?;
+					let opts = RolloutExecutionOpts {
+						selector: Some(target),
+					};
+					if !schema_name.is_empty() {
+						let schema =
+							schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
+						rollout::run_lint_with_workspace(&schema.workspace, opts).await?;
+					} else {
+						rollout::run_lint(&folder, opts).await?;
+					}
+				}
+				RolloutCommands::Repair {
+					target,
+				} => {
+					let schema_name = require_schema(schema)?;
+					let opts = RolloutExecutionOpts {
+						selector: Some(target),
+					};
+					if !schema_name.is_empty() {
+						let schema =
+							schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
+						let db = connect_schema(&cfg, &schema).await?;
+						rollout::run_repair_with_workspace(&db, &schema.workspace, opts).await?;
+					} else {
+						let db = connect(&cfg).await?;
+						rollout::run_repair(&db, &folder, opts).await?;
+					}
 				}
 			}
-			RolloutCommands::Complete {
-				target,
-			} => {
-				let opts = RolloutExecutionOpts {
-					selector: Some(target),
-				};
-				if let Some(schema_name) = schema {
-					let schema =
-						schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
-					let db = connect_schema(&cfg, &schema).await?;
-					rollout::run_complete_with_workspace(
-						&db,
-						&schema.workspace,
-						opts,
-						&template_vars,
-					)
-					.await?;
-				} else {
-					let db = connect(&cfg).await?;
-					rollout::run_complete(&db, &folder, opts, &template_vars).await?;
-				}
-			}
-			RolloutCommands::Rollback {
-				target,
-			} => {
-				let opts = RolloutExecutionOpts {
-					selector: Some(target),
-				};
-				if let Some(schema_name) = schema {
-					let schema =
-						schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
-					let db = connect_schema(&cfg, &schema).await?;
-					rollout::run_rollback_with_workspace(
-						&db,
-						&schema.workspace,
-						opts,
-						&template_vars,
-					)
-					.await?;
-				} else {
-					let db = connect(&cfg).await?;
-					rollout::run_rollback(&db, &folder, opts, &template_vars).await?;
-				}
-			}
-			RolloutCommands::Status {
-				target,
-			} => {
-				if let Some(schema_name) = schema {
-					let schema =
-						schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
-					let db = connect_schema(&cfg, &schema).await?;
-					rollout::run_status(&db, &folder, target).await?;
-				} else {
-					let db = connect(&cfg).await?;
-					rollout::run_status(&db, &folder, target).await?;
-				}
-			}
-			RolloutCommands::Lint {
-				target,
-			} => {
-				let opts = RolloutExecutionOpts {
-					selector: Some(target),
-				};
-				if let Some(schema_name) = schema {
-					let schema =
-						schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
-					rollout::run_lint_with_workspace(&schema.workspace, opts).await?;
-				} else {
-					rollout::run_lint(&folder, opts).await?;
-				}
-			}
-			RolloutCommands::Repair {
-				target,
-			} => {
-				let opts = RolloutExecutionOpts {
-					selector: Some(target),
-				};
-				if let Some(schema_name) = schema {
-					let schema =
-						schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
-					let db = connect_schema(&cfg, &schema).await?;
-					rollout::run_repair_with_workspace(&db, &schema.workspace, opts).await?;
-				} else {
-					let db = connect(&cfg).await?;
-					rollout::run_repair(&db, &folder, opts).await?;
-				}
-			}
-		},
+		}
 		Commands::Seed {
 			schema,
 			skip_template_schemas,
@@ -505,8 +539,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			}
 		}
 		Commands::Status => {
-			let db = connect(&cfg).await?;
-			rollout::run_status(&db, &folder, None).await?;
+			if !schema_catalog.is_empty() {
+				for name in schema_catalog.names() {
+					match schema_catalog.resolve(&name, &folder, &template_vars) {
+						Ok(schema) => {
+							println!(
+								"--- schema '{}' (ns={} db={})",
+								schema.name, schema.ns, schema.db
+							);
+							let db = connect_schema(&cfg, &schema).await?;
+							rollout::run_status(&db, &folder, None).await?;
+						}
+						Err(err) => {
+							println!("--- schema '{}' (skipped: {})", name, err);
+						}
+					}
+				}
+			} else {
+				let db = connect(&cfg).await?;
+				rollout::run_status(&db, &folder, None).await?;
+			}
 		}
 		Commands::Apply {
 			path,

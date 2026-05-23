@@ -150,6 +150,15 @@ async fn run_sync_once(
 	watch_mode: bool,
 ) -> Result<()> {
 	let files = collect_workspace_schema_files(workspace)?;
+	if files.is_empty() && !watch_mode {
+		let dirs = workspace
+			.schema_dirs
+			.iter()
+			.map(|p| p.display().to_string())
+			.collect::<Vec<_>>()
+			.join(", ");
+		println!("No schema files found in {dirs}");
+	}
 	run_sync_with_files(db, opts, &files, watch_mode).await
 }
 
@@ -162,10 +171,6 @@ async fn run_sync_with_files(
 	let desired_catalog = build_catalog_snapshot(files, opts.allow_all_statements)?;
 	let tracked = load_sync_hashes(db).await?;
 	let managed = load_managed_entities(db).await?;
-
-	if files.is_empty() && !watch_mode {
-		println!("No schema files found in {}/schema", opts.folder);
-	}
 
 	let file_paths: BTreeSet<String> = files.iter().map(|file| file.path.clone()).collect();
 	let removed_paths: Vec<String> =

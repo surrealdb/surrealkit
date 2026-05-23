@@ -64,7 +64,6 @@ services:
       - --user=root
       - --pass=root
       - sync
-      - --schema=admin
 ```
 
 `surrealkit` exits on completion, so Compose moves on, ideal for "apply schema then run tests" pipelines.
@@ -174,44 +173,46 @@ surrealkit sync --watch
 4. Baseline an existing shared/prod database before the first rollout:
 
 ```sh
-surrealkit rollout baseline
+surrealkit rollout baseline --schema admin
 ```
 
 5. Generate a rollout manifest from the current desired-state diff:
 
 ```sh
-surrealkit rollout plan --name add_customer_indexes
+surrealkit rollout plan --schema admin --name add_customer_indexes
 ```
 
 6. Start the rollout, let application cutover happen, then complete it:
 
 ```sh
-surrealkit rollout start 20260302153045__add_customer_indexes
-surrealkit rollout complete 20260302153045__add_customer_indexes
+surrealkit rollout start --schema admin 20260302153045__add_customer_indexes
+surrealkit rollout complete --schema admin 20260302153045__add_customer_indexes
 ```
 
 7. Roll back an in-flight rollout if needed:
 
 ```sh
-surrealkit rollout rollback 20260302153045__add_customer_indexes
+surrealkit rollout rollback --schema admin 20260302153045__add_customer_indexes
 ```
 
-Generated rollout manifests are written to `database/rollouts/*.toml`.
-Local snapshots are tracked in:
+Rollout manifests and local snapshots are stored per schema:
 
-- `database/snapshots/schema_snapshot.json`
-- `database/snapshots/catalog_snapshot.json`
+| Path | Purpose |
+|---|---|
+| `database/rollouts/schemas/<name>/*.toml` | Rollout manifests |
+| `database/snapshots/schemas/<name>/schema_snapshot.json` | Schema file hashes after last plan |
+| `database/snapshots/schemas/<name>/catalog_snapshot.json` | Managed-entity catalog after last plan |
 
 To validate a rollout manifest without mutating the database:
 
 ```sh
-surrealkit rollout lint 20260302153045__add_customer_indexes
+surrealkit rollout lint --schema admin 20260302153045__add_customer_indexes
 ```
 
 To inspect rollout state stored in the database:
 
 ```sh
-surrealkit rollout status
+surrealkit rollout status --schema admin
 ```
 
 If managed destructive prune is enabled against a shared DB, SurrealKit requires explicit override:

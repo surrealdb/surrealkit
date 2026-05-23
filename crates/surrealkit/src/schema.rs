@@ -63,6 +63,13 @@ impl SchemaCatalog {
 		self.definitions.is_empty()
 	}
 
+	/// Sorted list of all schema names defined in `surrealkit.toml`.
+	pub fn names(&self) -> Vec<String> {
+		let mut names: Vec<String> = self.definitions.keys().cloned().collect();
+		names.sort();
+		names
+	}
+
 	pub fn resolve(
 		&self,
 		name: &str,
