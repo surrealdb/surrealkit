@@ -204,6 +204,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let env = load_env();
 	let overrides = ConfigOverrides {
 		host: args.host,
+		ns: None,
+		db: None,
 		user: args.user,
 		pass: args.pass,
 		auth_level: args.auth_level,
@@ -291,15 +293,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 					.await?;
 				}
 			} else {
+				let ns = cfg.ns();
+				let db_name = cfg.db();
 				eprintln!(
 					"warning: no named schemas found in surrealkit.toml; falling back to the \
-					 deprecated flat `{folder}/schema/` directory.\n\
+					 deprecated flat `{folder}/schema/` directory (ns={ns} db={db_name}).\n\
 					 \n\
-					 Define your schemas in surrealkit.toml to use the named-schema layout:\n\
+					 SURREALDB_NAMESPACE / SURREALDB_NAME env vars are deprecated. Define your \
+					 schemas in surrealkit.toml to use the named-schema layout:\n\
 					 \n\
 					 \t[schema.myapp]\n\
-					 \tns = \"mynamespace\"\n\
-					 \tdb = \"mydatabase\"\n\
+					 \tns = \"{ns}\"\n\
+					 \tdb = \"{db_name}\"\n\
 					 \n\
 					 Files go in `{folder}/schemas/myapp/`. \
 					 The flat directory will be removed in a future release."
@@ -521,15 +526,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 					seed::seed_from_dirs(&db, &schema.seed_dirs, &template_vars).await?;
 				}
 			} else {
+				let ns = cfg.ns();
+				let db_name = cfg.db();
 				eprintln!(
 					"warning: no named schemas found in surrealkit.toml; falling back to the \
-					 deprecated flat `{folder}/seed/` path.\n\
+					 deprecated flat `{folder}/seed/` path (ns={ns} db={db_name}).\n\
 					 \n\
-					 Define your schemas in surrealkit.toml to use the named-schema layout:\n\
+					 SURREALDB_NAMESPACE / SURREALDB_NAME env vars are deprecated. Define your \
+					 schemas in surrealkit.toml to use the named-schema layout:\n\
 					 \n\
 					 \t[schema.myapp]\n\
-					 \tns = \"mynamespace\"\n\
-					 \tdb = \"mydatabase\"\n\
+					 \tns = \"{ns}\"\n\
+					 \tdb = \"{db_name}\"\n\
 					 \n\
 					 Seed files go in `{folder}/seed/myapp/`. \
 					 The flat seed path will be removed in a future release."

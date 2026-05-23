@@ -35,6 +35,10 @@ impl AuthLevel {
 #[derive(Debug, Clone, Default)]
 pub struct ConfigOverrides {
 	pub host: Option<String>,
+	/// Deprecated: use named schemas in surrealkit.toml instead.
+	pub ns: Option<String>,
+	/// Deprecated: use named schemas in surrealkit.toml instead.
+	pub db: Option<String>,
 	pub user: Option<String>,
 	pub pass: Option<String>,
 	pub auth_level: Option<String>,
@@ -89,8 +93,21 @@ impl Cfg {
 			dotenv,
 			"http://localhost:8000",
 		);
-		let db = "test".to_string();
-		let ns = "db".to_string();
+		// ns/db resolution is only used by the legacy flat sync path.
+		// Named schemas supply their own ns/db targets via [schema.*] in
+		// surrealkit.toml. These env vars and config fields are deprecated.
+		let db = resolve(
+			&overrides.db,
+			&["SURREALDB_NAME", "DATABASE_NAME"],
+			dotenv,
+			"test",
+		);
+		let ns = resolve(
+			&overrides.ns,
+			&["SURREALDB_NAMESPACE", "DATABASE_NAMESPACE"],
+			dotenv,
+			"db",
+		);
 		let user = resolve(&overrides.user, &["SURREALDB_USER", "DATABASE_USER"], dotenv, "root");
 		let pass =
 			resolve(&overrides.pass, &["SURREALDB_PASSWORD", "DATABASE_PASSWORD"], dotenv, "root");
@@ -176,10 +193,14 @@ mod tests {
 	fn clear_db_env() {
 		unsafe {
 			unset_env("SURREALDB_HOST");
+			unset_env("SURREALDB_NAME");
+			unset_env("SURREALDB_NAMESPACE");
 			unset_env("SURREALDB_USER");
 			unset_env("SURREALDB_PASSWORD");
 			unset_env("SURREALDB_AUTH_LEVEL");
 			unset_env("DATABASE_HOST");
+			unset_env("DATABASE_NAME");
+			unset_env("DATABASE_NAMESPACE");
 			unset_env("DATABASE_USER");
 			unset_env("DATABASE_PASSWORD");
 			unset_env("DATABASE_AUTH_LEVEL");
@@ -263,6 +284,8 @@ mod tests {
 		clear_db_env();
 		let overrides = ConfigOverrides {
 			host: Some("http://custom:9000".into()),
+			ns: None,
+			db: None,
 			user: Some("admin".into()),
 			pass: Some("secret".into()),
 			auth_level: None,

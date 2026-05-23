@@ -105,6 +105,11 @@ surrealkit --host http://localhost:8000 --user root --pass root sync --schema ad
 - `SURREALDB_AUTH_LEVEL` (fallback: `DATABASE_AUTH_LEVEL`) — accepted values: `root`, `namespace` / `ns`, `database` / `db`
 - `SURREALDB_FOLDER` — root folder for schema, rollouts, snapshots, seed, and tests (default: `./database`)
 
+**Deprecated** (legacy flat-mode only — only effective when no `[schema.*]` entries exist in `surrealkit.toml`):
+
+- `SURREALDB_NAMESPACE` (fallback: `DATABASE_NAMESPACE`) — namespace for flat sync/seed (default: `db`)
+- `SURREALDB_NAME` (fallback: `DATABASE_NAME`) — database for flat sync/seed (default: `test`)
+
 These can be set as system environment variables or in a `.env` file.
 
 SurrealKit creates and manages its internal sync and rollout metadata tables on your configured database.
