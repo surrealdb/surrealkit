@@ -26,7 +26,7 @@ Named schema workspaces can be resolved from `surrealkit.toml` and then passed t
 ```rust
 let catalog = surrealkit::load_schema_catalog(None)?;
 let vars = surrealkit::TemplateVars::default();
-let admin = catalog.resolve_concrete("admin", "./database", &vars)?;
+let admin = catalog.resolve("admin", "./database", &vars)?;
 let cfg = surrealkit::Cfg::from_env(None, &Default::default())?
     .with_target(admin.ns.clone(), admin.db.clone());
 let db = surrealkit::connect(&cfg).await?;

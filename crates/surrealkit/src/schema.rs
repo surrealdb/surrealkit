@@ -63,7 +63,7 @@ impl SchemaCatalog {
 		self.definitions.is_empty()
 	}
 
-	pub fn resolve_concrete(
+	pub fn resolve(
 		&self,
 		name: &str,
 		root_folder: &str,
@@ -115,7 +115,9 @@ impl SchemaCatalog {
 		})
 	}
 
-	pub fn resolve_all_concrete(
+	/// Resolve all schemas, skipping abstract ones (no `ns`/`db`) but erroring
+	/// on any schema whose required template variables are missing.
+	pub fn resolve_all(
 		&self,
 		root_folder: &str,
 		vars: &TemplateVars,
@@ -125,7 +127,31 @@ impl SchemaCatalog {
 
 		let mut schemas = Vec::new();
 		for name in names {
-			match self.resolve_concrete(&name, root_folder, vars) {
+			match self.resolve(&name, root_folder, vars) {
+				Ok(schema) => schemas.push(schema),
+				Err(err) if is_abstract_schema_error(&err.to_string()) => {}
+				Err(err) => return Err(err),
+			}
+		}
+
+		Ok(schemas)
+	}
+
+	/// Like [`resolve_all`] but also silently skips template schemas whose
+	/// required variables are not present in `vars`. Use when the caller
+	/// supplies only a subset of vars and wants to sync whatever can be
+	/// fully resolved (e.g. `--skip-template-schemas`).
+	pub fn resolve_all_skip_templates(
+		&self,
+		root_folder: &str,
+		vars: &TemplateVars,
+	) -> Result<Vec<ResolvedSchema>> {
+		let mut names = self.definitions.keys().cloned().collect::<Vec<_>>();
+		names.sort();
+
+		let mut schemas = Vec::new();
+		for name in names {
+			match self.resolve(&name, root_folder, vars) {
 				Ok(schema) => schemas.push(schema),
 				Err(err) if is_skippable_all_schema_error(&err.to_string()) => {}
 				Err(err) => return Err(err),
@@ -205,8 +231,12 @@ fn missing_required_vars(required: &[String], vars: &TemplateVars) -> Vec<String
 		.collect()
 }
 
-fn is_skippable_all_schema_error(message: &str) -> bool {
+fn is_abstract_schema_error(message: &str) -> bool {
 	message.contains(" is abstract: ")
+}
+
+fn is_skippable_all_schema_error(message: &str) -> bool {
+	is_abstract_schema_error(message)
 		|| message.contains("requires missing variable")
 		|| message.contains("template variable")
 }
@@ -250,7 +280,7 @@ db = "main"
 		);
 
 		let resolved =
-			catalog.resolve_concrete("admin", "./database", &TemplateVars::default()).unwrap();
+			catalog.resolve("admin", "./database", &TemplateVars::default()).unwrap();
 		assert_eq!(resolved.chain, vec!["base", "admin"]);
 		assert_eq!(resolved.ns, "system");
 		assert_eq!(resolved.db, "main");
@@ -268,7 +298,7 @@ required_variables = ["org_id"]
 		);
 
 		let resolved =
-			catalog.resolve_concrete("org", "./database", &vars(&[("org_id", "acme")])).unwrap();
+			catalog.resolve("org", "./database", &vars(&[("org_id", "acme")])).unwrap();
 		assert_eq!(resolved.ns, "org_acme");
 	}
 
@@ -284,7 +314,7 @@ required_variables = ["org_id"]
 		);
 
 		let err =
-			catalog.resolve_concrete("org", "./database", &TemplateVars::default()).unwrap_err();
+			catalog.resolve("org", "./database", &TemplateVars::default()).unwrap_err();
 		assert!(err.to_string().contains("requires missing variable"));
 	}
 
@@ -301,7 +331,7 @@ extends = "a"
 		);
 
 		let err =
-			catalog.resolve_concrete("a", "./database", &TemplateVars::default()).unwrap_err();
+			catalog.resolve("a", "./database", &TemplateVars::default()).unwrap_err();
 		assert!(err.to_string().contains("cycle"));
 	}
 }

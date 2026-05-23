@@ -130,15 +130,17 @@ required_variables = ["org_id"]
 ```
 
 ```sh
+# Sync/seed all resolved schemas (default when schemas are defined)
+surrealkit sync
+surrealkit seed
+
+# Target a single schema
 surrealkit sync --schema admin
 surrealkit sync --schema org --var org_id=acme
-surrealkit sync --all-schemas
-
 surrealkit seed --schema admin
-surrealkit seed --all-schemas
 ```
 
-Schemas without a resolved `ns` and `db`, such as `base`, are abstract and are only applied through concrete child schemas.
+Schemas without `ns` and `db`, such as `base`, are **abstract** and only contribute files through child schemas. Schemas with `ns`/`db` but unbound `required_variables` are **template schemas** — they resolve once the required vars are supplied. All other schemas are fully **resolved** and can be synced directly.
 
 ## Team Workflow
 
@@ -146,16 +148,18 @@ SurrealKit now separates schema authoring, dev sync, and shared/prod rollouts:
 
 ### Sync vs Rollouts
 
-- `surrealkit sync` is the fast desired-state reconciler for local, preview, and other disposable databases.
-- `surrealkit sync` applies changed schema files and automatically removes SurrealKit-managed objects that were deleted from `database/schema`.
+- `surrealkit sync` is the fast desired-state reconciler for local, preview, and other disposable databases. When schemas are defined in `surrealkit.toml`, it syncs all resolved schemas by default; template schemas with missing `required_variables` are an error unless `--skip-template-schemas` is passed.
+- `surrealkit sync --schema <name>` targets a single named schema.
 - `surrealkit rollout ...` is the production/shared-database migration path.
 - `surrealkit rollout plan` turns the desired-state diff into a reviewed manifest in `database/rollouts/*.toml`.
 - `surrealkit rollout start` applies the non-destructive expansion phase and records resumable state in the database.
 - `surrealkit rollout complete` performs the destructive contract phase, including removing legacy objects after application cutover.
 - Use `sync` when it is safe for the database to match local files immediately. Use `rollout` when changes need review, staged execution, rollback, or operator-controlled cutover.
 
-1. Edit desired state in `database/schema/*.surql`
-2. Reconcile local or disposable DBs with managed auto-prune:
+> **Deprecation notice:** If no schemas are defined in `surrealkit.toml`, `sync` and `seed` fall back to the legacy flat `database/schema/` and `database/seed/` directories and print a warning. Define your schemas in `surrealkit.toml` to silence the warning. The flat directories will be removed in a future release.
+
+1. Edit desired state in `database/schemas/<name>/*.surql`
+2. Reconcile local or disposable DBs with managed auto-prune (syncs all schemas):
 
 ```sh
 surrealkit sync
