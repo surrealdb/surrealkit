@@ -6,7 +6,7 @@ use serde::Deserialize;
 
 use crate::constants::{named_rollouts_dir, named_schema_dir, named_seed_dir, named_state_dir};
 use crate::schema_state::SchemaWorkspace;
-use crate::variables::TemplateVars;
+use crate::variables::{self, TemplateVars};
 
 #[derive(Debug, Clone, Default, Deserialize)]
 struct ProjectSchemaConfig {
@@ -212,27 +212,8 @@ fn is_skippable_all_schema_error(message: &str) -> bool {
 }
 
 fn render_target_template(value: &str, vars: &TemplateVars) -> Result<String> {
-	let mut out = String::with_capacity(value.len());
-	let mut rest = value;
-	while let Some(open) = rest.find('{') {
-		out.push_str(&rest[..open]);
-		let after_open = &rest[open + 1..];
-		let Some(close) = after_open.find('}') else {
-			bail!("unterminated schema target template in '{}'", value);
-		};
-		let name = &after_open[..close];
-		if name.is_empty() {
-			bail!("empty schema target template variable in '{}'", value);
-		}
-		let key = name.to_ascii_uppercase();
-		let Some(var_value) = vars.vars.get(&key) else {
-			bail!("template variable '{}' is not defined for schema target '{}'", key, value);
-		};
-		out.push_str(var_value);
-		rest = &after_open[close + 1..];
-	}
-	out.push_str(rest);
-	Ok(out)
+	variables::apply(value, &vars.vars)
+		.with_context(|| format!("rendering schema target template '{}'", value))
 }
 
 #[cfg(test)]
@@ -280,7 +261,7 @@ db = "main"
 		let catalog = catalog(
 			r#"
 [schema.org]
-ns = "org_{org_id}"
+ns = "org_${org_id}"
 db = "main"
 required_variables = ["org_id"]
 "#,
@@ -296,7 +277,7 @@ required_variables = ["org_id"]
 		let catalog = catalog(
 			r#"
 [schema.org]
-ns = "org_{org_id}"
+ns = "org_${org_id}"
 db = "main"
 required_variables = ["org_id"]
 "#,

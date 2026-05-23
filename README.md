@@ -124,7 +124,7 @@ db = "main"
 
 [schema.org]
 extends = "base"
-ns = "org_{org_id}"
+ns = "org_${org_id}"
 db = "main"
 required_variables = ["org_id"]
 ```

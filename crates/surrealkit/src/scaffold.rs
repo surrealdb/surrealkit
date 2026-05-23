@@ -176,7 +176,7 @@ pub const DEFAULT_PROJECT_CONFIG: &str = r#"# Template variables for use in .sur
 #
 # [schema.org]
 # extends = "base"
-# ns = "org_{org_id}"
+# ns = "org_${org_id}"
 # db = "main"
 # required_variables = ["org_id"]
 "#;
