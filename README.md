@@ -219,6 +219,12 @@ If managed destructive prune is enabled against a shared DB, SurrealKit requires
 surrealkit sync --allow-shared-prune
 ```
 
+To allow non-`DEFINE` statements (e.g. `INSERT`, `UPDATE`, `CREATE`) in schema files:
+
+```sh
+surrealkit sync --allow-all-statements
+```
+
 `surrealkit sync` is the local/dev reconciliation path. `surrealkit rollout ...` is the shared/prod migration path.
 
 ### Recovering a stuck rollout

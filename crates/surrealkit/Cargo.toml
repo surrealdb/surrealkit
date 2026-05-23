@@ -30,6 +30,7 @@ rustls = { version = '0.23', default-features = false, features = ['aws-lc-rs'] 
 [dev-dependencies]
 surrealdb = { version = '3.0.5', features = ['kv-mem'] }
 tempfile = '3'
+test-case = "3"
 
 [lints]
 workspace = true

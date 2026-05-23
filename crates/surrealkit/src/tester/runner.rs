@@ -257,6 +257,7 @@ impl RunnerContext {
 					fail_fast: true,
 					prune: true,
 					allow_shared_prune: true,
+					allow_all_statements: false,
 					vars: self.vars.clone(),
 					folder: self.cfg.folder().to_owned(),
 				},
