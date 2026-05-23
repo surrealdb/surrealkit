@@ -94,7 +94,7 @@ surrealkit --host http://localhost:8000 --ns my_ns --db my_db --user root --pass
 
 | Flag           | Description                                                            | Default                 |
 | -------------- | ---------------------------------------------------------------------- | ----------------------- |
-| `--connection` | Named host/auth connection from `surrealkit.toml` or connection env (`--conn` alias) | unset                   |
+| `--connection` | Named database host/auth connection                                    | unset                   |
 | `--host`       | Database host URL                                                      | `http://localhost:8000` |
 | `--ns`         | Database namespace                                                     | `db`                    |
 | `--db`         | Database name                                                          | `test`                  |
@@ -116,7 +116,7 @@ These can be set as system environment variables or in a `.env` file.
 
 ### Connections
 
-Connections define named defaults for host/auth settings only.
+Connections define named defaults for host/auth.
 
 ```toml
 [connections.local]
@@ -126,7 +126,7 @@ pass = "root"
 auth_level = "root"
 ```
 
-With `--connection local` or `--conn local`, connection-backed fields resolve in this order:
+With `--connection local`, connection-backed fields resolve in this order:
 
 ```text
 per-field CLI > SURREALDB_CONNECTION_LOCAL_* env > .env connection values > surrealkit.toml connection > global env > .env global values > defaults
