@@ -415,8 +415,19 @@ error: template variable 'SCHEMA_PREFIX' is not defined
 [Testing Example](https://github.com/ForetagInc/surrealkit/blob/main/examples/testing/README.md)
 
 ```sh
+# Test all resolved schemas in sequence (default when schemas are defined)
 surrealkit test
+
+# Test a single schema
+surrealkit test --schema main
+
+# Skip template schemas with unresolved variables instead of erroring
+surrealkit test --skip-template-schemas
 ```
+
+When named schemas are defined in `surrealkit.toml`, the runner tests each resolved schema in sequence — applying that schema's SQL files and seed files before each suite, and using its `ns`/`db` as the base for the isolated test namespace and database. Use `--schema <name>` to target a single schema.
+
+For legacy flat-schema projects (no `[schema.*]` in `surrealkit.toml`), `--schema` can be omitted and the flat `database/schema/` and `database/seed/` directories are used.
 
 The runner executes declarative TOML suites from `database/tests/suites/*.toml` and supports:
 
@@ -432,6 +443,8 @@ By default, each suite runs in an isolated ephemeral namespace/database and fail
 
 `surrealkit test` supports:
 
+- `--schema <name>` — target a single schema; omit to test all resolved schemas
+- `--skip-template-schemas` — skip template schemas with missing vars instead of erroring (incompatible with `--schema`)
 - `--suite <glob>`
 - `--case <glob>`
 - `--tag <tag>` (repeatable)

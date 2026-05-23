@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone)]
 pub struct TestOpts {
+	pub schema: Option<String>,
+	pub skip_template_schemas: bool,
 	pub suite: Option<String>,
 	pub case: Option<String>,
 	pub tags: Vec<String>,

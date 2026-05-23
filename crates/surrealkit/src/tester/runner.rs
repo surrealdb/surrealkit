@@ -23,8 +23,8 @@ use super::types::{
 	LoadedSuite, PermissionAction, RunReport, SuiteReport, TestOpts,
 };
 use crate::config::{AuthLevel, Cfg};
-use crate::constants::DEFAULT_ROOT_DIR;
 use crate::core::create_surreal_client;
+use crate::schema::ResolvedSchema;
 use crate::seed;
 use crate::setup::run_setup;
 use crate::sync::{self, SyncOpts};
@@ -37,6 +37,7 @@ pub struct RunnerContext {
 	pub base_url: Option<String>,
 	pub timeout_ms: u64,
 	pub vars: TemplateVars,
+	pub schema: Option<ResolvedSchema>,
 	run_id: String,
 }
 
@@ -48,6 +49,7 @@ impl RunnerContext {
 		base_url: Option<String>,
 		timeout_ms: u64,
 		vars: TemplateVars,
+		schema: Option<ResolvedSchema>,
 	) -> Self {
 		Self {
 			cfg,
@@ -56,6 +58,7 @@ impl RunnerContext {
 			base_url,
 			timeout_ms,
 			vars,
+			schema,
 			run_id: unique_run_id(),
 		}
 	}
@@ -152,6 +155,7 @@ impl RunnerContext {
 			base_url: self.base_url.clone(),
 			timeout_ms: self.timeout_ms,
 			vars: self.vars.clone(),
+			schema: self.schema.clone(),
 			run_id: self.run_id.clone(),
 		}
 	}
@@ -161,14 +165,21 @@ impl RunnerContext {
 		let suite_name =
 			suite.spec.name.clone().unwrap_or_else(|| suite.path.to_string_lossy().to_string());
 		let slug = slugify(&format!("{}-{}", suite_name, suite.path.display()));
+
+		// Use the resolved schema's ns/db as the isolation base when available,
+		// falling back to the connection-level ns/db for legacy flat mode.
+		let (base_ns, base_db) = match &self.schema {
+			Some(s) => (s.ns.clone(), s.db.clone()),
+			None => (self.cfg.ns().to_string(), self.cfg.db().to_string()),
+		};
 		let (namespace, database) = match self.cfg.auth_level() {
 			AuthLevel::Root => (
-				format!("{}_sk_test_{}_{}", self.cfg.ns(), self.run_id, slug),
-				format!("{}_sk_test_{}_{}", self.cfg.db(), self.run_id, slug),
+				format!("{}_sk_test_{}_{}", base_ns, self.run_id, slug),
+				format!("{}_sk_test_{}_{}", base_db, self.run_id, slug),
 			),
 			AuthLevel::Namespace => (
-				self.cfg.ns().to_string(),
-				format!("{}_sk_test_{}_{}", self.cfg.db(), self.run_id, slug),
+				base_ns.clone(),
+				format!("{}_sk_test_{}_{}", base_db, self.run_id, slug),
 			),
 			AuthLevel::Database => {
 				unreachable!("AuthLevel::Database is rejected by tester::run_test")
@@ -176,8 +187,7 @@ impl RunnerContext {
 		};
 		let host = self.cfg.host().to_string();
 
-		let actors =
-			self.prepare_suite(&suite, &host, &namespace, &database, DEFAULT_ROOT_DIR).await?;
+		let actors = self.prepare_suite(&suite, &host, &namespace, &database).await?;
 		let mut cases = Vec::new();
 
 		for case in &suite.spec.cases {
@@ -236,8 +246,8 @@ impl RunnerContext {
 		host: &str,
 		namespace: &str,
 		database: &str,
-		folder: &str,
 	) -> Result<HashMap<String, ActorSession>> {
+		let folder = self.cfg.folder();
 		let merged = merged_actor_specs(&self.global.actors, &suite.spec.actors);
 		let bootstrap_actors =
 			build_actor_sessions(&self.cfg, host, namespace, database, &BTreeMap::new()).await?;
@@ -247,25 +257,54 @@ impl RunnerContext {
 			run_setup(&root.db, folder).await?;
 		}
 		if !self.opts.no_sync {
-			sync::run_sync(
-				&root.db,
-				folder,
-				SyncOpts {
-					watch: false,
-					debounce_ms: 250,
-					dry_run: false,
-					fail_fast: true,
-					prune: true,
-					allow_shared_prune: true,
-					allow_all_statements: false,
-					vars: self.vars.clone(),
-					folder: self.cfg.folder().to_owned(),
-				},
-			)
-			.await?;
+			match &self.schema {
+				Some(schema) => {
+					sync::run_sync_with_workspace(
+						&root.db,
+						&schema.workspace,
+						SyncOpts {
+							watch: false,
+							debounce_ms: 250,
+							dry_run: false,
+							fail_fast: true,
+							prune: true,
+							allow_shared_prune: true,
+							allow_all_statements: false,
+							vars: self.vars.clone(),
+							folder: folder.to_owned(),
+						},
+					)
+					.await?;
+				}
+				None => {
+					sync::run_sync(
+						&root.db,
+						folder,
+						SyncOpts {
+							watch: false,
+							debounce_ms: 250,
+							dry_run: false,
+							fail_fast: true,
+							prune: true,
+							allow_shared_prune: true,
+							allow_all_statements: false,
+							vars: self.vars.clone(),
+							folder: folder.to_owned(),
+						},
+					)
+					.await?;
+				}
+			}
 		}
 		if !self.opts.no_seed {
-			seed::seed(&root.db, self.cfg.folder(), &self.vars).await?;
+			match &self.schema {
+				Some(schema) => {
+					seed::seed_from_dirs(&root.db, &schema.seed_dirs, &self.vars).await?;
+				}
+				None => {
+					seed::seed(&root.db, folder, &self.vars).await?;
+				}
+			}
 		}
 
 		let tests_dir = PathBuf::from(self.cfg.folder()).join("tests");

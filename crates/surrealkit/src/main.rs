@@ -111,6 +111,10 @@ enum Commands {
 	},
 	Test {
 		#[arg(long)]
+		schema: Option<String>,
+		#[arg(long, conflicts_with = "schema")]
+		skip_template_schemas: bool,
+		#[arg(long)]
 		suite: Option<String>,
 		#[arg(long)]
 		case: Option<String>,
@@ -603,6 +607,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			exec_surql(&db, &sql).await?;
 		}
 		Commands::Test {
+			schema,
+			skip_template_schemas,
 			suite,
 			case,
 			tag,
@@ -619,6 +625,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			run_test(
 				env.as_ref(),
 				TestOpts {
+					schema,
+					skip_template_schemas,
 					suite,
 					case,
 					tags: tag,
