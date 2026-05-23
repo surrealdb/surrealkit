@@ -10,6 +10,7 @@ use surrealkit::setup::run_setup;
 use surrealkit::sync::{self, SyncOpts};
 use surrealkit::tester::{TestOpts, run_test};
 use surrealkit::variables::{TemplateVars, build_vars, parse_var_flag};
+use surrealkit::migrate::{MigrateOpts, run_migrate};
 use surrealkit::{scaffold, seed};
 
 #[derive(Parser, Debug)]
@@ -51,6 +52,21 @@ pub struct Cli {
 enum Commands {
 	Init,
 	Setup,
+	/// Migrate a flat schema layout to a named schema.
+	///
+	/// Moves files from the legacy flat directories (schema/, seed/, rollouts/,
+	/// snapshots/) into the named-schema layout under schemas/<name>/,
+	/// seed/<name>/, rollouts/<name>/, and snapshots/<name>/.
+	///
+	/// After migrating, add the schema entry to surrealkit.toml and run
+	/// `surrealkit sync --schema <name>` to verify.
+	Migrate {
+		/// Name to assign the new schema (e.g. "main")
+		name: String,
+		/// Preview what would be moved without touching any files
+		#[arg(long)]
+		dry_run: bool,
+	},
 	Sync {
 		#[arg(long)]
 		schema: Option<String>,
@@ -224,6 +240,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 	match args.command {
 		Commands::Init => scaffold::scaffold(&folder)?,
+		Commands::Migrate {
+			name,
+			dry_run,
+		} => {
+			run_migrate(&MigrateOpts {
+				schema_name: name,
+				folder,
+				dry_run,
+			})?;
+		}
 		Commands::Setup => {
 			let db = connect(&cfg).await?;
 			run_setup(&db, &folder).await?;

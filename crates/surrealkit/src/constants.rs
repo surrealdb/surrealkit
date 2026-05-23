@@ -23,7 +23,7 @@ pub fn rollouts_dir(folder: &str) -> PathBuf {
 }
 
 pub fn named_rollouts_dir(folder: &str, schema: &str) -> PathBuf {
-	rollouts_dir(folder).join("schemas").join(schema)
+	rollouts_dir(folder).join(schema)
 }
 
 pub fn state_dir(folder: &str) -> PathBuf {
@@ -31,7 +31,7 @@ pub fn state_dir(folder: &str) -> PathBuf {
 }
 
 pub fn named_state_dir(folder: &str, schema: &str) -> PathBuf {
-	state_dir(folder).join("schemas").join(schema)
+	state_dir(folder).join(schema)
 }
 
 pub fn schema_snapshot_path(folder: &str) -> PathBuf {

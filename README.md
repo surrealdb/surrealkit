@@ -82,6 +82,17 @@ surrealkit init
 
 This creates a directory `/database` with the necessary scaffolding
 
+```
+database/
+  schemas/     ← schema SQL files, one subdirectory per named schema
+  rollouts/    ← rollout manifests per named schema
+  snapshots/   ← plan snapshots per named schema
+  seed/        ← seed files per named schema
+  tests/
+  setup.surql
+surrealkit.toml
+```
+
 Connection details can be provided via CLI arguments, environment variables, or a `.env` file. Namespace/database targets are selected by schema commands such as `sync --schema admin`. The resolution order for host/auth is: CLI args > system env vars > `.env` file > defaults.
 
 ### CLI Arguments
@@ -160,7 +171,7 @@ SurrealKit now separates schema authoring, dev sync, and shared/prod rollouts:
 - `surrealkit rollout complete` performs the destructive contract phase, including removing legacy objects after application cutover.
 - Use `sync` when it is safe for the database to match local files immediately. Use `rollout` when changes need review, staged execution, rollback, or operator-controlled cutover.
 
-> **Deprecation notice:** If no schemas are defined in `surrealkit.toml`, `sync` and `seed` fall back to the legacy flat `database/schema/` and `database/seed/` directories and print a warning. Define your schemas in `surrealkit.toml` to silence the warning. The flat directories will be removed in a future release.
+> **Deprecation notice:** If no schemas are defined in `surrealkit.toml`, `sync` and `seed` fall back to the legacy flat `database/schema/` and `database/seed/` directories and print a warning. Use `surrealkit migrate <name>` to move to the named-schema layout (see [Migrating from flat schema](#migrating-from-flat-schema)). The flat directories will be removed in a future release.
 
 1. Edit desired state in `database/schemas/<name>/*.surql`
 2. Reconcile local or disposable DBs with managed auto-prune (syncs all schemas):
@@ -204,9 +215,9 @@ Rollout manifests and local snapshots are stored per schema:
 
 | Path | Purpose |
 |---|---|
-| `database/rollouts/schemas/<name>/*.toml` | Rollout manifests |
-| `database/snapshots/schemas/<name>/schema_snapshot.json` | Schema file hashes after last plan |
-| `database/snapshots/schemas/<name>/catalog_snapshot.json` | Managed-entity catalog after last plan |
+| `database/rollouts/<name>/*.toml` | Rollout manifests |
+| `database/snapshots/<name>/schema_snapshot.json` | Schema file hashes after last plan |
+| `database/snapshots/<name>/catalog_snapshot.json` | Managed-entity catalog after last plan |
 
 To validate a rollout manifest without mutating the database:
 
@@ -265,6 +276,53 @@ Seeding runs on demand:
 ```sh
 surrealkit seed
 ```
+
+## Migrating from flat schema
+
+If your project was created before named schemas existed, your files live in the flat layout:
+
+```
+database/
+  schema/          ← SQL files
+  seed/            ← seed files
+  rollouts/        ← manifest .toml files at the root
+  snapshots/       ← *_snapshot.json files at the root
+```
+
+The named-schema layout puts everything under a schema name:
+
+```
+database/
+  schemas/<name>/  ← SQL files
+  seed/<name>/     ← seed files
+  rollouts/<name>/ ← manifest .toml files
+  snapshots/<name>/← snapshot JSON files
+```
+
+Run the migration command to move all existing files to the new layout in one step:
+
+```sh
+# Preview what will be moved (no files are changed)
+surrealkit migrate main --dry-run
+
+# Apply the migration
+surrealkit migrate main
+```
+
+Then add the schema to `surrealkit.toml` (replacing `ns`/`db` with your values):
+
+```toml
+[schema.main]
+ns = "<your-namespace>"
+db = "<your-database>"
+```
+
+Verify the migration:
+
+```sh
+surrealkit sync --schema main
+```
+> **Note:** `surrealkit migrate` only moves flat files at the root of each directory. Files already inside a named subdirectory (e.g. `seed/main/`) are left in place.
 
 ## Template Variables
 

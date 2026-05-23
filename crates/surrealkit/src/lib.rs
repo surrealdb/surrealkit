@@ -1,6 +1,7 @@
 pub mod config;
 pub mod constants;
 pub mod core;
+pub mod migrate;
 pub mod rollout;
 pub mod scaffold;
 pub mod schema;

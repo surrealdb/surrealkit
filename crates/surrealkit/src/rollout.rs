@@ -170,6 +170,21 @@ pub async fn run_plan_with_workspace(
 	opts: RolloutPlanOpts,
 ) -> Result<()> {
 	ensure_workspace_dirs(workspace)?;
+
+	// Guard: baseline must be run before plan so the diff has a valid "before"
+	// state. Without it, plan sees an empty old-catalog and generates a rollout
+	// that re-applies every entity — wasteful and misleading.
+	if !workspace.catalog_snapshot_path().exists() {
+		bail!(
+			"no baseline found for schema '{}' (expected {}).\n\
+			 \n\
+			 Run `surrealkit rollout baseline` first to record the current \
+			 database state as the starting point for rollout planning.",
+			workspace.label,
+			workspace.catalog_snapshot_path().display()
+		);
+	}
+
 	let files = collect_workspace_schema_files(workspace)?;
 	let old_schema = load_workspace_schema_snapshot(workspace)?;
 	let old_catalog = load_workspace_catalog_snapshot(workspace)?;
