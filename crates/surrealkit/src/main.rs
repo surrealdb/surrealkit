@@ -4,9 +4,8 @@ use clap::{Parser, Subcommand};
 use rust_dotenv::dotenv::DotEnv;
 use surrealkit::config::{Cfg, ConfigOverrides, connect};
 use surrealkit::core::exec_surql;
-use surrealkit::migrate::{MigrateOpts, run_migrate};
 use surrealkit::rollout::{self, RolloutExecutionOpts, RolloutPlanOpts};
-use surrealkit::schema::{ResolvedSchema, load_schema_catalog};
+use surrealkit::schema::{SchemaCatalog, SchemaTarget, load_schema_catalog};
 use surrealkit::setup::run_setup;
 use surrealkit::sync::{self, SyncOpts};
 use surrealkit::tester::{TestOpts, run_test};
@@ -23,6 +22,14 @@ pub struct Cli {
 	/// Database host URL
 	#[arg(long, global = true)]
 	host: Option<String>,
+
+	/// Deprecated: database namespace for legacy flat mode. Use [schema.*].ns in surrealkit.toml.
+	#[arg(long, global = true)]
+	ns: Option<String>,
+
+	/// Deprecated: database name for legacy flat mode. Use [schema.*].db in surrealkit.toml.
+	#[arg(long, global = true)]
+	db: Option<String>,
 
 	/// Database user
 	#[arg(long, global = true)]
@@ -51,21 +58,11 @@ pub struct Cli {
 #[derive(Subcommand, Debug)]
 enum Commands {
 	Init,
-	Setup,
-	/// Migrate a flat schema layout to a named schema.
-	///
-	/// Moves files from the legacy flat directories (schema/, seed/, rollouts/,
-	/// snapshots/) into the named-schema layout under schemas/<name>/,
-	/// seed/<name>/, rollouts/<name>/, and snapshots/<name>/.
-	///
-	/// After migrating, add the schema entry to surrealkit.toml and run
-	/// `surrealkit sync --schema <name>` to verify.
-	Migrate {
-		/// Name to assign the new schema (e.g. "main")
-		name: String,
-		/// Preview what would be moved without touching any files
+	Setup {
 		#[arg(long)]
-		dry_run: bool,
+		schema: Option<String>,
+		#[arg(long, conflicts_with = "schema")]
+		skip_template_schemas: bool,
 	},
 	Sync {
 		#[arg(long)]
@@ -100,13 +97,20 @@ enum Commands {
 	Seed {
 		#[arg(long)]
 		schema: Option<String>,
-		/// Skip schemas whose required template variables are not supplied
-		/// instead of erroring. Only applies when seeding all schemas.
 		#[arg(long, conflicts_with = "schema")]
 		skip_template_schemas: bool,
 	},
-	Status,
+	Status {
+		#[arg(long)]
+		schema: Option<String>,
+	},
 	Apply {
+		#[arg(long)]
+		schema: Option<String>,
+		/// Skip schemas whose required template variables are not supplied
+		/// instead of erroring. Only applies when applying to all schemas.
+		#[arg(long, conflicts_with = "schema")]
+		skip_template_schemas: bool,
 		path: PathBuf,
 	},
 	Test {
@@ -184,16 +188,16 @@ fn load_env() -> Option<DotEnv> {
 	}
 }
 
-async fn connect_schema(
+async fn connect_target(
 	cfg: &Cfg,
-	schema: &ResolvedSchema,
+	target: &SchemaTarget,
 ) -> anyhow::Result<surrealkit::Surreal<surrealkit::engine::any::Any>> {
-	let target_cfg = cfg.with_target(schema.ns.clone(), schema.db.clone());
+	let target_cfg = target.connect_config(cfg);
 	connect(&target_cfg).await
 }
 
-fn sync_opts(
-	folder: &str,
+#[derive(Debug, Clone)]
+struct SyncFlags {
 	watch: bool,
 	debounce_ms: u64,
 	dry_run: bool,
@@ -201,19 +205,81 @@ fn sync_opts(
 	no_prune: bool,
 	allow_shared_prune: bool,
 	allow_all_statements: bool,
-	vars: TemplateVars,
-) -> SyncOpts {
+}
+
+fn sync_opts(folder: &str, flags: &SyncFlags, vars: TemplateVars) -> SyncOpts {
 	SyncOpts {
-		watch,
-		debounce_ms,
-		dry_run,
-		fail_fast,
-		prune: !no_prune,
-		allow_shared_prune,
-		allow_all_statements,
+		watch: flags.watch,
+		debounce_ms: flags.debounce_ms,
+		dry_run: flags.dry_run,
+		fail_fast: flags.fail_fast,
+		prune: !flags.no_prune,
+		allow_shared_prune: flags.allow_shared_prune,
+		allow_all_statements: flags.allow_all_statements,
 		vars,
 		folder: folder.to_string(),
 	}
+}
+
+fn warn_deprecated_target_flags(overrides: &ConfigOverrides) {
+	if overrides.ns.is_some() || overrides.db.is_some() {
+		eprintln!(
+			"warning: --ns and --db are deprecated and only kept for legacy flat-schema \
+			 compatibility. Prefer defining namespace/database targets in surrealkit.toml:\n\
+			 \n\
+			 \t[schema.main]\n\
+			 \tns = \"{}\"\n\
+			 \tdb = \"{}\"\n\
+			 \n\
+			 Named-schema commands ignore --ns/--db and use the selected schema target.",
+			overrides.ns.as_deref().unwrap_or("<namespace>"),
+			overrides.db.as_deref().unwrap_or("<database>")
+		);
+	}
+}
+
+fn warn_legacy_target(command: &str, target: &SchemaTarget, folder: &str) {
+	if !target.is_legacy() {
+		return;
+	}
+	eprintln!(
+		"warning: no named schemas found in surrealkit.toml; `{command}` is using the \
+		 deprecated legacy flat layout (ns={} db={}).\n\
+		 \n\
+		 Define named schemas in surrealkit.toml and move legacy files manually:\n\
+		 \n\
+		 \t{folder}/schema/                 -> {folder}/schemas/<name>/\n\
+		 \t{folder}/seed/*.surql            -> {folder}/seed/<name>/\n\
+		 \t{folder}/rollouts/*.toml         -> {folder}/rollouts/<name>/\n\
+		 \t{folder}/snapshots/*_snapshot.json -> {folder}/snapshots/<name>/\n\
+		 \n\
+		 Example:\n\
+		 \t[schema.main]\n\
+		 \tns = \"{}\"\n\
+		 \tdb = \"{}\"\n\
+		 \n\
+		 The legacy flat layout will be removed in a future release.",
+		target.ns(),
+		target.db(),
+		target.ns(),
+		target.db()
+	);
+}
+
+fn resolve_targets(
+	catalog: &SchemaCatalog,
+	schema: Option<&str>,
+	skip_template_schemas: bool,
+	folder: &str,
+	vars: &TemplateVars,
+	cfg: &Cfg,
+) -> anyhow::Result<Vec<SchemaTarget>> {
+	let targets =
+		catalog.resolve_targets(schema, skip_template_schemas, folder, vars, cfg.ns(), cfg.db())?;
+	if targets.is_empty() {
+		anyhow::bail!("No resolved schemas found.");
+	}
+	Ok(targets)
 }
 
 #[tokio::main]
@@ -224,13 +290,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let env = load_env();
 	let overrides = ConfigOverrides {
 		host: args.host,
-		ns: None,
-		db: None,
+		ns: args.ns,
+		db: args.db,
 		user: args.user,
 		pass: args.pass,
 		auth_level: args.auth_level,
 		folder: args.folder,
 	};
+	warn_deprecated_target_flags(&overrides);
 
 	let raw_vars: Vec<(String, String)> =
 		args.var.iter().map(|s| parse_var_flag(s)).collect::<anyhow::Result<_>>()?;
@@ -244,19 +311,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 	match args.command {
 		Commands::Init => scaffold::scaffold(&folder)?,
-		Commands::Migrate {
-			name,
-			dry_run,
+		Commands::Setup {
+			schema,
+			skip_template_schemas,
 		} => {
-			run_migrate(&MigrateOpts {
-				schema_name: name,
-				folder,
-				dry_run,
-			})?;
-		}
-		Commands::Setup => {
-			let db = connect(&cfg).await?;
-			run_setup(&db, &folder).await?;
+			let targets = resolve_targets(
+				&schema_catalog,
+				schema.as_deref(),
+				skip_template_schemas,
+				&folder,
+				&template_vars,
+				&cfg,
+			)?;
+			for target in targets {
+				warn_legacy_target("setup", &target, &folder);
+				if target.schema_name().is_some() {
+					println!(
+						"Setting up schema '{}' in ns={} db={}",
+						target.label(),
+						target.ns(),
+						target.db()
+					);
+				}
+				let db = connect_target(&cfg, &target).await?;
+				run_setup(&db, &folder).await?;
+			}
 		}
 		Commands::Sync {
 			schema,
@@ -269,89 +348,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			allow_shared_prune,
 			allow_all_statements,
 		} => {
-			if let Some(schema_name) = schema {
-				let schema = schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
-				let db = connect_schema(&cfg, &schema).await?;
-				sync::run_sync_with_workspace(
-					&db,
-					&schema.workspace,
-					sync_opts(
-						&folder,
-						watch,
-						debounce_ms,
-						dry_run,
-						fail_fast,
-						no_prune,
-						allow_shared_prune,
-						allow_all_statements,
-						template_vars,
-					),
-				)
-				.await?;
-			} else if !schema_catalog.is_empty() {
-				let schemas = if skip_template_schemas {
-					schema_catalog.resolve_all_skip_templates(&folder, &template_vars)?
-				} else {
-					schema_catalog.resolve_all(&folder, &template_vars)?
-				};
-				if schemas.is_empty() {
-					println!("No resolved schemas found.");
-				}
-				for schema in schemas {
+			let flags = SyncFlags {
+				watch,
+				debounce_ms,
+				dry_run,
+				fail_fast,
+				no_prune,
+				allow_shared_prune,
+				allow_all_statements,
+			};
+			let targets = resolve_targets(
+				&schema_catalog,
+				schema.as_deref(),
+				skip_template_schemas,
+				&folder,
+				&template_vars,
+				&cfg,
+			)?;
+			for target in targets {
+				warn_legacy_target("sync", &target, &folder);
+				if target.schema_name().is_some() {
 					println!(
 						"Syncing schema '{}' into ns={} db={}",
-						schema.name, schema.ns, schema.db
+						target.label(),
+						target.ns(),
+						target.db()
 					);
-					let db = connect_schema(&cfg, &schema).await?;
-					sync::run_sync_with_workspace(
-						&db,
-						&schema.workspace,
-						sync_opts(
-							&folder,
-							watch,
-							debounce_ms,
-							dry_run,
-							fail_fast,
-							no_prune,
-							allow_shared_prune,
-							allow_all_statements,
-							template_vars.clone(),
-						),
-					)
-					.await?;
 				}
-			} else {
-				let ns = cfg.ns();
-				let db_name = cfg.db();
-				eprintln!(
-					"warning: no named schemas found in surrealkit.toml; falling back to the \
-					 deprecated flat `{folder}/schema/` directory (ns={ns} db={db_name}).\n\
-					 \n\
-					 SURREALDB_NAMESPACE / SURREALDB_NAME env vars are deprecated. Define your \
-					 schemas in surrealkit.toml to use the named-schema layout:\n\
-					 \n\
-					 \t[schema.myapp]\n\
-					 \tns = \"{ns}\"\n\
-					 \tdb = \"{db_name}\"\n\
-					 \n\
-					 Files go in `{folder}/schemas/myapp/`. \
-					 The flat directory will be removed in a future release."
-				);
-				let db = connect(&cfg).await?;
-				sync::run_sync(
+				let db = connect_target(&cfg, &target).await?;
+				sync::run_sync_with_workspace(
 					&db,
-					&folder,
-					sync_opts(
-						&folder,
-						watch,
-						debounce_ms,
-						dry_run,
-						fail_fast,
-						no_prune,
-						allow_shared_prune,
-						allow_all_statements,
-						template_vars,
-					),
+					target.workspace(),
+					sync_opts(&folder, &flags, template_vars.clone()),
 				)
 				.await?;
 			}
@@ -360,169 +388,97 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			schema,
 			command,
 		} => {
-			// When named schemas are configured, --schema is required so the
-			// correct ns/db target and rollout/snapshot directories are used.
-			// Omitting it would silently operate on the legacy flat paths with
-			// the default connection, which is incorrect.
-			let require_schema = |schema_name: Option<String>| -> anyhow::Result<String> {
-				match schema_name {
-					Some(name) => Ok(name),
-					None if !schema_catalog.is_empty() => anyhow::bail!(
-						"surrealkit.toml defines named schemas; \
-						 --schema <name> is required for rollout commands.\n\
-						 \n\
-						 Available schemas: {}",
-						schema_catalog.names().join(", ")
-					),
-					None => Ok(String::new()),
-				}
-			};
+			let rollout_target = schema_catalog.resolve_required_target(
+				schema.as_deref(),
+				&folder,
+				&template_vars,
+				cfg.ns(),
+				cfg.db(),
+			)?;
+			warn_legacy_target("rollout", &rollout_target, &folder);
 			match command {
 				RolloutCommands::Baseline => {
-					let schema_name = require_schema(schema)?;
-					if !schema_name.is_empty() {
-						let schema =
-							schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
-						let db = connect_schema(&cfg, &schema).await?;
-						rollout::run_baseline_with_workspace(&db, &schema.workspace).await?;
-					} else {
-						let db = connect(&cfg).await?;
-						rollout::run_baseline(&db, &folder).await?;
-					}
+					let db = connect_target(&cfg, &rollout_target).await?;
+					rollout::run_baseline_with_workspace(&db, rollout_target.workspace()).await?;
 				}
 				RolloutCommands::Plan {
 					name,
 					dry_run,
 				} => {
-					let schema_name = require_schema(schema)?;
 					let opts = RolloutPlanOpts {
 						name,
 						dry_run,
 					};
-					if !schema_name.is_empty() {
-						let schema =
-							schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
-						rollout::run_plan_with_workspace(&schema.workspace, opts).await?;
-					} else {
-						rollout::run_plan(&folder, opts).await?;
-					}
+					rollout::run_plan_with_workspace(rollout_target.workspace(), opts).await?;
 				}
 				RolloutCommands::Start {
 					target,
 				} => {
-					let schema_name = require_schema(schema)?;
 					let opts = RolloutExecutionOpts {
 						selector: Some(target),
 					};
-					if !schema_name.is_empty() {
-						let schema =
-							schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
-						let db = connect_schema(&cfg, &schema).await?;
-						rollout::run_start_with_workspace(
-							&db,
-							&schema.workspace,
-							opts,
-							&template_vars,
-						)
-						.await?;
-					} else {
-						let db = connect(&cfg).await?;
-						rollout::run_start(&db, &folder, opts, &template_vars).await?;
-					}
+					let db = connect_target(&cfg, &rollout_target).await?;
+					rollout::run_start_with_workspace(
+						&db,
+						rollout_target.workspace(),
+						opts,
+						&template_vars,
+					)
+					.await?;
 				}
 				RolloutCommands::Complete {
 					target,
 				} => {
-					let schema_name = require_schema(schema)?;
 					let opts = RolloutExecutionOpts {
 						selector: Some(target),
 					};
-					if !schema_name.is_empty() {
-						let schema =
-							schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
-						let db = connect_schema(&cfg, &schema).await?;
-						rollout::run_complete_with_workspace(
-							&db,
-							&schema.workspace,
-							opts,
-							&template_vars,
-						)
-						.await?;
-					} else {
-						let db = connect(&cfg).await?;
-						rollout::run_complete(&db, &folder, opts, &template_vars).await?;
-					}
+					let db = connect_target(&cfg, &rollout_target).await?;
+					rollout::run_complete_with_workspace(
+						&db,
+						rollout_target.workspace(),
+						opts,
+						&template_vars,
+					)
+					.await?;
 				}
 				RolloutCommands::Rollback {
 					target,
 				} => {
-					let schema_name = require_schema(schema)?;
 					let opts = RolloutExecutionOpts {
 						selector: Some(target),
 					};
-					if !schema_name.is_empty() {
-						let schema =
-							schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
-						let db = connect_schema(&cfg, &schema).await?;
-						rollout::run_rollback_with_workspace(
-							&db,
-							&schema.workspace,
-							opts,
-							&template_vars,
-						)
-						.await?;
-					} else {
-						let db = connect(&cfg).await?;
-						rollout::run_rollback(&db, &folder, opts, &template_vars).await?;
-					}
+					let db = connect_target(&cfg, &rollout_target).await?;
+					rollout::run_rollback_with_workspace(
+						&db,
+						rollout_target.workspace(),
+						opts,
+						&template_vars,
+					)
+					.await?;
 				}
 				RolloutCommands::Status {
-					target,
+					target: selector,
 				} => {
-					// Status reads __rollout rows from the DB; no workspace paths needed.
-					// When named schemas exist, require --schema so the right ns/db is queried.
-					let schema_name = require_schema(schema)?;
-					if !schema_name.is_empty() {
-						let schema =
-							schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
-						let db = connect_schema(&cfg, &schema).await?;
-						rollout::run_status(&db, &folder, target).await?;
-					} else {
-						let db = connect(&cfg).await?;
-						rollout::run_status(&db, &folder, target).await?;
-					}
+					let db = connect_target(&cfg, &rollout_target).await?;
+					rollout::run_status(&db, &folder, selector).await?;
 				}
 				RolloutCommands::Lint {
 					target,
 				} => {
-					let schema_name = require_schema(schema)?;
 					let opts = RolloutExecutionOpts {
 						selector: Some(target),
 					};
-					if !schema_name.is_empty() {
-						let schema =
-							schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
-						rollout::run_lint_with_workspace(&schema.workspace, opts).await?;
-					} else {
-						rollout::run_lint(&folder, opts).await?;
-					}
+					rollout::run_lint_with_workspace(rollout_target.workspace(), opts).await?;
 				}
 				RolloutCommands::Repair {
 					target,
 				} => {
-					let schema_name = require_schema(schema)?;
 					let opts = RolloutExecutionOpts {
 						selector: Some(target),
 					};
-					if !schema_name.is_empty() {
-						let schema =
-							schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
-						let db = connect_schema(&cfg, &schema).await?;
-						rollout::run_repair_with_workspace(&db, &schema.workspace, opts).await?;
-					} else {
-						let db = connect(&cfg).await?;
-						rollout::run_repair(&db, &folder, opts).await?;
-					}
+					let db = connect_target(&cfg, &rollout_target).await?;
+					rollout::run_repair_with_workspace(&db, rollout_target.workspace(), opts)
+						.await?;
 				}
 			}
 		}
@@ -530,58 +486,60 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			schema,
 			skip_template_schemas,
 		} => {
-			if let Some(schema_name) = schema {
-				let schema = schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
-				let db = connect_schema(&cfg, &schema).await?;
-				seed::seed_from_dirs(&db, &schema.seed_dirs, &template_vars).await?;
-			} else if !schema_catalog.is_empty() {
-				let schemas = if skip_template_schemas {
-					schema_catalog.resolve_all_skip_templates(&folder, &template_vars)?
-				} else {
-					schema_catalog.resolve_all(&folder, &template_vars)?
-				};
-				if schemas.is_empty() {
-					println!("No resolved schemas found.");
-				}
-				for schema in schemas {
+			let targets = resolve_targets(
+				&schema_catalog,
+				schema.as_deref(),
+				skip_template_schemas,
+				&folder,
+				&template_vars,
+				&cfg,
+			)?;
+			for target in targets {
+				warn_legacy_target("seed", &target, &folder);
+				if target.schema_name().is_some() {
 					println!(
 						"Seeding schema '{}' into ns={} db={}",
-						schema.name, schema.ns, schema.db
+						target.label(),
+						target.ns(),
+						target.db()
 					);
-					let db = connect_schema(&cfg, &schema).await?;
-					seed::seed_from_dirs(&db, &schema.seed_dirs, &template_vars).await?;
 				}
-			} else {
-				let ns = cfg.ns();
-				let db_name = cfg.db();
-				eprintln!(
-					"warning: no named schemas found in surrealkit.toml; falling back to the \
-					 deprecated flat `{folder}/seed/` path (ns={ns} db={db_name}).\n\
-					 \n\
-					 SURREALDB_NAMESPACE / SURREALDB_NAME env vars are deprecated. Define your \
-					 schemas in surrealkit.toml to use the named-schema layout:\n\
-					 \n\
-					 \t[schema.myapp]\n\
-					 \tns = \"{ns}\"\n\
-					 \tdb = \"{db_name}\"\n\
-					 \n\
-					 Seed files go in `{folder}/seed/myapp/`. \
-					 The flat seed path will be removed in a future release."
-				);
-				let db = connect(&cfg).await?;
-				seed::seed(&db, &folder, &template_vars).await?;
+				let db = connect_target(&cfg, &target).await?;
+				if target.is_legacy() {
+					seed::seed(&db, &folder, &template_vars).await?;
+				} else {
+					seed::seed_from_dirs(&db, target.seed_dirs(), &template_vars).await?;
+				}
 			}
 		}
-		Commands::Status => {
-			if !schema_catalog.is_empty() {
+		Commands::Status {
+			schema,
+		} => {
+			if let Some(schema_name) = schema {
+				let target = schema_catalog.resolve_required_target(
+					Some(&schema_name),
+					&folder,
+					&template_vars,
+					cfg.ns(),
+					cfg.db(),
+				)?;
+				println!("--- schema '{}' (ns={} db={})", target.label(), target.ns(), target.db());
+				let db = connect_target(&cfg, &target).await?;
+				rollout::run_status(&db, &folder, None).await?;
+			} else if !schema_catalog.is_empty() {
 				for name in schema_catalog.names() {
-					match schema_catalog.resolve(&name, &folder, &template_vars) {
+					match schema_catalog.resolve_typed(&name, &folder, &template_vars) {
 						Ok(schema) => {
+							let target = SchemaTarget::Named {
+								schema,
+							};
 							println!(
 								"--- schema '{}' (ns={} db={})",
-								schema.name, schema.ns, schema.db
+								target.label(),
+								target.ns(),
+								target.db()
 							);
-							let db = connect_schema(&cfg, &schema).await?;
+							let db = connect_target(&cfg, &target).await?;
 							rollout::run_status(&db, &folder, None).await?;
 						}
 						Err(err) => {
@@ -590,17 +548,47 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 					}
 				}
 			} else {
-				let db = connect(&cfg).await?;
+				let target = schema_catalog.resolve_required_target(
+					None,
+					&folder,
+					&template_vars,
+					cfg.ns(),
+					cfg.db(),
+				)?;
+				warn_legacy_target("status", &target, &folder);
+				let db = connect_target(&cfg, &target).await?;
 				rollout::run_status(&db, &folder, None).await?;
 			}
 		}
 		Commands::Apply {
+			schema,
+			skip_template_schemas,
 			path,
 		} => {
-			let db = connect(&cfg).await?;
 			let sql = std::fs::read_to_string(&path)?;
 			let sql = template_vars.apply(&sql)?;
-			exec_surql(&db, &sql).await?;
+			let targets = resolve_targets(
+				&schema_catalog,
+				schema.as_deref(),
+				skip_template_schemas,
+				&folder,
+				&template_vars,
+				&cfg,
+			)?;
+			for target in targets {
+				warn_legacy_target("apply", &target, &folder);
+				if target.schema_name().is_some() {
+					println!(
+						"Applying {} to schema '{}' (ns={} db={})",
+						path.display(),
+						target.label(),
+						target.ns(),
+						target.db()
+					);
+				}
+				let db = connect_target(&cfg, &target).await?;
+				exec_surql(&db, &sql).await?;
+			}
 		}
 		Commands::Test {
 			schema,
@@ -658,9 +646,13 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn global_ns_and_db_flags_are_removed() {
-		assert!(Cli::try_parse_from(["surrealkit", "--ns", "app", "sync"]).is_err());
-		assert!(Cli::try_parse_from(["surrealkit", "--db", "main", "sync"]).is_err());
+	fn global_ns_and_db_flags_parse_for_legacy_compatibility() {
+		assert!(Cli::try_parse_from(["surrealkit", "--ns", "app", "--db", "main", "sync"]).is_ok());
+	}
+
+	#[test]
+	fn migrate_command_is_not_exposed() {
+		assert!(Cli::try_parse_from(["surrealkit", "migrate", "main"]).is_err());
 	}
 
 	#[test]
@@ -719,5 +711,22 @@ mod tests {
 	#[test]
 	fn seed_all_schemas_flag_is_removed() {
 		assert!(Cli::try_parse_from(["surrealkit", "seed", "--all-schemas"]).is_err());
+	}
+
+	#[test]
+	fn setup_schema_flag_parses() {
+		assert!(Cli::try_parse_from(["surrealkit", "setup", "--schema", "admin"]).is_ok());
+	}
+
+	#[test]
+	fn status_schema_flag_parses() {
+		assert!(Cli::try_parse_from(["surrealkit", "status", "--schema", "admin"]).is_ok());
+	}
+
+	#[test]
+	fn apply_schema_flag_parses() {
+		assert!(
+			Cli::try_parse_from(["surrealkit", "apply", "--schema", "admin", "file.surql"]).is_ok()
+		);
 	}
 }

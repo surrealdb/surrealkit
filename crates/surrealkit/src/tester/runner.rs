@@ -24,7 +24,7 @@ use super::types::{
 };
 use crate::config::{AuthLevel, Cfg};
 use crate::core::create_surreal_client;
-use crate::schema::ResolvedSchema;
+use crate::schema::SchemaTarget;
 use crate::seed;
 use crate::setup::run_setup;
 use crate::sync::{self, SyncOpts};
@@ -37,7 +37,7 @@ pub struct RunnerContext {
 	pub base_url: Option<String>,
 	pub timeout_ms: u64,
 	pub vars: TemplateVars,
-	pub schema: Option<ResolvedSchema>,
+	pub target: SchemaTarget,
 	run_id: String,
 }
 
@@ -49,7 +49,7 @@ impl RunnerContext {
 		base_url: Option<String>,
 		timeout_ms: u64,
 		vars: TemplateVars,
-		schema: Option<ResolvedSchema>,
+		target: SchemaTarget,
 	) -> Self {
 		Self {
 			cfg,
@@ -58,7 +58,7 @@ impl RunnerContext {
 			base_url,
 			timeout_ms,
 			vars,
-			schema,
+			target,
 			run_id: unique_run_id(),
 		}
 	}
@@ -155,7 +155,7 @@ impl RunnerContext {
 			base_url: self.base_url.clone(),
 			timeout_ms: self.timeout_ms,
 			vars: self.vars.clone(),
-			schema: self.schema.clone(),
+			target: self.target.clone(),
 			run_id: self.run_id.clone(),
 		}
 	}
@@ -166,12 +166,7 @@ impl RunnerContext {
 			suite.spec.name.clone().unwrap_or_else(|| suite.path.to_string_lossy().to_string());
 		let slug = slugify(&format!("{}-{}", suite_name, suite.path.display()));
 
-		// Use the resolved schema's ns/db as the isolation base when available,
-		// falling back to the connection-level ns/db for legacy flat mode.
-		let (base_ns, base_db) = match &self.schema {
-			Some(s) => (s.ns.clone(), s.db.clone()),
-			None => (self.cfg.ns().to_string(), self.cfg.db().to_string()),
-		};
+		let (base_ns, base_db) = (self.target.ns().to_string(), self.target.db().to_string());
 		let (namespace, database) = match self.cfg.auth_level() {
 			AuthLevel::Root => (
 				format!("{}_sk_test_{}_{}", base_ns, self.run_id, slug),
@@ -256,53 +251,28 @@ impl RunnerContext {
 			run_setup(&root.db, folder).await?;
 		}
 		if !self.opts.no_sync {
-			match &self.schema {
-				Some(schema) => {
-					sync::run_sync_with_workspace(
-						&root.db,
-						&schema.workspace,
-						SyncOpts {
-							watch: false,
-							debounce_ms: 250,
-							dry_run: false,
-							fail_fast: true,
-							prune: true,
-							allow_shared_prune: true,
-							allow_all_statements: false,
-							vars: self.vars.clone(),
-							folder: folder.to_owned(),
-						},
-					)
-					.await?;
-				}
-				None => {
-					sync::run_sync(
-						&root.db,
-						folder,
-						SyncOpts {
-							watch: false,
-							debounce_ms: 250,
-							dry_run: false,
-							fail_fast: true,
-							prune: true,
-							allow_shared_prune: true,
-							allow_all_statements: false,
-							vars: self.vars.clone(),
-							folder: folder.to_owned(),
-						},
-					)
-					.await?;
-				}
-			}
+			sync::run_sync_with_workspace(
+				&root.db,
+				self.target.workspace(),
+				SyncOpts {
+					watch: false,
+					debounce_ms: 250,
+					dry_run: false,
+					fail_fast: true,
+					prune: true,
+					allow_shared_prune: true,
+					allow_all_statements: false,
+					vars: self.vars.clone(),
+					folder: folder.to_owned(),
+				},
+			)
+			.await?;
 		}
 		if !self.opts.no_seed {
-			match &self.schema {
-				Some(schema) => {
-					seed::seed_from_dirs(&root.db, &schema.seed_dirs, &self.vars).await?;
-				}
-				None => {
-					seed::seed(&root.db, folder, &self.vars).await?;
-				}
+			if self.target.is_legacy() {
+				seed::seed(&root.db, folder, &self.vars).await?;
+			} else {
+				seed::seed_from_dirs(&root.db, self.target.seed_dirs(), &self.vars).await?;
 			}
 		}
 

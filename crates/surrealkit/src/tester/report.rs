@@ -2,6 +2,7 @@ use std::fs;
 use std::path::Path;
 
 use anyhow::{Context, Result};
+use serde::Serialize;
 
 use super::types::RunReport;
 
@@ -39,6 +40,10 @@ pub fn print_human_report(report: &RunReport) {
 }
 
 pub fn write_json_report(path: &Path, report: &RunReport) -> Result<()> {
+	write_json_value(path, report)
+}
+
+pub fn write_json_value(path: &Path, report: &impl Serialize) -> Result<()> {
 	if let Some(parent) = path.parent() {
 		fs::create_dir_all(parent)
 			.with_context(|| format!("creating report directory {}", parent.display()))?;

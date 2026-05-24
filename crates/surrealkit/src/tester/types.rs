@@ -262,6 +262,29 @@ pub struct RunReport {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct SchemaRunReport {
+	pub schema: Option<String>,
+	pub namespace: String,
+	pub database: String,
+	pub report: RunReport,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct AggregateRunReport {
+	pub started_at: String,
+	pub finished_at: String,
+	pub duration_ms: u128,
+	pub schemas_total: usize,
+	pub schemas_failed: usize,
+	pub suites_total: usize,
+	pub suites_failed: usize,
+	pub cases_total: usize,
+	pub cases_passed: usize,
+	pub cases_failed: usize,
+	pub schemas: Vec<SchemaRunReport>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct SuiteReport {
 	pub suite_file: String,
 	pub suite_name: String,

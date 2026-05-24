@@ -43,6 +43,8 @@ surrealkit::sync::run_sync_with_workspace(
 .await?;
 ```
 
+For tools that need to handle both legacy flat projects and named schemas, resolve `SchemaTarget` values from the catalog. A target exposes the selected namespace/database plus the workspace and seed directories for that mode.
+
 ### `embed_schema!` (compile-time embedding)
 
 `embed_schema!` is a proc-macro that walks your `.surql` files at build time and bakes them into the binary. At runtime the generated `embedded_schema::sync` function applies any file whose content has changed, using the same hash-tracking logic as the CLI.
