@@ -250,6 +250,7 @@ pub fn load_workspace_catalog_snapshot(workspace: &SchemaWorkspace) -> Result<Ca
 		CatalogSnapshot {
 			version: 2,
 			entities: Vec::new(),
+			operations: Vec::new(),
 		},
 	)
 }

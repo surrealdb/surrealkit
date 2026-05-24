@@ -96,18 +96,9 @@ impl Cfg {
 		// ns/db resolution is only used by the legacy flat sync path.
 		// Named schemas supply their own ns/db targets via [schema.*] in
 		// surrealkit.toml. These env vars and config fields are deprecated.
-		let db = resolve(
-			&overrides.db,
-			&["SURREALDB_NAME", "DATABASE_NAME"],
-			dotenv,
-			"test",
-		);
-		let ns = resolve(
-			&overrides.ns,
-			&["SURREALDB_NAMESPACE", "DATABASE_NAMESPACE"],
-			dotenv,
-			"db",
-		);
+		let db = resolve(&overrides.db, &["SURREALDB_NAME", "DATABASE_NAME"], dotenv, "test");
+		let ns =
+			resolve(&overrides.ns, &["SURREALDB_NAMESPACE", "DATABASE_NAMESPACE"], dotenv, "db");
 		let user = resolve(&overrides.user, &["SURREALDB_USER", "DATABASE_USER"], dotenv, "root");
 		let pass =
 			resolve(&overrides.pass, &["SURREALDB_PASSWORD", "DATABASE_PASSWORD"], dotenv, "root");

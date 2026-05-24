@@ -4,13 +4,13 @@ use clap::{Parser, Subcommand};
 use rust_dotenv::dotenv::DotEnv;
 use surrealkit::config::{Cfg, ConfigOverrides, connect};
 use surrealkit::core::exec_surql;
+use surrealkit::migrate::{MigrateOpts, run_migrate};
 use surrealkit::rollout::{self, RolloutExecutionOpts, RolloutPlanOpts};
 use surrealkit::schema::{ResolvedSchema, load_schema_catalog};
 use surrealkit::setup::run_setup;
 use surrealkit::sync::{self, SyncOpts};
 use surrealkit::tester::{TestOpts, run_test};
 use surrealkit::variables::{TemplateVars, build_vars, parse_var_flag};
-use surrealkit::migrate::{MigrateOpts, run_migrate};
 use surrealkit::{scaffold, seed};
 
 #[derive(Parser, Debug)]
@@ -270,8 +270,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			allow_all_statements,
 		} => {
 			if let Some(schema_name) = schema {
-				let schema =
-					schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
+				let schema = schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
 				let db = connect_schema(&cfg, &schema).await?;
 				sync::run_sync_with_workspace(
 					&db,
@@ -291,8 +290,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 				.await?;
 			} else if !schema_catalog.is_empty() {
 				let schemas = if skip_template_schemas {
-					schema_catalog
-						.resolve_all_skip_templates(&folder, &template_vars)?
+					schema_catalog.resolve_all_skip_templates(&folder, &template_vars)?
 				} else {
 					schema_catalog.resolve_all(&folder, &template_vars)?
 				};
@@ -533,14 +531,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			skip_template_schemas,
 		} => {
 			if let Some(schema_name) = schema {
-				let schema =
-					schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
+				let schema = schema_catalog.resolve(&schema_name, &folder, &template_vars)?;
 				let db = connect_schema(&cfg, &schema).await?;
 				seed::seed_from_dirs(&db, &schema.seed_dirs, &template_vars).await?;
 			} else if !schema_catalog.is_empty() {
 				let schemas = if skip_template_schemas {
-					schema_catalog
-						.resolve_all_skip_templates(&folder, &template_vars)?
+					schema_catalog.resolve_all_skip_templates(&folder, &template_vars)?
 				} else {
 					schema_catalog.resolve_all(&folder, &template_vars)?
 				};
@@ -679,14 +675,16 @@ mod tests {
 
 	#[test]
 	fn sync_skip_template_schemas_conflicts_with_schema() {
-		assert!(Cli::try_parse_from([
-			"surrealkit",
-			"sync",
-			"--schema",
-			"admin",
-			"--skip-template-schemas",
-		])
-		.is_err());
+		assert!(
+			Cli::try_parse_from([
+				"surrealkit",
+				"sync",
+				"--schema",
+				"admin",
+				"--skip-template-schemas",
+			])
+			.is_err()
+		);
 	}
 
 	#[test]
@@ -706,14 +704,16 @@ mod tests {
 
 	#[test]
 	fn seed_skip_template_schemas_conflicts_with_schema() {
-		assert!(Cli::try_parse_from([
-			"surrealkit",
-			"seed",
-			"--schema",
-			"admin",
-			"--skip-template-schemas",
-		])
-		.is_err());
+		assert!(
+			Cli::try_parse_from([
+				"surrealkit",
+				"seed",
+				"--schema",
+				"admin",
+				"--skip-template-schemas",
+			])
+			.is_err()
+		);
 	}
 
 	#[test]

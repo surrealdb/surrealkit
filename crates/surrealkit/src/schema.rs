@@ -286,8 +286,7 @@ db = "main"
 "#,
 		);
 
-		let resolved =
-			catalog.resolve("admin", "./database", &TemplateVars::default()).unwrap();
+		let resolved = catalog.resolve("admin", "./database", &TemplateVars::default()).unwrap();
 		assert_eq!(resolved.chain, vec!["base", "admin"]);
 		assert_eq!(resolved.ns, "system");
 		assert_eq!(resolved.db, "main");
@@ -304,8 +303,7 @@ required_variables = ["org_id"]
 "#,
 		);
 
-		let resolved =
-			catalog.resolve("org", "./database", &vars(&[("org_id", "acme")])).unwrap();
+		let resolved = catalog.resolve("org", "./database", &vars(&[("org_id", "acme")])).unwrap();
 		assert_eq!(resolved.ns, "org_acme");
 	}
 
@@ -320,8 +318,7 @@ required_variables = ["org_id"]
 "#,
 		);
 
-		let err =
-			catalog.resolve("org", "./database", &TemplateVars::default()).unwrap_err();
+		let err = catalog.resolve("org", "./database", &TemplateVars::default()).unwrap_err();
 		assert!(err.to_string().contains("requires missing variable"));
 	}
 
@@ -337,8 +334,7 @@ extends = "a"
 "#,
 		);
 
-		let err =
-			catalog.resolve("a", "./database", &TemplateVars::default()).unwrap_err();
+		let err = catalog.resolve("a", "./database", &TemplateVars::default()).unwrap_err();
 		assert!(err.to_string().contains("cycle"));
 	}
 }

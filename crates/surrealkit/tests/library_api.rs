@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use surrealdb::Surreal;
 use surrealdb::engine::any::{Any, connect};
@@ -16,9 +17,13 @@ use surrealkit::{
 use surrealkit::{load_schema_catalog, seed, sync};
 
 async fn mem_db() -> Surreal<Any> {
+	static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 	let cfg = Config::new().capabilities(Capabilities::all());
 	let db = connect(("mem://", cfg)).await.expect("connect mem://");
-	db.use_ns("surrealkit_test").use_db("library_api_test").await.expect("use_ns/use_db");
+	let id = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+	let ns = format!("surrealkit_test_{}_{}", std::process::id(), id);
+	db.use_ns(ns).use_db("library_api_test").await.expect("use_ns/use_db");
 	db
 }
 
@@ -42,7 +47,7 @@ fn enter_tempdir() -> (tempfile::TempDir, RestoreCwd) {
 
 #[tokio::test]
 async fn setup_initialises_metadata_tables() {
-	let _lock = FS_LOCK.lock().unwrap();
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (_tmp, _cwd) = enter_tempdir();
 	let db = mem_db().await;
 	run_setup(&db, DEFAULT_ROOT_DIR).await.expect("run_setup");
@@ -444,7 +449,7 @@ db = "main"
 
 [schema.org]
 extends = "base"
-ns = "org_{org_id}"
+ns = "org_${org_id}"
 db = "main"
 required_variables = ["org_id"]
 "#,
@@ -456,7 +461,7 @@ required_variables = ["org_id"]
 
 	let catalog = load_schema_catalog(None).expect("load schema catalog");
 	let admin = catalog
-		.resolve_concrete("admin", DEFAULT_ROOT_DIR, &TemplateVars::default())
+		.resolve("admin", DEFAULT_ROOT_DIR, &TemplateVars::default())
 		.expect("resolve admin");
 	let db = mem_db().await;
 	db.use_ns(&admin.ns).use_db(&admin.db).await.expect("use admin target");
@@ -483,8 +488,7 @@ required_variables = ["org_id"]
 	let template_vars = TemplateVars {
 		vars,
 	};
-	let org =
-		catalog.resolve_concrete("org", DEFAULT_ROOT_DIR, &template_vars).expect("resolve org");
+	let org = catalog.resolve("org", DEFAULT_ROOT_DIR, &template_vars).expect("resolve org");
 	assert_eq!(org.ns, "org_acme");
 	db.use_ns(&org.ns).use_db(&org.db).await.expect("use org target");
 	sync::run_sync_with_workspace(
@@ -529,7 +533,7 @@ db = "main"
 
 	let catalog = load_schema_catalog(None).expect("load schema catalog");
 	let admin = catalog
-		.resolve_concrete("admin", DEFAULT_ROOT_DIR, &TemplateVars::default())
+		.resolve("admin", DEFAULT_ROOT_DIR, &TemplateVars::default())
 		.expect("resolve admin");
 	let db = mem_db().await;
 	db.use_ns(&admin.ns).use_db(&admin.db).await.expect("use admin target");
@@ -818,7 +822,7 @@ async fn sync_embedded_with_undefined_var_returns_error() {
 
 #[tokio::test]
 async fn seed_with_vars_substitutes_in_seed_file() {
-	let _lock = FS_LOCK.lock().unwrap();
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (tmp, _cwd) = enter_tempdir();
 
 	let db = mem_db().await;
@@ -844,7 +848,7 @@ async fn seed_with_vars_substitutes_in_seed_file() {
 
 #[tokio::test]
 async fn seed_with_undefined_var_returns_error() {
-	let _lock = FS_LOCK.lock().unwrap();
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (tmp, _cwd) = enter_tempdir();
 
 	let db = mem_db().await;
@@ -866,7 +870,7 @@ async fn seed_with_undefined_var_returns_error() {
 #[tokio::test]
 async fn rollout_apply_schema_step_with_files_substitutes_vars() {
 	// ApplySchema with files reads from disk; rollout_run_sql_step_with_vars covers inline sql.
-	let _lock = FS_LOCK.lock().unwrap();
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (tmp, _cwd) = enter_tempdir();
 
 	let db = mem_db().await;

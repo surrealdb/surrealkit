@@ -177,10 +177,9 @@ impl RunnerContext {
 				format!("{}_sk_test_{}_{}", base_ns, self.run_id, slug),
 				format!("{}_sk_test_{}_{}", base_db, self.run_id, slug),
 			),
-			AuthLevel::Namespace => (
-				base_ns.clone(),
-				format!("{}_sk_test_{}_{}", base_db, self.run_id, slug),
-			),
+			AuthLevel::Namespace => {
+				(base_ns.clone(), format!("{}_sk_test_{}_{}", base_db, self.run_id, slug))
+			}
 			AuthLevel::Database => {
 				unreachable!("AuthLevel::Database is rejected by tester::run_test")
 			}

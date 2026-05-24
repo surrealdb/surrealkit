@@ -39,7 +39,11 @@ pub fn run_migrate(opts: &MigrateOpts) -> Result<()> {
 
 	println!(
 		"{}Migrating flat schema layout to named schema '{name}' in {folder}/\n",
-		if dry_run { "[dry-run] " } else { "" }
+		if dry_run {
+			"[dry-run] "
+		} else {
+			""
+		}
 	);
 
 	for m in &moves {
@@ -57,17 +61,15 @@ pub fn run_migrate(opts: &MigrateOpts) -> Result<()> {
 			fs::create_dir_all(parent)
 				.with_context(|| format!("creating parent directory {}", parent.display()))?;
 		}
-		fs::rename(&m.from, &m.to).with_context(|| {
-			format!("moving {} → {}", m.from.display(), m.to.display())
-		})?;
+		fs::rename(&m.from, &m.to)
+			.with_context(|| format!("moving {} → {}", m.from.display(), m.to.display()))?;
 	}
 
 	// schema/ was fully relocated to schemas/<name>/ — remove it.
 	let legacy_schema = schema_dir(folder);
 	if legacy_schema.exists() {
-		fs::remove_dir_all(&legacy_schema).with_context(|| {
-			format!("removing legacy {}", legacy_schema.display())
-		})?;
+		fs::remove_dir_all(&legacy_schema)
+			.with_context(|| format!("removing legacy {}", legacy_schema.display()))?;
 		println!("\n  Removed {}/", legacy_schema.display());
 	}
 
@@ -149,8 +151,7 @@ fn has_flat_manifests(rollouts: &Path) -> bool {
 		return false;
 	};
 	entries.flatten().any(|e| {
-		e.path().is_file()
-			&& e.path().extension().and_then(|s| s.to_str()) == Some("toml")
+		e.path().is_file() && e.path().extension().and_then(|s| s.to_str()) == Some("toml")
 	})
 }
 
@@ -162,12 +163,9 @@ fn has_flat_snapshots(state: &Path) -> bool {
 	let Ok(entries) = fs::read_dir(state) else {
 		return false;
 	};
-	entries.flatten().any(|e| {
-		e.path().is_file()
-			&& e.file_name()
-				.to_string_lossy()
-				.ends_with("_snapshot.json")
-	})
+	entries
+		.flatten()
+		.any(|e| e.path().is_file() && e.file_name().to_string_lossy().ends_with("_snapshot.json"))
 }
 
 fn plan_moves(folder: &str, name: &str) -> Vec<Move> {
@@ -191,7 +189,13 @@ fn plan_moves(folder: &str, name: &str) -> Vec<Move> {
 	let src_rollouts = rollouts_dir(folder);
 	if src_rollouts.exists() {
 		let dest_rollouts = named_rollouts_dir(folder, name);
-		collect_files_matching(&src_rollouts, &dest_rollouts, "toml", &mut moves, "rollout manifest");
+		collect_files_matching(
+			&src_rollouts,
+			&dest_rollouts,
+			"toml",
+			&mut moves,
+			"rollout manifest",
+		);
 	}
 
 	// 4. snapshots/*_snapshot.json → snapshots/<name>/
@@ -251,13 +255,7 @@ fn collect_flat_seed_files(src_seed: &Path, dest_seed: &Path, moves: &mut Vec<Mo
 }
 
 /// Collect files with a given extension directly inside `src` (not recursive).
-fn collect_files_matching(
-	src: &Path,
-	dest: &Path,
-	ext: &str,
-	moves: &mut Vec<Move>,
-	kind: &str,
-) {
+fn collect_files_matching(src: &Path, dest: &Path, ext: &str, moves: &mut Vec<Move>, kind: &str) {
 	let Ok(entries) = fs::read_dir(src) else {
 		return;
 	};
@@ -273,4 +271,3 @@ fn collect_files_matching(
 		}
 	}
 }
-
