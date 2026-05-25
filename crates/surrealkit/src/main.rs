@@ -91,6 +91,10 @@ enum Commands {
 	Rollout {
 		#[arg(long)]
 		schema: Option<String>,
+		/// Skip schemas whose required template variables are not supplied
+		/// instead of erroring. Only applies when running rollout for all schemas.
+		#[arg(long, conflicts_with = "schema")]
+		skip_template_schemas: bool,
 		#[command(subcommand)]
 		command: RolloutCommands,
 	},
@@ -386,99 +390,110 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		}
 		Commands::Rollout {
 			schema,
+			skip_template_schemas,
 			command,
 		} => {
-			let rollout_target = schema_catalog.resolve_required_target(
+			let targets = resolve_targets(
+				&schema_catalog,
 				schema.as_deref(),
+				skip_template_schemas,
 				&folder,
 				&template_vars,
-				cfg.ns(),
-				cfg.db(),
+				&cfg,
 			)?;
-			warn_legacy_target("rollout", &rollout_target, &folder);
-			match command {
-				RolloutCommands::Baseline => {
-					let db = connect_target(&cfg, &rollout_target).await?;
-					rollout::run_baseline_with_workspace(&db, rollout_target.workspace()).await?;
+			for target in targets {
+				warn_legacy_target("rollout", &target, &folder);
+				if target.schema_name().is_some() {
+					println!(
+						"Rollout for schema '{}' (ns={} db={})",
+						target.label(),
+						target.ns(),
+						target.db()
+					);
 				}
-				RolloutCommands::Plan {
-					name,
-					dry_run,
-				} => {
-					let opts = RolloutPlanOpts {
+				match &command {
+					RolloutCommands::Baseline => {
+						let db = connect_target(&cfg, &target).await?;
+						rollout::run_baseline_with_workspace(&db, target.workspace()).await?;
+					}
+					RolloutCommands::Plan {
 						name,
 						dry_run,
-					};
-					rollout::run_plan_with_workspace(rollout_target.workspace(), opts).await?;
-				}
-				RolloutCommands::Start {
-					target,
-				} => {
-					let opts = RolloutExecutionOpts {
-						selector: Some(target),
-					};
-					let db = connect_target(&cfg, &rollout_target).await?;
-					rollout::run_start_with_workspace(
-						&db,
-						rollout_target.workspace(),
-						opts,
-						&template_vars,
-					)
-					.await?;
-				}
-				RolloutCommands::Complete {
-					target,
-				} => {
-					let opts = RolloutExecutionOpts {
-						selector: Some(target),
-					};
-					let db = connect_target(&cfg, &rollout_target).await?;
-					rollout::run_complete_with_workspace(
-						&db,
-						rollout_target.workspace(),
-						opts,
-						&template_vars,
-					)
-					.await?;
-				}
-				RolloutCommands::Rollback {
-					target,
-				} => {
-					let opts = RolloutExecutionOpts {
-						selector: Some(target),
-					};
-					let db = connect_target(&cfg, &rollout_target).await?;
-					rollout::run_rollback_with_workspace(
-						&db,
-						rollout_target.workspace(),
-						opts,
-						&template_vars,
-					)
-					.await?;
-				}
-				RolloutCommands::Status {
-					target: selector,
-				} => {
-					let db = connect_target(&cfg, &rollout_target).await?;
-					rollout::run_status(&db, &folder, selector).await?;
-				}
-				RolloutCommands::Lint {
-					target,
-				} => {
-					let opts = RolloutExecutionOpts {
-						selector: Some(target),
-					};
-					rollout::run_lint_with_workspace(rollout_target.workspace(), opts).await?;
-				}
-				RolloutCommands::Repair {
-					target,
-				} => {
-					let opts = RolloutExecutionOpts {
-						selector: Some(target),
-					};
-					let db = connect_target(&cfg, &rollout_target).await?;
-					rollout::run_repair_with_workspace(&db, rollout_target.workspace(), opts)
+					} => {
+						let opts = RolloutPlanOpts {
+							name: name.clone(),
+							dry_run: *dry_run,
+						};
+						rollout::run_plan_with_workspace(target.workspace(), opts).await?;
+					}
+					RolloutCommands::Start {
+						target: selector,
+					} => {
+						let opts = RolloutExecutionOpts {
+							selector: Some(selector.clone()),
+						};
+						let db = connect_target(&cfg, &target).await?;
+						rollout::run_start_with_workspace(
+							&db,
+							target.workspace(),
+							opts,
+							&template_vars,
+						)
 						.await?;
+					}
+					RolloutCommands::Complete {
+						target: selector,
+					} => {
+						let opts = RolloutExecutionOpts {
+							selector: Some(selector.clone()),
+						};
+						let db = connect_target(&cfg, &target).await?;
+						rollout::run_complete_with_workspace(
+							&db,
+							target.workspace(),
+							opts,
+							&template_vars,
+						)
+						.await?;
+					}
+					RolloutCommands::Rollback {
+						target: selector,
+					} => {
+						let opts = RolloutExecutionOpts {
+							selector: Some(selector.clone()),
+						};
+						let db = connect_target(&cfg, &target).await?;
+						rollout::run_rollback_with_workspace(
+							&db,
+							target.workspace(),
+							opts,
+							&template_vars,
+						)
+						.await?;
+					}
+					RolloutCommands::Status {
+						target: selector,
+					} => {
+						let db = connect_target(&cfg, &target).await?;
+						rollout::run_status(&db, &folder, selector.clone()).await?;
+					}
+					RolloutCommands::Lint {
+						target: selector,
+					} => {
+						let opts = RolloutExecutionOpts {
+							selector: Some(selector.clone()),
+						};
+						rollout::run_lint_with_workspace(target.workspace(), opts).await?;
+					}
+					RolloutCommands::Repair {
+						target: selector,
+					} => {
+						let opts = RolloutExecutionOpts {
+							selector: Some(selector.clone()),
+						};
+						let db = connect_target(&cfg, &target).await?;
+						rollout::run_repair_with_workspace(&db, target.workspace(), opts).await?;
+					}
 				}
 			}
 		}
@@ -727,6 +742,36 @@ mod tests {
 	fn apply_schema_flag_parses() {
 		assert!(
 			Cli::try_parse_from(["surrealkit", "apply", "--schema", "admin", "file.surql"]).is_ok()
+		);
+	}
+
+	#[test]
+	fn rollout_schema_flag_parses() {
+		assert!(Cli::try_parse_from(["surrealkit", "rollout", "--schema", "admin", "baseline"]).is_ok());
+	}
+
+	#[test]
+	fn rollout_baseline_without_schema_parses() {
+		assert!(Cli::try_parse_from(["surrealkit", "rollout", "baseline"]).is_ok());
+	}
+
+	#[test]
+	fn rollout_skip_template_schemas_flag_parses() {
+		assert!(Cli::try_parse_from(["surrealkit", "rollout", "--skip-template-schemas", "baseline"]).is_ok());
+	}
+
+	#[test]
+	fn rollout_skip_template_schemas_conflicts_with_schema() {
+		assert!(
+			Cli::try_parse_from([
+				"surrealkit",
+				"rollout",
+				"--schema",
+				"admin",
+				"--skip-template-schemas",
+				"baseline",
+			])
+			.is_err()
 		);
 	}
 }
