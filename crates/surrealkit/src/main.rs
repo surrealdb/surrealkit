@@ -747,7 +747,9 @@ mod tests {
 
 	#[test]
 	fn rollout_schema_flag_parses() {
-		assert!(Cli::try_parse_from(["surrealkit", "rollout", "--schema", "admin", "baseline"]).is_ok());
+		assert!(
+			Cli::try_parse_from(["surrealkit", "rollout", "--schema", "admin", "baseline"]).is_ok()
+		);
 	}
 
 	#[test]
@@ -757,7 +759,10 @@ mod tests {
 
 	#[test]
 	fn rollout_skip_template_schemas_flag_parses() {
-		assert!(Cli::try_parse_from(["surrealkit", "rollout", "--skip-template-schemas", "baseline"]).is_ok());
+		assert!(
+			Cli::try_parse_from(["surrealkit", "rollout", "--skip-template-schemas", "baseline"])
+				.is_ok()
+		);
 	}
 
 	#[test]
