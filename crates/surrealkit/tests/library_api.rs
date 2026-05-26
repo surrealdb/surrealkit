@@ -872,9 +872,7 @@ async fn seed_with_env_vars_substitutes_in_seed_file() {
 		vars: build_vars(&[], None, None).expect("build_vars from env"),
 	};
 
-	seed_from_dir(&db, &seed_dir, &template_vars)
-		.await
-		.expect("seed_from_dir with env vars");
+	seed_from_dir(&db, &seed_dir, &template_vars).await.expect("seed_from_dir with env vars");
 
 	let mut resp = db.query("SELECT role FROM person WHERE id = person:1;").await.expect("q");
 	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
@@ -890,11 +888,8 @@ async fn seed_with_dotenv_vars_substitutes_in_seed_file() {
 	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (tmp, _cwd) = enter_tempdir();
 
-	std::fs::write(
-		tmp.path().join(".env"),
-		"SURREALKIT_VAR_SEED_TEST_ONLY_DOTENV_ROLE=editor\n",
-	)
-	.expect("write .env");
+	std::fs::write(tmp.path().join(".env"), "SURREALKIT_VAR_SEED_TEST_ONLY_DOTENV_ROLE=editor\n")
+		.expect("write .env");
 
 	let dotenv = rust_dotenv::dotenv::DotEnv::new("");
 	let db = mem_db().await;
@@ -911,9 +906,7 @@ async fn seed_with_dotenv_vars_substitutes_in_seed_file() {
 		vars: build_vars(&[], None, Some(&dotenv)).expect("build_vars from dotenv"),
 	};
 
-	seed_from_dir(&db, &seed_dir, &template_vars)
-		.await
-		.expect("seed_from_dir with dotenv vars");
+	seed_from_dir(&db, &seed_dir, &template_vars).await.expect("seed_from_dir with dotenv vars");
 
 	let mut resp = db.query("SELECT role FROM person WHERE id = person:2;").await.expect("q");
 	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");

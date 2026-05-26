@@ -129,7 +129,7 @@ SurrealKit creates and manages its internal sync and rollout metadata tables on 
 
 ### Schemas
 
-Named schemas live in `surrealkit.toml` and select the namespace/database target for schema-aware commands. Schemas can extend a base schema, which composes files from `database/schemas/<name>/` and seeds from `database/seed/<name>/` in inheritance order.
+Named schemas live in `surrealkit.toml` and select the namespace/database target for schema-aware commands. Schemas can extend one or more base schemas, which composes files from `database/schemas/<name>/` and seeds from `database/seed/<name>/` in inheritance order.
 
 ```toml
 [schema.base]

@@ -369,9 +369,12 @@ mod tests {
 	fn build_vars_normalizes_cli_key_to_uppercase() {
 		let tmp = TempDir::new().unwrap();
 		let cfg = tmp.path().join("surrealkit.toml");
-		let map =
-			build_vars(&[("build_vars_test_only_c".to_string(), "v".to_string())], Some(&cfg), None)
-				.unwrap();
+		let map = build_vars(
+			&[("build_vars_test_only_c".to_string(), "v".to_string())],
+			Some(&cfg),
+			None,
+		)
+		.unwrap();
 		assert!(map.contains_key("BUILD_VARS_TEST_ONLY_C"), "CLI key should be uppercased");
 	}
 
@@ -424,10 +427,7 @@ mod tests {
 
 		std::env::set_current_dir(original).unwrap();
 
-		assert_eq!(
-			map.get("BUILD_VARS_TEST_ONLY_DOTENV").map(String::as_str),
-			Some("from_dotenv")
-		);
+		assert_eq!(map.get("BUILD_VARS_TEST_ONLY_DOTENV").map(String::as_str), Some("from_dotenv"));
 	}
 
 	#[test]
@@ -442,11 +442,8 @@ mod tests {
 		)
 		.unwrap();
 		let cfg = tmp.path().join("surrealkit.toml");
-		std::fs::write(
-			&cfg,
-			"[variables]\nbuild_vars_test_only_dotenv_prec = \"from_toml\"\n",
-		)
-		.unwrap();
+		std::fs::write(&cfg, "[variables]\nbuild_vars_test_only_dotenv_prec = \"from_toml\"\n")
+			.unwrap();
 
 		let dotenv = DotEnv::new("");
 		let map = build_vars(&[], Some(&cfg), Some(&dotenv)).unwrap();
@@ -497,9 +494,6 @@ mod tests {
 		let map = build_vars(&[], Some(&nonexistent), None).unwrap();
 		unsafe { std::env::remove_var(env_key) };
 
-		assert_eq!(
-			map.get("BUILD_VARS_TEST_ONLY_F").map(String::as_str),
-			Some("from_env")
-		);
+		assert_eq!(map.get("BUILD_VARS_TEST_ONLY_F").map(String::as_str), Some("from_env"));
 	}
 }

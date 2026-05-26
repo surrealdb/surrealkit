@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
+use serde::de::Deserializer;
 
 use crate::config::Cfg;
 use crate::constants::{
@@ -20,11 +21,31 @@ struct ProjectSchemaConfig {
 #[derive(Debug, Clone, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SchemaDefinition {
-	pub extends: Option<String>,
+	#[serde(default, deserialize_with = "deserialize_extends")]
+	pub extends: Vec<String>,
 	pub ns: Option<String>,
 	pub db: Option<String>,
 	#[serde(default)]
 	pub required_variables: Vec<String>,
+}
+
+/// Accept either `extends = "base"` or `extends = ["base", "shared"]`.
+fn deserialize_extends<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+	D: Deserializer<'de>,
+{
+	#[derive(Deserialize)]
+	#[serde(untagged)]
+	enum Extends {
+		One(String),
+		Many(Vec<String>),
+	}
+
+	match Option::<Extends>::deserialize(deserializer)? {
+		None => Ok(Vec::new()),
+		Some(Extends::One(parent)) => Ok(vec![parent]),
+		Some(Extends::Many(parents)) => Ok(parents),
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -144,7 +165,9 @@ pub enum SchemaResolveError {
 		name: String,
 	},
 	Cycle {
-		name: String,
+		requested: String,
+		path: Vec<String>,
+		cycle: Vec<String>,
 	},
 	Abstract {
 		name: String,
@@ -167,8 +190,16 @@ impl std::fmt::Display for SchemaResolveError {
 				name,
 			} => write!(f, "schema '{}' was not found", name),
 			Self::Cycle {
-				name,
-			} => write!(f, "schema inheritance cycle detected at '{}'", name),
+				requested,
+				path,
+				cycle,
+			} => write!(
+				f,
+				"schema inheritance cycle detected while resolving '{}': {} (cycle: {})",
+				requested,
+				path.join(" -> "),
+				cycle.join(" -> ")
+			),
 			Self::Abstract {
 				name,
 				missing,
@@ -420,9 +451,10 @@ impl SchemaCatalog {
 	}
 
 	fn resolve_merged(&self, name: &str) -> std::result::Result<MergedSchema, SchemaResolveError> {
-		let mut visiting = BTreeSet::new();
+		let mut path = Vec::new();
+		let mut seen = BTreeSet::new();
 		let mut chain = Vec::new();
-		self.resolve_chain(name, &mut visiting, &mut chain)?;
+		self.resolve_chain(name, &mut path, &mut seen, &mut chain)?;
 
 		let mut ns = None;
 		let mut db = None;
@@ -454,23 +486,36 @@ impl SchemaCatalog {
 	fn resolve_chain(
 		&self,
 		name: &str,
-		visiting: &mut BTreeSet<String>,
+		path: &mut Vec<String>,
+		seen: &mut BTreeSet<String>,
 		chain: &mut Vec<String>,
 	) -> std::result::Result<(), SchemaResolveError> {
 		let definition =
 			self.definitions.get(name).ok_or_else(|| SchemaResolveError::NotFound {
 				name: name.to_string(),
 			})?;
-		if !visiting.insert(name.to_string()) {
+		if let Some(cycle_start) = path.iter().position(|visited| visited == name) {
+			let mut cycle = path[cycle_start..].to_vec();
+			cycle.push(name.to_string());
+			let full_path = {
+				let mut full = path.clone();
+				full.push(name.to_string());
+				full
+			};
 			return Err(SchemaResolveError::Cycle {
-				name: name.to_string(),
+				requested: path.first().cloned().unwrap_or_else(|| name.to_string()),
+				path: full_path,
+				cycle,
 			});
 		}
-		if let Some(parent) = definition.extends.as_deref() {
-			self.resolve_chain(parent, visiting, chain)?;
+		path.push(name.to_string());
+		for parent in &definition.extends {
+			self.resolve_chain(parent, path, seen, chain)?;
 		}
-		visiting.remove(name);
-		chain.push(name.to_string());
+		path.pop();
+		if seen.insert(name.to_string()) {
+			chain.push(name.to_string());
+		}
 		Ok(())
 	}
 }
@@ -533,6 +578,49 @@ mod tests {
 		}
 	}
 
+	fn expect_cycle(
+		catalog: &SchemaCatalog,
+		name: &str,
+		expected_path: &str,
+		expected_cycle: &str,
+	) {
+		let err = catalog.resolve_typed(name, "./database", &TemplateVars::default()).unwrap_err();
+		match err {
+			SchemaResolveError::Cycle {
+				requested,
+				path,
+				cycle,
+			} => {
+				let message = SchemaResolveError::Cycle {
+					requested: requested.clone(),
+					path: path.clone(),
+					cycle: cycle.clone(),
+				}
+				.to_string();
+				assert_eq!(requested, name, "unexpected requested schema in cycle error");
+				assert_eq!(path.join(" -> "), expected_path, "unexpected inheritance path");
+				assert_eq!(cycle.join(" -> "), expected_cycle, "unexpected cycle loop");
+				assert!(
+					message.contains(expected_path),
+					"display message should include path: {message}"
+				);
+				assert!(
+					message.contains(expected_cycle),
+					"display message should include cycle: {message}"
+				);
+			}
+			other => panic!("expected cycle error, got: {other}"),
+		}
+	}
+
+	fn expect_not_found(catalog: &SchemaCatalog, name: &str) {
+		let err = catalog.resolve_typed(name, "./database", &TemplateVars::default()).unwrap_err();
+		assert!(
+			matches!(err, SchemaResolveError::NotFound { .. }),
+			"expected not-found error, got: {err}"
+		);
+	}
+
 	#[test]
 	fn resolves_inheritance_order_and_target() {
 		let catalog = catalog(
@@ -550,6 +638,48 @@ db = "main"
 		assert_eq!(resolved.chain, vec!["base", "admin"]);
 		assert_eq!(resolved.ns, "system");
 		assert_eq!(resolved.db, "main");
+	}
+
+	#[test]
+	fn resolves_multiple_extends_in_declaration_order() {
+		let catalog = catalog(
+			r#"
+[schema.base]
+
+[schema.shared]
+
+[schema.admin]
+extends = ["base", "shared"]
+ns = "system"
+db = "main"
+"#,
+		);
+
+		let resolved = catalog.resolve("admin", "./database", &TemplateVars::default()).unwrap();
+		assert_eq!(resolved.chain, vec!["base", "shared", "admin"]);
+	}
+
+	#[test]
+	fn deduplicates_shared_ancestors_with_multiple_extends() {
+		let catalog = catalog(
+			r#"
+[schema.base]
+
+[schema.left]
+extends = "base"
+
+[schema.right]
+extends = "base"
+
+[schema.child]
+extends = ["left", "right"]
+ns = "system"
+db = "main"
+"#,
+		);
+
+		let resolved = catalog.resolve("child", "./database", &TemplateVars::default()).unwrap();
+		assert_eq!(resolved.chain, vec!["base", "left", "right", "child"]);
 	}
 
 	#[test]
@@ -646,7 +776,147 @@ extends = "a"
 "#,
 		);
 
-		let err = catalog.resolve("a", "./database", &TemplateVars::default()).unwrap_err();
-		assert!(err.to_string().contains("cycle"));
+		expect_cycle(&catalog, "a", "a -> b -> a", "a -> b -> a");
+		expect_cycle(&catalog, "b", "b -> a -> b", "b -> a -> b");
+	}
+
+	#[test]
+	fn rejects_self_cycle_with_single_extends() {
+		let catalog = catalog(
+			r#"
+[schema.a]
+extends = "a"
+ns = "system"
+db = "main"
+"#,
+		);
+
+		expect_cycle(&catalog, "a", "a -> a", "a -> a");
+	}
+
+	#[test]
+	fn rejects_self_cycle_with_extends_array() {
+		let catalog = catalog(
+			r#"
+[schema.a]
+extends = ["a"]
+ns = "system"
+db = "main"
+"#,
+		);
+
+		expect_cycle(&catalog, "a", "a -> a", "a -> a");
+	}
+
+	#[test]
+	fn rejects_three_node_cycle() {
+		let catalog = catalog(
+			r#"
+[schema.a]
+extends = "b"
+
+[schema.b]
+extends = "c"
+
+[schema.c]
+extends = "a"
+"#,
+		);
+
+		expect_cycle(&catalog, "a", "a -> b -> c -> a", "a -> b -> c -> a");
+		expect_cycle(&catalog, "b", "b -> c -> a -> b", "b -> c -> a -> b");
+		expect_cycle(&catalog, "c", "c -> a -> b -> c", "c -> a -> b -> c");
+	}
+
+	#[test]
+	fn rejects_cycle_reached_through_second_extends_parent() {
+		let catalog = catalog(
+			r#"
+[schema.base]
+
+[schema.a]
+extends = ["base", "b"]
+ns = "system"
+db = "main"
+
+[schema.b]
+extends = "a"
+"#,
+		);
+
+		expect_cycle(&catalog, "a", "a -> b -> a", "a -> b -> a");
+	}
+
+	#[test]
+	fn rejects_cycle_between_extends_siblings() {
+		let catalog = catalog(
+			r#"
+[schema.a]
+extends = ["b", "c"]
+ns = "system"
+db = "main"
+
+[schema.b]
+extends = "c"
+
+[schema.c]
+extends = "b"
+"#,
+		);
+
+		expect_cycle(&catalog, "a", "a -> b -> c -> b", "b -> c -> b");
+	}
+
+	#[test]
+	fn rejects_missing_extends_target() {
+		let catalog = catalog(
+			r#"
+[schema.a]
+extends = "missing"
+ns = "system"
+db = "main"
+"#,
+		);
+
+		expect_not_found(&catalog, "a");
+	}
+
+	#[test]
+	fn rejects_missing_extends_target_in_array() {
+		let catalog = catalog(
+			r#"
+[schema.base]
+
+[schema.a]
+extends = ["base", "missing"]
+ns = "system"
+db = "main"
+"#,
+		);
+
+		expect_not_found(&catalog, "a");
+	}
+
+	#[test]
+	fn resolves_deep_single_parent_chain() {
+		let catalog = catalog(
+			r#"
+[schema.a]
+
+[schema.b]
+extends = "a"
+
+[schema.c]
+extends = "b"
+
+[schema.d]
+extends = "c"
+ns = "system"
+db = "main"
+"#,
+		);
+
+		let resolved = catalog.resolve("d", "./database", &TemplateVars::default()).unwrap();
+		assert_eq!(resolved.chain, vec!["a", "b", "c", "d"]);
 	}
 }
