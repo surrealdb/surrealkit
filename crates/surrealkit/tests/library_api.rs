@@ -10,7 +10,7 @@ use surrealkit::constants::DEFAULT_ROOT_DIR;
 use surrealkit::schema_state::EntityKey;
 use surrealkit::{
 	EmbeddedSchemaFile, RolloutExecutionOpts, RolloutPhase, RolloutPlanOpts, RolloutSpec,
-	RolloutStep, RolloutStepKind, SyncOpts, TemplateVars, run_baseline, run_complete,
+	RolloutStep, RolloutStepKind, SyncOpts, TemplateVars, build_vars, run_baseline, run_complete,
 	run_complete_with_spec, run_plan, run_rollback, run_rollback_with_spec, run_setup, run_start,
 	run_start_with_spec, run_status, run_sync_embedded, run_sync_embedded_with_opts, seed_from_dir,
 };
@@ -29,6 +29,9 @@ async fn mem_db() -> Surreal<Any> {
 
 // Tests that change cwd must hold this lock to avoid races.
 static FS_LOCK: Mutex<()> = Mutex::new(());
+
+/// Serialises tests that mutate `SURREALKIT_VAR_*` env vars.
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 struct RestoreCwd(std::path::PathBuf);
 
@@ -844,6 +847,78 @@ async fn seed_with_vars_substitutes_in_seed_file() {
 	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
 	assert_eq!(rows.len(), 1);
 	assert_eq!(rows[0].get("role").and_then(|v| v.as_str()), Some("admin"));
+}
+
+#[tokio::test]
+async fn seed_with_env_vars_substitutes_in_seed_file() {
+	let _env_lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (tmp, _cwd) = enter_tempdir();
+
+	const ENV_KEY: &str = "SURREALKIT_VAR_SEED_TEST_ONLY_ROLE";
+	unsafe { std::env::set_var(ENV_KEY, "admin") };
+
+	let db = mem_db().await;
+
+	let seed_dir = tmp.path().join("custom_seed");
+	std::fs::create_dir_all(&seed_dir).expect("create seed dir");
+	std::fs::write(
+		seed_dir.join("01_data.surql"),
+		"CREATE person:1 SET role = '${seed_test_only_role}';",
+	)
+	.expect("write seed file");
+
+	let template_vars = TemplateVars {
+		vars: build_vars(&[], None, None).expect("build_vars from env"),
+	};
+
+	seed_from_dir(&db, &seed_dir, &template_vars)
+		.await
+		.expect("seed_from_dir with env vars");
+
+	let mut resp = db.query("SELECT role FROM person WHERE id = person:1;").await.expect("q");
+	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
+	assert_eq!(rows.len(), 1);
+	assert_eq!(rows[0].get("role").and_then(|v| v.as_str()), Some("admin"));
+
+	unsafe { std::env::remove_var(ENV_KEY) };
+}
+
+#[tokio::test]
+async fn seed_with_dotenv_vars_substitutes_in_seed_file() {
+	let _env_lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (tmp, _cwd) = enter_tempdir();
+
+	std::fs::write(
+		tmp.path().join(".env"),
+		"SURREALKIT_VAR_SEED_TEST_ONLY_DOTENV_ROLE=editor\n",
+	)
+	.expect("write .env");
+
+	let dotenv = rust_dotenv::dotenv::DotEnv::new("");
+	let db = mem_db().await;
+
+	let seed_dir = tmp.path().join("custom_seed");
+	std::fs::create_dir_all(&seed_dir).expect("create seed dir");
+	std::fs::write(
+		seed_dir.join("01_data.surql"),
+		"CREATE person:2 SET role = '${seed_test_only_dotenv_role}';",
+	)
+	.expect("write seed file");
+
+	let template_vars = TemplateVars {
+		vars: build_vars(&[], None, Some(&dotenv)).expect("build_vars from dotenv"),
+	};
+
+	seed_from_dir(&db, &seed_dir, &template_vars)
+		.await
+		.expect("seed_from_dir with dotenv vars");
+
+	let mut resp = db.query("SELECT role FROM person WHERE id = person:2;").await.expect("q");
+	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
+	assert_eq!(rows.len(), 1);
+	assert_eq!(rows[0].get("role").and_then(|v| v.as_str()), Some("editor"));
 }
 
 #[tokio::test]

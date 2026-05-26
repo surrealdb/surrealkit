@@ -182,7 +182,7 @@ pub const DEFAULT_PROJECT_CONFIG: &str = r#"# Named schemas — required to use 
 # required_variables = ["org_id"]
 #
 # ── Template variables ─────────────────────────────────────────────────────
-# Lowest priority: --var KEY=VALUE > SURREALKIT_VAR_KEY env > this file.
+# Lowest priority: --var KEY=VALUE > SURREALKIT_VAR_KEY env > .env > this file.
 #
 # [variables]
 # schema_prefix = "myapp"

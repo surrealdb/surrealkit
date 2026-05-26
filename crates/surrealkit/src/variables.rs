@@ -4,6 +4,7 @@ use std::sync::OnceLock;
 
 use anyhow::{Result, anyhow, bail};
 use regex::Regex;
+use rust_dotenv::dotenv::DotEnv;
 use serde::Deserialize;
 
 static VAR_REGEX: OnceLock<Regex> = OnceLock::new();
@@ -43,7 +44,7 @@ pub fn apply(content: &str, vars: &HashMap<String, String>) -> Result<String> {
 				None => {
 					return Err(anyhow!(
 						"template variable '{}' is not defined \
-                         (set via --var {}=VALUE, SURREALKIT_VAR_{} env var, or surrealkit.toml [variables])",
+                         (set via --var {}=VALUE, SURREALKIT_VAR_{} env var, .env, or surrealkit.toml [variables])",
 						key,
 						key,
 						key,
@@ -59,12 +60,14 @@ pub fn apply(content: &str, vars: &HashMap<String, String>) -> Result<String> {
 	Ok(result)
 }
 
-/// Merge variables from all three sources. Highest priority wins:
-/// `cli_vars` > `SURREALKIT_VAR_*` env vars > `surrealkit.toml [variables]`.
+/// Merge variables from all sources. Highest priority wins:
+/// `cli_vars` > `SURREALKIT_VAR_*` process env > `SURREALKIT_VAR_*` in `.env` >
+/// `surrealkit.toml [variables]`.
 /// Keys are uppercased. `toml_path` defaults to `./surrealkit.toml` when `None`.
 pub fn build_vars(
 	cli_vars: &[(String, String)],
 	toml_path: Option<&Path>,
+	dotenv: Option<&DotEnv>,
 ) -> Result<HashMap<String, String>> {
 	let mut map: HashMap<String, String> = HashMap::new();
 
@@ -78,7 +81,19 @@ pub fn build_vars(
 		}
 	}
 
-	// Middle priority: SURREALKIT_VAR_* environment variables
+	// Next: SURREALKIT_VAR_* entries from .env / .env.local
+	if let Some(dotenv) = dotenv {
+		for (key, value) in dotenv.all_vars() {
+			let upper = key.to_ascii_uppercase();
+			if let Some(stripped) = upper.strip_prefix("SURREALKIT_VAR_")
+				&& !stripped.is_empty()
+			{
+				map.insert(stripped.to_string(), value.clone());
+			}
+		}
+	}
+
+	// Higher priority: SURREALKIT_VAR_* process environment variables
 	for (key, value) in std::env::vars() {
 		if let Some(stripped) = key.strip_prefix("SURREALKIT_VAR_")
 			&& !stripped.is_empty()
@@ -138,10 +153,15 @@ struct ProjectConfig {
 #[cfg(test)]
 mod tests {
 	use std::collections::HashMap;
+	use std::sync::Mutex;
 
+	use rust_dotenv::dotenv::DotEnv;
 	use tempfile::TempDir;
 
 	use super::*;
+
+	/// Guards tests that mutate `SURREALKIT_VAR_*` env vars.
+	static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 	fn vars(pairs: &[(&str, &str)]) -> HashMap<String, String> {
 		pairs.iter().map(|(k, v)| (k.to_ascii_uppercase(), v.to_string())).collect()
@@ -327,7 +347,7 @@ mod tests {
 		let tmp = TempDir::new().unwrap();
 		let cfg = tmp.path().join("surrealkit.toml");
 		std::fs::write(&cfg, "[variables]\nbuild_vars_test_only_a = \"from_toml\"\n").unwrap();
-		let map = build_vars(&[], Some(&cfg)).unwrap();
+		let map = build_vars(&[], Some(&cfg), None).unwrap();
 		assert_eq!(map.get("BUILD_VARS_TEST_ONLY_A").map(String::as_str), Some("from_toml"));
 	}
 
@@ -339,6 +359,7 @@ mod tests {
 		let map = build_vars(
 			&[("BUILD_VARS_TEST_ONLY_B".to_string(), "from_cli".to_string())],
 			Some(&cfg),
+			None,
 		)
 		.unwrap();
 		assert_eq!(map.get("BUILD_VARS_TEST_ONLY_B").map(String::as_str), Some("from_cli"));
@@ -349,7 +370,7 @@ mod tests {
 		let tmp = TempDir::new().unwrap();
 		let cfg = tmp.path().join("surrealkit.toml");
 		let map =
-			build_vars(&[("build_vars_test_only_c".to_string(), "v".to_string())], Some(&cfg))
+			build_vars(&[("build_vars_test_only_c".to_string(), "v".to_string())], Some(&cfg), None)
 				.unwrap();
 		assert!(map.contains_key("BUILD_VARS_TEST_ONLY_C"), "CLI key should be uppercased");
 	}
@@ -359,7 +380,7 @@ mod tests {
 		let tmp = TempDir::new().unwrap();
 		let nonexistent = tmp.path().join("does_not_exist.toml");
 		// No CLI vars + no env-var prefix collisions expected with a unique key check below.
-		let map = build_vars(&[], Some(&nonexistent)).unwrap();
+		let map = build_vars(&[], Some(&nonexistent), None).unwrap();
 		assert!(
 			!map.contains_key("BUILD_VARS_TEST_ONLY_D"),
 			"no spurious key should appear from a missing TOML"
@@ -372,7 +393,7 @@ mod tests {
 		let cfg = tmp.path().join("surrealkit.toml");
 		// A surrealkit.toml that exists but has no [variables] section must not error.
 		std::fs::write(&cfg, "# no variables section\n").unwrap();
-		let map = build_vars(&[], Some(&cfg)).unwrap();
+		let map = build_vars(&[], Some(&cfg), None).unwrap();
 		assert!(!map.contains_key("BUILD_VARS_TEST_ONLY_E"));
 	}
 
@@ -381,12 +402,104 @@ mod tests {
 		let tmp = TempDir::new().unwrap();
 		let cfg = tmp.path().join("surrealkit.toml");
 		std::fs::write(&cfg, "this is = not = valid = toml [[[").unwrap();
-		let err = build_vars(&[], Some(&cfg)).unwrap_err();
+		let err = build_vars(&[], Some(&cfg), None).unwrap_err();
 		let _ = err;
 	}
 
-	// `SURREALKIT_VAR_*` env var pickup is exercised by integration usage; testing it
-	// deterministically here requires process-wide env mutation, which races other tests.
-	// The logic is straightforward: filter `std::env::vars()` by the prefix, strip it,
-	// uppercase the key.
+	#[test]
+	fn build_vars_reads_surrealkit_var_from_dotenv() {
+		let _lock = ENV_LOCK.lock().unwrap();
+		let tmp = TempDir::new().unwrap();
+		let original = std::env::current_dir().unwrap();
+		std::env::set_current_dir(tmp.path()).unwrap();
+		std::fs::write(
+			tmp.path().join(".env"),
+			"SURREALKIT_VAR_BUILD_VARS_TEST_ONLY_DOTENV=from_dotenv\n",
+		)
+		.unwrap();
+
+		let dotenv = DotEnv::new("");
+		let nonexistent = tmp.path().join("does_not_exist.toml");
+		let map = build_vars(&[], Some(&nonexistent), Some(&dotenv)).unwrap();
+
+		std::env::set_current_dir(original).unwrap();
+
+		assert_eq!(
+			map.get("BUILD_VARS_TEST_ONLY_DOTENV").map(String::as_str),
+			Some("from_dotenv")
+		);
+	}
+
+	#[test]
+	fn build_vars_dotenv_beats_toml() {
+		let _lock = ENV_LOCK.lock().unwrap();
+		let tmp = TempDir::new().unwrap();
+		let original = std::env::current_dir().unwrap();
+		std::env::set_current_dir(tmp.path()).unwrap();
+		std::fs::write(
+			tmp.path().join(".env"),
+			"SURREALKIT_VAR_BUILD_VARS_TEST_ONLY_DOTENV_PREC=from_dotenv\n",
+		)
+		.unwrap();
+		let cfg = tmp.path().join("surrealkit.toml");
+		std::fs::write(
+			&cfg,
+			"[variables]\nbuild_vars_test_only_dotenv_prec = \"from_toml\"\n",
+		)
+		.unwrap();
+
+		let dotenv = DotEnv::new("");
+		let map = build_vars(&[], Some(&cfg), Some(&dotenv)).unwrap();
+
+		std::env::set_current_dir(original).unwrap();
+
+		assert_eq!(
+			map.get("BUILD_VARS_TEST_ONLY_DOTENV_PREC").map(String::as_str),
+			Some("from_dotenv")
+		);
+	}
+
+	#[test]
+	fn build_vars_process_env_beats_dotenv() {
+		let _lock = ENV_LOCK.lock().unwrap();
+		let tmp = TempDir::new().unwrap();
+		let original = std::env::current_dir().unwrap();
+		std::env::set_current_dir(tmp.path()).unwrap();
+		std::fs::write(
+			tmp.path().join(".env"),
+			"SURREALKIT_VAR_BUILD_VARS_TEST_ONLY_DOTENV_WIN=from_dotenv\n",
+		)
+		.unwrap();
+		let env_key = "SURREALKIT_VAR_BUILD_VARS_TEST_ONLY_DOTENV_WIN";
+
+		unsafe { std::env::set_var(env_key, "from_process_env") };
+		let dotenv = DotEnv::new("");
+		let nonexistent = tmp.path().join("does_not_exist.toml");
+		let map = build_vars(&[], Some(&nonexistent), Some(&dotenv)).unwrap();
+		unsafe { std::env::remove_var(env_key) };
+
+		std::env::set_current_dir(original).unwrap();
+
+		assert_eq!(
+			map.get("BUILD_VARS_TEST_ONLY_DOTENV_WIN").map(String::as_str),
+			Some("from_process_env")
+		);
+	}
+
+	#[test]
+	fn build_vars_reads_surrealkit_var_env() {
+		let _lock = ENV_LOCK.lock().unwrap();
+		let tmp = TempDir::new().unwrap();
+		let nonexistent = tmp.path().join("does_not_exist.toml");
+		let env_key = "SURREALKIT_VAR_BUILD_VARS_TEST_ONLY_F";
+
+		unsafe { std::env::set_var(env_key, "from_env") };
+		let map = build_vars(&[], Some(&nonexistent), None).unwrap();
+		unsafe { std::env::remove_var(env_key) };
+
+		assert_eq!(
+			map.get("BUILD_VARS_TEST_ONLY_F").map(String::as_str),
+			Some("from_env")
+		);
+	}
 }
