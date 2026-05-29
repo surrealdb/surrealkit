@@ -270,6 +270,27 @@ fn warn_legacy_target(command: &str, target: &SchemaTarget, folder: &str) {
 	);
 }
 
+fn log_named_target(action: &str, target: &SchemaTarget) {
+	if target.schema_name().is_none() {
+		return;
+	}
+	if target.is_merged() {
+		println!(
+			"{action} merged schemas [{}] into ns={} db={}",
+			target.source_schemas().join(", "),
+			target.ns(),
+			target.db()
+		);
+		return;
+	}
+	println!(
+		"{action} schema '{}' into ns={} db={}",
+		target.label(),
+		target.ns(),
+		target.db()
+	);
+}
+
 fn resolve_targets(
 	catalog: &SchemaCatalog,
 	schema: Option<&str>,
@@ -329,14 +350,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			)?;
 			for target in targets {
 				warn_legacy_target("setup", &target, &folder);
-				if target.schema_name().is_some() {
-					println!(
-						"Setting up schema '{}' in ns={} db={}",
-						target.label(),
-						target.ns(),
-						target.db()
-					);
-				}
+				log_named_target("Setting up", &target);
 				let db = connect_target(&cfg, &target).await?;
 				run_setup(&db, &folder).await?;
 			}
@@ -371,14 +385,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			)?;
 			for target in targets {
 				warn_legacy_target("sync", &target, &folder);
-				if target.schema_name().is_some() {
-					println!(
-						"Syncing schema '{}' into ns={} db={}",
-						target.label(),
-						target.ns(),
-						target.db()
-					);
-				}
+				log_named_target("Syncing", &target);
 				let db = connect_target(&cfg, &target).await?;
 				sync::run_sync_with_workspace(
 					&db,
@@ -403,18 +410,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			)?;
 			for target in targets {
 				warn_legacy_target("rollout", &target, &folder);
-				if target.schema_name().is_some() {
-					println!(
-						"Rollout for schema '{}' (ns={} db={})",
-						target.label(),
-						target.ns(),
-						target.db()
-					);
-				}
+				log_named_target("Running rollout for", &target);
 				match &command {
 					RolloutCommands::Baseline => {
 						let db = connect_target(&cfg, &target).await?;
-						rollout::run_baseline_with_workspace(&db, target.workspace()).await?;
+						for workspace in target.rollout_workspaces() {
+							rollout::run_baseline_with_workspace(&db, workspace).await?;
+						}
 					}
 					RolloutCommands::Plan {
 						name,
@@ -424,7 +426,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 							name: name.clone(),
 							dry_run: *dry_run,
 						};
-						rollout::run_plan_with_workspace(target.workspace(), opts).await?;
+						for workspace in target.rollout_workspaces() {
+							rollout::run_plan_with_workspace(workspace, opts.clone()).await?;
+						}
 					}
 					RolloutCommands::Start {
 						target: selector,
@@ -433,13 +437,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 							selector: Some(selector.clone()),
 						};
 						let db = connect_target(&cfg, &target).await?;
-						rollout::run_start_with_workspace(
-							&db,
-							target.workspace(),
-							opts,
-							&template_vars,
-						)
-						.await?;
+						for workspace in target.rollout_workspaces() {
+							rollout::run_start_with_workspace(
+								&db,
+								workspace,
+								opts.clone(),
+								&template_vars,
+							)
+							.await?;
+						}
 					}
 					RolloutCommands::Complete {
 						target: selector,
@@ -448,13 +454,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 							selector: Some(selector.clone()),
 						};
 						let db = connect_target(&cfg, &target).await?;
-						rollout::run_complete_with_workspace(
-							&db,
-							target.workspace(),
-							opts,
-							&template_vars,
-						)
-						.await?;
+						for workspace in target.rollout_workspaces() {
+							rollout::run_complete_with_workspace(
+								&db,
+								workspace,
+								opts.clone(),
+								&template_vars,
+							)
+							.await?;
+						}
 					}
 					RolloutCommands::Rollback {
 						target: selector,
@@ -463,13 +471,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 							selector: Some(selector.clone()),
 						};
 						let db = connect_target(&cfg, &target).await?;
-						rollout::run_rollback_with_workspace(
-							&db,
-							target.workspace(),
-							opts,
-							&template_vars,
-						)
-						.await?;
+						for workspace in target.rollout_workspaces() {
+							rollout::run_rollback_with_workspace(
+								&db,
+								workspace,
+								opts.clone(),
+								&template_vars,
+							)
+							.await?;
+						}
 					}
 					RolloutCommands::Status {
 						target: selector,
@@ -483,7 +493,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 						let opts = RolloutExecutionOpts {
 							selector: Some(selector.clone()),
 						};
-						rollout::run_lint_with_workspace(target.workspace(), opts).await?;
+						for workspace in target.rollout_workspaces() {
+							rollout::run_lint_with_workspace(workspace, opts.clone()).await?;
+						}
 					}
 					RolloutCommands::Repair {
 						target: selector,
@@ -492,7 +504,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 							selector: Some(selector.clone()),
 						};
 						let db = connect_target(&cfg, &target).await?;
-						rollout::run_repair_with_workspace(&db, target.workspace(), opts).await?;
+						for workspace in target.rollout_workspaces() {
+							rollout::run_repair_with_workspace(&db, workspace, opts.clone()).await?;
+						}
 					}
 				}
 			}
@@ -511,14 +525,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			)?;
 			for target in targets {
 				warn_legacy_target("seed", &target, &folder);
-				if target.schema_name().is_some() {
-					println!(
-						"Seeding schema '{}' into ns={} db={}",
-						target.label(),
-						target.ns(),
-						target.db()
-					);
-				}
+				log_named_target("Seeding", &target);
 				let db = connect_target(&cfg, &target).await?;
 				if target.is_legacy() {
 					seed::seed(&db, &folder, &template_vars).await?;
@@ -593,13 +600,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			for target in targets {
 				warn_legacy_target("apply", &target, &folder);
 				if target.schema_name().is_some() {
-					println!(
-						"Applying {} to schema '{}' (ns={} db={})",
-						path.display(),
-						target.label(),
-						target.ns(),
-						target.db()
-					);
+					if target.is_merged() {
+						println!(
+							"Applying {} to merged schemas [{}] (ns={} db={})",
+							path.display(),
+							target.source_schemas().join(", "),
+							target.ns(),
+							target.db()
+						);
+					} else {
+						println!(
+							"Applying {} to schema '{}' (ns={} db={})",
+							path.display(),
+							target.label(),
+							target.ns(),
+							target.db()
+						);
+					}
 				}
 				let db = connect_target(&cfg, &target).await?;
 				exec_surql(&db, &sql).await?;

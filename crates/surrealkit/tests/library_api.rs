@@ -515,6 +515,70 @@ required_variables = ["org_id"]
 }
 
 #[tokio::test]
+async fn coalesced_schema_sync_keeps_entities_from_shared_target() {
+	let _guard = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (_tmp, _restore) = enter_tempdir();
+
+	std::fs::write(
+		"surrealkit.toml",
+		r#"
+[schema.base]
+
+[schema.admin]
+extends = "base"
+ns = "system"
+db = "main"
+
+[schema.api]
+extends = "base"
+ns = "system"
+db = "main"
+"#,
+	)
+	.expect("write surrealkit.toml");
+	write_named_schema_file("base", "base.surql", "DEFINE TABLE base_user SCHEMALESS;");
+	write_named_schema_file("admin", "admin.surql", "DEFINE TABLE admin_setting SCHEMALESS;");
+	write_named_schema_file("api", "api.surql", "DEFINE TABLE api_route SCHEMALESS;");
+
+	let catalog = load_schema_catalog(None).expect("load schema catalog");
+	let targets = catalog
+		.resolve_targets(
+			None,
+			false,
+			DEFAULT_ROOT_DIR,
+			&TemplateVars::default(),
+			"legacy_ns",
+			"legacy_db",
+		)
+		.expect("resolve targets");
+	assert_eq!(targets.len(), 1);
+	assert!(targets[0].is_merged());
+
+	let db = mem_db().await;
+	db.use_ns(targets[0].ns())
+		.use_db(targets[0].db())
+		.await
+		.expect("use merged target");
+	sync::run_sync_with_workspace(
+		&db,
+		targets[0].workspace(),
+		SyncOpts {
+			fail_fast: true,
+			prune: true,
+			folder: DEFAULT_ROOT_DIR.to_string(),
+			..Default::default()
+		},
+	)
+	.await
+	.expect("sync merged schemas");
+
+	let tables = table_names(&db).await;
+	assert!(tables.contains(&"base_user".to_string()));
+	assert!(tables.contains(&"admin_setting".to_string()));
+	assert!(tables.contains(&"api_route".to_string()));
+}
+
+#[tokio::test]
 async fn named_schema_seed_uses_inheritance_order() {
 	let _guard = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (_tmp, _restore) = enter_tempdir();

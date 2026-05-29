@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
@@ -63,6 +63,10 @@ pub struct ResolvedSchema {
 	pub schema_dirs: Vec<PathBuf>,
 	pub seed_dirs: Vec<PathBuf>,
 	pub workspace: SchemaWorkspace,
+	/// Schema names merged into this target. A single-schema target contains one entry.
+	pub source_schemas: Vec<String>,
+	/// Per-source-schema workspaces (rollouts/state dirs). Sync uses the merged [`Self::workspace`].
+	pub rollout_workspaces: Vec<SchemaWorkspace>,
 }
 
 #[derive(Debug, Clone)]
@@ -155,6 +159,40 @@ impl SchemaTarget {
 			Self::Named {
 				schema,
 			} => Some(&schema.name),
+		}
+	}
+
+	pub fn is_merged(&self) -> bool {
+		match self {
+			Self::Legacy {
+				..
+			} => false,
+			Self::Named {
+				schema,
+			} => schema.source_schemas.len() > 1,
+		}
+	}
+
+	pub fn source_schemas(&self) -> &[String] {
+		match self {
+			Self::Legacy {
+				..
+			} => &[],
+			Self::Named {
+				schema,
+			} => &schema.source_schemas,
+		}
+	}
+
+	pub fn rollout_workspaces(&self) -> Vec<&SchemaWorkspace> {
+		match self {
+			Self::Legacy {
+				workspace,
+				..
+			} => vec![workspace],
+			Self::Named {
+				schema,
+			} => schema.rollout_workspaces.iter().collect(),
 		}
 	}
 }
@@ -311,6 +349,8 @@ impl SchemaCatalog {
 			state_dir: named_state_dir(root_folder, name),
 			label: name.to_string(),
 		};
+		let source_schemas = vec![name.to_string()];
+		let rollout_workspaces = vec![workspace.clone()];
 
 		Ok(ResolvedSchema {
 			name: name.to_string(),
@@ -321,6 +361,8 @@ impl SchemaCatalog {
 			schema_dirs,
 			seed_dirs,
 			workspace,
+			source_schemas,
+			rollout_workspaces,
 		})
 	}
 
@@ -412,12 +454,13 @@ impl SchemaCatalog {
 		} else {
 			self.resolve_all(root_folder, vars)?
 		};
-		Ok(schemas
+		let targets = schemas
 			.into_iter()
 			.map(|schema| SchemaTarget::Named {
 				schema,
 			})
-			.collect())
+			.collect();
+		coalesce_targets_by_database(targets)
 	}
 
 	pub fn resolve_required_target(
@@ -556,6 +599,99 @@ fn render_target_template(
 			name: name.to_string(),
 			message: format!("{err:#}"),
 		})
+}
+
+fn coalesce_targets_by_database(targets: Vec<SchemaTarget>) -> Result<Vec<SchemaTarget>> {
+	let mut legacy = Vec::new();
+	let mut groups: BTreeMap<(String, String), Vec<ResolvedSchema>> = BTreeMap::new();
+
+	for target in targets {
+		match target {
+			SchemaTarget::Legacy {
+				..
+			} => legacy.push(target),
+			SchemaTarget::Named {
+				schema,
+			} => groups
+				.entry((schema.ns.clone(), schema.db.clone()))
+				.or_default()
+				.push(schema),
+		}
+	}
+
+	let mut out = legacy;
+	for schemas in groups.into_values() {
+		if schemas.len() == 1 {
+			out.push(SchemaTarget::Named {
+				schema: schemas.into_iter().next().expect("non-empty schema group"),
+			});
+		} else {
+			out.push(SchemaTarget::Named {
+				schema: merge_resolved_schemas(schemas)?,
+			});
+		}
+	}
+
+	Ok(out)
+}
+
+fn merge_resolved_schemas(mut schemas: Vec<ResolvedSchema>) -> Result<ResolvedSchema> {
+	schemas.sort_by(|left, right| left.name.cmp(&right.name));
+	let source_schemas: Vec<String> = schemas.iter().map(|schema| schema.name.clone()).collect();
+	let mut schema_dirs = Vec::new();
+	let mut seed_dirs = Vec::new();
+	let mut chain = Vec::new();
+	let mut required_variables = BTreeSet::new();
+	let mut rollout_workspaces = Vec::new();
+
+	for schema in &schemas {
+		extend_unique_paths(&mut schema_dirs, &schema.schema_dirs);
+		extend_unique_paths(&mut seed_dirs, &schema.seed_dirs);
+		extend_unique_strings(&mut chain, &schema.chain);
+		for var in &schema.required_variables {
+			required_variables.insert(var.clone());
+		}
+		rollout_workspaces.extend(schema.rollout_workspaces.clone());
+	}
+
+	let first = &schemas[0];
+	let name = source_schemas.join("+");
+	let workspace = SchemaWorkspace {
+		root_folder: first.workspace.root_folder.clone(),
+		schema_dirs: schema_dirs.clone(),
+		rollouts_dir: first.workspace.rollouts_dir.clone(),
+		state_dir: first.workspace.state_dir.clone(),
+		label: name.clone(),
+	};
+
+	Ok(ResolvedSchema {
+		name,
+		chain,
+		ns: first.ns.clone(),
+		db: first.db.clone(),
+		required_variables: required_variables.into_iter().collect(),
+		schema_dirs,
+		seed_dirs,
+		workspace,
+		source_schemas,
+		rollout_workspaces,
+	})
+}
+
+fn extend_unique_paths(out: &mut Vec<PathBuf>, items: &[PathBuf]) {
+	for item in items {
+		if !out.contains(item) {
+			out.push(item.clone());
+		}
+	}
+}
+
+fn extend_unique_strings(out: &mut Vec<String>, items: &[String]) {
+	for item in items {
+		if !out.contains(item) {
+			out.push(item.clone());
+		}
+	}
 }
 
 #[cfg(test)]
@@ -918,5 +1054,90 @@ db = "main"
 
 		let resolved = catalog.resolve("d", "./database", &TemplateVars::default()).unwrap();
 		assert_eq!(resolved.chain, vec!["a", "b", "c", "d"]);
+	}
+
+	#[test]
+	fn coalesces_schemas_targeting_same_namespace_and_database() {
+		let catalog = catalog(
+			r#"
+[schema.base]
+
+[schema.admin]
+extends = "base"
+ns = "system"
+db = "main"
+
+[schema.api]
+extends = "base"
+ns = "system"
+db = "main"
+
+[schema.org]
+extends = "base"
+ns = "org_${org_id}"
+db = "main"
+required_variables = ["org_id"]
+"#,
+		);
+
+		let targets = catalog
+			.resolve_targets(
+				None,
+				false,
+				"./database",
+				&vars(&[("org_id", "acme")]),
+				"legacy_ns",
+				"legacy_db",
+			)
+			.unwrap();
+
+		assert_eq!(targets.len(), 2);
+		let merged = targets
+			.iter()
+			.find(|target| target.ns() == "system" && target.db() == "main")
+			.expect("merged system/main target");
+		assert!(merged.is_merged());
+		assert_eq!(merged.source_schemas(), &["admin", "api"]);
+		assert_eq!(merged.label(), "admin+api");
+		assert_eq!(merged.rollout_workspaces().len(), 2);
+		assert_eq!(
+			merged
+				.workspace()
+				.schema_dirs
+				.iter()
+				.map(|path| path.to_string_lossy().to_string())
+				.collect::<Vec<_>>(),
+			vec![
+				"./database/schemas/base".to_string(),
+				"./database/schemas/admin".to_string(),
+				"./database/schemas/api".to_string(),
+			]
+		);
+	}
+
+	#[test]
+	fn single_schema_target_is_not_marked_merged() {
+		let catalog = catalog(
+			r#"
+[schema.admin]
+ns = "system"
+db = "main"
+"#,
+		);
+
+		let targets = catalog
+			.resolve_targets(
+				None,
+				false,
+				"./database",
+				&TemplateVars::default(),
+				"legacy_ns",
+				"legacy_db",
+			)
+			.unwrap();
+
+		assert_eq!(targets.len(), 1);
+		assert!(!targets[0].is_merged());
+		assert_eq!(targets[0].source_schemas(), &["admin"]);
 	}
 }

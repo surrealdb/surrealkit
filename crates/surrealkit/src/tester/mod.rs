@@ -62,7 +62,14 @@ pub async fn run_test(
 	let mut total_failed = 0usize;
 	let mut schema_reports = Vec::new();
 	for target in targets {
-		if target.schema_name().is_some() {
+		if target.is_merged() {
+			println!(
+				"--- Testing merged schemas [{}] (ns={} db={})",
+				target.source_schemas().join(", "),
+				target.ns(),
+				target.db()
+			);
+		} else if target.schema_name().is_some() {
 			println!(
 				"--- Testing schema '{}' (ns={} db={})",
 				target.label(),
