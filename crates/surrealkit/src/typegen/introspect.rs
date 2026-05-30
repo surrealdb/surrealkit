@@ -108,13 +108,12 @@ fn build_field(name: String, define: String) -> FieldDef {
 	});
 	// SurrealDB normalises `option<T>` to `none | T`; collapse it into the flag.
 	let (ty, optional) = unwrap_optional(parsed);
-	let upper = define.to_ascii_uppercase();
 	FieldDef {
 		name,
 		optional,
-		flexible: contains_keyword(&upper, "FLEXIBLE"),
-		readonly: contains_keyword(&upper, "READONLY"),
-		has_default: contains_keyword(&upper, "DEFAULT"),
+		flexible: has_clause_keyword(&define, "FLEXIBLE"),
+		readonly: has_clause_keyword(&define, "READONLY"),
+		has_default: has_clause_keyword(&define, "DEFAULT"),
 		raw_type,
 		r#type: ty,
 		define,
@@ -152,10 +151,9 @@ fn as_define_string(v: &Value) -> String {
 }
 
 fn schemafull(define: &str) -> Option<bool> {
-	let upper = define.to_ascii_uppercase();
-	if contains_keyword(&upper, "SCHEMAFULL") {
+	if has_clause_keyword(define, "SCHEMAFULL") {
 		Some(true)
-	} else if contains_keyword(&upper, "SCHEMALESS") {
+	} else if has_clause_keyword(define, "SCHEMALESS") {
 		Some(false)
 	} else {
 		None
@@ -163,21 +161,76 @@ fn schemafull(define: &str) -> Option<bool> {
 }
 
 fn table_kind(define: &str) -> Option<String> {
-	let upper = define.to_ascii_uppercase();
-	if contains_keyword(&upper, "RELATION") {
+	if has_clause_keyword(define, "RELATION") {
 		Some("RELATION".to_string())
-	} else if contains_keyword(&upper, "NORMAL") {
+	} else if has_clause_keyword(define, "NORMAL") {
 		Some("NORMAL".to_string())
-	} else if upper.contains("TYPE ANY") {
+	} else if has_clause_keyword(define, "ANY") {
 		Some("ANY".to_string())
 	} else {
 		None
 	}
 }
 
-/// Whole-word, ASCII-case-insensitive keyword check (input already uppercased).
-fn contains_keyword(haystack_upper: &str, keyword: &str) -> bool {
-	haystack_upper.split(|c: char| !c.is_ascii_alphanumeric() && c != '_').any(|w| w == keyword)
+/// Whole-word, ASCII-case-insensitive keyword check that only matches at the
+/// top level (bracket depth 0) and outside string literals.
+///
+/// This avoids false positives from keywords that appear inside `ASSERT` /
+/// `VALUE` expressions, string defaults, or comments — e.g. a field defined as
+/// `TYPE string ASSERT $value != 'DEFAULT'` must not be reported as having a
+/// `DEFAULT` clause.
+fn has_clause_keyword(stmt: &str, keyword: &str) -> bool {
+	let chars: Vec<char> = stmt.chars().collect();
+	let n = chars.len();
+	let mut i = 0;
+	let mut depth: i32 = 0;
+	let mut quote: Option<char> = None;
+
+	while i < n {
+		let c = chars[i];
+		if let Some(q) = quote {
+			if c == q {
+				quote = None;
+			}
+			i += 1;
+			continue;
+		}
+		match c {
+			'\'' | '"' => {
+				quote = Some(c);
+				i += 1;
+				continue;
+			}
+			'<' | '(' | '[' | '{' => {
+				depth += 1;
+				i += 1;
+				continue;
+			}
+			'>' | ')' | ']' | '}' => {
+				depth -= 1;
+				i += 1;
+				continue;
+			}
+			_ => {}
+		}
+
+		if c.is_ascii_alphabetic() {
+			let start = i;
+			let mut j = i;
+			while j < n && (chars[j].is_ascii_alphanumeric() || chars[j] == '_') {
+				j += 1;
+			}
+			if depth == 0
+				&& chars[start..j].iter().collect::<String>().eq_ignore_ascii_case(keyword)
+			{
+				return true;
+			}
+			i = j;
+			continue;
+		}
+		i += 1;
+	}
+	false
 }
 
 fn function_name_from_key(define: &str) -> String {
@@ -198,4 +251,43 @@ fn sort_doc(doc: &mut SchemaTypes) {
 	}
 	doc.functions.sort_by(|a, b| a.name.cmp(&b.name));
 	doc.params.sort_by(|a, b| a.name.cmp(&b.name));
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	#[test]
+	fn clause_keyword_matches_whole_word_at_top_level() {
+		assert!(has_clause_keyword("DEFINE FIELD x ON t TYPE string READONLY", "READONLY"));
+		assert!(has_clause_keyword("DEFINE FIELD x ON t TYPE string DEFAULT 'a'", "DEFAULT"));
+		assert!(has_clause_keyword("DEFINE FIELD x ON t FLEXIBLE TYPE object", "FLEXIBLE"));
+		// Case-insensitive.
+		assert!(has_clause_keyword("define field x on t type string readonly", "READONLY"));
+	}
+
+	#[test]
+	fn clause_keyword_ignores_string_literals_and_nested_scopes() {
+		// `DEFAULT` only inside a string literal must not count as a DEFAULT clause.
+		assert!(!has_clause_keyword(
+			"DEFINE FIELD x ON t TYPE string ASSERT $value != 'DEFAULT'",
+			"DEFAULT"
+		));
+		// Keyword nested inside an assertion block (depth > 0) must not match.
+		assert!(!has_clause_keyword(
+			"DEFINE FIELD x ON t TYPE string ASSERT { READONLY }",
+			"READONLY"
+		));
+		// Substring of a larger identifier must not match.
+		assert!(!has_clause_keyword("DEFINE FIELD readonly_at ON t TYPE string", "READONLY"));
+	}
+
+	#[test]
+	fn table_kind_detects_any_without_false_positives() {
+		assert_eq!(table_kind("DEFINE TABLE u TYPE ANY SCHEMALESS"), Some("ANY".to_string()));
+		assert_eq!(table_kind("DEFINE TABLE u TYPE RELATION"), Some("RELATION".to_string()));
+		assert_eq!(table_kind("DEFINE TABLE u TYPE NORMAL"), Some("NORMAL".to_string()));
+		// `ANY` only inside a comment string must not be picked up as the kind.
+		assert_eq!(table_kind("DEFINE TABLE u SCHEMAFULL COMMENT 'accepts ANY value'"), None);
+	}
 }

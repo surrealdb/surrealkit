@@ -52,8 +52,12 @@ pub async fn run_typegen(
 	opts: TypegenOpts,
 ) -> Result<()> {
 	let mut doc = generate(db).await?;
-	doc.namespace = Some(namespace.to_string());
-	doc.database = Some(database.to_string());
+	if !namespace.is_empty() {
+		doc.namespace = Some(namespace.to_string());
+	}
+	if !database.is_empty() {
+		doc.database = Some(database.to_string());
+	}
 
 	let json = emit::to_json(&doc, opts.pretty)?;
 

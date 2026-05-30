@@ -120,9 +120,9 @@ enum Commands {
 		/// Print the JSON to stdout instead of writing a file.
 		#[arg(long)]
 		stdout: bool,
-		/// Pretty-print the JSON.
-		#[arg(long, default_value_t = true)]
-		pretty: bool,
+		/// Emit compact (single-line) JSON instead of pretty-printed.
+		#[arg(long)]
+		compact: bool,
 	},
 }
 
@@ -374,7 +374,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		Commands::Typegen {
 			out,
 			stdout,
-			pretty,
+			compact,
 		} => {
 			let db = connect(&cfg).await?;
 			run_typegen(
@@ -385,7 +385,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 				TypegenOpts {
 					out,
 					stdout,
-					pretty,
+					pretty: !compact,
 				},
 			)
 			.await?;
