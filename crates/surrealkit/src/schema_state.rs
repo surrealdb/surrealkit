@@ -236,9 +236,8 @@ pub fn build_catalog_snapshot(
 ///
 /// Returns a tuple of `(entities, operations)`:
 /// - `entities`: catalog entities extracted from `DEFINE` statements
-/// - `operations`: raw SQL strings for non-`DEFINE` statements (only populated
-///   when `allow_all_statements` is `true`; otherwise any non-`DEFINE` statement
-///   is a hard error)
+/// - `operations`: raw SQL strings for non-`DEFINE` statements (only populated when
+///   `allow_all_statements` is `true`; otherwise any non-`DEFINE` statement is a hard error)
 pub fn parse_schema_statements(
 	file: &SchemaFile,
 	allow_all_statements: bool,
@@ -714,8 +713,9 @@ fn truncate_stmt(stmt: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-	use super::*;
 	use test_case::test_case;
+
+	use super::*;
 
 	#[test]
 	fn schema_diff_detects_added_modified_removed() {

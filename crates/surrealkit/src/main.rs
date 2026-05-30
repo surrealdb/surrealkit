@@ -8,6 +8,7 @@ use surrealkit::rollout::{self, RolloutExecutionOpts, RolloutPlanOpts};
 use surrealkit::setup::run_setup;
 use surrealkit::sync::{self, SyncOpts};
 use surrealkit::tester::{TestOpts, run_test};
+use surrealkit::typegen::{TypegenOpts, run_typegen};
 use surrealkit::variables::{TemplateVars, build_vars, parse_var_flag};
 use surrealkit::{scaffold, seed};
 
@@ -110,6 +111,18 @@ enum Commands {
 		timeout_ms: Option<u64>,
 		#[arg(long)]
 		keep_db: bool,
+	},
+	/// Introspect the database and generate a typed schema document (JSON).
+	Typegen {
+		/// Output path (default: `{folder}/types/schema.json`).
+		#[arg(long)]
+		out: Option<PathBuf>,
+		/// Print the JSON to stdout instead of writing a file.
+		#[arg(long)]
+		stdout: bool,
+		/// Pretty-print the JSON.
+		#[arg(long, default_value_t = true)]
+		pretty: bool,
 	},
 }
 
@@ -355,6 +368,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 				},
 				template_vars,
 				&overrides,
+			)
+			.await?;
+		}
+		Commands::Typegen {
+			out,
+			stdout,
+			pretty,
+		} => {
+			let db = connect(&cfg).await?;
+			run_typegen(
+				&db,
+				&folder,
+				cfg.ns(),
+				cfg.db(),
+				TypegenOpts {
+					out,
+					stdout,
+					pretty,
+				},
 			)
 			.await?;
 		}

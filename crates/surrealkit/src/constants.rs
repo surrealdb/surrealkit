@@ -46,6 +46,14 @@ pub fn seed_surql_path(folder: &str) -> PathBuf {
 	seed_dir(folder).join("seed.surql")
 }
 
+pub fn types_dir(folder: &str) -> PathBuf {
+	PathBuf::from(folder).join("types")
+}
+
+pub fn typegen_output_path(folder: &str) -> PathBuf {
+	types_dir(folder).join("schema.json")
+}
+
 #[deprecated(
 	note = "Deprecated path: `{folder}/seed.surql` (before the seed/ directory was introduced)"
 )]
