@@ -386,6 +386,7 @@ Use a manual migration or upgrade server support.",
 			"model" => format!("REMOVE MODEL IF EXISTS {};", entity.name),
 			"sequence" => format!("REMOVE SEQUENCE IF EXISTS {};", entity.name),
 			"config" => format!("REMOVE CONFIG IF EXISTS {};", entity.name),
+			"module" => format!("REMOVE MODULE IF EXISTS {};", entity.name),
 			_ => continue,
 		};
 		out.push(stmt);
@@ -412,10 +413,11 @@ fn removal_sort_key(entity: &EntityKey) -> (usize, Option<String>, String, Strin
 		"analyzer" => 8,
 		"bucket" => 9,
 		"model" => 10,
-		"sequence" => 11,
-		"config" => 12,
-		"table" => 13,
-		_ => 14,
+		"module" => 11,
+		"sequence" => 12,
+		"config" => 13,
+		"table" => 14,
+		_ => 15,
 	};
 	(weight, entity.scope.clone(), entity.kind.clone(), entity.name.clone())
 }
@@ -622,9 +624,8 @@ fn parse_define_entity(stmt: &str) -> Option<CatalogEntity> {
 			}
 			(Some(clean_ident(tokens[scope_idx])), name)
 		}
-		"function" | "param" | "analyzer" | "api" | "bucket" | "model" | "sequence" | "config" => {
-			(None, clean_ident(tokens[idx]))
-		}
+		"function" | "param" | "analyzer" | "api" | "bucket" | "model" | "sequence" | "config"
+		| "module" => (None, clean_ident(tokens[idx])),
 		"access" | "user" => {
 			let name = clean_ident(tokens[idx]);
 			let scope = find_token(&tokens, idx + 1, "ON").and_then(|on_idx| {
@@ -771,6 +772,7 @@ mod tests {
 				DEFINE BUCKET assets;
 				DEFINE SEQUENCE order_no;
 				DEFINE CONFIG GRAPHQL AUTO;
+					DEFINE MODULE mod::math AS f"math:/math.surli";
 			"#
 			.to_string(),
 		}];
@@ -802,6 +804,13 @@ mod tests {
 		assert!(
 			catalog.entities.iter().any(|e| e.kind == "config" && e.name == "GRAPHQL"),
 			"config should be captured by its kind keyword"
+		);
+		assert!(
+			catalog
+				.entities
+				.iter()
+				.any(|e| { e.kind == "module" && e.scope.is_none() && e.name == "mod::math" }),
+			"module should be captured with its mod:: name"
 		);
 	}
 
@@ -844,12 +853,64 @@ mod tests {
 				scope: None,
 				name: "ml::sentiment".to_string(),
 			},
+			EntityKey {
+				kind: "module".to_string(),
+				scope: None,
+				name: "mod::math".to_string(),
+			},
 		];
 		let out = render_remove_sql(&entities, true).expect("remove sql");
 		assert!(out.iter().any(|l| l == "REMOVE BUCKET IF EXISTS assets;"));
 		assert!(out.iter().any(|l| l == "REMOVE SEQUENCE IF EXISTS order_no;"));
 		assert!(out.iter().any(|l| l == "REMOVE CONFIG IF EXISTS GRAPHQL;"));
 		assert!(out.iter().any(|l| l == "REMOVE MODEL IF EXISTS ml::sentiment;"));
+		assert!(out.iter().any(|l| l == "REMOVE MODULE IF EXISTS mod::math;"));
+	}
+
+	#[test]
+	fn ensure_overwrite_handles_define_module() {
+		// Sync sends DEFINE statements with OVERWRITE injected so re-applying is
+		// idempotent. A `DEFINE MODULE mod::x AS f"..."` must gain OVERWRITE right
+		// after the MODULE keyword (where surrealdb's parser expects it), and an
+		// explicit IF NOT EXISTS must be rewritten to OVERWRITE.
+		let plain = ensure_overwrite("DEFINE MODULE mod::math AS f\"math:/math.surli\";");
+		assert_eq!(plain.trim(), "DEFINE MODULE OVERWRITE mod::math AS f\"math:/math.surli\";");
+
+		let if_not_exists =
+			ensure_overwrite("DEFINE MODULE IF NOT EXISTS mod::math AS f\"math:/math.surli\";");
+		assert_eq!(
+			if_not_exists.trim(),
+			"DEFINE MODULE OVERWRITE mod::math AS f\"math:/math.surli\";"
+		);
+	}
+
+	#[test]
+	fn module_removed_after_dependents_and_before_table() {
+		// A field/event default expression may call mod::x::fn(), so the module must
+		// be removed after fields (which are dropped first) but before the table.
+		let entities = vec![
+			EntityKey {
+				kind: "table".into(),
+				scope: None,
+				name: "person".into(),
+			},
+			EntityKey {
+				kind: "module".into(),
+				scope: None,
+				name: "mod::math".into(),
+			},
+			EntityKey {
+				kind: "field".into(),
+				scope: Some("person".into()),
+				name: "age".into(),
+			},
+		];
+		let out = render_remove_sql(&entities, true).expect("render");
+		let field_idx = out.iter().position(|l| l.starts_with("REMOVE FIELD")).expect("field");
+		let module_idx = out.iter().position(|l| l.starts_with("REMOVE MODULE")).expect("module");
+		let table_idx = out.iter().position(|l| l.starts_with("REMOVE TABLE")).expect("table");
+		assert!(field_idx < module_idx, "field must be removed before module");
+		assert!(module_idx < table_idx, "module must be removed before table");
 	}
 
 	#[test]
@@ -957,6 +1018,11 @@ mod tests {
 				kind: "config".into(),
 				scope: None,
 				name: "GRAPHQL".into(),
+			},
+			EntityKey {
+				kind: "module".into(),
+				scope: None,
+				name: "mod::math".into(),
 			},
 		];
 		let out = render_remove_sql(&entities, true).expect("render");
@@ -1646,6 +1712,21 @@ mod tests {
 		assert_eq!(entities[0].kind, "user");
 		assert_eq!(entities[0].name, "app");
 		assert_eq!(entities[0].scope.as_deref(), Some("DATABASE"));
+	}
+
+	#[test]
+	fn parse_schema_statements_accepts_if_not_exists_module() {
+		let file = SchemaFile {
+			path: "database/schema/test.surql".to_string(),
+			hash: "h".to_string(),
+			sql: "DEFINE MODULE IF NOT EXISTS mod::math AS f\"math:/math.surli\";".to_string(),
+		};
+		let (entities, _ops) =
+			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS module");
+		assert_eq!(entities.len(), 1);
+		assert_eq!(entities[0].kind, "module");
+		assert_eq!(entities[0].name, "mod::math");
+		assert!(entities[0].scope.is_none());
 	}
 
 	#[test]
