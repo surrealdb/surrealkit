@@ -14,9 +14,10 @@ pub mod variables;
 pub use anyhow;
 pub use config::{AuthLevel, DbCfg, DbOverrides, connect};
 pub use rollout::{
-	RolloutExecutionOpts, RolloutPhase, RolloutPlanOpts, RolloutSpec, RolloutStep, RolloutStepKind,
-	run_baseline, run_complete, run_complete_with_spec, run_lint, run_plan, run_rollback,
-	run_rollback_with_spec, run_start, run_start_with_spec, run_status,
+	RolloutAction, RolloutCompatibility, RolloutExecutionOpts, RolloutPhase, RolloutPlanOpts,
+	RolloutSpec, RolloutStatus, RolloutStep, run_baseline, run_complete, run_complete_with_spec,
+	run_lint, run_plan, run_rollback, run_rollback_with_spec, run_start, run_start_with_spec,
+	run_status,
 };
 pub use seed::{seed, seed_from_dir};
 pub use setup::run_setup;

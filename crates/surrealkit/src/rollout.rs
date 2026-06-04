@@ -43,13 +43,56 @@ pub enum RolloutPhase {
 	Rollback,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// The migration strategy for a rollout — how its `start` and `complete` phases
+/// relate.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
 #[serde(rename_all = "snake_case")]
-pub enum RolloutStepKind {
-	ApplySchema,
-	RunSql,
-	AssertSql,
-	RemoveEntities,
+pub enum RolloutCompatibility {
+	/// Expand/contract. The `start` phase is non-destructive (it adds or updates
+	/// schema); the `complete` phase performs the destructive changes (it removes
+	/// entities that are no longer needed). `rollback` undoes the `start` phase.
+	/// This lets old and new application code run side-by-side between `start` and
+	/// `complete`. Serializes as `"phased"`.
+	#[default]
+	Phased,
+}
+
+/// What a rollout step does. Each variant carries exactly the data it needs, so
+/// invalid combinations (e.g. an assertion with no expected value, or schema SQL
+/// mixed with a file list) cannot be represented. Construct steps with the
+/// [`RolloutStep`] constructors rather than building this directly.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RolloutAction {
+	/// Apply inline SurrealQL DDL. `DEFINE` statements are made idempotent
+	/// (`OVERWRITE` is injected) so the step is always safe to retry.
+	ApplySchema { sql: String },
+	/// Read DDL from `.surql` files on disk and apply them. Used by the CLI
+	/// `rollout plan`/`start` workflow; in code prefer [`RolloutAction::ApplySchema`]
+	/// with inline SQL.
+	ApplyFiles { files: Vec<String> },
+	/// Execute SurrealQL that mutates data (e.g. a backfill). The SQL must be safe
+	/// to re-run: on retry the step executes again from scratch.
+	RunSql { sql: String },
+	/// Run a query and assert its stringified output equals `expect`; fails the
+	/// rollout otherwise.
+	AssertSql { sql: String, expect: String },
+	/// Issue `REMOVE … IF EXISTS` for named database objects (tables, fields,
+	/// indexes, …).
+	RemoveEntities { entities: Vec<EntityKey> },
+}
+
+impl RolloutAction {
+	/// The persisted discriminator string for this action (e.g. `"apply_schema"`).
+	fn kind_str(&self) -> &'static str {
+		match self {
+			Self::ApplySchema { .. } => "apply_schema",
+			Self::ApplyFiles { .. } => "apply_files",
+			Self::RunSql { .. } => "run_sql",
+			Self::AssertSql { .. } => "assert_sql",
+			Self::RemoveEntities { .. } => "remove_entities",
+		}
+	}
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -80,19 +123,42 @@ impl RolloutStatus {
 	}
 }
 
+/// A complete rollout definition: an identity, a migration strategy, and the
+/// ordered steps to run across its `start`, `complete`, and `rollback` phases.
+///
+/// Prefer [`RolloutSpec::builder`] over constructing this directly — it defaults
+/// the bookkeeping fields (`source_schema_hash`, `target_schema_hash`, `renames`)
+/// that only the CLI's filesystem drift-detection uses.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RolloutSpec {
+	/// Stable, unique identifier stored in the database. Must be identical across
+	/// the `start`, `complete`, and `rollback` calls for one rollout (e.g. a
+	/// timestamp-prefixed migration name).
 	pub id: String,
+	/// Human-readable name shown in status output.
 	pub name: String,
+	/// Schema hash before this rollout. Set by the CLI filesystem workflow; left
+	/// empty for code-driven rollouts.
+	#[serde(default)]
 	pub source_schema_hash: String,
+	/// Desired schema hash after this rollout. When non-empty it is verified
+	/// against the supplied target files before `start`. Left empty for code-driven
+	/// rollouts.
+	#[serde(default)]
 	pub target_schema_hash: String,
-	pub compatibility: String,
+	/// The migration strategy. See [`RolloutCompatibility`].
+	#[serde(default)]
+	pub compatibility: RolloutCompatibility,
+	/// Reserved for future rename hints; currently unused by execution.
 	#[serde(default)]
 	pub renames: Vec<RolloutRename>,
+	/// The steps to execute, grouped by [`RolloutPhase`].
 	#[serde(default)]
 	pub steps: Vec<RolloutStep>,
 }
 
+/// Reserved rename hint. Currently inert — carried for forward compatibility but
+/// not consumed by rollout execution.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RolloutRename {
 	pub kind: String,
@@ -101,18 +167,157 @@ pub struct RolloutRename {
 	pub to: String,
 }
 
+/// One step in a rollout. Build steps with the constructors
+/// ([`RolloutStep::apply_schema`], [`RolloutStep::run_sql`],
+/// [`RolloutStep::assert_sql`], [`RolloutStep::remove_entities`]) so the action
+/// and its data always match.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RolloutStep {
+	/// Stable identifier, unique within the rollout. Used to track per-step
+	/// execution state so a re-run skips already-completed steps.
 	pub id: String,
+	/// Which phase runs this step: `Start`, `Complete`, or `Rollback`.
 	pub phase: RolloutPhase,
-	pub kind: RolloutStepKind,
-	#[serde(default)]
-	pub files: Vec<String>,
-	pub sql: Option<String>,
-	pub expect: Option<String>,
-	#[serde(default)]
-	pub entities: Vec<EntityKey>,
-	pub idempotent: Option<bool>,
+	/// What the step does and the data it needs.
+	#[serde(flatten)]
+	pub action: RolloutAction,
+}
+
+impl RolloutStep {
+	/// Apply inline SurrealQL DDL during `phase`.
+	pub fn apply_schema(
+		id: impl Into<String>,
+		phase: RolloutPhase,
+		sql: impl Into<String>,
+	) -> Self {
+		Self {
+			id: id.into(),
+			phase,
+			action: RolloutAction::ApplySchema {
+				sql: sql.into(),
+			},
+		}
+	}
+
+	/// Apply DDL read from `.surql` files on disk during `phase`. Used by the CLI;
+	/// in code prefer [`RolloutStep::apply_schema`].
+	pub fn apply_files(id: impl Into<String>, phase: RolloutPhase, files: Vec<String>) -> Self {
+		Self {
+			id: id.into(),
+			phase,
+			action: RolloutAction::ApplyFiles {
+				files,
+			},
+		}
+	}
+
+	/// Execute data-mutation SQL during `phase`. The SQL must be safe to re-run.
+	pub fn run_sql(id: impl Into<String>, phase: RolloutPhase, sql: impl Into<String>) -> Self {
+		Self {
+			id: id.into(),
+			phase,
+			action: RolloutAction::RunSql {
+				sql: sql.into(),
+			},
+		}
+	}
+
+	/// Assert a query's stringified output equals `expect` during `phase`.
+	pub fn assert_sql(
+		id: impl Into<String>,
+		phase: RolloutPhase,
+		sql: impl Into<String>,
+		expect: impl Into<String>,
+	) -> Self {
+		Self {
+			id: id.into(),
+			phase,
+			action: RolloutAction::AssertSql {
+				sql: sql.into(),
+				expect: expect.into(),
+			},
+		}
+	}
+
+	/// Remove named database objects during `phase`.
+	pub fn remove_entities(
+		id: impl Into<String>,
+		phase: RolloutPhase,
+		entities: Vec<EntityKey>,
+	) -> Self {
+		Self {
+			id: id.into(),
+			phase,
+			action: RolloutAction::RemoveEntities {
+				entities,
+			},
+		}
+	}
+}
+
+impl RolloutSpec {
+	/// Start building a code-driven rollout with the given stable `id`.
+	///
+	/// Defaults `name` to `id` and `compatibility` to [`RolloutCompatibility::Phased`].
+	/// The CLI-only bookkeeping fields (`source_schema_hash`, `target_schema_hash`,
+	/// `renames`) are left empty — they are not needed for code-driven rollouts.
+	pub fn builder(id: impl Into<String>) -> RolloutSpecBuilder {
+		RolloutSpecBuilder {
+			id: id.into(),
+			name: None,
+			compatibility: RolloutCompatibility::default(),
+			steps: Vec::new(),
+		}
+	}
+}
+
+/// Builder for [`RolloutSpec`]. Create one with [`RolloutSpec::builder`].
+#[derive(Debug, Clone)]
+pub struct RolloutSpecBuilder {
+	id: String,
+	name: Option<String>,
+	compatibility: RolloutCompatibility,
+	steps: Vec<RolloutStep>,
+}
+
+impl RolloutSpecBuilder {
+	/// Set the human-readable name (defaults to the id).
+	pub fn name(mut self, name: impl Into<String>) -> Self {
+		self.name = Some(name.into());
+		self
+	}
+
+	/// Set the migration strategy (defaults to [`RolloutCompatibility::Phased`]).
+	pub fn compatibility(mut self, compatibility: RolloutCompatibility) -> Self {
+		self.compatibility = compatibility;
+		self
+	}
+
+	/// Append a step. Build steps with the [`RolloutStep`] constructors.
+	pub fn step(mut self, step: RolloutStep) -> Self {
+		self.steps.push(step);
+		self
+	}
+
+	/// Append several steps.
+	pub fn steps(mut self, steps: impl IntoIterator<Item = RolloutStep>) -> Self {
+		self.steps.extend(steps);
+		self
+	}
+
+	/// Finish building the [`RolloutSpec`].
+	pub fn build(self) -> RolloutSpec {
+		let name = self.name.unwrap_or_else(|| self.id.clone());
+		RolloutSpec {
+			id: self.id,
+			name,
+			source_schema_hash: String::new(),
+			target_schema_hash: String::new(),
+			compatibility: self.compatibility,
+			renames: Vec::new(),
+			steps: self.steps,
+		}
+	}
 }
 
 #[derive(Debug, Clone)]
@@ -658,6 +863,50 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 	}
 }
 
+/// Force a stuck or failed rollout to the terminal `rolled_back` state by id,
+/// without running any rollback SQL and without needing the original spec.
+///
+/// Use this as a last-resort recovery when a rollout is wedged in `failed`,
+/// `running_start`, `ready_to_complete`, `running_complete`, or `running_rollback`
+/// and is blocking new rollouts (only one may be active at a time). It does **not**
+/// undo any schema changes the rollout already applied — reconcile those with a
+/// fresh sync or a new rollout afterwards. Already-terminal rollouts are a no-op.
+pub async fn run_abandon_rollout(db: &Surreal<Any>, rollout_id: &str) -> Result<()> {
+	acquire_lock(db, "global").await?;
+	let result = async {
+		let row = load_rollout_record(db, rollout_id)
+			.await?
+			.ok_or_else(|| anyhow!("rollout '{}' has no __rollout record", rollout_id))?;
+		match string_field(&row, "status").as_deref() {
+			Some("completed") => {
+				bail!("rollout '{}' is already completed; nothing to abandon", rollout_id)
+			}
+			Some("rolled_back") => {
+				println!("Rollout {} is already rolled back.", rollout_id);
+				return Ok(());
+			}
+			_ => {}
+		}
+		set_rollout_status(
+			db,
+			rollout_id,
+			RolloutStatus::RolledBack,
+			Some("abandoned: force-transitioned to rolled_back; schema changes were not reverted"),
+			Some(OffsetDateTime::now_utc().format(&Rfc3339)?),
+		)
+		.await?;
+		println!("Abandoned rollout {} (forced → rolled_back).", rollout_id);
+		Ok(())
+	}
+	.await;
+	let release = release_lock(db, "global").await;
+	match (result, release) {
+		(Err(err), _) => Err(err),
+		(Ok(_), Err(err)) => Err(err),
+		(Ok(value), Ok(())) => Ok(value),
+	}
+}
+
 pub async fn load_active_rollout_id(db: &Surreal<Any>) -> Result<Option<String>> {
 	let mut resp = db
 		.query(
@@ -857,46 +1106,31 @@ fn build_rollout_spec(
 	let changed_paths = changed_files(files, file_diff);
 	let mut steps = Vec::new();
 	if !changed_paths.is_empty() {
-		steps.push(RolloutStep {
-			id: "apply_expand_schema".to_string(),
-			phase: RolloutPhase::Start,
-			kind: RolloutStepKind::ApplySchema,
-			files: changed_paths,
-			sql: None,
-			expect: None,
-			entities: Vec::new(),
-			idempotent: None,
-		});
+		steps.push(RolloutStep::apply_files(
+			"apply_expand_schema",
+			RolloutPhase::Start,
+			changed_paths,
+		));
 	}
 
 	let added_entities: Vec<EntityKey> =
 		catalog_diff.added.iter().map(CatalogEntity::key).collect();
 	if !added_entities.is_empty() {
-		steps.push(RolloutStep {
-			id: "rollback_expand_schema".to_string(),
-			phase: RolloutPhase::Rollback,
-			kind: RolloutStepKind::RemoveEntities,
-			files: Vec::new(),
-			sql: None,
-			expect: None,
-			entities: added_entities,
-			idempotent: None,
-		});
+		steps.push(RolloutStep::remove_entities(
+			"rollback_expand_schema",
+			RolloutPhase::Rollback,
+			added_entities,
+		));
 	}
 
 	let removed_entities: Vec<EntityKey> =
 		catalog_diff.removed.iter().map(CatalogEntity::key).collect();
 	if !removed_entities.is_empty() {
-		steps.push(RolloutStep {
-			id: "remove_legacy_entities".to_string(),
-			phase: RolloutPhase::Complete,
-			kind: RolloutStepKind::RemoveEntities,
-			files: Vec::new(),
-			sql: None,
-			expect: None,
-			entities: removed_entities,
-			idempotent: None,
-		});
+		steps.push(RolloutStep::remove_entities(
+			"remove_legacy_entities",
+			RolloutPhase::Complete,
+			removed_entities,
+		));
 	}
 
 	Ok(RolloutSpec {
@@ -904,7 +1138,7 @@ fn build_rollout_spec(
 		name: name.to_string(),
 		source_schema_hash: hash_schema_snapshot(old_schema)?,
 		target_schema_hash: hash_schema_snapshot(new_schema)?,
-		compatibility: "phased".to_string(),
+		compatibility: RolloutCompatibility::Phased,
 		renames: Vec::new(),
 		steps,
 	})
@@ -1008,41 +1242,52 @@ fn validate_rollout_spec(spec: &RolloutSpec) -> Result<()> {
 	if spec.name.trim().is_empty() {
 		bail!("rollout name is required");
 	}
-	if spec.compatibility.trim().is_empty() {
-		bail!("compatibility is required");
-	}
 
 	let mut step_ids = BTreeSet::new();
 	for step in &spec.steps {
 		if !step_ids.insert(step.id.clone()) {
 			bail!("duplicate rollout step id '{}'", step.id);
 		}
-		match step.kind {
-			RolloutStepKind::ApplySchema => {
-				let has_files = !step.files.is_empty();
-				let has_sql = step.sql.as_deref().is_some_and(|s| !s.trim().is_empty());
-				if !has_files && !has_sql {
-					bail!("apply_schema step '{}' requires either files or sql", step.id);
+		// The type system guarantees each action carries the right shape (e.g.
+		// assert_sql always has both sql and expect). We only check for empty
+		// payloads that compile but make no sense at runtime.
+		match &step.action {
+			RolloutAction::ApplySchema {
+				sql,
+			} => {
+				if sql.trim().is_empty() {
+					bail!("apply_schema step '{}' requires non-empty sql", step.id);
 				}
 			}
-			RolloutStepKind::RunSql => {
-				if step.sql.as_deref().unwrap_or("").trim().is_empty() {
-					bail!("run_sql step '{}' requires sql", step.id);
-				}
-				if step.idempotent != Some(true) {
-					bail!("run_sql step '{}' must declare idempotent = true", step.id);
-				}
-			}
-			RolloutStepKind::AssertSql => {
-				if step.sql.as_deref().unwrap_or("").trim().is_empty() {
-					bail!("assert_sql step '{}' requires sql", step.id);
-				}
-				if step.expect.as_deref().unwrap_or("").trim().is_empty() {
-					bail!("assert_sql step '{}' requires expect", step.id);
+			RolloutAction::ApplyFiles {
+				files,
+			} => {
+				if files.is_empty() {
+					bail!("apply_files step '{}' requires at least one file", step.id);
 				}
 			}
-			RolloutStepKind::RemoveEntities => {
-				if step.entities.is_empty() {
+			RolloutAction::RunSql {
+				sql,
+			} => {
+				if sql.trim().is_empty() {
+					bail!("run_sql step '{}' requires non-empty sql", step.id);
+				}
+			}
+			RolloutAction::AssertSql {
+				sql,
+				expect,
+			} => {
+				if sql.trim().is_empty() {
+					bail!("assert_sql step '{}' requires non-empty sql", step.id);
+				}
+				if expect.trim().is_empty() {
+					bail!("assert_sql step '{}' requires a non-empty expect", step.id);
+				}
+			}
+			RolloutAction::RemoveEntities {
+				entities,
+			} => {
+				if entities.is_empty() {
 					bail!("remove_entities step '{}' requires entities", step.id);
 				}
 			}
@@ -1076,31 +1321,35 @@ async fn execute_phase(
 }
 
 async fn execute_step(db: &Surreal<Any>, step: &RolloutStep, vars: &TemplateVars) -> Result<()> {
-	match step.kind {
-		RolloutStepKind::ApplySchema => {
-			if !step.files.is_empty() {
-				for file in &step.files {
-					let raw =
-						fs::read_to_string(file).with_context(|| format!("reading {}", file))?;
-					let substituted = vars
-						.apply(&raw)
-						.with_context(|| format!("applying template variables in {}", file))?;
-					exec_surql(db, &ensure_overwrite(&substituted)).await?;
-				}
-			} else if let Some(ref sql) = step.sql {
-				let substituted = vars.apply(sql)?;
+	match &step.action {
+		RolloutAction::ApplySchema {
+			sql,
+		} => {
+			let substituted = vars.apply(sql)?;
+			exec_surql(db, &ensure_overwrite(&substituted)).await
+		}
+		RolloutAction::ApplyFiles {
+			files,
+		} => {
+			for file in files {
+				let raw = fs::read_to_string(file).with_context(|| format!("reading {}", file))?;
+				let substituted = vars
+					.apply(&raw)
+					.with_context(|| format!("applying template variables in {}", file))?;
 				exec_surql(db, &ensure_overwrite(&substituted)).await?;
 			}
 			Ok(())
 		}
-		RolloutStepKind::RunSql => {
-			let sql = step.sql.as_deref().ok_or_else(|| anyhow!("missing sql"))?;
+		RolloutAction::RunSql {
+			sql,
+		} => {
 			let substituted = vars.apply(sql)?;
 			exec_surql(db, &substituted).await
 		}
-		RolloutStepKind::AssertSql => {
-			let sql = step.sql.as_deref().ok_or_else(|| anyhow!("missing sql"))?;
-			let expect = step.expect.as_deref().ok_or_else(|| anyhow!("missing expect"))?;
+		RolloutAction::AssertSql {
+			sql,
+			expect,
+		} => {
 			let substituted = vars.apply(sql)?;
 			let actual = execute_sql_value(db, &substituted).await?;
 			if value_to_expect_string(&actual) != expect.trim() {
@@ -1113,8 +1362,10 @@ async fn execute_step(db: &Surreal<Any>, step: &RolloutStep, vars: &TemplateVars
 			}
 			Ok(())
 		}
-		RolloutStepKind::RemoveEntities => {
-			let sql = render_remove_sql(&step.entities, true)?.join("\n");
+		RolloutAction::RemoveEntities {
+			entities,
+		} => {
+			let sql = render_remove_sql(entities, true)?.join("\n");
 			if sql.trim().is_empty() {
 				return Ok(());
 			}
@@ -1275,7 +1526,7 @@ async fn record_step_start(db: &Surreal<Any>, rollout_id: &str, step: &RolloutSt
 	let new_step = serde_json::json!({
 		"step_id": step.id,
 		"phase": format!("{:?}", step.phase).to_ascii_lowercase(),
-		"kind": format!("{:?}", step.kind).to_ascii_lowercase(),
+		"kind": step.action.kind_str(),
 		"checksum": step_checksum(step)?,
 		"status": "running",
 		"error": null
@@ -1498,41 +1749,30 @@ mod tests {
 		.expect("build rollout");
 
 		assert_eq!(spec.steps.len(), 3);
-		assert!(
-			spec.steps.iter().any(|step| step.phase == RolloutPhase::Start
-				&& step.kind == RolloutStepKind::ApplySchema)
-		);
+		// The expand phase reads changed files from disk → ApplyFiles.
 		assert!(spec.steps.iter().any(|step| {
-			step.phase == RolloutPhase::Rollback && step.kind == RolloutStepKind::RemoveEntities
+			step.phase == RolloutPhase::Start
+				&& matches!(step.action, RolloutAction::ApplyFiles { .. })
 		}));
 		assert!(spec.steps.iter().any(|step| {
-			step.phase == RolloutPhase::Complete && step.kind == RolloutStepKind::RemoveEntities
+			step.phase == RolloutPhase::Rollback
+				&& matches!(step.action, RolloutAction::RemoveEntities { .. })
+		}));
+		assert!(spec.steps.iter().any(|step| {
+			step.phase == RolloutPhase::Complete
+				&& matches!(step.action, RolloutAction::RemoveEntities { .. })
 		}));
 	}
 
 	#[test]
-	fn rollout_lint_rejects_non_idempotent_run_sql() {
-		let spec = RolloutSpec {
-			id: "a".to_string(),
-			name: "a".to_string(),
-			source_schema_hash: "1".to_string(),
-			target_schema_hash: "2".to_string(),
-			compatibility: "phased".to_string(),
-			renames: Vec::new(),
-			steps: vec![RolloutStep {
-				id: "step".to_string(),
-				phase: RolloutPhase::Start,
-				kind: RolloutStepKind::RunSql,
-				files: Vec::new(),
-				sql: Some("UPDATE person SET name = 'a';".to_string()),
-				expect: None,
-				entities: Vec::new(),
-				idempotent: Some(false),
-			}],
-		};
-
-		let err = validate_rollout_spec(&spec).expect_err("must reject non-idempotent run_sql");
-		assert!(err.to_string().contains("idempotent = true"));
+	fn rollout_lint_rejects_empty_run_sql() {
+		// The action enum makes mismatched shapes unrepresentable; validation only
+		// guards against empty payloads that still compile.
+		let spec = RolloutSpec::builder("a")
+			.step(RolloutStep::run_sql("step", RolloutPhase::Start, "   "))
+			.build();
+		let err = validate_rollout_spec(&spec).expect_err("must reject empty run_sql");
+		assert!(err.to_string().contains("non-empty sql"));
 	}
 
 	async fn connect_mem_db() -> Surreal<Any> {
@@ -1560,7 +1800,7 @@ mod tests {
 				name: "test".to_string(),
 				source_schema_hash: "src".to_string(),
 				target_schema_hash: "tgt".to_string(),
-				compatibility: "phased".to_string(),
+				compatibility: RolloutCompatibility::Phased,
 				renames: Vec::new(),
 				steps: Vec::new(),
 			},
