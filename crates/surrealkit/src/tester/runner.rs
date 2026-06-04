@@ -249,7 +249,6 @@ impl RunnerContext {
 		if !self.opts.no_sync {
 			sync::run_sync(
 				&root.db,
-				folder,
 				SyncOpts {
 					watch: false,
 					debounce_ms: 250,

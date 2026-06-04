@@ -44,6 +44,7 @@ pub async fn generate(db: &Surreal<Any>) -> Result<SchemaTypes> {
 
 /// Run the `typegen` command: introspect the database, render JSON, and either
 /// print it or write it to a file.
+#[doc(hidden)]
 pub async fn run_typegen(
 	db: &Surreal<Any>,
 	folder: &str,

@@ -18,10 +18,11 @@ use crate::schema_state::{
 	CatalogEntity, EntityKey, SchemaFile, build_catalog_snapshot, collect_schema_files,
 	ensure_local_state_dirs, ensure_overwrite, render_remove_sql,
 };
-use crate::setup::run_setup;
+use crate::setup::{run_setup, run_setup_embedded};
 use crate::variables::TemplateVars;
 
 #[derive(Debug, Clone, Default)]
+#[doc(hidden)]
 pub struct SyncOpts {
 	pub watch: bool,
 	pub debounce_ms: u64,
@@ -39,15 +40,26 @@ pub struct SyncOpts {
 	pub folder: String,
 }
 
-/// Schema file embedded at compile time via [`embed_schema!`].
+/// A schema file embedded into the binary at compile time (via [`embed_schema!`])
+/// or constructed by hand for runtime sync.
+///
+/// `path` is a **stable tracking key**, not a path that must exist on disk:
+/// SurrealKit uses it to identify the file in its metadata tables so it can detect
+/// when the content changes and prune files that disappear. Keep it stable across
+/// releases — renaming it makes SurrealKit treat the old key as deleted and the new
+/// one as added. `sql` is the actual SurrealQL content; changing it (with `path`
+/// held constant) is what triggers a re-apply on the next sync.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct EmbeddedSchemaFile {
-	/// Relative path used as the tracking key in the database.
+	/// Stable tracking key (typically the source file's relative path).
 	pub path: &'static str,
+	/// The SurrealQL content applied to the database.
 	pub sql: &'static str,
 }
 
-pub async fn run_sync(db: &Surreal<Any>, folder: &str, opts: SyncOpts) -> Result<()> {
-	run_setup(db, folder).await?;
+#[doc(hidden)]
+pub async fn run_sync(db: &Surreal<Any>, opts: SyncOpts) -> Result<()> {
+	run_setup(db, &opts.folder).await?;
 	ensure_local_state_dirs(&opts.folder)?;
 
 	if opts.watch {
@@ -79,42 +91,117 @@ pub async fn run_sync(db: &Surreal<Any>, folder: &str, opts: SyncOpts) -> Result
 	}
 }
 
-/// Syncs embedded schema files without reading from the filesystem.
+/// A fluent builder for applying an embedded schema to a database.
 ///
-/// Defaults to `prune = true`, `fail_fast = true`. Use [`run_sync_embedded_with_opts`]
-/// for custom options.
-pub async fn run_sync_embedded(
-	db: &Surreal<Any>,
-	folder: &str,
-	files: &[EmbeddedSchemaFile],
-) -> Result<()> {
-	run_sync_embedded_with_opts(
-		db,
-		folder,
-		files,
-		&SyncOpts {
-			watch: false,
-			debounce_ms: 0,
-			dry_run: false,
-			fail_fast: true,
-			prune: true,
-			allow_shared_prune: false,
-			allow_all_statements: false,
-			vars: TemplateVars::default(),
-			folder: String::new(),
-		},
-	)
-	.await
+/// This is the library entry point for schema sync: it reconciles the database
+/// against the supplied [`EmbeddedSchemaFile`] slice, applying changed files and
+/// (by default) pruning database objects that are no longer present. It reads
+/// nothing from the filesystem and writes no scaffolding files.
+///
+/// Defaults: `prune = true`, `fail_fast = true`, no template variables.
+///
+/// ```no_run
+/// # use surrealkit::{Sync, EmbeddedSchemaFile, Surreal, engine::any::Any};
+/// # async fn run(db: &Surreal<Any>) -> anyhow::Result<()> {
+/// static SCHEMA: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+///     path: "database/schema/person.surql",
+///     sql: "DEFINE TABLE person SCHEMALESS;",
+/// }];
+/// Sync::embedded(SCHEMA).run(db).await?;
+/// // or, customized:
+/// Sync::embedded(SCHEMA).prune(false).run(db).await?;
+/// # Ok(()) }
+/// ```
+#[derive(Debug, Clone)]
+pub struct Sync<'a> {
+	files: &'a [EmbeddedSchemaFile],
+	prune: bool,
+	fail_fast: bool,
+	allow_shared_prune: bool,
+	allow_all_statements: bool,
+	dry_run: bool,
+	vars: TemplateVars,
 }
 
-/// Like [`run_sync_embedded`] but with caller-supplied [`SyncOpts`]. `watch` is ignored.
-pub async fn run_sync_embedded_with_opts(
+impl<'a> Sync<'a> {
+	/// Build a sync for the given compile-time-embedded schema slice (from
+	/// [`embed_schema!`](crate::embed_schema) or constructed by hand).
+	pub fn embedded(files: &'a [EmbeddedSchemaFile]) -> Self {
+		Self {
+			files,
+			prune: true,
+			fail_fast: true,
+			allow_shared_prune: false,
+			allow_all_statements: false,
+			dry_run: false,
+			vars: TemplateVars::default(),
+		}
+	}
+
+	/// Remove database objects no longer present in the schema slice (default: `true`).
+	pub fn prune(mut self, prune: bool) -> Self {
+		self.prune = prune;
+		self
+	}
+
+	/// Stop at the first apply error instead of continuing (default: `true`).
+	pub fn fail_fast(mut self, fail_fast: bool) -> Self {
+		self.fail_fast = fail_fast;
+		self
+	}
+
+	/// Permit pruning even when the database appears to be shared (default: `false`).
+	pub fn allow_shared_prune(mut self, allow: bool) -> Self {
+		self.allow_shared_prune = allow;
+		self
+	}
+
+	/// Allow non-`DEFINE` statements (e.g. `INSERT`/`UPDATE`) in schema content
+	/// (default: `false`). When set, files are applied as-is and only file-level
+	/// hashes are tracked.
+	pub fn allow_all_statements(mut self, allow: bool) -> Self {
+		self.allow_all_statements = allow;
+		self
+	}
+
+	/// Report what would change without applying anything (default: `false`).
+	pub fn dry_run(mut self, dry_run: bool) -> Self {
+		self.dry_run = dry_run;
+		self
+	}
+
+	/// Template variables substituted into `${VAR}` placeholders before execution.
+	pub fn vars(mut self, vars: TemplateVars) -> Self {
+		self.vars = vars;
+		self
+	}
+
+	/// Apply the schema to `db`. Idempotent: re-running with unchanged content is a
+	/// no-op.
+	pub async fn run(self, db: &Surreal<Any>) -> Result<()> {
+		let opts = SyncOpts {
+			watch: false,
+			debounce_ms: 0,
+			dry_run: self.dry_run,
+			fail_fast: self.fail_fast,
+			prune: self.prune,
+			allow_shared_prune: self.allow_shared_prune,
+			allow_all_statements: self.allow_all_statements,
+			vars: self.vars,
+			folder: String::new(),
+		};
+		sync_embedded(db, self.files, &opts).await
+	}
+}
+
+/// Apply embedded schema files using the given options, without touching the
+/// filesystem. The `watch` and `folder` fields of `opts` are ignored.
+async fn sync_embedded(
 	db: &Surreal<Any>,
-	folder: &str,
 	files: &[EmbeddedSchemaFile],
 	opts: &SyncOpts,
 ) -> Result<()> {
-	run_setup(db, folder).await?;
+	run_setup_embedded(db).await?;
 	let schema_files: Vec<SchemaFile> = files
 		.iter()
 		.map(|f| {

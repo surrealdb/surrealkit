@@ -25,12 +25,14 @@ use crate::setup::run_setup;
 use crate::variables::TemplateVars;
 
 #[derive(Debug, Clone)]
+#[doc(hidden)]
 pub struct RolloutPlanOpts {
 	pub name: Option<String>,
 	pub dry_run: bool,
 }
 
 #[derive(Debug, Clone)]
+#[doc(hidden)]
 pub struct RolloutExecutionOpts {
 	pub selector: Option<String>,
 }
@@ -109,7 +111,8 @@ pub enum RolloutStatus {
 }
 
 impl RolloutStatus {
-	fn as_str(&self) -> &'static str {
+	/// The persisted lowercase string for this status (e.g. `"running_start"`).
+	pub fn as_str(&self) -> &'static str {
 		match self {
 			Self::Planned => "planned",
 			Self::RunningStart => "running_start",
@@ -120,6 +123,26 @@ impl RolloutStatus {
 			Self::RolledBack => "rolled_back",
 			Self::Failed => "failed",
 		}
+	}
+
+	/// Parse a persisted status string, or `None` if unrecognized.
+	pub fn from_storage(s: &str) -> Option<Self> {
+		Some(match s {
+			"planned" => Self::Planned,
+			"running_start" => Self::RunningStart,
+			"ready_to_complete" => Self::ReadyToComplete,
+			"running_complete" => Self::RunningComplete,
+			"completed" => Self::Completed,
+			"running_rollback" => Self::RunningRollback,
+			"rolled_back" => Self::RolledBack,
+			"failed" => Self::Failed,
+			_ => return None,
+		})
+	}
+
+	/// Whether this is a terminal state (`completed` or `rolled_back`).
+	pub fn is_terminal(&self) -> bool {
+		matches!(self, Self::Completed | Self::RolledBack)
 	}
 }
 
@@ -320,21 +343,138 @@ impl RolloutSpecBuilder {
 	}
 }
 
+/// A code-driven rollout: a [`RolloutSpec`] plus the desired end-state schema, with
+/// methods to drive its lifecycle.
+///
+/// This is the primary entry point for running rollouts from your own code (as
+/// opposed to the CLI's filesystem workflow). Construct one with [`Rollout::new`]
+/// and call [`Rollout::start`] / [`Rollout::complete`] / [`Rollout::rollback`].
+///
+/// Only one rollout may be active (in any non-terminal state) at a time. If a
+/// rollout becomes wedged, recover it with [`Rollout::abandon`].
+///
+/// ```no_run
+/// # use surrealkit::{Rollout, RolloutSpec, RolloutStep, RolloutPhase, EmbeddedSchemaFile, Surreal, engine::any::Any};
+/// # async fn run(db: &Surreal<Any>) -> anyhow::Result<()> {
+/// static TARGET: &[EmbeddedSchemaFile] = &[];
+/// let spec = RolloutSpec::builder("20260604__add_account")
+///     .step(RolloutStep::apply_schema("create", RolloutPhase::Start, "DEFINE TABLE account SCHEMAFULL;"))
+///     .build();
+/// let rollout = Rollout::new(spec, TARGET);
+/// rollout.start(db).await?;
+/// rollout.complete(db).await?;
+/// # Ok(()) }
+/// ```
 #[derive(Debug, Clone)]
+pub struct Rollout<'a> {
+	spec: RolloutSpec,
+	target_files: &'a [crate::sync::EmbeddedSchemaFile],
+	vars: TemplateVars,
+}
+
+impl<'a> Rollout<'a> {
+	/// Create a code-driven rollout.
+	///
+	/// `target_files` is the desired schema after the rollout completes; it is used
+	/// to compute the managed-entity catalog recorded on complete/rollback. Pass
+	/// `&[]` when the rollout's steps fully describe the entity changes.
+	pub fn new(spec: RolloutSpec, target_files: &'a [crate::sync::EmbeddedSchemaFile]) -> Self {
+		Self {
+			spec,
+			target_files,
+			vars: TemplateVars::default(),
+		}
+	}
+
+	/// Set template variables applied to step SQL before execution.
+	pub fn vars(mut self, vars: TemplateVars) -> Self {
+		self.vars = vars;
+		self
+	}
+
+	/// The spec this rollout will run.
+	pub fn spec(&self) -> &RolloutSpec {
+		&self.spec
+	}
+
+	/// Run the `start` (expand) phase. Errors if another rollout is already active,
+	/// if this rollout is already in a terminal state, or if a step fails (the
+	/// rollout is left in the `failed` state).
+	pub async fn start(&self, db: &Surreal<Any>) -> Result<()> {
+		run_start_with_spec(db, default_folder(), &self.spec, self.target_files, &self.vars).await
+	}
+
+	/// Run the `complete` (contract) phase, applying destructive changes and marking
+	/// the rollout completed.
+	pub async fn complete(&self, db: &Surreal<Any>) -> Result<()> {
+		run_complete_with_spec(db, default_folder(), &self.spec, &self.vars).await
+	}
+
+	/// Run the `rollback` phase, undoing the `start` phase and marking the rollout
+	/// rolled back.
+	pub async fn rollback(&self, db: &Surreal<Any>) -> Result<()> {
+		run_rollback_with_spec(db, default_folder(), &self.spec, &self.vars).await
+	}
+
+	/// Fetch this rollout's current status, or `None` if it has never been started.
+	pub async fn status(&self, db: &Surreal<Any>) -> Result<Option<RolloutStatusReport>> {
+		load_rollout_status_report(db, &self.spec.id).await
+	}
+
+	/// Force a stuck or failed rollout (by id) to the terminal `rolled_back` state
+	/// without running rollback SQL. See [`run_abandon_rollout`] for the full
+	/// semantics — this does not revert applied schema changes.
+	pub async fn abandon(db: &Surreal<Any>, rollout_id: &str) -> Result<()> {
+		run_abandon_rollout(db, rollout_id).await
+	}
+}
+
+/// The recorded state of one step within a rollout.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RolloutStepStatus {
+	pub step_id: String,
+	pub phase: String,
+	pub kind: String,
+	pub status: String,
+	pub error: Option<String>,
+}
+
+/// A structured snapshot of a rollout's recorded execution state, returned by
+/// [`Rollout::status`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RolloutStatusReport {
+	pub id: String,
+	pub name: String,
+	/// The parsed status, or `None` if the stored value is unrecognized.
+	pub status: Option<RolloutStatus>,
+	pub started_at: Option<String>,
+	pub completed_at: Option<String>,
+	pub last_error: Option<String>,
+	pub steps: Vec<RolloutStepStatus>,
+}
+
+fn default_folder() -> &'static str {
+	crate::constants::DEFAULT_ROOT_DIR
+}
+
+#[derive(Debug, Clone)]
+#[doc(hidden)]
 pub struct LoadedRolloutSpec {
 	pub path: PathBuf,
 	pub checksum: String,
 	pub spec: RolloutSpec,
 }
 
-#[expect(dead_code)]
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
+#[doc(hidden)]
 pub struct ManagedEntityRecord {
 	pub entity: CatalogEntity,
 	pub active_rollout_id: Option<String>,
 	pub state: String,
 }
 
+#[doc(hidden)]
 pub async fn run_baseline(db: &Surreal<Any>, folder: &str) -> Result<()> {
 	run_setup(db, folder).await?;
 	ensure_local_state_dirs(folder)?;
@@ -359,6 +499,7 @@ pub async fn run_baseline(db: &Surreal<Any>, folder: &str) -> Result<()> {
 	Ok(())
 }
 
+#[doc(hidden)]
 pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 	ensure_local_state_dirs(folder)?;
 	let files = collect_schema_files(folder)?;
@@ -416,6 +557,7 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 	Ok(())
 }
 
+#[doc(hidden)]
 pub async fn run_lint(folder: &str, opts: RolloutExecutionOpts) -> Result<()> {
 	ensure_local_state_dirs(folder)?;
 	let rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
@@ -434,6 +576,41 @@ pub async fn run_lint(folder: &str, opts: RolloutExecutionOpts) -> Result<()> {
 	Ok(())
 }
 
+/// Load a single rollout's recorded state as a structured report (used by
+/// [`Rollout::status`]). Returns `None` if no record exists for `rollout_id`.
+async fn load_rollout_status_report(
+	db: &Surreal<Any>,
+	rollout_id: &str,
+) -> Result<Option<RolloutStatusReport>> {
+	let Some(row) = load_rollout_record(db, rollout_id).await? else {
+		return Ok(None);
+	};
+	let steps = row
+		.get("steps")
+		.and_then(|v| v.as_array())
+		.cloned()
+		.unwrap_or_default()
+		.iter()
+		.map(|step| RolloutStepStatus {
+			step_id: string_field(step, "step_id").unwrap_or_default(),
+			phase: string_field(step, "phase").unwrap_or_default(),
+			kind: string_field(step, "kind").unwrap_or_default(),
+			status: string_field(step, "status").unwrap_or_default(),
+			error: string_field(step, "error"),
+		})
+		.collect();
+	Ok(Some(RolloutStatusReport {
+		id: string_field(&row, "id").unwrap_or_else(|| rollout_id.to_string()),
+		name: string_field(&row, "name").unwrap_or_default(),
+		status: string_field(&row, "status").as_deref().and_then(RolloutStatus::from_storage),
+		started_at: string_field(&row, "started_at"),
+		completed_at: string_field(&row, "completed_at"),
+		last_error: string_field(&row, "last_error"),
+		steps,
+	}))
+}
+
+#[doc(hidden)]
 pub async fn run_status(db: &Surreal<Any>, folder: &str, selector: Option<String>) -> Result<()> {
 	run_setup(db, folder).await?;
 	let mut query =
@@ -487,6 +664,7 @@ pub async fn run_status(db: &Surreal<Any>, folder: &str, selector: Option<String
 	Ok(())
 }
 
+#[doc(hidden)]
 pub async fn run_start(
 	db: &Surreal<Any>,
 	folder: &str,
@@ -528,7 +706,7 @@ pub async fn run_start(
 ///
 /// `vars` is applied to step SQL (`ApplySchema`, `RunSql`, `AssertSql`) before execution.
 /// Pass `&TemplateVars::default()` if no substitution is needed.
-pub async fn run_start_with_spec(
+pub(crate) async fn run_start_with_spec(
 	db: &Surreal<Any>,
 	folder: &str,
 	spec: &RolloutSpec,
@@ -615,6 +793,7 @@ async fn start_inner(
 	}
 }
 
+#[doc(hidden)]
 pub async fn run_complete(
 	db: &Surreal<Any>,
 	folder: &str,
@@ -632,7 +811,7 @@ pub async fn run_complete(
 /// The `spec` must be identical to the one passed to [`run_start_with_spec`].
 /// `vars` is applied to step SQL before execution; pass `&TemplateVars::default()`
 /// if no substitution is needed.
-pub async fn run_complete_with_spec(
+pub(crate) async fn run_complete_with_spec(
 	db: &Surreal<Any>,
 	folder: &str,
 	spec: &RolloutSpec,
@@ -696,6 +875,7 @@ async fn complete_inner(
 	}
 }
 
+#[doc(hidden)]
 pub async fn run_rollback(
 	db: &Surreal<Any>,
 	folder: &str,
@@ -713,7 +893,7 @@ pub async fn run_rollback(
 /// The `spec` must be identical to the one passed to [`run_start_with_spec`].
 /// `vars` is applied to step SQL before execution; pass `&TemplateVars::default()`
 /// if no substitution is needed.
-pub async fn run_rollback_with_spec(
+pub(crate) async fn run_rollback_with_spec(
 	db: &Surreal<Any>,
 	folder: &str,
 	spec: &RolloutSpec,
@@ -779,6 +959,7 @@ async fn rollback_inner(
 }
 
 /// Heal a rollout left in an intermediate state without re-running SQL steps.
+#[doc(hidden)]
 pub async fn run_repair(db: &Surreal<Any>, folder: &str, opts: RolloutExecutionOpts) -> Result<()> {
 	run_setup(db, folder).await?;
 	let rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
@@ -871,6 +1052,7 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 /// and is blocking new rollouts (only one may be active at a time). It does **not**
 /// undo any schema changes the rollout already applied — reconcile those with a
 /// fresh sync or a new rollout afterwards. Already-terminal rollouts are a no-op.
+#[doc(hidden)]
 pub async fn run_abandon_rollout(db: &Surreal<Any>, rollout_id: &str) -> Result<()> {
 	acquire_lock(db, "global").await?;
 	let result = async {
@@ -907,7 +1089,7 @@ pub async fn run_abandon_rollout(db: &Surreal<Any>, rollout_id: &str) -> Result<
 	}
 }
 
-pub async fn load_active_rollout_id(db: &Surreal<Any>) -> Result<Option<String>> {
+pub(crate) async fn load_active_rollout_id(db: &Surreal<Any>) -> Result<Option<String>> {
 	let mut resp = db
 		.query(
 			"SELECT id, status, started_at FROM __rollout \
@@ -920,7 +1102,7 @@ pub async fn load_active_rollout_id(db: &Surreal<Any>) -> Result<Option<String>>
 	Ok(row.and_then(|value| string_field(&value, "id")))
 }
 
-pub async fn load_managed_entities(db: &Surreal<Any>) -> Result<Vec<ManagedEntityRecord>> {
+pub(crate) async fn load_managed_entities(db: &Surreal<Any>) -> Result<Vec<ManagedEntityRecord>> {
 	let mut resp = db.query("SELECT key, val FROM __entity WHERE ns = 'schema';").await?;
 	let rows: Vec<Value> = resp.take(0)?;
 	let mut out = Vec::with_capacity(rows.len());
@@ -990,7 +1172,7 @@ fn entity_keys_payload(entities: &[EntityKey]) -> Vec<String> {
 	entities.iter().map(|e| entity_key_string(&e.kind, e.scope.as_deref(), &e.name)).collect()
 }
 
-pub async fn upsert_managed_entities(
+pub(crate) async fn upsert_managed_entities(
 	db: &Surreal<Any>,
 	entities: &[CatalogEntity],
 	active_rollout_id: Option<&str>,
@@ -1028,7 +1210,7 @@ fn entity_key_string(kind: &EntityKind, scope: Option<&str>, name: &str) -> Stri
 	format!("{}:{}:{}", kind, scope.unwrap_or(""), name)
 }
 
-pub async fn delete_managed_entities(db: &Surreal<Any>, entities: &[EntityKey]) -> Result<()> {
+pub(crate) async fn delete_managed_entities(db: &Surreal<Any>, entities: &[EntityKey]) -> Result<()> {
 	if entities.is_empty() {
 		return Ok(());
 	}
@@ -1039,7 +1221,7 @@ pub async fn delete_managed_entities(db: &Surreal<Any>, entities: &[EntityKey]) 
 	Ok(())
 }
 
-pub async fn replace_managed_entities(
+pub(crate) async fn replace_managed_entities(
 	db: &Surreal<Any>,
 	entities: &[CatalogEntity],
 	active_rollout_id: Option<&str>,
@@ -1070,7 +1252,7 @@ pub async fn replace_managed_entities(
 	Ok(())
 }
 
-pub async fn replace_sync_hashes(db: &Surreal<Any>, files: &[SchemaFile]) -> Result<()> {
+pub(crate) async fn replace_sync_hashes(db: &Surreal<Any>, files: &[SchemaFile]) -> Result<()> {
 	db.query("DELETE __entity WHERE ns = 'sync';").await?.check()?;
 	for file in files {
 		db.query(
@@ -1084,7 +1266,7 @@ pub async fn replace_sync_hashes(db: &Surreal<Any>, files: &[SchemaFile]) -> Res
 	Ok(())
 }
 
-pub async fn delete_sync_hashes(db: &Surreal<Any>, paths: &[String]) -> Result<()> {
+pub(crate) async fn delete_sync_hashes(db: &Surreal<Any>, paths: &[String]) -> Result<()> {
 	for path in paths {
 		db.query("DELETE __entity WHERE ns = 'sync' AND key = $path;")
 			.bind(("path", path.clone()))
@@ -1607,7 +1789,7 @@ fn step_checksum(step: &RolloutStep) -> Result<String> {
 	Ok(sha256_hex(&raw))
 }
 
-pub async fn acquire_lock(db: &Surreal<Any>, lock_key: &str) -> Result<()> {
+pub(crate) async fn acquire_lock(db: &Surreal<Any>, lock_key: &str) -> Result<()> {
 	let owner = std::env::var("SURREALKIT_OWNER").unwrap_or_else(|_| "surrealkit".to_string());
 	db.query(
 		"DELETE __entity WHERE ns = 'lock' AND key = $key; \
@@ -1625,7 +1807,7 @@ pub async fn acquire_lock(db: &Surreal<Any>, lock_key: &str) -> Result<()> {
 	Ok(())
 }
 
-pub async fn release_lock(db: &Surreal<Any>, lock_key: &str) -> Result<()> {
+pub(crate) async fn release_lock(db: &Surreal<Any>, lock_key: &str) -> Result<()> {
 	db.query("DELETE __entity WHERE ns = 'lock' AND key = $key;")
 		.bind(("key", lock_key.to_string()))
 		.await?

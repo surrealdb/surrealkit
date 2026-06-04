@@ -11,20 +11,29 @@ pub mod tester;
 pub mod typegen;
 pub mod variables;
 
+// Re-exported dependencies used in the public API surface.
 pub use anyhow;
-pub use config::{AuthLevel, DbCfg, DbOverrides, connect};
-pub use rollout::{
-	RolloutAction, RolloutCompatibility, RolloutExecutionOpts, RolloutPhase, RolloutPlanOpts,
-	RolloutSpec, RolloutStatus, RolloutStep, run_baseline, run_complete, run_complete_with_spec,
-	run_lint, run_plan, run_rollback, run_rollback_with_spec, run_start, run_start_with_spec,
-	run_status,
-};
-pub use seed::{seed, seed_from_dir};
-pub use setup::run_setup;
 pub use surrealdb::{self, Surreal, engine};
 pub use surrealkit_macros::embed_schema;
-pub use sync::{
-	EmbeddedSchemaFile, SyncOpts, run_sync, run_sync_embedded, run_sync_embedded_with_opts,
+
+// Connecting.
+pub use config::{AuthLevel, DbCfg, DbOverrides, connect};
+
+// Schema sync (the simple, desired-state path).
+pub use sync::{EmbeddedSchemaFile, Sync};
+
+// Rollouts (the staged, reversible path).
+pub use rollout::{
+	Rollout, RolloutAction, RolloutCompatibility, RolloutPhase, RolloutSpec, RolloutSpecBuilder,
+	RolloutStatus, RolloutStatusReport, RolloutStep, RolloutStepStatus,
 };
-pub use typegen::{SchemaTypes, TypegenOpts, generate, run_typegen};
-pub use variables::{TemplateVars, build_vars, parse_var_flag};
+pub use schema_state::{EntityKey, EntityKind};
+
+// Seeding.
+pub use seed::seed;
+
+// Type generation (programmatic).
+pub use typegen::{SchemaTypes, TypegenOpts, generate};
+
+// Template variables.
+pub use variables::TemplateVars;

@@ -30,6 +30,7 @@ pub async fn seed(db: &Surreal<Any>, folder: &str, vars: &TemplateVars) -> Resul
 	}
 }
 
+#[doc(hidden)]
 pub async fn seed_from_dir(db: &Surreal<Any>, dir: &Path, vars: &TemplateVars) -> Result<()> {
 	let mut files: Vec<_> = fs::read_dir(dir)
 		.with_context(|| format!("reading directory {}", display(dir)))?

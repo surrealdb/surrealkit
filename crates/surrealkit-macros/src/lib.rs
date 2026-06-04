@@ -72,7 +72,7 @@ pub fn embed_schema(input: TokenStream) -> TokenStream {
 			pub async fn sync(
 				db: &::surrealkit::Surreal<::surrealkit::engine::any::Any>,
 			) -> ::surrealkit::anyhow::Result<()> {
-				::surrealkit::run_sync_embedded(db, SCHEMA).await
+				::surrealkit::Sync::embedded(SCHEMA).run(db).await
 			}
 		}
 	};

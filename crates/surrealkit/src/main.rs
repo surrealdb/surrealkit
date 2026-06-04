@@ -212,7 +212,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			let db = connect(&cfg).await?;
 			sync::run_sync(
 				&db,
-				&folder,
 				SyncOpts {
 					watch,
 					debounce_ms,
@@ -222,7 +221,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 					allow_shared_prune,
 					allow_all_statements,
 					vars: template_vars,
-					folder: folder.clone(),
+					folder,
 				},
 			)
 			.await?;

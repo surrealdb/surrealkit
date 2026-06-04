@@ -62,6 +62,7 @@ pub fn apply(content: &str, vars: &HashMap<String, String>) -> Result<String> {
 /// Merge variables from all three sources. Highest priority wins:
 /// `cli_vars` > `SURREALKIT_VAR_*` env vars > `surrealkit.toml [variables]`.
 /// Keys are uppercased. `toml_path` defaults to `./surrealkit.toml` when `None`.
+#[doc(hidden)]
 pub fn build_vars(
 	cli_vars: &[(String, String)],
 	toml_path: Option<&Path>,
@@ -100,6 +101,7 @@ pub fn build_vars(
 
 /// Parse a `KEY=VALUE` string from a `--var` CLI flag. Splits at the first `=`.
 /// Missing `=` is an error. Empty value is allowed.
+#[doc(hidden)]
 pub fn parse_var_flag(raw: &str) -> Result<(String, String)> {
 	match raw.find('=') {
 		None => bail!("--var '{}' is missing '=' (expected KEY=VALUE)", raw),
