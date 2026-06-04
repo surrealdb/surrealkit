@@ -37,6 +37,12 @@ pub struct RolloutExecutionOpts {
 	pub selector: Option<String>,
 }
 
+/// Which phase of a rollout a step belongs to.
+///
+/// A rollout runs in two forward phases plus an undo phase:
+/// - `Start` — the non-destructive expand phase (add/modify schema).
+/// - `Complete` — the destructive contract phase (remove what's no longer needed).
+/// - `Rollback` — undo the `Start` phase.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RolloutPhase {
@@ -68,36 +74,69 @@ pub enum RolloutCompatibility {
 pub enum RolloutAction {
 	/// Apply inline SurrealQL DDL. `DEFINE` statements are made idempotent
 	/// (`OVERWRITE` is injected) so the step is always safe to retry.
-	ApplySchema { sql: String },
+	ApplySchema {
+		sql: String,
+	},
 	/// Read DDL from `.surql` files on disk and apply them. Used by the CLI
 	/// `rollout plan`/`start` workflow; in code prefer [`RolloutAction::ApplySchema`]
 	/// with inline SQL.
-	ApplyFiles { files: Vec<String> },
+	ApplyFiles {
+		files: Vec<String>,
+	},
 	/// Execute SurrealQL that mutates data (e.g. a backfill). The SQL must be safe
 	/// to re-run: on retry the step executes again from scratch.
-	RunSql { sql: String },
+	RunSql {
+		sql: String,
+	},
 	/// Run a query and assert its stringified output equals `expect`; fails the
 	/// rollout otherwise.
-	AssertSql { sql: String, expect: String },
+	AssertSql {
+		sql: String,
+		expect: String,
+	},
 	/// Issue `REMOVE … IF EXISTS` for named database objects (tables, fields,
 	/// indexes, …).
-	RemoveEntities { entities: Vec<EntityKey> },
+	RemoveEntities {
+		entities: Vec<EntityKey>,
+	},
 }
 
 impl RolloutAction {
 	/// The persisted discriminator string for this action (e.g. `"apply_schema"`).
 	fn kind_str(&self) -> &'static str {
 		match self {
-			Self::ApplySchema { .. } => "apply_schema",
-			Self::ApplyFiles { .. } => "apply_files",
-			Self::RunSql { .. } => "run_sql",
-			Self::AssertSql { .. } => "assert_sql",
-			Self::RemoveEntities { .. } => "remove_entities",
+			Self::ApplySchema {
+				..
+			} => "apply_schema",
+			Self::ApplyFiles {
+				..
+			} => "apply_files",
+			Self::RunSql {
+				..
+			} => "run_sql",
+			Self::AssertSql {
+				..
+			} => "assert_sql",
+			Self::RemoveEntities {
+				..
+			} => "remove_entities",
 		}
 	}
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// The lifecycle state of a rollout.
+///
+/// Happy path:
+/// `Planned → RunningStart → ReadyToComplete → RunningComplete → Completed`.
+///
+/// Rollback path: from `ReadyToComplete` (or a recovered state)
+/// `→ RunningRollback → RolledBack`.
+///
+/// `Completed` and `RolledBack` are terminal (see [`RolloutStatus::is_terminal`]).
+/// `Failed` and the three `Running*` states are intermediate/stuck states left by
+/// an interrupted run; recover them with the CLI `repair` command or
+/// [`Rollout::abandon`]. Only one rollout may be in a non-terminal state at a time.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RolloutStatus {
 	Planned,
@@ -465,7 +504,6 @@ pub struct LoadedRolloutSpec {
 	pub spec: RolloutSpec,
 }
 
-#[allow(dead_code)]
 #[derive(Debug, Clone)]
 #[doc(hidden)]
 pub struct ManagedEntityRecord {
@@ -1210,7 +1248,10 @@ fn entity_key_string(kind: &EntityKind, scope: Option<&str>, name: &str) -> Stri
 	format!("{}:{}:{}", kind, scope.unwrap_or(""), name)
 }
 
-pub(crate) async fn delete_managed_entities(db: &Surreal<Any>, entities: &[EntityKey]) -> Result<()> {
+pub(crate) async fn delete_managed_entities(
+	db: &Surreal<Any>,
+	entities: &[EntityKey],
+) -> Result<()> {
 	if entities.is_empty() {
 		return Ok(());
 	}

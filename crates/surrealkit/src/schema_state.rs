@@ -170,10 +170,17 @@ impl<'de> Deserialize<'de> for EntityKind {
 	}
 }
 
+/// Identifies one SurrealDB object managed by SurrealKit. The `(kind, scope, name)`
+/// triple is the object's identity for diffing and for the `__entity` metadata key.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EntityKey {
+	/// What kind of object this is.
 	pub kind: EntityKind,
+	/// The parent scope: the table name for `field`/`event`/`index`, the level
+	/// (`DATABASE`/`NAMESPACE`) for `access`/`user`, and `None` for top-level
+	/// objects like `table`/`function`/`param`.
 	pub scope: Option<String>,
+	/// The object's name.
 	pub name: String,
 }
 
@@ -960,7 +967,12 @@ mod tests {
 				&& entity.name == "name"
 				&& entity.source_path == "database/schema/root.surql"
 		}));
-		assert!(catalog.entities.iter().any(|entity| entity.kind == EntityKind::Api && entity.name == "v1"));
+		assert!(
+			catalog
+				.entities
+				.iter()
+				.any(|entity| entity.kind == EntityKind::Api && entity.name == "v1")
+		);
 		assert!(
 			catalog.entities.iter().any(|e| e.kind == EntityKind::Bucket && e.name == "assets"),
 			"bucket should be captured"
@@ -974,10 +986,9 @@ mod tests {
 			"config should be captured by its kind keyword"
 		);
 		assert!(
-			catalog
-				.entities
-				.iter()
-				.any(|e| { e.kind == EntityKind::Module && e.scope.is_none() && e.name == "mod::math" }),
+			catalog.entities.iter().any(|e| {
+				e.kind == EntityKind::Module && e.scope.is_none() && e.name == "mod::math"
+			}),
 			"module should be captured with its mod:: name"
 		);
 	}

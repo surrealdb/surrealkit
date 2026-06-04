@@ -458,7 +458,10 @@ async fn rollout_facade_full_lifecycle() {
 	let rollout = Rollout::new(add_table_spec("add_invoice", "invoice"), TARGET);
 
 	rollout.start(&db).await.expect("start");
-	assert_eq!(query_rollout_status(&db, "add_invoice").await.as_deref(), Some("ready_to_complete"));
+	assert_eq!(
+		query_rollout_status(&db, "add_invoice").await.as_deref(),
+		Some("ready_to_complete")
+	);
 
 	// The structured status report is available via the facade.
 	let report = rollout.status(&db).await.expect("status").expect("record exists");
@@ -569,7 +572,10 @@ async fn rollout_abandon_unsticks_active_rollout() {
 	assert_eq!(query_rollout_status(&db, "stuck_rollout").await.as_deref(), Some("rolled_back"));
 
 	next.start(&db).await.expect("new rollout can start after abandon");
-	assert_eq!(query_rollout_status(&db, "next_rollout").await.as_deref(), Some("ready_to_complete"));
+	assert_eq!(
+		query_rollout_status(&db, "next_rollout").await.as_deref(),
+		Some("ready_to_complete")
+	);
 }
 
 // Template variable tests
@@ -619,7 +625,10 @@ async fn sync_embedded_with_undefined_var_returns_error() {
 	// Variable name lives in the cause chain (wrapped by file-path context); {:#} prints full
 	// chain.
 	let chain = format!("{err:#}");
-	assert!(chain.contains("UNDEFINED_VAR"), "error chain should name the missing variable: {chain}");
+	assert!(
+		chain.contains("UNDEFINED_VAR"),
+		"error chain should name the missing variable: {chain}"
+	);
 }
 
 #[tokio::test]
@@ -678,7 +687,8 @@ async fn rollout_apply_files_step_substitutes_vars() {
 	let db = mem_db().await;
 
 	let schema_path = tmp.path().join("schema_for_apply.surql");
-	std::fs::write(&schema_path, "DEFINE TABLE ${tbl_name} SCHEMALESS;").expect("write schema file");
+	std::fs::write(&schema_path, "DEFINE TABLE ${tbl_name} SCHEMALESS;")
+		.expect("write schema file");
 
 	let spec = RolloutSpec::builder("apply_files_with_vars")
 		.step(RolloutStep::apply_files(
