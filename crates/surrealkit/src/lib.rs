@@ -12,7 +12,7 @@ pub mod typegen;
 pub mod variables;
 
 pub use anyhow;
-pub use config::{AuthLevel, Cfg, ConfigOverrides, connect};
+pub use config::{AuthLevel, DbCfg, DbOverrides, connect};
 pub use rollout::{
 	RolloutExecutionOpts, RolloutPhase, RolloutPlanOpts, RolloutSpec, RolloutStep, RolloutStepKind,
 	run_baseline, run_complete, run_complete_with_spec, run_lint, run_plan, run_rollback,

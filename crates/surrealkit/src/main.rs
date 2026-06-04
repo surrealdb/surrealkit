@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
 use rust_dotenv::dotenv::DotEnv;
-use surrealkit::config::{Cfg, ConfigOverrides, connect};
+use surrealkit::config::{DbCfg, DbOverrides, connect};
 use surrealkit::core::exec_surql;
 use surrealkit::rollout::{self, RolloutExecutionOpts, RolloutPlanOpts};
 use surrealkit::setup::run_setup;
@@ -175,7 +175,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 	let args = Cli::parse();
 	let env = load_env();
-	let overrides = ConfigOverrides {
+	let overrides = DbOverrides {
 		host: args.host,
 		ns: args.ns,
 		db: args.db,
@@ -191,7 +191,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		vars: build_vars(&raw_vars, None)?,
 	};
 
-	let cfg = Cfg::from_env(env.as_ref(), &overrides)?;
+	let cfg = DbCfg::from_env(env.as_ref(), &overrides)?;
 	let folder = cfg.folder().to_owned();
 
 	match args.command {

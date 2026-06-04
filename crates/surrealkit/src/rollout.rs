@@ -15,7 +15,7 @@ use time::macros::format_description;
 use crate::constants::{catalog_snapshot_path, rollouts_dir};
 use crate::core::{exec_surql, sha256_hex};
 use crate::schema_state::{
-	CatalogDiff, CatalogEntity, CatalogSnapshot, EntityKey, FileDiff, SchemaFile,
+	CatalogDiff, CatalogEntity, CatalogSnapshot, EntityKey, EntityKind, FileDiff, SchemaFile,
 	build_catalog_snapshot, collect_schema_files, diff_catalog, diff_schema,
 	ensure_local_state_dirs, ensure_overwrite, hash_schema_snapshot, load_catalog_snapshot,
 	load_schema_snapshot, render_remove_sql, save_catalog_snapshot, save_schema_snapshot,
@@ -684,7 +684,7 @@ pub async fn load_managed_entities(db: &Surreal<Any>) -> Result<Vec<ManagedEntit
 		if parts.len() < 3 {
 			continue;
 		}
-		let kind = parts[0].to_string();
+		let kind = EntityKind::from_storage(parts[0]);
 		let scope = if parts[1].is_empty() {
 			None
 		} else {
@@ -775,7 +775,7 @@ pub async fn upsert_managed_entities(
 	Ok(())
 }
 
-fn entity_key_string(kind: &str, scope: Option<&str>, name: &str) -> String {
+fn entity_key_string(kind: &EntityKind, scope: Option<&str>, name: &str) -> String {
 	format!("{}:{}:{}", kind, scope.unwrap_or(""), name)
 }
 
@@ -925,9 +925,9 @@ Author a manual rollout manifest for non-additive changes.",
 		);
 	}
 
-	let removed_by_scope: BTreeSet<(String, Option<String>)> =
+	let removed_by_scope: BTreeSet<(EntityKind, Option<String>)> =
 		diff.removed.iter().map(|entity| (entity.kind.clone(), entity.scope.clone())).collect();
-	let added_by_scope: BTreeSet<(String, Option<String>)> =
+	let added_by_scope: BTreeSet<(EntityKind, Option<String>)> =
 		diff.added.iter().map(|entity| (entity.kind.clone(), entity.scope.clone())).collect();
 
 	if removed_by_scope.intersection(&added_by_scope).next().is_some() {
@@ -1423,7 +1423,7 @@ mod tests {
 			removed: Vec::new(),
 			modified: vec![CatalogChange {
 				old: CatalogEntity {
-					kind: "field".to_string(),
+					kind: EntityKind::Field,
 					scope: Some("person".to_string()),
 					name: "name".to_string(),
 					source_path: "database/schema/person.surql".to_string(),
@@ -1431,7 +1431,7 @@ mod tests {
 					file_hash: "fa".to_string(),
 				},
 				new: CatalogEntity {
-					kind: "field".to_string(),
+					kind: EntityKind::Field,
 					scope: Some("person".to_string()),
 					name: "name".to_string(),
 					source_path: "database/schema/person.surql".to_string(),
@@ -1463,7 +1463,7 @@ mod tests {
 			},
 			&CatalogDiff {
 				added: vec![CatalogEntity {
-					kind: "table".to_string(),
+					kind: EntityKind::Table,
 					scope: None,
 					name: "customer".to_string(),
 					source_path: "database/schema/customer.surql".to_string(),
@@ -1471,7 +1471,7 @@ mod tests {
 					file_hash: "file-a".to_string(),
 				}],
 				removed: vec![CatalogEntity {
-					kind: "field".to_string(),
+					kind: EntityKind::Field,
 					scope: Some("person".to_string()),
 					name: "nickname".to_string(),
 					source_path: "database/schema/person.surql".to_string(),
@@ -1747,7 +1747,7 @@ mod tests {
 
 	fn sample_entity(name: &str) -> CatalogEntity {
 		CatalogEntity {
-			kind: "field".to_string(),
+			kind: EntityKind::Field,
 			scope: Some("person".to_string()),
 			name: name.to_string(),
 			source_path: format!("database/schema/{name}.surql"),

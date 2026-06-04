@@ -22,7 +22,7 @@ use super::types::{
 	AssertionReport, CaseKind, CaseReport, FilterInput, GlobalTestConfig, JsonAssertionSpec,
 	LoadedSuite, PermissionAction, RunReport, SuiteReport, TestOpts,
 };
-use crate::config::{AuthLevel, Cfg};
+use crate::config::{AuthLevel, DbCfg};
 use crate::constants::DEFAULT_ROOT_DIR;
 use crate::core::create_surreal_client;
 use crate::seed;
@@ -31,7 +31,7 @@ use crate::sync::{self, SyncOpts};
 use crate::variables::TemplateVars;
 
 pub struct RunnerContext {
-	pub cfg: Cfg,
+	pub cfg: DbCfg,
 	pub opts: TestOpts,
 	pub global: GlobalTestConfig,
 	pub base_url: Option<String>,
@@ -42,7 +42,7 @@ pub struct RunnerContext {
 
 impl RunnerContext {
 	pub fn new(
-		cfg: Cfg,
+		cfg: DbCfg,
 		opts: TestOpts,
 		global: GlobalTestConfig,
 		base_url: Option<String>,
@@ -680,7 +680,7 @@ fn fixture_targets_root(fixture: &crate::tester::types::FixtureSpec) -> bool {
 	matches!(fixture.actor.as_deref(), None | Some("root"))
 }
 
-async fn cleanup_suite_db(cfg: &Cfg, host: &str, namespace: &str, database: &str) -> Result<()> {
+async fn cleanup_suite_db(cfg: &DbCfg, host: &str, namespace: &str, database: &str) -> Result<()> {
 	let db = create_surreal_client(&host.to_string())
 		.await
 		.with_context(|| format!("connecting for cleanup {host}"))?;
