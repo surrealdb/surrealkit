@@ -160,6 +160,13 @@ pub const DEFAULT_PROJECT_CONFIG: &str = r#"# Template variables for use in .sur
 # [variables]
 # schema_prefix = "myapp"
 # environment   = "development"
+
+# Generate TypeScript types from your schema (surrealdb JS SDK v2).
+# When `typescript` is set, `surrealkit typegen` and `sync --watch` write an
+# index.ts of typed table interfaces into this directory.
+#
+# [typegen]
+# typescript = "../src/types"
 "#;
 
 pub const DEFAULT_TEST_SUITE: &str = r#"name = "smoke"

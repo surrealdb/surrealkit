@@ -210,6 +210,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			allow_all_statements,
 		} => {
 			let db = connect(&cfg).await?;
+			let typegen_cfg = surrealkit::variables::load_typegen_config(None)?;
 			sync::run_sync(
 				&db,
 				&folder,
@@ -223,6 +224,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 					allow_all_statements,
 					vars: template_vars,
 					folder: folder.clone(),
+					typegen_ts_out: typegen_cfg.typescript,
 				},
 			)
 			.await?;
@@ -377,6 +379,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			compact,
 		} => {
 			let db = connect(&cfg).await?;
+			let typegen_cfg = surrealkit::variables::load_typegen_config(None)?;
 			run_typegen(
 				&db,
 				&folder,
@@ -386,6 +389,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 					out,
 					stdout,
 					pretty: !compact,
+					ts_out: typegen_cfg.typescript,
 				},
 			)
 			.await?;

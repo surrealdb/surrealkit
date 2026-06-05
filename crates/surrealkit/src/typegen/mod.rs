@@ -32,6 +32,25 @@ pub struct TypegenOpts {
 	pub stdout: bool,
 	/// Pretty-print the JSON.
 	pub pretty: bool,
+	/// When set, also emit TypeScript types into this directory (`index.ts`).
+	/// Configured via `[typegen] typescript` in `surrealkit.toml`.
+	pub ts_out: Option<PathBuf>,
+}
+
+/// Render a [`SchemaTypes`] document as TypeScript. Re-exported so callers
+/// (e.g. the sync/watch loop) can emit types without re-introspecting.
+pub fn render_typescript(doc: &SchemaTypes) -> Result<String> {
+	emit::to_typescript(doc)
+}
+
+/// Write the TypeScript types for `doc` into `dir/index.ts`, creating `dir` if
+/// needed. Returns the path written.
+pub fn write_typescript(doc: &SchemaTypes, dir: &std::path::Path) -> Result<PathBuf> {
+	let ts = emit::to_typescript(doc)?;
+	std::fs::create_dir_all(dir)?;
+	let path = dir.join("index.ts");
+	std::fs::write(&path, ts)?;
+	Ok(path)
 }
 
 /// Introspect the database into a [`SchemaTypes`] document and stamp the
@@ -72,5 +91,10 @@ pub async fn run_typegen(
 	}
 	std::fs::write(&path, format!("{json}\n"))?;
 	eprintln!("typegen: wrote {}", path.display());
+
+	if let Some(ts_dir) = &opts.ts_out {
+		let ts_path = write_typescript(&doc, ts_dir)?;
+		eprintln!("typegen: wrote {}", ts_path.display());
+	}
 	Ok(())
 }

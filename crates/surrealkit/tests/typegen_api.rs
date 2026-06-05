@@ -2,7 +2,9 @@ use surrealdb::Surreal;
 use surrealdb::engine::any::{Any, connect};
 use surrealdb::opt::Config;
 use surrealdb::opt::capabilities::Capabilities;
-use surrealkit::typegen::{FieldType, PrimitiveType, TypegenOpts, generate, run_typegen};
+use surrealkit::typegen::{
+	FieldType, PrimitiveType, TypegenOpts, generate, render_typescript, run_typegen,
+};
 
 async fn mem_db() -> Surreal<Any> {
 	let cfg = Config::new().capabilities(Capabilities::all());
@@ -132,6 +134,7 @@ async fn run_typegen_writes_valid_json_file() {
 			out: Some(out.clone()),
 			stdout: false,
 			pretty: true,
+			ts_out: None,
 		},
 	)
 	.await
@@ -144,4 +147,57 @@ async fn run_typegen_writes_valid_json_file() {
 	assert_eq!(parsed["database"], "typegen_test");
 	assert!(parsed["tables"].as_array().expect("tables array").iter().any(|t| t["name"] == "user"));
 	assert!(!parsed["generatedAt"].as_str().expect("generatedAt").is_empty());
+}
+
+#[tokio::test]
+async fn render_typescript_emits_sdk_interfaces() {
+	let db = mem_db().await;
+	define_schema(&db).await;
+
+	let doc = generate(&db).await.expect("generate");
+	let ts = render_typescript(&doc).expect("render ts");
+
+	// PascalCase interface + synthesized typed id.
+	assert!(ts.contains("export interface User {"), "got:\n{ts}");
+	assert!(ts.contains("id: RecordId<'user'>;"), "got:\n{ts}");
+	// Field mappings from the introspected schema.
+	assert!(ts.contains("name: string;"), "got:\n{ts}");
+	assert!(ts.contains("nickname?: string;"), "got:\n{ts}");
+	assert!(ts.contains("tags: string[];"), "got:\n{ts}");
+	assert!(ts.contains("best_friend: RecordId<'user'>;"), "got:\n{ts}");
+	// Dotted sub-field becomes a nested object property.
+	assert!(ts.contains("address: {"), "got:\n{ts}");
+	assert!(ts.contains("city: string;"), "got:\n{ts}");
+	// SDK import line.
+	assert!(ts.contains("import type { RecordId } from 'surrealdb';"), "got:\n{ts}");
+}
+
+#[tokio::test]
+async fn run_typegen_writes_typescript_file_when_configured() {
+	let db = mem_db().await;
+	define_schema(&db).await;
+
+	let tmp = tempfile::TempDir::new().expect("temp dir");
+	let json_out = tmp.path().join("schema.json");
+	let ts_dir = tmp.path().join("types");
+
+	run_typegen(
+		&db,
+		"./database",
+		"surrealkit_test",
+		"typegen_test",
+		TypegenOpts {
+			out: Some(json_out.clone()),
+			stdout: false,
+			pretty: true,
+			ts_out: Some(ts_dir.clone()),
+		},
+	)
+	.await
+	.expect("run_typegen");
+
+	assert!(json_out.exists(), "json should still be written");
+	let ts = std::fs::read_to_string(ts_dir.join("index.ts")).expect("read index.ts");
+	assert!(ts.contains("export interface User {"), "got:\n{ts}");
+	assert!(ts.contains("id: RecordId<'user'>;"), "got:\n{ts}");
 }

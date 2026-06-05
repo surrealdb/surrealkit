@@ -260,6 +260,7 @@ impl RunnerContext {
 					allow_all_statements: false,
 					vars: self.vars.clone(),
 					folder: self.cfg.folder().to_owned(),
+					typegen_ts_out: None,
 				},
 			)
 			.await?;
