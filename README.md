@@ -34,7 +34,7 @@ Multi-arch (`linux/amd64`, `linux/arm64`) images are published to GitHub Contain
 ```sh
 docker pull ghcr.io/surrealdb/surrealkit:latest
 docker run --rm -v "$(pwd)/database:/database:ro" ghcr.io/surrealdb/surrealkit:latest \
-    --host http://host.docker.internal:8000 --ns my_ns --db my_db sync
+    --host http://host.docker.internal:8000 sync --schema admin
 ```
 
 Available tags: `X.Y.Z` (exact), `X.Y` (minor line), `latest`.
@@ -61,8 +61,6 @@ services:
       - ./database:/database:ro
     command:
       - --host=http://surrealdb:8000
-      - --ns=my_ns
-      - --db=my_db
       - --user=root
       - --pass=root
       - sync
@@ -84,19 +82,30 @@ surrealkit init
 
 This creates a directory `/database` with the necessary scaffolding
 
-Connection details can be provided via CLI arguments, environment variables, or a `.env` file. The resolution order is: CLI args > system env vars > `.env` file > defaults.
+```
+database/
+  schemas/     ← schema SQL files, one subdirectory per named schema
+  rollouts/    ← rollout manifests per named schema
+  snapshots/   ← plan snapshots per named schema
+  seed/        ← seed files per named schema
+  tests/
+  setup.surql
+surrealkit.toml
+```
+
+Connection details can be provided via CLI arguments, environment variables, or a `.env` file. Namespace/database targets are selected by schema commands such as `sync --schema admin`. The resolution order for host/auth is: CLI args > system env vars > `.env` file > defaults.
 
 ### CLI Arguments
 
 ```bash
-surrealkit --host http://localhost:8000 --ns my_ns --db my_db --user root --pass root sync
+surrealkit --host http://localhost:8000 --user root --pass root sync --schema admin
 ```
 
 | Flag           | Description                                                            | Default                 |
 | -------------- | ---------------------------------------------------------------------- | ----------------------- |
 | `--host`       | Database host URL                                                      | `http://localhost:8000` |
-| `--ns`         | Database namespace                                                     | `db`                    |
-| `--db`         | Database name                                                          | `test`                  |
+| `--ns`         | Deprecated namespace override for legacy flat mode                     | `db`                    |
+| `--db`         | Deprecated database override for legacy flat mode                      | `test`                  |
 | `--user`       | Database user                                                          | `root`                  |
 | `--pass`       | Database password                                                      | `root`                  |
 | `--auth-level` | Authentication level: `root`, `namespace` / `ns`, or `database` / `db` | `root`                  |
@@ -104,16 +113,53 @@ surrealkit --host http://localhost:8000 --ns my_ns --db my_db --user root --pass
 ### Environment Variables
 
 - `SURREALDB_HOST` (fallback: `DATABASE_HOST`)
-- `SURREALDB_NAME` (fallback: `DATABASE_NAME`)
-- `SURREALDB_NAMESPACE` (fallback: `DATABASE_NAMESPACE`)
 - `SURREALDB_USER` (fallback: `DATABASE_USER`)
 - `SURREALDB_PASSWORD` (fallback: `DATABASE_PASSWORD`)
 - `SURREALDB_AUTH_LEVEL` (fallback: `DATABASE_AUTH_LEVEL`) — accepted values: `root`, `namespace` / `ns`, `database` / `db`
 - `SURREALDB_FOLDER` — root folder for schema, rollouts, snapshots, seed, and tests (default: `./database`)
 
+**Deprecated** (legacy flat-mode only — only effective when no `[schema.*]` entries exist in `surrealkit.toml`, or when using deprecated `--ns` / `--db`):
+
+- `SURREALDB_NAMESPACE` (fallback: `DATABASE_NAMESPACE`) — namespace for flat sync/seed (default: `db`)
+- `SURREALDB_NAME` (fallback: `DATABASE_NAME`) — database for flat sync/seed (default: `test`)
+
 These can be set as system environment variables or in a `.env` file.
 
 SurrealKit creates and manages its internal sync and rollout metadata tables on your configured database.
+
+### Schemas
+
+Named schemas live in `surrealkit.toml` and select the namespace/database target for schema-aware commands. Schemas can extend one or more base schemas, which composes files from `database/schemas/<name>/` and seeds from `database/seed/<name>/` in inheritance order.
+
+```toml
+[schema.base]
+
+[schema.admin]
+extends = "base"
+ns = "system"
+db = "main"
+
+[schema.org]
+extends = "base"
+ns = "org_${org_id}"
+db = "main"
+required_variables = ["org_id"]
+```
+
+```sh
+# Sync/seed all resolved schemas (default when schemas are defined)
+surrealkit sync
+surrealkit seed
+
+# Target a single schema
+surrealkit sync --schema admin
+surrealkit sync --schema org --var org_id=acme
+surrealkit seed --schema admin
+surrealkit setup --schema admin
+surrealkit apply --schema admin ./custom.surql
+```
+
+Schemas without `ns` and `db`, such as `base`, are **abstract** and only contribute files through child schemas. Schemas with `ns`/`db` but unbound `required_variables` are **template schemas** — they resolve once the required vars are supplied. All other schemas are fully **resolved** and can be used by schema-aware commands (`sync`, `seed`, `setup`, `apply`, `rollout`, `status`, and `test`).
 
 ## Team Workflow
 
@@ -121,16 +167,18 @@ SurrealKit now separates schema authoring, dev sync, and shared/prod rollouts:
 
 ### Sync vs Rollouts
 
-- `surrealkit sync` is the fast desired-state reconciler for local, preview, and other disposable databases.
-- `surrealkit sync` applies changed schema files and automatically removes SurrealKit-managed objects that were deleted from `database/schema`.
+- `surrealkit sync` is the fast desired-state reconciler for local, preview, and other disposable databases. When schemas are defined in `surrealkit.toml`, it syncs all resolved schemas by default; template schemas with missing `required_variables` are an error unless `--skip-template-schemas` is passed.
+- `surrealkit sync --schema <name>` targets a single named schema.
 - `surrealkit rollout ...` is the production/shared-database migration path.
 - `surrealkit rollout plan` turns the desired-state diff into a reviewed manifest in `database/rollouts/*.toml`.
 - `surrealkit rollout start` applies the non-destructive expansion phase and records resumable state in the database.
 - `surrealkit rollout complete` performs the destructive contract phase, including removing legacy objects after application cutover.
 - Use `sync` when it is safe for the database to match local files immediately. Use `rollout` when changes need review, staged execution, rollback, or operator-controlled cutover.
 
-1. Edit desired state in `database/schema/*.surql`
-2. Reconcile local or disposable DBs with managed auto-prune:
+> **Deprecation notice:** If no schemas are defined in `surrealkit.toml`, schema-aware commands fall back to the legacy flat `database/schema/` and `database/seed/` directories and print a warning. Move files manually to the named-schema layout (see [Moving from flat schema](#moving-from-flat-schema)). The flat directories, `--ns`, and `--db` will be removed in a future release.
+
+1. Edit desired state in `database/schemas/<name>/*.surql`
+2. Reconcile local or disposable DBs with managed auto-prune (syncs all schemas):
 
 ```sh
 surrealkit sync
@@ -145,44 +193,46 @@ surrealkit sync --watch
 4. Baseline an existing shared/prod database before the first rollout:
 
 ```sh
-surrealkit rollout baseline
+surrealkit rollout baseline --schema admin
 ```
 
 5. Generate a rollout manifest from the current desired-state diff:
 
 ```sh
-surrealkit rollout plan --name add_customer_indexes
+surrealkit rollout plan --schema admin --name add_customer_indexes
 ```
 
 6. Start the rollout, let application cutover happen, then complete it:
 
 ```sh
-surrealkit rollout start 20260302153045__add_customer_indexes
-surrealkit rollout complete 20260302153045__add_customer_indexes
+surrealkit rollout start --schema admin 20260302153045__add_customer_indexes
+surrealkit rollout complete --schema admin 20260302153045__add_customer_indexes
 ```
 
 7. Roll back an in-flight rollout if needed:
 
 ```sh
-surrealkit rollout rollback 20260302153045__add_customer_indexes
+surrealkit rollout rollback --schema admin 20260302153045__add_customer_indexes
 ```
 
-Generated rollout manifests are written to `database/rollouts/*.toml`.
-Local snapshots are tracked in:
+Rollout manifests and local snapshots are stored per schema:
 
-- `database/snapshots/schema_snapshot.json`
-- `database/snapshots/catalog_snapshot.json`
+| Path | Purpose |
+|---|---|
+| `database/rollouts/<name>/*.toml` | Rollout manifests |
+| `database/snapshots/<name>/schema_snapshot.json` | Schema file hashes after last plan |
+| `database/snapshots/<name>/catalog_snapshot.json` | Managed-entity catalog after last plan |
 
 To validate a rollout manifest without mutating the database:
 
 ```sh
-surrealkit rollout lint 20260302153045__add_customer_indexes
+surrealkit rollout lint --schema admin 20260302153045__add_customer_indexes
 ```
 
 To inspect rollout state stored in the database:
 
 ```sh
-surrealkit rollout status
+surrealkit rollout status --schema admin
 ```
 
 If managed destructive prune is enabled against a shared DB, SurrealKit requires explicit override:
@@ -229,6 +279,51 @@ Seeding runs on demand:
 
 ```sh
 surrealkit seed
+```
+
+## Moving from flat schema
+
+If your project was created before named schemas existed, your files live in the flat layout:
+
+```
+database/
+  schema/          ← SQL files
+  seed/            ← seed files
+  rollouts/        ← manifest .toml files at the root
+  snapshots/       ← *_snapshot.json files at the root
+```
+
+The named-schema layout puts everything under a schema name:
+
+```
+database/
+  schemas/<name>/  ← SQL files
+  seed/<name>/     ← seed files
+  rollouts/<name>/ ← manifest .toml files
+  snapshots/<name>/← snapshot JSON files
+```
+
+Move flat files into a named subdirectory:
+
+```text
+database/schema/*.surql             -> database/schemas/main/*.surql
+database/seed/*.surql               -> database/seed/main/*.surql
+database/rollouts/*.toml            -> database/rollouts/main/*.toml
+database/snapshots/*_snapshot.json  -> database/snapshots/main/*_snapshot.json
+```
+
+Then add the schema to `surrealkit.toml` (replacing `ns`/`db` with your values):
+
+```toml
+[schema.main]
+ns = "<your-namespace>"
+db = "<your-database>"
+```
+
+Verify the migration:
+
+```sh
+surrealkit sync --schema main
 ```
 
 ## Template Variables
@@ -322,8 +417,19 @@ error: template variable 'SCHEMA_PREFIX' is not defined
 [Testing Example](https://github.com/ForetagInc/surrealkit/blob/main/examples/testing/README.md)
 
 ```sh
+# Test all resolved schemas in sequence (default when schemas are defined)
 surrealkit test
+
+# Test a single schema
+surrealkit test --schema main
+
+# Skip template schemas with unresolved variables instead of erroring
+surrealkit test --skip-template-schemas
 ```
+
+When named schemas are defined in `surrealkit.toml`, the runner tests each resolved schema in sequence — applying that schema's SQL files and seed files before each suite, and using its `ns`/`db` as the base for the isolated test namespace and database. Use `--schema <name>` to target a single schema.
+
+For legacy flat-schema projects (no `[schema.*]` in `surrealkit.toml`), `--schema` can be omitted and the flat `database/schema/` and `database/seed/` directories are used.
 
 The runner executes declarative TOML suites from `database/tests/suites/*.toml` and supports:
 
@@ -339,6 +445,8 @@ By default, each suite runs in an isolated ephemeral namespace/database and fail
 
 `surrealkit test` supports:
 
+- `--schema <name>` — target a single schema; omit to test all resolved schemas
+- `--skip-template-schemas` — skip template schemas with missing vars instead of erroring (incompatible with `--schema`)
 - `--suite <glob>`
 - `--case <glob>`
 - `--tag <tag>` (repeatable)
@@ -470,4 +578,4 @@ Generate machine-readable output:
 surrealkit test --json-out database/tests/report.json
 ```
 
-The command exits non-zero if any case fails.
+The command exits non-zero if any case fails. When a single schema (or legacy flat mode) is tested, the JSON shape is the normal run report. When multiple named schemas are tested, the JSON file contains a top-level aggregate summary with one report per schema.

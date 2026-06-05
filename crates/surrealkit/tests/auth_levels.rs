@@ -51,8 +51,8 @@ fn make_cfg(url: &str, auth_level: AuthLevel, user: &str, pass: &str) -> Cfg {
 		None,
 		&ConfigOverrides {
 			host: Some(url.into()),
-			ns: Some(NS.into()),
-			db: Some(DB.into()),
+			ns: None,
+			db: None,
 			user: Some(user.into()),
 			pass: Some(pass.into()),
 			auth_level: Some(
@@ -67,6 +67,7 @@ fn make_cfg(url: &str, auth_level: AuthLevel, user: &str, pass: &str) -> Cfg {
 		},
 	)
 	.expect("DbCfg::from_env")
+	.with_target(NS, DB)
 }
 
 #[test]
@@ -248,6 +249,8 @@ async fn test_runner_rejects_database_auth_level() {
 		..Default::default()
 	};
 	let opts = TestOpts {
+		schema: None,
+		skip_template_schemas: false,
 		suite: None,
 		case: None,
 		tags: Vec::new(),

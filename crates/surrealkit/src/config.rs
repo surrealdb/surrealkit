@@ -35,7 +35,9 @@ impl AuthLevel {
 #[derive(Debug, Clone, Default)]
 pub struct ConfigOverrides {
 	pub host: Option<String>,
+	/// Deprecated: use named schemas in surrealkit.toml instead.
 	pub ns: Option<String>,
+	/// Deprecated: use named schemas in surrealkit.toml instead.
 	pub db: Option<String>,
 	pub user: Option<String>,
 	pub pass: Option<String>,
@@ -91,6 +93,9 @@ impl Cfg {
 			dotenv,
 			"http://localhost:8000",
 		);
+		// ns/db resolution is only used by the legacy flat sync path.
+		// Named schemas supply their own ns/db targets via [schema.*] in
+		// surrealkit.toml. These env vars and config fields are deprecated.
 		let db = resolve(&overrides.db, &["SURREALDB_NAME", "DATABASE_NAME"], dotenv, "test");
 		let ns =
 			resolve(&overrides.ns, &["SURREALDB_NAMESPACE", "DATABASE_NAMESPACE"], dotenv, "db");
@@ -109,7 +114,7 @@ impl Cfg {
 				auth_level_str
 			)
 		})?;
-		let folder = resolve(&None, &["SURREALDB_FOLDER"], dotenv, DEFAULT_ROOT_DIR);
+		let folder = resolve(&overrides.folder, &["SURREALDB_FOLDER"], dotenv, DEFAULT_ROOT_DIR);
 
 		Ok(Self {
 			host,
@@ -148,6 +153,13 @@ impl Cfg {
 
 	pub fn folder(&self) -> &str {
 		&self.folder
+	}
+
+	pub fn with_target(&self, ns: impl Into<String>, db: impl Into<String>) -> Self {
+		let mut cfg = self.clone();
+		cfg.ns = ns.into();
+		cfg.db = db.into();
+		cfg
 	}
 }
 
@@ -263,8 +275,8 @@ mod tests {
 		clear_db_env();
 		let overrides = ConfigOverrides {
 			host: Some("http://custom:9000".into()),
-			db: Some("mydb".into()),
-			ns: Some("myns".into()),
+			ns: None,
+			db: None,
 			user: Some("admin".into()),
 			pass: Some("secret".into()),
 			auth_level: None,
@@ -272,8 +284,8 @@ mod tests {
 		};
 		let cfg = Cfg::from_env(None, &overrides).unwrap();
 		assert_eq!(cfg.host(), "http://custom:9000");
-		assert_eq!(cfg.db(), "mydb");
-		assert_eq!(cfg.ns(), "myns");
+		assert_eq!(cfg.db(), "test");
+		assert_eq!(cfg.ns(), "db");
 		assert_eq!(cfg.user(), "admin");
 		assert_eq!(cfg.pass(), "secret");
 	}
@@ -338,16 +350,14 @@ mod tests {
 		clear_db_env();
 		unsafe {
 			set_env("SURREALDB_HOST", "http://envhost:8000");
-			set_env("SURREALDB_NAME", "envdb");
-			set_env("SURREALDB_NAMESPACE", "envns");
 			set_env("SURREALDB_USER", "envuser");
 			set_env("SURREALDB_PASSWORD", "envpass");
 		}
 
 		let cfg = Cfg::from_env(None, &ConfigOverrides::default()).unwrap();
 		assert_eq!(cfg.host(), "http://envhost:8000");
-		assert_eq!(cfg.db(), "envdb");
-		assert_eq!(cfg.ns(), "envns");
+		assert_eq!(cfg.db(), "test");
+		assert_eq!(cfg.ns(), "db");
 		assert_eq!(cfg.user(), "envuser");
 		assert_eq!(cfg.pass(), "envpass");
 

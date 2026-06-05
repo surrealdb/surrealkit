@@ -4,19 +4,19 @@ use std::path::Path;
 use anyhow::{Context, Result};
 
 use crate::constants::{
-	fixtures_dir, rollouts_dir, schema_dir, seed_dir, seed_surql_path, setup_surql_path, state_dir,
-	suites_dir, tests_dir,
+	fixtures_dir, rollouts_dir, schemas_dir, seed_dir, seed_surql_path, setup_surql_path,
+	state_dir, suites_dir, tests_dir,
 };
 
 pub fn scaffold(folder: &str) -> Result<()> {
-	let schema_dir = schema_dir(folder);
+	let schemas_dir = schemas_dir(folder);
 	let rollouts_dir = rollouts_dir(folder);
 	let state_dir = state_dir(folder);
 	let tests_dir = tests_dir(folder);
 	let test_suites_dir = suites_dir(folder);
 	let test_fixtures_dir = fixtures_dir(folder);
 
-	fs::create_dir_all(&schema_dir).with_context(|| format!("creating {}/schema", folder))?;
+	fs::create_dir_all(&schemas_dir).with_context(|| format!("creating {}/schemas", folder))?;
 	fs::create_dir_all(&rollouts_dir).with_context(|| format!("creating {}/rollouts", folder))?;
 	fs::create_dir_all(&state_dir).with_context(|| format!("creating {}/snapshots", folder))?;
 	fs::create_dir_all(&tests_dir).with_context(|| format!("creating {}/tests", folder))?;
@@ -61,15 +61,18 @@ pub fn scaffold(folder: &str) -> Result<()> {
 	println!("Scaffolded project in {}\n", folder);
 	println!("  surrealkit.toml");
 	println!("  {}/", folder);
-	println!("  ├── schema/");
-	println!("  ├── rollouts/");
-	println!("  ├── snapshots/");
+	println!("  ├── schemas/          ← schema SQL files per named schema");
+	println!("  ├── rollouts/         ← rollout manifests per named schema");
+	println!("  ├── snapshots/        ← plan snapshots per named schema");
 	println!("  ├── tests/");
 	println!("  │   ├── suites/");
 	println!("  │   └── fixtures/");
-	println!("  ├── seed/");
+	println!("  ├── seed/             ← seed files per named schema");
 	println!("  │   └── seed.surql");
 	println!("  └── setup.surql");
+	println!();
+	println!("Next: define your schemas in surrealkit.toml, then create");
+	println!("  {folder}/schemas/<name>/*.surql  for each schema.");
 	Ok(())
 }
 
@@ -153,9 +156,33 @@ timeout_ms = 10000
 kind = "root"
 "#;
 
-pub const DEFAULT_PROJECT_CONFIG: &str = r#"# Template variables for use in .surql schema and seed files.
-# Values here have the lowest priority:
-#   --var KEY=VALUE  >  SURREALKIT_VAR_KEY env vars  >  this file
+pub const DEFAULT_PROJECT_CONFIG: &str = r#"# Named schemas — required to use named-schema commands.
+#
+# Each schema entry maps a name to a SurrealDB namespace/database target.
+# Schema SQL files live in:  database/schemas/<name>/
+# Seed files live in:        database/seed/<name>/
+# Rollout manifests in:      database/rollouts/<name>/
+# Plan snapshots in:         database/snapshots/<name>/
+#
+# Schemas can extend a base schema to inherit its SURQL files and seed files.
+# Abstract schemas (no ns/db) are only applied through concrete child schemas.
+# Template schemas use ${VAR} placeholders; supply values with --var KEY=VALUE.
+#
+# [schema.base]
+#
+# [schema.main]
+# extends = "base"
+# ns      = "mynamespace"
+# db      = "main"
+#
+# [schema.org]
+# extends           = "base"
+# ns                = "org_${org_id}"
+# db                = "main"
+# required_variables = ["org_id"]
+#
+# ── Template variables ─────────────────────────────────────────────────────
+# Lowest priority: --var KEY=VALUE > SURREALKIT_VAR_KEY env > .env > this file.
 #
 # [variables]
 # schema_prefix = "myapp"

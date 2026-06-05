@@ -1,5 +1,5 @@
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use surrealdb::Surreal;
@@ -31,26 +31,41 @@ pub async fn seed(db: &Surreal<Any>, folder: &str, vars: &TemplateVars) -> Resul
 }
 
 pub async fn seed_from_dir(db: &Surreal<Any>, dir: &Path, vars: &TemplateVars) -> Result<()> {
-	let mut files: Vec<_> = fs::read_dir(dir)
-		.with_context(|| format!("reading directory {}", display(dir)))?
-		.filter_map(|entry| {
-			let entry = entry.ok()?;
-			let path = entry.path();
-			if path.extension().and_then(|e| e.to_str()) == Some("surql") {
-				Some(path)
-			} else {
-				None
-			}
-		})
-		.collect();
+	seed_from_dirs(db, &[dir.to_path_buf()], vars).await
+}
 
-	if files.is_empty() {
-		return Err(anyhow!("no .surql files found in {}", display(dir)));
+pub async fn seed_from_dirs(
+	db: &Surreal<Any>,
+	dirs: &[PathBuf],
+	vars: &TemplateVars,
+) -> Result<()> {
+	let mut files = Vec::new();
+	for dir in dirs {
+		if !dir.exists() {
+			continue;
+		}
+		let mut dir_files: Vec<_> = fs::read_dir(dir)
+			.with_context(|| format!("reading directory {}", display(dir)))?
+			.filter_map(|entry| {
+				let entry = entry.ok()?;
+				let path = entry.path();
+				if path.extension().and_then(|e| e.to_str()) == Some("surql") {
+					Some(path)
+				} else {
+					None
+				}
+			})
+			.collect();
+		dir_files.sort();
+		files.extend(dir_files);
 	}
 
-	files.sort();
+	if files.is_empty() {
+		let dirs = dirs.iter().map(|dir| display(dir)).collect::<Vec<_>>().join(", ");
+		return Err(anyhow!("no .surql files found in {}", dirs));
+	}
 
-	println!("Seeding from {} ({} files found)", display(dir), files.len());
+	println!("Seeding {} file(s)", files.len());
 
 	for path in &files {
 		println!("  executing {}", display(path));

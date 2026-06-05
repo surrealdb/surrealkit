@@ -15,8 +15,8 @@ use crate::rollout::{
 	load_managed_entities, release_lock, upsert_managed_entities,
 };
 use crate::schema_state::{
-	CatalogEntity, EntityKey, SchemaFile, build_catalog_snapshot, collect_schema_files,
-	ensure_local_state_dirs, ensure_overwrite, render_remove_sql,
+	CatalogEntity, EntityKey, SchemaFile, SchemaWorkspace, build_catalog_snapshot,
+	collect_workspace_schema_files, ensure_overwrite, ensure_workspace_dirs, render_remove_sql,
 };
 use crate::setup::run_setup;
 use crate::variables::TemplateVars;
@@ -47,11 +47,20 @@ pub struct EmbeddedSchemaFile {
 }
 
 pub async fn run_sync(db: &Surreal<Any>, folder: &str, opts: SyncOpts) -> Result<()> {
-	run_setup(db, folder).await?;
-	ensure_local_state_dirs(&opts.folder)?;
+	let workspace = SchemaWorkspace::legacy(folder);
+	run_sync_with_workspace(db, &workspace, opts).await
+}
+
+pub async fn run_sync_with_workspace(
+	db: &Surreal<Any>,
+	workspace: &SchemaWorkspace,
+	opts: SyncOpts,
+) -> Result<()> {
+	run_setup(db, &workspace.root_folder).await?;
+	ensure_workspace_dirs(workspace)?;
 
 	if opts.watch {
-		run_sync_once(db, &opts, true).await?;
+		run_sync_once(db, workspace, &opts, true).await?;
 		println!(
 			"Watch mode active ({}ms interval). Waiting for schema changes... (Ctrl+C to stop)",
 			opts.debounce_ms.max(250)
@@ -64,7 +73,7 @@ pub async fn run_sync(db: &Surreal<Any>, folder: &str, opts: SyncOpts) -> Result
 					break;
 				}
 				_ = tokio::time::sleep(Duration::from_millis(opts.debounce_ms.max(250))) => {
-					if let Err(err) = run_sync_once(db, &opts, true).await {
+					if let Err(err) = run_sync_once(db, workspace, &opts, true).await {
 						if opts.fail_fast {
 							return Err(err);
 						}
@@ -75,7 +84,7 @@ pub async fn run_sync(db: &Surreal<Any>, folder: &str, opts: SyncOpts) -> Result
 		}
 		Ok(())
 	} else {
-		run_sync_once(db, &opts, false).await
+		run_sync_once(db, workspace, &opts, false).await
 	}
 }
 
@@ -134,8 +143,22 @@ pub async fn run_sync_embedded_with_opts(
 	run_sync_with_files(db, opts, &schema_files, false).await
 }
 
-async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> Result<()> {
-	let files = collect_schema_files(&opts.folder)?;
+async fn run_sync_once(
+	db: &Surreal<Any>,
+	workspace: &SchemaWorkspace,
+	opts: &SyncOpts,
+	watch_mode: bool,
+) -> Result<()> {
+	let files = collect_workspace_schema_files(workspace)?;
+	if files.is_empty() && !watch_mode {
+		let dirs = workspace
+			.schema_dirs
+			.iter()
+			.map(|p| p.display().to_string())
+			.collect::<Vec<_>>()
+			.join(", ");
+		println!("No schema files found in {dirs}");
+	}
 	run_sync_with_files(db, opts, &files, watch_mode).await
 }
 
@@ -148,10 +171,6 @@ async fn run_sync_with_files(
 	let desired_catalog = build_catalog_snapshot(files, opts.allow_all_statements)?;
 	let tracked = load_sync_hashes(db).await?;
 	let managed = load_managed_entities(db).await?;
-
-	if files.is_empty() && !watch_mode {
-		println!("No schema files found in {}/schema", opts.folder);
-	}
 
 	let file_paths: BTreeSet<String> = files.iter().map(|file| file.path.clone()).collect();
 	let removed_paths: Vec<String> =

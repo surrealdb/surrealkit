@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use surrealdb::Surreal;
 use surrealdb::engine::any::{Any, connect};
@@ -9,20 +10,28 @@ use surrealkit::constants::DEFAULT_ROOT_DIR;
 use surrealkit::schema_state::EntityKey;
 use surrealkit::{
 	EmbeddedSchemaFile, RolloutExecutionOpts, RolloutPhase, RolloutPlanOpts, RolloutSpec,
-	RolloutStep, RolloutStepKind, SyncOpts, TemplateVars, run_baseline, run_complete,
+	RolloutStep, RolloutStepKind, SyncOpts, TemplateVars, build_vars, run_baseline, run_complete,
 	run_complete_with_spec, run_plan, run_rollback, run_rollback_with_spec, run_setup, run_start,
 	run_start_with_spec, run_status, run_sync_embedded, run_sync_embedded_with_opts, seed_from_dir,
 };
+use surrealkit::{load_schema_catalog, seed, sync};
 
 async fn mem_db() -> Surreal<Any> {
+	static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+
 	let cfg = Config::new().capabilities(Capabilities::all());
 	let db = connect(("mem://", cfg)).await.expect("connect mem://");
-	db.use_ns("surrealkit_test").use_db("library_api_test").await.expect("use_ns/use_db");
+	let id = DB_COUNTER.fetch_add(1, Ordering::Relaxed);
+	let ns = format!("surrealkit_test_{}_{}", std::process::id(), id);
+	db.use_ns(ns).use_db("library_api_test").await.expect("use_ns/use_db");
 	db
 }
 
 // Tests that change cwd must hold this lock to avoid races.
 static FS_LOCK: Mutex<()> = Mutex::new(());
+
+/// Serialises tests that mutate `SURREALKIT_VAR_*` env vars.
+static ENV_LOCK: Mutex<()> = Mutex::new(());
 
 struct RestoreCwd(std::path::PathBuf);
 
@@ -41,7 +50,7 @@ fn enter_tempdir() -> (tempfile::TempDir, RestoreCwd) {
 
 #[tokio::test]
 async fn setup_initialises_metadata_tables() {
-	let _lock = FS_LOCK.lock().unwrap();
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (_tmp, _cwd) = enter_tempdir();
 	let db = mem_db().await;
 	run_setup(&db, DEFAULT_ROOT_DIR).await.expect("run_setup");
@@ -426,6 +435,210 @@ async fn seed_from_dir_is_accessible_via_library() {
 	assert_eq!(rows[0].get("name").and_then(|v| v.as_str()), Some("Alice"));
 }
 
+#[tokio::test]
+async fn named_schema_sync_uses_inheritance_and_target() {
+	let _guard = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (_tmp, _restore) = enter_tempdir();
+
+	std::fs::write(
+		"surrealkit.toml",
+		r#"
+[schema.base]
+
+[schema.admin]
+extends = "base"
+ns = "system"
+db = "main"
+
+[schema.org]
+extends = "base"
+ns = "org_${org_id}"
+db = "main"
+required_variables = ["org_id"]
+"#,
+	)
+	.expect("write surrealkit.toml");
+	write_named_schema_file("base", "base.surql", "DEFINE TABLE base_user SCHEMALESS;");
+	write_named_schema_file("admin", "admin.surql", "DEFINE TABLE admin_setting SCHEMALESS;");
+	write_named_schema_file("org", "org.surql", "DEFINE TABLE org_project SCHEMALESS;");
+
+	let catalog = load_schema_catalog(None).expect("load schema catalog");
+	let admin = catalog
+		.resolve("admin", DEFAULT_ROOT_DIR, &TemplateVars::default())
+		.expect("resolve admin");
+	let db = mem_db().await;
+	db.use_ns(&admin.ns).use_db(&admin.db).await.expect("use admin target");
+	sync::run_sync_with_workspace(
+		&db,
+		&admin.workspace,
+		SyncOpts {
+			fail_fast: true,
+			prune: true,
+			folder: DEFAULT_ROOT_DIR.to_string(),
+			..Default::default()
+		},
+	)
+	.await
+	.expect("sync admin schema");
+
+	let admin_tables = table_names(&db).await;
+	assert!(admin_tables.contains(&"base_user".to_string()));
+	assert!(admin_tables.contains(&"admin_setting".to_string()));
+	assert!(!admin_tables.contains(&"org_project".to_string()));
+
+	let mut vars = std::collections::HashMap::new();
+	vars.insert("ORG_ID".to_string(), "acme".to_string());
+	let template_vars = TemplateVars {
+		vars,
+	};
+	let org = catalog.resolve("org", DEFAULT_ROOT_DIR, &template_vars).expect("resolve org");
+	assert_eq!(org.ns, "org_acme");
+	db.use_ns(&org.ns).use_db(&org.db).await.expect("use org target");
+	sync::run_sync_with_workspace(
+		&db,
+		&org.workspace,
+		SyncOpts {
+			fail_fast: true,
+			prune: true,
+			folder: DEFAULT_ROOT_DIR.to_string(),
+			vars: template_vars,
+			..Default::default()
+		},
+	)
+	.await
+	.expect("sync org schema");
+
+	let org_tables = table_names(&db).await;
+	assert!(org_tables.contains(&"base_user".to_string()));
+	assert!(org_tables.contains(&"org_project".to_string()));
+	assert!(!org_tables.contains(&"admin_setting".to_string()));
+}
+
+#[tokio::test]
+async fn coalesced_schema_sync_keeps_entities_from_shared_target() {
+	let _guard = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (_tmp, _restore) = enter_tempdir();
+
+	std::fs::write(
+		"surrealkit.toml",
+		r#"
+[schema.base]
+
+[schema.admin]
+extends = "base"
+ns = "system"
+db = "main"
+
+[schema.api]
+extends = "base"
+ns = "system"
+db = "main"
+"#,
+	)
+	.expect("write surrealkit.toml");
+	write_named_schema_file("base", "base.surql", "DEFINE TABLE base_user SCHEMALESS;");
+	write_named_schema_file("admin", "admin.surql", "DEFINE TABLE admin_setting SCHEMALESS;");
+	write_named_schema_file("api", "api.surql", "DEFINE TABLE api_route SCHEMALESS;");
+
+	let catalog = load_schema_catalog(None).expect("load schema catalog");
+	let targets = catalog
+		.resolve_targets(
+			None,
+			false,
+			DEFAULT_ROOT_DIR,
+			&TemplateVars::default(),
+			"legacy_ns",
+			"legacy_db",
+		)
+		.expect("resolve targets");
+	assert_eq!(targets.len(), 1);
+	assert!(targets[0].is_merged());
+
+	let db = mem_db().await;
+	db.use_ns(targets[0].ns())
+		.use_db(targets[0].db())
+		.await
+		.expect("use merged target");
+	sync::run_sync_with_workspace(
+		&db,
+		targets[0].workspace(),
+		SyncOpts {
+			fail_fast: true,
+			prune: true,
+			folder: DEFAULT_ROOT_DIR.to_string(),
+			..Default::default()
+		},
+	)
+	.await
+	.expect("sync merged schemas");
+
+	let tables = table_names(&db).await;
+	assert!(tables.contains(&"base_user".to_string()));
+	assert!(tables.contains(&"admin_setting".to_string()));
+	assert!(tables.contains(&"api_route".to_string()));
+}
+
+#[tokio::test]
+async fn named_schema_seed_uses_inheritance_order() {
+	let _guard = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (_tmp, _restore) = enter_tempdir();
+
+	std::fs::write(
+		"surrealkit.toml",
+		r#"
+[schema.base]
+
+[schema.admin]
+extends = "base"
+ns = "system"
+db = "main"
+"#,
+	)
+	.expect("write surrealkit.toml");
+	write_named_seed_file("base", "01_base.surql", "CREATE seeded:base SET source = 'base';");
+	write_named_seed_file("admin", "01_admin.surql", "CREATE seeded:admin SET source = 'admin';");
+
+	let catalog = load_schema_catalog(None).expect("load schema catalog");
+	let admin = catalog
+		.resolve("admin", DEFAULT_ROOT_DIR, &TemplateVars::default())
+		.expect("resolve admin");
+	let db = mem_db().await;
+	db.use_ns(&admin.ns).use_db(&admin.db).await.expect("use admin target");
+	seed::seed_from_dirs(&db, &admin.seed_dirs, &TemplateVars::default())
+		.await
+		.expect("seed admin");
+
+	let rows: Vec<serde_json::Value> =
+		db.query("SELECT source FROM seeded ORDER BY source;").await.unwrap().take(0).unwrap();
+	let sources = rows
+		.iter()
+		.filter_map(|row| row.get("source").and_then(|v| v.as_str()))
+		.collect::<Vec<_>>();
+	assert_eq!(sources, vec!["admin", "base"]);
+}
+
+fn write_named_schema_file(schema: &str, name: &str, sql: &str) {
+	let dir = Path::new(DEFAULT_ROOT_DIR).join("schemas").join(schema);
+	std::fs::create_dir_all(&dir).expect("create named schema dir");
+	std::fs::write(dir.join(name), sql).expect("write named schema file");
+}
+
+fn write_named_seed_file(schema: &str, name: &str, sql: &str) {
+	let dir = Path::new(DEFAULT_ROOT_DIR).join("seed").join(schema);
+	std::fs::create_dir_all(&dir).expect("create named seed dir");
+	std::fs::write(dir.join(name), sql).expect("write named seed file");
+}
+
+async fn table_names(db: &Surreal<Any>) -> Vec<String> {
+	let mut resp = db.query("INFO FOR DB;").await.expect("INFO FOR DB");
+	let info: Option<serde_json::Value> = resp.take(0).expect("take");
+	info.as_ref()
+		.and_then(|v| v.get("tables"))
+		.and_then(|v| v.as_object())
+		.map(|m| m.keys().cloned().collect::<Vec<_>>())
+		.unwrap_or_default()
+}
+
 fn find_latest_rollout_id(base: &Path) -> Option<String> {
 	let rollouts_dir = base.join("database/rollouts");
 	let mut entries: Vec<_> = std::fs::read_dir(&rollouts_dir)
@@ -676,7 +889,7 @@ async fn sync_embedded_with_undefined_var_returns_error() {
 
 #[tokio::test]
 async fn seed_with_vars_substitutes_in_seed_file() {
-	let _lock = FS_LOCK.lock().unwrap();
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (tmp, _cwd) = enter_tempdir();
 
 	let db = mem_db().await;
@@ -701,8 +914,73 @@ async fn seed_with_vars_substitutes_in_seed_file() {
 }
 
 #[tokio::test]
+async fn seed_with_env_vars_substitutes_in_seed_file() {
+	let _env_lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (tmp, _cwd) = enter_tempdir();
+
+	const ENV_KEY: &str = "SURREALKIT_VAR_SEED_TEST_ONLY_ROLE";
+	unsafe { std::env::set_var(ENV_KEY, "admin") };
+
+	let db = mem_db().await;
+
+	let seed_dir = tmp.path().join("custom_seed");
+	std::fs::create_dir_all(&seed_dir).expect("create seed dir");
+	std::fs::write(
+		seed_dir.join("01_data.surql"),
+		"CREATE person:1 SET role = '${seed_test_only_role}';",
+	)
+	.expect("write seed file");
+
+	let template_vars = TemplateVars {
+		vars: build_vars(&[], None, None).expect("build_vars from env"),
+	};
+
+	seed_from_dir(&db, &seed_dir, &template_vars).await.expect("seed_from_dir with env vars");
+
+	let mut resp = db.query("SELECT role FROM person WHERE id = person:1;").await.expect("q");
+	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
+	assert_eq!(rows.len(), 1);
+	assert_eq!(rows[0].get("role").and_then(|v| v.as_str()), Some("admin"));
+
+	unsafe { std::env::remove_var(ENV_KEY) };
+}
+
+#[tokio::test]
+async fn seed_with_dotenv_vars_substitutes_in_seed_file() {
+	let _env_lock = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (tmp, _cwd) = enter_tempdir();
+
+	std::fs::write(tmp.path().join(".env"), "SURREALKIT_VAR_SEED_TEST_ONLY_DOTENV_ROLE=editor\n")
+		.expect("write .env");
+
+	let dotenv = rust_dotenv::dotenv::DotEnv::new("");
+	let db = mem_db().await;
+
+	let seed_dir = tmp.path().join("custom_seed");
+	std::fs::create_dir_all(&seed_dir).expect("create seed dir");
+	std::fs::write(
+		seed_dir.join("01_data.surql"),
+		"CREATE person:2 SET role = '${seed_test_only_dotenv_role}';",
+	)
+	.expect("write seed file");
+
+	let template_vars = TemplateVars {
+		vars: build_vars(&[], None, Some(&dotenv)).expect("build_vars from dotenv"),
+	};
+
+	seed_from_dir(&db, &seed_dir, &template_vars).await.expect("seed_from_dir with dotenv vars");
+
+	let mut resp = db.query("SELECT role FROM person WHERE id = person:2;").await.expect("q");
+	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
+	assert_eq!(rows.len(), 1);
+	assert_eq!(rows[0].get("role").and_then(|v| v.as_str()), Some("editor"));
+}
+
+#[tokio::test]
 async fn seed_with_undefined_var_returns_error() {
-	let _lock = FS_LOCK.lock().unwrap();
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (tmp, _cwd) = enter_tempdir();
 
 	let db = mem_db().await;
@@ -724,7 +1002,7 @@ async fn seed_with_undefined_var_returns_error() {
 #[tokio::test]
 async fn rollout_apply_schema_step_with_files_substitutes_vars() {
 	// ApplySchema with files reads from disk; rollout_run_sql_step_with_vars covers inline sql.
-	let _lock = FS_LOCK.lock().unwrap();
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (tmp, _cwd) = enter_tempdir();
 
 	let db = mem_db().await;

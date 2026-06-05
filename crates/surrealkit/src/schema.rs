@@ -1,0 +1,1143 @@
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Result, bail};
+use serde::Deserialize;
+use serde::de::Deserializer;
+
+use crate::config::Cfg;
+use crate::constants::{
+	named_rollouts_dir, named_schema_dir, named_seed_dir, named_state_dir, seed_dir,
+};
+use crate::schema_state::SchemaWorkspace;
+use crate::variables::{self, TemplateVars};
+
+#[derive(Debug, Clone, Default, Deserialize)]
+struct ProjectSchemaConfig {
+	#[serde(default)]
+	schema: HashMap<String, SchemaDefinition>,
+}
+
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SchemaDefinition {
+	#[serde(default, deserialize_with = "deserialize_extends")]
+	pub extends: Vec<String>,
+	pub ns: Option<String>,
+	pub db: Option<String>,
+	#[serde(default)]
+	pub required_variables: Vec<String>,
+}
+
+/// Accept either `extends = "base"` or `extends = ["base", "shared"]`.
+fn deserialize_extends<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+	D: Deserializer<'de>,
+{
+	#[derive(Deserialize)]
+	#[serde(untagged)]
+	enum Extends {
+		One(String),
+		Many(Vec<String>),
+	}
+
+	match Option::<Extends>::deserialize(deserializer)? {
+		None => Ok(Vec::new()),
+		Some(Extends::One(parent)) => Ok(vec![parent]),
+		Some(Extends::Many(parents)) => Ok(parents),
+	}
+}
+
+#[derive(Debug, Clone)]
+pub struct SchemaCatalog {
+	definitions: HashMap<String, SchemaDefinition>,
+}
+
+#[derive(Debug, Clone)]
+pub struct ResolvedSchema {
+	pub name: String,
+	pub chain: Vec<String>,
+	pub ns: String,
+	pub db: String,
+	pub required_variables: Vec<String>,
+	pub schema_dirs: Vec<PathBuf>,
+	pub seed_dirs: Vec<PathBuf>,
+	pub workspace: SchemaWorkspace,
+	/// Schema names merged into this target. A single-schema target contains one entry.
+	pub source_schemas: Vec<String>,
+	/// Per-source-schema workspaces (rollouts/state dirs). Sync uses the merged [`Self::workspace`].
+	pub rollout_workspaces: Vec<SchemaWorkspace>,
+}
+
+#[derive(Debug, Clone)]
+pub enum SchemaTarget {
+	Legacy {
+		workspace: SchemaWorkspace,
+		seed_dirs: Vec<PathBuf>,
+		ns: String,
+		db: String,
+	},
+	Named {
+		schema: ResolvedSchema,
+	},
+}
+
+impl SchemaTarget {
+	pub fn label(&self) -> &str {
+		match self {
+			Self::Legacy {
+				workspace,
+				..
+			} => &workspace.label,
+			Self::Named {
+				schema,
+			} => &schema.name,
+		}
+	}
+
+	pub fn ns(&self) -> &str {
+		match self {
+			Self::Legacy {
+				ns,
+				..
+			} => ns,
+			Self::Named {
+				schema,
+			} => &schema.ns,
+		}
+	}
+
+	pub fn db(&self) -> &str {
+		match self {
+			Self::Legacy {
+				db,
+				..
+			} => db,
+			Self::Named {
+				schema,
+			} => &schema.db,
+		}
+	}
+
+	pub fn workspace(&self) -> &SchemaWorkspace {
+		match self {
+			Self::Legacy {
+				workspace,
+				..
+			} => workspace,
+			Self::Named {
+				schema,
+			} => &schema.workspace,
+		}
+	}
+
+	pub fn seed_dirs(&self) -> &[PathBuf] {
+		match self {
+			Self::Legacy {
+				seed_dirs,
+				..
+			} => seed_dirs,
+			Self::Named {
+				schema,
+			} => &schema.seed_dirs,
+		}
+	}
+
+	pub fn connect_config(&self, cfg: &Cfg) -> Cfg {
+		cfg.with_target(self.ns().to_string(), self.db().to_string())
+	}
+
+	pub fn is_legacy(&self) -> bool {
+		matches!(self, Self::Legacy { .. })
+	}
+
+	pub fn schema_name(&self) -> Option<&str> {
+		match self {
+			Self::Legacy {
+				..
+			} => None,
+			Self::Named {
+				schema,
+			} => Some(&schema.name),
+		}
+	}
+
+	pub fn is_merged(&self) -> bool {
+		match self {
+			Self::Legacy {
+				..
+			} => false,
+			Self::Named {
+				schema,
+			} => schema.source_schemas.len() > 1,
+		}
+	}
+
+	pub fn source_schemas(&self) -> &[String] {
+		match self {
+			Self::Legacy {
+				..
+			} => &[],
+			Self::Named {
+				schema,
+			} => &schema.source_schemas,
+		}
+	}
+
+	pub fn rollout_workspaces(&self) -> Vec<&SchemaWorkspace> {
+		match self {
+			Self::Legacy {
+				workspace,
+				..
+			} => vec![workspace],
+			Self::Named {
+				schema,
+			} => schema.rollout_workspaces.iter().collect(),
+		}
+	}
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SchemaResolveError {
+	NotFound {
+		name: String,
+	},
+	Cycle {
+		requested: String,
+		path: Vec<String>,
+		cycle: Vec<String>,
+	},
+	Abstract {
+		name: String,
+		missing: &'static str,
+	},
+	MissingVariables {
+		name: String,
+		variables: Vec<String>,
+	},
+	Template {
+		name: String,
+		message: String,
+	},
+}
+
+impl std::fmt::Display for SchemaResolveError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			Self::NotFound {
+				name,
+			} => write!(f, "schema '{}' was not found", name),
+			Self::Cycle {
+				requested,
+				path,
+				cycle,
+			} => write!(
+				f,
+				"schema inheritance cycle detected while resolving '{}': {} (cycle: {})",
+				requested,
+				path.join(" -> "),
+				cycle.join(" -> ")
+			),
+			Self::Abstract {
+				name,
+				missing,
+			} => write!(f, "schema '{}' is abstract: missing {}", name, missing),
+			Self::MissingVariables {
+				name,
+				variables,
+			} => {
+				write!(
+					f,
+					"schema '{}' requires missing variable(s): {}",
+					name,
+					variables.join(", ")
+				)
+			}
+			Self::Template {
+				name,
+				message,
+			} => write!(f, "schema '{}' template resolution failed: {}", name, message),
+		}
+	}
+}
+
+impl std::error::Error for SchemaResolveError {}
+
+pub fn load_schema_catalog(toml_path: Option<&Path>) -> Result<SchemaCatalog> {
+	let path = toml_path.unwrap_or_else(|| Path::new("surrealkit.toml"));
+	if !path.exists() {
+		return Ok(SchemaCatalog {
+			definitions: HashMap::new(),
+		});
+	}
+
+	let raw =
+		std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+	let cfg: ProjectSchemaConfig =
+		toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+	Ok(SchemaCatalog {
+		definitions: cfg.schema,
+	})
+}
+
+impl SchemaCatalog {
+	pub fn is_empty(&self) -> bool {
+		self.definitions.is_empty()
+	}
+
+	/// Sorted list of all schema names defined in `surrealkit.toml`.
+	pub fn names(&self) -> Vec<String> {
+		let mut names: Vec<String> = self.definitions.keys().cloned().collect();
+		names.sort();
+		names
+	}
+
+	pub fn resolve(
+		&self,
+		name: &str,
+		root_folder: &str,
+		vars: &TemplateVars,
+	) -> Result<ResolvedSchema> {
+		self.resolve_typed(name, root_folder, vars).map_err(|err| anyhow::anyhow!(err))
+	}
+
+	pub fn resolve_typed(
+		&self,
+		name: &str,
+		root_folder: &str,
+		vars: &TemplateVars,
+	) -> std::result::Result<ResolvedSchema, SchemaResolveError> {
+		let merged = self.resolve_merged(name)?;
+		let missing = missing_required_vars(&merged.required_variables, vars);
+		if !missing.is_empty() {
+			return Err(SchemaResolveError::MissingVariables {
+				name: name.to_string(),
+				variables: missing,
+			});
+		}
+		let ns = merged
+			.ns
+			.as_deref()
+			.ok_or_else(|| SchemaResolveError::Abstract {
+				name: name.to_string(),
+				missing: "ns",
+			})
+			.and_then(|value| render_target_template(name, value, vars))?;
+		let db = merged
+			.db
+			.as_deref()
+			.ok_or_else(|| SchemaResolveError::Abstract {
+				name: name.to_string(),
+				missing: "db",
+			})
+			.and_then(|value| render_target_template(name, value, vars))?;
+
+		let schema_dirs = merged
+			.chain
+			.iter()
+			.map(|schema| named_schema_dir(root_folder, schema))
+			.collect::<Vec<_>>();
+		let seed_dirs = merged
+			.chain
+			.iter()
+			.map(|schema| named_seed_dir(root_folder, schema))
+			.collect::<Vec<_>>();
+		let workspace = SchemaWorkspace {
+			root_folder: root_folder.to_string(),
+			schema_dirs: schema_dirs.clone(),
+			rollouts_dir: named_rollouts_dir(root_folder, name),
+			state_dir: named_state_dir(root_folder, name),
+			label: name.to_string(),
+		};
+		let source_schemas = vec![name.to_string()];
+		let rollout_workspaces = vec![workspace.clone()];
+
+		Ok(ResolvedSchema {
+			name: name.to_string(),
+			chain: merged.chain,
+			ns,
+			db,
+			required_variables: merged.required_variables,
+			schema_dirs,
+			seed_dirs,
+			workspace,
+			source_schemas,
+			rollout_workspaces,
+		})
+	}
+
+	/// Resolve all schemas, skipping abstract ones (no `ns`/`db`) but erroring
+	/// on any schema whose required template variables are missing.
+	pub fn resolve_all(
+		&self,
+		root_folder: &str,
+		vars: &TemplateVars,
+	) -> Result<Vec<ResolvedSchema>> {
+		let mut names = self.definitions.keys().cloned().collect::<Vec<_>>();
+		names.sort();
+
+		let mut schemas = Vec::new();
+		for name in names {
+			match self.resolve_typed(&name, root_folder, vars) {
+				Ok(schema) => schemas.push(schema),
+				Err(SchemaResolveError::Abstract {
+					..
+				}) => {}
+				Err(err) => return Err(anyhow::anyhow!(err)),
+			}
+		}
+
+		Ok(schemas)
+	}
+
+	/// Like [`resolve_all`] but also silently skips template schemas whose
+	/// required variables are not present in `vars`. Use when the caller
+	/// supplies only a subset of vars and wants to sync whatever can be
+	/// fully resolved (e.g. `--skip-template-schemas`).
+	pub fn resolve_all_skip_templates(
+		&self,
+		root_folder: &str,
+		vars: &TemplateVars,
+	) -> Result<Vec<ResolvedSchema>> {
+		let mut names = self.definitions.keys().cloned().collect::<Vec<_>>();
+		names.sort();
+
+		let mut schemas = Vec::new();
+		for name in names {
+			match self.resolve_typed(&name, root_folder, vars) {
+				Ok(schema) => schemas.push(schema),
+				Err(
+					SchemaResolveError::Abstract {
+						..
+					}
+					| SchemaResolveError::MissingVariables {
+						..
+					}
+					| SchemaResolveError::Template {
+						..
+					},
+				) => {}
+				Err(err) => return Err(anyhow::anyhow!(err)),
+			}
+		}
+
+		Ok(schemas)
+	}
+
+	pub fn resolve_targets(
+		&self,
+		schema: Option<&str>,
+		skip_template_schemas: bool,
+		root_folder: &str,
+		vars: &TemplateVars,
+		legacy_ns: &str,
+		legacy_db: &str,
+	) -> Result<Vec<SchemaTarget>> {
+		if let Some(name) = schema {
+			if self.is_empty() {
+				bail!(
+					"--schema '{}' was provided, but no [schema.*] entries were found in surrealkit.toml",
+					name
+				);
+			}
+			return Ok(vec![SchemaTarget::Named {
+				schema: self.resolve(name, root_folder, vars)?,
+			}]);
+		}
+
+		if self.is_empty() {
+			return Ok(vec![legacy_target(root_folder, legacy_ns, legacy_db)]);
+		}
+
+		let schemas = if skip_template_schemas {
+			self.resolve_all_skip_templates(root_folder, vars)?
+		} else {
+			self.resolve_all(root_folder, vars)?
+		};
+		let targets = schemas
+			.into_iter()
+			.map(|schema| SchemaTarget::Named {
+				schema,
+			})
+			.collect();
+		coalesce_targets_by_database(targets)
+	}
+
+	pub fn resolve_required_target(
+		&self,
+		schema: Option<&str>,
+		root_folder: &str,
+		vars: &TemplateVars,
+		legacy_ns: &str,
+		legacy_db: &str,
+	) -> Result<SchemaTarget> {
+		if let Some(name) = schema {
+			if self.is_empty() {
+				bail!(
+					"--schema '{}' was provided, but no [schema.*] entries were found in surrealkit.toml",
+					name
+				);
+			}
+			return Ok(SchemaTarget::Named {
+				schema: self.resolve(name, root_folder, vars)?,
+			});
+		}
+
+		if self.is_empty() {
+			return Ok(legacy_target(root_folder, legacy_ns, legacy_db));
+		}
+
+		bail!(
+			"surrealkit.toml defines named schemas; --schema <name> is required.\n\nAvailable schemas: {}",
+			self.names().join(", ")
+		)
+	}
+
+	fn resolve_merged(&self, name: &str) -> std::result::Result<MergedSchema, SchemaResolveError> {
+		let mut path = Vec::new();
+		let mut seen = BTreeSet::new();
+		let mut chain = Vec::new();
+		self.resolve_chain(name, &mut path, &mut seen, &mut chain)?;
+
+		let mut ns = None;
+		let mut db = None;
+		let mut required = BTreeSet::new();
+		for schema_name in &chain {
+			let definition =
+				self.definitions.get(schema_name).ok_or_else(|| SchemaResolveError::NotFound {
+					name: schema_name.clone(),
+				})?;
+			if let Some(value) = &definition.ns {
+				ns = Some(value.clone());
+			}
+			if let Some(value) = &definition.db {
+				db = Some(value.clone());
+			}
+			for var in &definition.required_variables {
+				required.insert(var.to_ascii_uppercase());
+			}
+		}
+
+		Ok(MergedSchema {
+			chain,
+			ns,
+			db,
+			required_variables: required.into_iter().collect(),
+		})
+	}
+
+	fn resolve_chain(
+		&self,
+		name: &str,
+		path: &mut Vec<String>,
+		seen: &mut BTreeSet<String>,
+		chain: &mut Vec<String>,
+	) -> std::result::Result<(), SchemaResolveError> {
+		let definition =
+			self.definitions.get(name).ok_or_else(|| SchemaResolveError::NotFound {
+				name: name.to_string(),
+			})?;
+		if let Some(cycle_start) = path.iter().position(|visited| visited == name) {
+			let mut cycle = path[cycle_start..].to_vec();
+			cycle.push(name.to_string());
+			let full_path = {
+				let mut full = path.clone();
+				full.push(name.to_string());
+				full
+			};
+			return Err(SchemaResolveError::Cycle {
+				requested: path.first().cloned().unwrap_or_else(|| name.to_string()),
+				path: full_path,
+				cycle,
+			});
+		}
+		path.push(name.to_string());
+		for parent in &definition.extends {
+			self.resolve_chain(parent, path, seen, chain)?;
+		}
+		path.pop();
+		if seen.insert(name.to_string()) {
+			chain.push(name.to_string());
+		}
+		Ok(())
+	}
+}
+
+#[derive(Debug, Clone)]
+struct MergedSchema {
+	chain: Vec<String>,
+	ns: Option<String>,
+	db: Option<String>,
+	required_variables: Vec<String>,
+}
+
+fn missing_required_vars(required: &[String], vars: &TemplateVars) -> Vec<String> {
+	required
+		.iter()
+		.filter(|name| !vars.vars.contains_key(&name.to_ascii_uppercase()))
+		.cloned()
+		.collect()
+}
+
+fn legacy_target(root_folder: &str, legacy_ns: &str, legacy_db: &str) -> SchemaTarget {
+	SchemaTarget::Legacy {
+		workspace: SchemaWorkspace::legacy(root_folder),
+		seed_dirs: vec![seed_dir(root_folder)],
+		ns: legacy_ns.to_string(),
+		db: legacy_db.to_string(),
+	}
+}
+
+fn render_target_template(
+	name: &str,
+	value: &str,
+	vars: &TemplateVars,
+) -> std::result::Result<String, SchemaResolveError> {
+	variables::apply(value, &vars.vars)
+		.with_context(|| format!("rendering schema target template '{}'", value))
+		.map_err(|err| SchemaResolveError::Template {
+			name: name.to_string(),
+			message: format!("{err:#}"),
+		})
+}
+
+fn coalesce_targets_by_database(targets: Vec<SchemaTarget>) -> Result<Vec<SchemaTarget>> {
+	let mut legacy = Vec::new();
+	let mut groups: BTreeMap<(String, String), Vec<ResolvedSchema>> = BTreeMap::new();
+
+	for target in targets {
+		match target {
+			SchemaTarget::Legacy {
+				..
+			} => legacy.push(target),
+			SchemaTarget::Named {
+				schema,
+			} => groups
+				.entry((schema.ns.clone(), schema.db.clone()))
+				.or_default()
+				.push(schema),
+		}
+	}
+
+	let mut out = legacy;
+	for schemas in groups.into_values() {
+		if schemas.len() == 1 {
+			out.push(SchemaTarget::Named {
+				schema: schemas.into_iter().next().expect("non-empty schema group"),
+			});
+		} else {
+			out.push(SchemaTarget::Named {
+				schema: merge_resolved_schemas(schemas)?,
+			});
+		}
+	}
+
+	Ok(out)
+}
+
+fn merge_resolved_schemas(mut schemas: Vec<ResolvedSchema>) -> Result<ResolvedSchema> {
+	schemas.sort_by(|left, right| left.name.cmp(&right.name));
+	let source_schemas: Vec<String> = schemas.iter().map(|schema| schema.name.clone()).collect();
+	let mut schema_dirs = Vec::new();
+	let mut seed_dirs = Vec::new();
+	let mut chain = Vec::new();
+	let mut required_variables = BTreeSet::new();
+	let mut rollout_workspaces = Vec::new();
+
+	for schema in &schemas {
+		extend_unique_paths(&mut schema_dirs, &schema.schema_dirs);
+		extend_unique_paths(&mut seed_dirs, &schema.seed_dirs);
+		extend_unique_strings(&mut chain, &schema.chain);
+		for var in &schema.required_variables {
+			required_variables.insert(var.clone());
+		}
+		rollout_workspaces.extend(schema.rollout_workspaces.clone());
+	}
+
+	let first = &schemas[0];
+	let name = source_schemas.join("+");
+	let workspace = SchemaWorkspace {
+		root_folder: first.workspace.root_folder.clone(),
+		schema_dirs: schema_dirs.clone(),
+		rollouts_dir: first.workspace.rollouts_dir.clone(),
+		state_dir: first.workspace.state_dir.clone(),
+		label: name.clone(),
+	};
+
+	Ok(ResolvedSchema {
+		name,
+		chain,
+		ns: first.ns.clone(),
+		db: first.db.clone(),
+		required_variables: required_variables.into_iter().collect(),
+		schema_dirs,
+		seed_dirs,
+		workspace,
+		source_schemas,
+		rollout_workspaces,
+	})
+}
+
+fn extend_unique_paths(out: &mut Vec<PathBuf>, items: &[PathBuf]) {
+	for item in items {
+		if !out.contains(item) {
+			out.push(item.clone());
+		}
+	}
+}
+
+fn extend_unique_strings(out: &mut Vec<String>, items: &[String]) {
+	for item in items {
+		if !out.contains(item) {
+			out.push(item.clone());
+		}
+	}
+}
+
+#[cfg(test)]
+mod tests {
+	use super::*;
+
+	fn catalog(raw: &str) -> SchemaCatalog {
+		let cfg: ProjectSchemaConfig = toml::from_str(raw).expect("parse schema config");
+		SchemaCatalog {
+			definitions: cfg.schema,
+		}
+	}
+
+	fn vars(pairs: &[(&str, &str)]) -> TemplateVars {
+		TemplateVars {
+			vars: pairs
+				.iter()
+				.map(|(key, value)| (key.to_ascii_uppercase(), value.to_string()))
+				.collect(),
+		}
+	}
+
+	fn expect_cycle(
+		catalog: &SchemaCatalog,
+		name: &str,
+		expected_path: &str,
+		expected_cycle: &str,
+	) {
+		let err = catalog.resolve_typed(name, "./database", &TemplateVars::default()).unwrap_err();
+		match err {
+			SchemaResolveError::Cycle {
+				requested,
+				path,
+				cycle,
+			} => {
+				let message = SchemaResolveError::Cycle {
+					requested: requested.clone(),
+					path: path.clone(),
+					cycle: cycle.clone(),
+				}
+				.to_string();
+				assert_eq!(requested, name, "unexpected requested schema in cycle error");
+				assert_eq!(path.join(" -> "), expected_path, "unexpected inheritance path");
+				assert_eq!(cycle.join(" -> "), expected_cycle, "unexpected cycle loop");
+				assert!(
+					message.contains(expected_path),
+					"display message should include path: {message}"
+				);
+				assert!(
+					message.contains(expected_cycle),
+					"display message should include cycle: {message}"
+				);
+			}
+			other => panic!("expected cycle error, got: {other}"),
+		}
+	}
+
+	fn expect_not_found(catalog: &SchemaCatalog, name: &str) {
+		let err = catalog.resolve_typed(name, "./database", &TemplateVars::default()).unwrap_err();
+		assert!(
+			matches!(err, SchemaResolveError::NotFound { .. }),
+			"expected not-found error, got: {err}"
+		);
+	}
+
+	#[test]
+	fn resolves_inheritance_order_and_target() {
+		let catalog = catalog(
+			r#"
+[schema.base]
+
+[schema.admin]
+extends = "base"
+ns = "system"
+db = "main"
+"#,
+		);
+
+		let resolved = catalog.resolve("admin", "./database", &TemplateVars::default()).unwrap();
+		assert_eq!(resolved.chain, vec!["base", "admin"]);
+		assert_eq!(resolved.ns, "system");
+		assert_eq!(resolved.db, "main");
+	}
+
+	#[test]
+	fn resolves_multiple_extends_in_declaration_order() {
+		let catalog = catalog(
+			r#"
+[schema.base]
+
+[schema.shared]
+
+[schema.admin]
+extends = ["base", "shared"]
+ns = "system"
+db = "main"
+"#,
+		);
+
+		let resolved = catalog.resolve("admin", "./database", &TemplateVars::default()).unwrap();
+		assert_eq!(resolved.chain, vec!["base", "shared", "admin"]);
+	}
+
+	#[test]
+	fn deduplicates_shared_ancestors_with_multiple_extends() {
+		let catalog = catalog(
+			r#"
+[schema.base]
+
+[schema.left]
+extends = "base"
+
+[schema.right]
+extends = "base"
+
+[schema.child]
+extends = ["left", "right"]
+ns = "system"
+db = "main"
+"#,
+		);
+
+		let resolved = catalog.resolve("child", "./database", &TemplateVars::default()).unwrap();
+		assert_eq!(resolved.chain, vec!["base", "left", "right", "child"]);
+	}
+
+	#[test]
+	fn renders_target_templates() {
+		let catalog = catalog(
+			r#"
+[schema.org]
+ns = "org_${org_id}"
+db = "main"
+required_variables = ["org_id"]
+"#,
+		);
+
+		let resolved = catalog.resolve("org", "./database", &vars(&[("org_id", "acme")])).unwrap();
+		assert_eq!(resolved.ns, "org_acme");
+	}
+
+	#[test]
+	fn rejects_missing_required_variables() {
+		let catalog = catalog(
+			r#"
+[schema.org]
+ns = "org_${org_id}"
+db = "main"
+required_variables = ["org_id"]
+"#,
+		);
+
+		let err = catalog.resolve("org", "./database", &TemplateVars::default()).unwrap_err();
+		assert!(err.to_string().contains("requires missing variable"));
+	}
+
+	#[test]
+	fn missing_variables_are_typed_resolution_errors() {
+		let catalog = catalog(
+			r#"
+[schema.org]
+ns = "org_${org_id}"
+db = "main"
+required_variables = ["org_id"]
+"#,
+		);
+
+		let err = catalog.resolve_typed("org", "./database", &TemplateVars::default()).unwrap_err();
+		assert!(matches!(err, SchemaResolveError::MissingVariables { .. }));
+	}
+
+	#[test]
+	fn resolves_legacy_target_when_catalog_is_empty() {
+		let catalog = catalog("");
+		let targets = catalog
+			.resolve_targets(
+				None,
+				false,
+				"./database",
+				&TemplateVars::default(),
+				"legacy_ns",
+				"legacy_db",
+			)
+			.unwrap();
+
+		assert_eq!(targets.len(), 1);
+		assert!(targets[0].is_legacy());
+		assert_eq!(targets[0].ns(), "legacy_ns");
+		assert_eq!(targets[0].db(), "legacy_db");
+	}
+
+	#[test]
+	fn schema_flag_without_catalog_is_rejected() {
+		let catalog = catalog("");
+		let err = catalog
+			.resolve_targets(
+				Some("admin"),
+				false,
+				"./database",
+				&TemplateVars::default(),
+				"legacy_ns",
+				"legacy_db",
+			)
+			.unwrap_err();
+
+		assert!(err.to_string().contains("no [schema.*] entries"));
+	}
+
+	#[test]
+	fn rejects_cycles() {
+		let catalog = catalog(
+			r#"
+[schema.a]
+extends = "b"
+
+[schema.b]
+extends = "a"
+"#,
+		);
+
+		expect_cycle(&catalog, "a", "a -> b -> a", "a -> b -> a");
+		expect_cycle(&catalog, "b", "b -> a -> b", "b -> a -> b");
+	}
+
+	#[test]
+	fn rejects_self_cycle_with_single_extends() {
+		let catalog = catalog(
+			r#"
+[schema.a]
+extends = "a"
+ns = "system"
+db = "main"
+"#,
+		);
+
+		expect_cycle(&catalog, "a", "a -> a", "a -> a");
+	}
+
+	#[test]
+	fn rejects_self_cycle_with_extends_array() {
+		let catalog = catalog(
+			r#"
+[schema.a]
+extends = ["a"]
+ns = "system"
+db = "main"
+"#,
+		);
+
+		expect_cycle(&catalog, "a", "a -> a", "a -> a");
+	}
+
+	#[test]
+	fn rejects_three_node_cycle() {
+		let catalog = catalog(
+			r#"
+[schema.a]
+extends = "b"
+
+[schema.b]
+extends = "c"
+
+[schema.c]
+extends = "a"
+"#,
+		);
+
+		expect_cycle(&catalog, "a", "a -> b -> c -> a", "a -> b -> c -> a");
+		expect_cycle(&catalog, "b", "b -> c -> a -> b", "b -> c -> a -> b");
+		expect_cycle(&catalog, "c", "c -> a -> b -> c", "c -> a -> b -> c");
+	}
+
+	#[test]
+	fn rejects_cycle_reached_through_second_extends_parent() {
+		let catalog = catalog(
+			r#"
+[schema.base]
+
+[schema.a]
+extends = ["base", "b"]
+ns = "system"
+db = "main"
+
+[schema.b]
+extends = "a"
+"#,
+		);
+
+		expect_cycle(&catalog, "a", "a -> b -> a", "a -> b -> a");
+	}
+
+	#[test]
+	fn rejects_cycle_between_extends_siblings() {
+		let catalog = catalog(
+			r#"
+[schema.a]
+extends = ["b", "c"]
+ns = "system"
+db = "main"
+
+[schema.b]
+extends = "c"
+
+[schema.c]
+extends = "b"
+"#,
+		);
+
+		expect_cycle(&catalog, "a", "a -> b -> c -> b", "b -> c -> b");
+	}
+
+	#[test]
+	fn rejects_missing_extends_target() {
+		let catalog = catalog(
+			r#"
+[schema.a]
+extends = "missing"
+ns = "system"
+db = "main"
+"#,
+		);
+
+		expect_not_found(&catalog, "a");
+	}
+
+	#[test]
+	fn rejects_missing_extends_target_in_array() {
+		let catalog = catalog(
+			r#"
+[schema.base]
+
+[schema.a]
+extends = ["base", "missing"]
+ns = "system"
+db = "main"
+"#,
+		);
+
+		expect_not_found(&catalog, "a");
+	}
+
+	#[test]
+	fn resolves_deep_single_parent_chain() {
+		let catalog = catalog(
+			r#"
+[schema.a]
+
+[schema.b]
+extends = "a"
+
+[schema.c]
+extends = "b"
+
+[schema.d]
+extends = "c"
+ns = "system"
+db = "main"
+"#,
+		);
+
+		let resolved = catalog.resolve("d", "./database", &TemplateVars::default()).unwrap();
+		assert_eq!(resolved.chain, vec!["a", "b", "c", "d"]);
+	}
+
+	#[test]
+	fn coalesces_schemas_targeting_same_namespace_and_database() {
+		let catalog = catalog(
+			r#"
+[schema.base]
+
+[schema.admin]
+extends = "base"
+ns = "system"
+db = "main"
+
+[schema.api]
+extends = "base"
+ns = "system"
+db = "main"
+
+[schema.org]
+extends = "base"
+ns = "org_${org_id}"
+db = "main"
+required_variables = ["org_id"]
+"#,
+		);
+
+		let targets = catalog
+			.resolve_targets(
+				None,
+				false,
+				"./database",
+				&vars(&[("org_id", "acme")]),
+				"legacy_ns",
+				"legacy_db",
+			)
+			.unwrap();
+
+		assert_eq!(targets.len(), 2);
+		let merged = targets
+			.iter()
+			.find(|target| target.ns() == "system" && target.db() == "main")
+			.expect("merged system/main target");
+		assert!(merged.is_merged());
+		assert_eq!(merged.source_schemas(), &["admin", "api"]);
+		assert_eq!(merged.label(), "admin+api");
+		assert_eq!(merged.rollout_workspaces().len(), 2);
+		assert_eq!(
+			merged
+				.workspace()
+				.schema_dirs
+				.iter()
+				.map(|path| path.to_string_lossy().to_string())
+				.collect::<Vec<_>>(),
+			vec![
+				"./database/schemas/base".to_string(),
+				"./database/schemas/admin".to_string(),
+				"./database/schemas/api".to_string(),
+			]
+		);
+	}
+
+	#[test]
+	fn single_schema_target_is_not_marked_merged() {
+		let catalog = catalog(
+			r#"
+[schema.admin]
+ns = "system"
+db = "main"
+"#,
+		);
+
+		let targets = catalog
+			.resolve_targets(
+				None,
+				false,
+				"./database",
+				&TemplateVars::default(),
+				"legacy_ns",
+				"legacy_db",
+			)
+			.unwrap();
+
+		assert_eq!(targets.len(), 1);
+		assert!(!targets[0].is_merged());
+		assert_eq!(targets[0].source_schemas(), &["admin"]);
+	}
+}

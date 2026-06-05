@@ -21,6 +21,30 @@ surrealkit = { version = "0.5", default-features = false }
 
 ## Schema sync
 
+Named schema workspaces can be resolved from `surrealkit.toml` and then passed to the sync, rollout, and seed APIs. A schema’s inheritance chain maps to `database/schemas/<name>/` for schema files and `database/seed/<name>/` for seed files.
+
+```rust
+let catalog = surrealkit::load_schema_catalog(None)?;
+let vars = surrealkit::TemplateVars::default();
+let admin = catalog.resolve("admin", "./database", &vars)?;
+let cfg = surrealkit::Cfg::from_env(None, &Default::default())?
+    .with_target(admin.ns.clone(), admin.db.clone());
+let db = surrealkit::connect(&cfg).await?;
+
+surrealkit::sync::run_sync_with_workspace(
+    &db,
+    &admin.workspace,
+    surrealkit::SyncOpts {
+        folder: "./database".into(),
+        vars,
+        ..Default::default()
+    },
+)
+.await?;
+```
+
+For tools that need to handle both legacy flat projects and named schemas, resolve `SchemaTarget` values from the catalog. A target exposes the selected namespace/database plus the workspace and seed directories for that mode.
+
 ### `embed_schema!` (compile-time embedding)
 
 `embed_schema!` is a proc-macro that walks your `.surql` files at build time and bakes them into the binary. At runtime the generated `embedded_schema::sync` function applies any file whose content has changed, using the same hash-tracking logic as the CLI.
