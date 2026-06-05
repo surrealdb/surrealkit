@@ -236,12 +236,12 @@ surrealkit seed
 Use `${VAR_NAME}` tokens in any `.surql` file (schema, seed, or rollout SQL) and bind values to them at runtime. Useful for credentials, table prefixes, or environment names that differ between dev, staging, and prod.
 
 ```sql
--- database/schema/roles.surql
-DROP ROLE IF EXISTS ${talent_username};
-DEFINE ROLE ${talent_username} PERMISSIONS FULL;
+-- database/schema/access.surql
+REMOVE USER IF EXISTS ${talent_username} ON DATABASE;
+DEFINE USER ${talent_username} ON DATABASE PASSWORD "${talent_password}" ROLES EDITOR;
 
 -- database/schema/tables.surql
-DEFINE TABLE ${schema_prefix}_users SCHEMAFULL;
+DEFINE TABLE IF NOT EXISTS ${schema_prefix}_users SCHEMAFULL;
 ```
 
 ### Resolution Priority
@@ -264,6 +264,7 @@ Place a `surrealkit.toml` at the project root (created by `surrealkit init`):
 [variables]
 schema_prefix = "myapp"
 talent_username = "talent_rw"
+talent_password = "change_me_in_prod"
 environment = "development"
 ```
 
