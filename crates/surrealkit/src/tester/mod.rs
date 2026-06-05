@@ -40,7 +40,7 @@ pub async fn run_test(
 		bail!("No suites matched the selected filters");
 	}
 
-	let base_url = resolve_base_url(&opts, &loaded.global);
+	let base_url = resolve_base_url(&opts, &loaded.global, cfg.host());
 	let timeout_ms = resolve_timeout_ms(&opts, &loaded.global);
 	let ctx =
 		runner::RunnerContext::new(cfg, opts.clone(), loaded.global, base_url, timeout_ms, vars);
@@ -56,13 +56,16 @@ pub async fn run_test(
 	Ok(())
 }
 
-fn resolve_base_url(opts: &TestOpts, global: &types::GlobalTestConfig) -> Option<String> {
+fn resolve_base_url(
+	opts: &TestOpts,
+	global: &types::GlobalTestConfig,
+	resolved_host: &str,
+) -> Option<String> {
 	opts.base_url
 		.clone()
 		.or_else(|| global.defaults.base_url.clone())
 		.or_else(|| env::var("SURREALKIT_TEST_BASE_URL").ok())
-		.or_else(|| env::var("SURREALDB_HOST").ok())
-		.or_else(|| env::var("DATABASE_HOST").ok())
+		.or_else(|| Some(resolved_host.to_string()))
 		.map(normalize_base_url)
 }
 
@@ -83,4 +86,59 @@ fn normalize_base_url(raw: String) -> String {
 		return format!("https://{rest}");
 	}
 	raw
+}
+
+#[cfg(test)]
+mod tests {
+	use std::sync::Mutex;
+
+	use super::*;
+
+	static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+	fn opts(base_url: Option<&str>) -> TestOpts {
+		TestOpts {
+			suite: None,
+			case: None,
+			tags: Vec::new(),
+			fail_fast: false,
+			parallel: 1,
+			json_out: None,
+			no_setup: false,
+			no_sync: false,
+			no_seed: false,
+			base_url: base_url.map(str::to_string),
+			timeout_ms: None,
+			keep_db: false,
+		}
+	}
+
+	#[test]
+	fn base_url_falls_back_to_resolved_host() {
+		let _guard = ENV_LOCK.lock().unwrap();
+		unsafe { env::remove_var("SURREALKIT_TEST_BASE_URL") };
+
+		let base_url = resolve_base_url(
+			&opts(None),
+			&types::GlobalTestConfig::default(),
+			"ws://target-host:8000",
+		);
+
+		assert_eq!(base_url.as_deref(), Some("http://target-host:8000"));
+	}
+
+	#[test]
+	fn test_specific_base_url_beats_resolved_host() {
+		let _guard = ENV_LOCK.lock().unwrap();
+		unsafe { env::set_var("SURREALKIT_TEST_BASE_URL", "http://env-host:8000") };
+
+		let base_url = resolve_base_url(
+			&opts(Some("http://cli-host:8000")),
+			&types::GlobalTestConfig::default(),
+			"http://target-host:8000",
+		);
+
+		assert_eq!(base_url.as_deref(), Some("http://cli-host:8000"));
+		unsafe { env::remove_var("SURREALKIT_TEST_BASE_URL") };
+	}
 }

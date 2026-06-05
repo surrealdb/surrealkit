@@ -84,7 +84,7 @@ surrealkit init
 
 This creates a directory `/database` with the necessary scaffolding
 
-Connection details can be provided via CLI arguments, environment variables, or a `.env` file. The resolution order is: CLI args > system env vars > `.env` file > defaults.
+Connection details can be provided via CLI arguments, environment variables, a `.env` file, or named connections in `surrealkit.toml`. Without `--connection`, the resolution order is: CLI args > system env vars > `.env` file > defaults.
 
 ### CLI Arguments
 
@@ -94,6 +94,7 @@ surrealkit --host http://localhost:8000 --ns my_ns --db my_db --user root --pass
 
 | Flag           | Description                                                            | Default                 |
 | -------------- | ---------------------------------------------------------------------- | ----------------------- |
+| `--connection` | Named database host/auth connection                                    | unset                   |
 | `--host`       | Database host URL                                                      | `http://localhost:8000` |
 | `--ns`         | Database namespace                                                     | `db`                    |
 | `--db`         | Database name                                                          | `test`                  |
@@ -112,6 +113,33 @@ surrealkit --host http://localhost:8000 --ns my_ns --db my_db --user root --pass
 - `SURREALDB_FOLDER` — root folder for schema, rollouts, snapshots, seed, and tests (default: `./database`)
 
 These can be set as system environment variables or in a `.env` file.
+
+### Connections
+
+Connections define named defaults for host/auth.
+
+```toml
+[connections.local]
+host = "http://localhost:8000"
+user = "root"
+pass = "root"
+auth_level = "root"
+```
+
+With `--connection local`, connection-backed fields resolve in this order:
+
+```text
+per-field CLI > SURREALDB_CONNECTION_LOCAL_* env > .env connection values > surrealkit.toml connection > global env > .env global values > defaults
+```
+
+Supported connection-specific env vars are:
+
+- `SURREALDB_CONNECTION_<CONNECTION>_HOST`
+- `SURREALDB_CONNECTION_<CONNECTION>_USER`
+- `SURREALDB_CONNECTION_<CONNECTION>_PASSWORD`
+- `SURREALDB_CONNECTION_<CONNECTION>_AUTH_LEVEL`
+
+`<CONNECTION>` is uppercased and non-alphanumeric separators become `_`, so `--connection staging-us` reads `SURREALDB_CONNECTION_STAGING_US_HOST`.
 
 SurrealKit creates and manages its internal sync and rollout metadata tables on your configured database.
 
