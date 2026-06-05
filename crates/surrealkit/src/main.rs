@@ -225,6 +225,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 					vars: template_vars,
 					folder: folder.clone(),
 					typegen_ts_out: typegen_cfg.typescript,
+					typegen_ts_format: typegen_cfg.format,
 				},
 			)
 			.await?;
@@ -390,6 +391,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 					stdout,
 					pretty: !compact,
 					ts_out: typegen_cfg.typescript,
+					ts_format: typegen_cfg.format,
 				},
 			)
 			.await?;

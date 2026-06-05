@@ -165,8 +165,12 @@ pub const DEFAULT_PROJECT_CONFIG: &str = r#"# Template variables for use in .sur
 # When `typescript` is set, `surrealkit typegen` and `sync --watch` write an
 # index.ts of typed table interfaces into this directory.
 #
+# Optionally run your formatter on the generated file so it matches your house
+# style (the file path is appended to the command). Failures are non-fatal.
+#
 # [typegen]
 # typescript = "../src/types"
+# format     = "biome check --write"   # or "prettier --write", "eslint --fix"
 "#;
 
 pub const DEFAULT_TEST_SUITE: &str = r#"name = "smoke"

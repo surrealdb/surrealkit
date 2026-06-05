@@ -35,6 +35,9 @@ pub struct TypegenOpts {
 	/// When set, also emit TypeScript types into this directory (`index.ts`).
 	/// Configured via `[typegen] typescript` in `surrealkit.toml`.
 	pub ts_out: Option<PathBuf>,
+	/// Optional formatter command run on the generated `index.ts` after writing.
+	/// Configured via `[typegen] format` in `surrealkit.toml`.
+	pub ts_format: Option<String>,
 }
 
 /// Render a [`SchemaTypes`] document as TypeScript. Re-exported so callers
@@ -51,6 +54,48 @@ pub fn write_typescript(doc: &SchemaTypes, dir: &std::path::Path) -> Result<Path
 	let path = dir.join("index.ts");
 	std::fs::write(&path, ts)?;
 	Ok(path)
+}
+
+/// Write the TypeScript types and, when `format` is set, run that formatter
+/// command on the written file so the output matches the project's house style
+/// (Biome / ESLint / Prettier). Returns the path written.
+pub fn write_typescript_formatted(
+	doc: &SchemaTypes,
+	dir: &std::path::Path,
+	format: Option<&str>,
+) -> Result<PathBuf> {
+	let path = write_typescript(doc, dir)?;
+	if let Some(cmd) = format {
+		format_file(cmd, &path);
+	}
+	Ok(path)
+}
+
+/// Run a user-configured formatter on `path`. The command is split on
+/// whitespace (first token is the program, the rest are arguments) and the
+/// file path is appended as the final argument — e.g. `biome check --write`
+/// becomes `biome check --write <path>`. The command inherits the current
+/// working directory so the formatter discovers the project's own config.
+///
+/// Failures (missing binary, non-zero exit) are non-fatal: they are reported as
+/// warnings so a missing formatter never breaks `typegen` or `sync --watch`.
+pub fn format_file(command: &str, path: &std::path::Path) {
+	let mut parts = command.split_whitespace();
+	let Some(program) = parts.next() else {
+		return; // empty / whitespace-only command: nothing to run
+	};
+	let args: Vec<&str> = parts.collect();
+	match std::process::Command::new(program).args(&args).arg(path).status() {
+		Ok(status) if status.success() => {
+			eprintln!("typegen: formatted {} with `{command}`", path.display());
+		}
+		Ok(status) => {
+			eprintln!("typegen: formatter `{command}` exited with {status}");
+		}
+		Err(err) => {
+			eprintln!("typegen: failed to run formatter `{command}`: {err}");
+		}
+	}
 }
 
 /// Introspect the database into a [`SchemaTypes`] document and stamp the
@@ -93,7 +138,7 @@ pub async fn run_typegen(
 	eprintln!("typegen: wrote {}", path.display());
 
 	if let Some(ts_dir) = &opts.ts_out {
-		let ts_path = write_typescript(&doc, ts_dir)?;
+		let ts_path = write_typescript_formatted(&doc, ts_dir, opts.ts_format.as_deref())?;
 		eprintln!("typegen: wrote {}", ts_path.display());
 	}
 	Ok(())

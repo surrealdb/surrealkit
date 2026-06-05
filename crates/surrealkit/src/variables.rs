@@ -143,6 +143,11 @@ pub struct TypegenConfig {
 	/// Directory for generated TypeScript types. When set, TS generation is
 	/// enabled: `surrealkit typegen` and `sync --watch` write an `index.ts` here.
 	pub typescript: Option<PathBuf>,
+	/// Optional formatter command run on the generated file after writing
+	/// (e.g. `"biome check --write"`, `"prettier --write"`, `"eslint --fix"`).
+	/// The generated file path is appended as the final argument. Failures are
+	/// non-fatal warnings.
+	pub format: Option<String>,
 }
 
 /// Load the `[typegen]` section from `surrealkit.toml`. `toml_path` defaults to
@@ -415,6 +420,19 @@ mod tests {
 		std::fs::write(&cfg, "[typegen]\ntypescript = \"../src/types\"\n").unwrap();
 		let parsed = load_typegen_config(Some(&cfg)).unwrap();
 		assert_eq!(parsed.typescript.as_deref(), Some(Path::new("../src/types")));
+	}
+
+	#[test]
+	fn load_typegen_config_reads_format_command() {
+		let tmp = TempDir::new().unwrap();
+		let cfg = tmp.path().join("surrealkit.toml");
+		std::fs::write(
+			&cfg,
+			"[typegen]\ntypescript = \"./types\"\nformat = \"biome check --write\"\n",
+		)
+		.unwrap();
+		let parsed = load_typegen_config(Some(&cfg)).unwrap();
+		assert_eq!(parsed.format.as_deref(), Some("biome check --write"));
 	}
 
 	#[test]
