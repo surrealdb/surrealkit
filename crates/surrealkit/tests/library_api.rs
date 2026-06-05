@@ -190,6 +190,39 @@ async fn sync_embedded_dry_run_makes_no_changes() {
 }
 
 #[tokio::test]
+async fn sync_embedded_does_not_scaffold_files_on_disk() {
+	// Regression: embedded/library sync must initialize the metadata tables in the
+	// database only — it must NOT write a `database/setup.surql` (or create a
+	// `database/` directory) in the process's working directory. That filesystem
+	// scaffolding is a CLI concern; under `cargo test` the CWD is the crate root,
+	// so the old behavior leaked e.g. `crates/<crate>/database/setup.surql`.
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (tmp, _restore) = enter_tempdir();
+
+	let db = mem_db().await;
+
+	static FILES: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/thing.surql",
+		sql: "DEFINE TABLE thing SCHEMALESS;",
+	}];
+
+	Sync::embedded(FILES).run(&db).await.expect("embedded sync");
+
+	// The `path` above is only a tracking key — nothing should hit the filesystem.
+	assert!(
+		!tmp.path().join("database").exists(),
+		"embedded sync must not create a `database/` directory on disk (found one in CWD)"
+	);
+
+	// And the metadata tables must still have been set up in the DB.
+	db.query("SELECT * FROM __entity LIMIT 1;")
+		.await
+		.expect("query __entity")
+		.check()
+		.expect("__entity must exist after embedded sync");
+}
+
+#[tokio::test]
 async fn rollout_status_is_empty_when_no_rollouts_exist() {
 	let db = mem_db().await;
 	run_status(&db, DEFAULT_ROOT_DIR, None).await.expect("run_status on empty DB");
