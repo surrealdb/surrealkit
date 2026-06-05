@@ -225,7 +225,8 @@ fn format_file_invokes_program_on_the_written_file() {
 	// Proves the configured command runs with the generated path as final arg.
 	let tmp = tempfile::TempDir::new().expect("temp dir");
 	let script = tmp.path().join("fmt.sh");
-	std::fs::write(&script, "#!/bin/sh\nprintf '// formatted\\n' >> \"$1\"\n").expect("write script");
+	std::fs::write(&script, "#!/bin/sh\nprintf '// formatted\\n' >> \"$1\"\n")
+		.expect("write script");
 	let mut perms = std::fs::metadata(&script).unwrap().permissions();
 	std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
 	std::fs::set_permissions(&script, perms).expect("chmod");

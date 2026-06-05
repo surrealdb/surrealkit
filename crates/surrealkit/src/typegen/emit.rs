@@ -2,9 +2,9 @@
 //!
 //! Two emitters share the same structured document:
 //! - [`to_json`] serialises the document verbatim.
-//! - [`to_typescript`] renders TypeScript interfaces for the surrealdb JS SDK
-//!   (v2): one `interface` per table, every table carrying an
-//!   `id: RecordId<'table'>`, with field types mapped to SDK wrapper types.
+//! - [`to_typescript`] renders TypeScript interfaces for the surrealdb JS SDK (v2): one `interface`
+//!   per table, every table carrying an `id: RecordId<'table'>`, with field types mapped to SDK
+//!   wrapper types.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -137,7 +137,11 @@ fn render_node(
 	imports: &mut BTreeSet<&'static str>,
 ) {
 	let indent = "  ".repeat(depth);
-	let optional = if node.own_optional { "?" } else { "" };
+	let optional = if node.own_optional {
+		"?"
+	} else {
+		""
+	};
 	let key = format_key(name);
 	let ty = render_node_type(node, depth, imports);
 	out.push_str(&format!("{indent}{key}{optional}: {ty};\n"));
@@ -149,15 +153,24 @@ fn render_node_type(node: &Node, depth: usize, imports: &mut BTreeSet<&'static s
 		let close_indent = "  ".repeat(depth);
 		let mut obj = String::from("{\n");
 		for (name, child) in &node.children {
-			let optional = if child.own_optional { "?" } else { "" };
+			let optional = if child.own_optional {
+				"?"
+			} else {
+				""
+			};
 			let key = format_key(name);
 			let ty = render_node_type(child, depth + 1, imports);
 			obj.push_str(&format!("{inner_indent}{key}{optional}: {ty};\n"));
 		}
 		obj.push_str(&format!("{close_indent}}}"));
 
-		let is_array = node.child_array || matches!(node.own_type, Some(FieldType::Array { .. } | FieldType::Set { .. }));
-		if is_array { format!("({obj})[]") } else { obj }
+		let is_array = node.child_array
+			|| matches!(node.own_type, Some(FieldType::Array { .. } | FieldType::Set { .. }));
+		if is_array {
+			format!("({obj})[]")
+		} else {
+			obj
+		}
 	} else if let Some(ty) = &node.own_type {
 		field_type_to_ts(ty, imports)
 	} else if let Some(elem) = &node.elem_type {
@@ -172,34 +185,47 @@ fn render_node_type(node: &Node, depth: usize, imports: &mut BTreeSet<&'static s
 /// surrealdb SDK symbols that need importing.
 fn field_type_to_ts(ty: &FieldType, imports: &mut BTreeSet<&'static str>) -> String {
 	match ty {
-		FieldType::Primitive { name } => primitive_to_ts(*name, imports),
-		FieldType::Option { inner } => {
+		FieldType::Primitive {
+			name,
+		} => primitive_to_ts(*name, imports),
+		FieldType::Option {
+			inner,
+		} => {
 			format!("{} | undefined", field_type_to_ts(inner, imports))
 		}
-		FieldType::Array { inner, .. } | FieldType::Set { inner, .. } => {
-			wrap_array(&field_type_to_ts(inner, imports))
+		FieldType::Array {
+			inner,
+			..
 		}
-		FieldType::Record { tables } => {
+		| FieldType::Set {
+			inner,
+			..
+		} => wrap_array(&field_type_to_ts(inner, imports)),
+		FieldType::Record {
+			tables,
+		} => {
 			imports.insert("RecordId");
 			if tables.is_empty() {
 				"RecordId".to_string()
 			} else {
-				tables
-					.iter()
-					.map(|t| format!("RecordId<'{t}'>"))
-					.collect::<Vec<_>>()
-					.join(" | ")
+				tables.iter().map(|t| format!("RecordId<'{t}'>")).collect::<Vec<_>>().join(" | ")
 			}
 		}
-		FieldType::Geometry { kinds } => geometry_to_ts(kinds, imports),
-		FieldType::Literal { value } => literal_to_ts(value),
-		FieldType::Union { variants } => variants
-			.iter()
-			.map(|v| field_type_to_ts(v, imports))
-			.collect::<Vec<_>>()
-			.join(" | "),
-		FieldType::Object { fields } => object_to_ts(fields, imports),
-		FieldType::Unknown { .. } => "unknown".to_string(),
+		FieldType::Geometry {
+			kinds,
+		} => geometry_to_ts(kinds, imports),
+		FieldType::Literal {
+			value,
+		} => literal_to_ts(value),
+		FieldType::Union {
+			variants,
+		} => variants.iter().map(|v| field_type_to_ts(v, imports)).collect::<Vec<_>>().join(" | "),
+		FieldType::Object {
+			fields,
+		} => object_to_ts(fields, imports),
+		FieldType::Unknown {
+			..
+		} => "unknown".to_string(),
 	}
 }
 
@@ -331,7 +357,11 @@ fn pascal_case(name: &str) -> String {
 			out.push_str(chars.as_str());
 		}
 	}
-	if out.is_empty() { name.to_string() } else { out }
+	if out.is_empty() {
+		name.to_string()
+	} else {
+		out
+	}
 }
 
 #[cfg(test)]
@@ -340,7 +370,9 @@ mod tests {
 	use crate::typegen::types::{FieldType, PrimitiveType};
 
 	fn prim(name: PrimitiveType) -> FieldType {
-		FieldType::Primitive { name }
+		FieldType::Primitive {
+			name,
+		}
 	}
 
 	fn field(name: &str, ty: FieldType, optional: bool) -> FieldDef {
@@ -408,10 +440,8 @@ mod tests {
 
 	#[test]
 	fn optional_field_gets_question_mark() {
-		let d = doc(vec![table(
-			"user",
-			vec![field("nickname", prim(PrimitiveType::String), true)],
-		)]);
+		let d =
+			doc(vec![table("user", vec![field("nickname", prim(PrimitiveType::String), true)])]);
 		let ts = to_typescript(&d).unwrap();
 		assert!(ts.contains("nickname?: string;"), "got:\n{ts}");
 	}
@@ -420,7 +450,13 @@ mod tests {
 	fn record_link_maps_to_record_id() {
 		let d = doc(vec![table(
 			"comment",
-			vec![field("author", FieldType::Record { tables: vec!["user".into()] }, false)],
+			vec![field(
+				"author",
+				FieldType::Record {
+					tables: vec!["user".into()],
+				},
+				false,
+			)],
 		)]);
 		let ts = to_typescript(&d).unwrap();
 		assert!(ts.contains("author: RecordId<'user'>;"), "got:\n{ts}");
@@ -432,7 +468,10 @@ mod tests {
 			"post",
 			vec![field(
 				"tags",
-				FieldType::Array { inner: Box::new(prim(PrimitiveType::String)), max: None },
+				FieldType::Array {
+					inner: Box::new(prim(PrimitiveType::String)),
+					max: None,
+				},
 				false,
 			)],
 		)]);
@@ -467,8 +506,12 @@ mod tests {
 				"status",
 				FieldType::Union {
 					variants: vec![
-						FieldType::Literal { value: serde_json::json!("open") },
-						FieldType::Literal { value: serde_json::json!("done") },
+						FieldType::Literal {
+							value: serde_json::json!("open"),
+						},
+						FieldType::Literal {
+							value: serde_json::json!("done"),
+						},
 					],
 				},
 				false,
@@ -500,7 +543,10 @@ mod tests {
 			vec![
 				field(
 					"addresses",
-					FieldType::Array { inner: Box::new(prim(PrimitiveType::Object)), max: None },
+					FieldType::Array {
+						inner: Box::new(prim(PrimitiveType::Object)),
+						max: None,
+					},
 					false,
 				),
 				field("addresses[*].street", prim(PrimitiveType::String), false),
