@@ -1,0 +1,61 @@
+schema_version = 1
+name = "default"
+display_name = "SurrealKit starter"
+description = "Optional building blocks for a new SurrealDB project"
+
+[[features]]
+id = "organizations"
+name = "Organizations"
+description = "Orgs, roles, per-app permissions, employees, and invitations"
+default = false
+schema = [
+	"schema/user.surql",
+	"schema/organization/functions.surql",
+	"schema/organization/organization.surql",
+	"schema/organization/organization_permission.surql",
+	"schema/organization/organization_role.surql",
+	"schema/organization/employee_of.surql",
+	"schema/organization/organization_invitation.surql",
+]
+seed = ["seed/organization_permissions.surql"]
+suites = ["tests/suites/organization.toml"]
+fixtures = ["tests/fixtures/organization_seed.surql"]
+
+[[features]]
+id = "teams"
+name = "Teams"
+description = "Teams with per-member roles (maintainer/member)"
+default = false
+requires = ["organizations"]
+schema = [
+	"schema/team/team.surql",
+	"schema/team/member_of.surql",
+	"schema/team/functions.surql",
+]
+seed = ["seed/team_permissions.surql"]
+suites = ["tests/suites/teams.toml"]
+
+[[features]]
+id = "units"
+name = "Organization units"
+description = "Departments/regions in a hierarchy, with unit-scoped permissions"
+default = false
+requires = ["organizations"]
+schema = [
+	"schema/units/organization_unit.surql",
+	"schema/units/functions.surql",
+]
+suites = ["tests/suites/units.toml"]
+
+[[features]]
+id = "subsidiaries"
+name = "Subsidiaries & delegation"
+description = "Parent/child orgs with cross-org delegated permissions"
+default = false
+requires = ["organizations"]
+schema = [
+	"schema/subsidiaries/has_subsidiary.surql",
+	"schema/subsidiaries/organization_delegation_grant.surql",
+	"schema/subsidiaries/functions.surql",
+]
+suites = ["tests/suites/subsidiaries.toml"]
