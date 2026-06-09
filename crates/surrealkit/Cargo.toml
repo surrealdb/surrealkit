@@ -26,10 +26,11 @@ walkdir = '2.5'
 reqwest = { version = '0.12', default-features = false, features = ['json', 'rustls-tls'] }
 regex = '1'
 rustls = { version = '0.23', default-features = false, features = ['aws-lc-rs'] }
+inquire = '0.7'
+tempfile = '3'
 
 [dev-dependencies]
 surrealdb = { version = '3.0.5', features = ['kv-mem'] }
-tempfile = '3'
 test-case = "3"
 
 [lints]

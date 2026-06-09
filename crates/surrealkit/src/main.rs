@@ -5,12 +5,18 @@ use rust_dotenv::dotenv::DotEnv;
 use surrealkit::config::{Cfg, ConfigOverrides, connect};
 use surrealkit::core::exec_surql;
 use surrealkit::rollout::{self, RolloutExecutionOpts, RolloutPlanOpts};
+use surrealkit::seed;
 use surrealkit::setup::run_setup;
 use surrealkit::sync::{self, SyncOpts};
 use surrealkit::tester::{TestOpts, run_test};
 use surrealkit::typegen::{TypegenOpts, run_typegen};
 use surrealkit::variables::{TemplateVars, build_vars, parse_var_flag};
-use surrealkit::{scaffold, seed};
+
+use crate::templates::InitOpts;
+
+// `init` templates are a CLI-only concern, so the module lives in the binary
+// rather than the public library surface.
+mod templates;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "SurrealKit CLI")]
@@ -57,7 +63,28 @@ pub struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-	Init,
+	/// Scaffold a new project from a template, selecting optional features.
+	Init {
+		/// Bundled template name (default: `default`). Ignored when --from is set.
+		#[arg(long)]
+		template: Option<String>,
+		/// Use an external template: a git URL (optionally `url#rev` / `url#rev:subdir`)
+		/// or a local path. Overrides --template.
+		#[arg(long)]
+		from: Option<String>,
+		/// Enable a feature by id (repeatable). Implies non-interactive selection.
+		#[arg(long = "feature", value_name = "ID")]
+		feature: Vec<String>,
+		/// Only scaffold the bare project; add no template features.
+		#[arg(long)]
+		minimal: bool,
+		/// Don't prompt; accept the default features (non-interactive).
+		#[arg(short = 'y', long)]
+		yes: bool,
+		/// Overwrite files that already exist.
+		#[arg(long)]
+		force: bool,
+	},
 	Setup,
 	Sync {
 		#[arg(long)]
@@ -195,7 +222,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 	let folder = cfg.folder().to_owned();
 
 	match args.command {
-		Commands::Init => scaffold::scaffold(&folder)?,
+		Commands::Init {
+			template,
+			from,
+			feature,
+			minimal,
+			yes,
+			force,
+		} => templates::run_init(
+			&folder,
+			InitOpts {
+				template,
+				from,
+				feature,
+				minimal,
+				yes,
+				force,
+			},
+		)?,
 		Commands::Setup => {
 			let db = connect(&cfg).await?;
 			run_setup(&db, &folder).await?;

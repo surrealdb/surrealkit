@@ -1,0 +1,62 @@
+name = "units"
+tags = ["organization", "units"]
+
+[[fixtures]]
+name = "organization_seed"
+actor = "root"
+file = "../fixtures/organization_seed.surql"
+
+[[cases]]
+name = "metadata_defines_unit_model"
+kind = "schema_metadata"
+actor = "root"
+sql = "INFO FOR DB;"
+contains = ["organization_unit", "fn::organization::unit::descendant"]
+
+[[cases]]
+name = "child_unit_is_descendant_of_root"
+kind = "schema_behavior"
+actor = "root"
+setup_sql = [
+  "CREATE organization_unit:root SET name = 'Root', organization = organization:acme;",
+  "CREATE organization_unit:eng SET name = 'Engineering', organization = organization:acme, parent = organization_unit:root;",
+]
+action_sql = "RETURN fn::organization::unit::descendant(organization_unit:eng, organization_unit:root);"
+verify_sql = "RETURN fn::organization::unit::descendant(organization_unit:eng, organization_unit:root);"
+expect_success = true
+
+[[cases.assertions]]
+path = ""
+equals = true
+
+[[cases]]
+name = "unrelated_units_are_not_descendants"
+kind = "schema_behavior"
+actor = "root"
+setup_sql = [
+  "CREATE organization_unit:sales SET name = 'Sales', organization = organization:acme;",
+  "CREATE organization_unit:ops SET name = 'Ops', organization = organization:acme;",
+]
+action_sql = "RETURN fn::organization::unit::descendant(organization_unit:sales, organization_unit:ops);"
+verify_sql = "RETURN fn::organization::unit::descendant(organization_unit:sales, organization_unit:ops);"
+expect_success = true
+
+[[cases.assertions]]
+path = ""
+equals = false
+
+[[cases]]
+name = "employee_can_be_assigned_a_unit"
+kind = "schema_behavior"
+actor = "root"
+setup_sql = [
+  "CREATE organization_unit:finance SET name = 'Finance', organization = organization:acme;",
+  "UPDATE employee_of SET unit = organization_unit:finance WHERE in = user:bob AND out = organization:acme;",
+]
+action_sql = "RETURN fn::account::organization::unit(user:bob, organization:acme);"
+verify_sql = "RETURN record::tb(fn::account::organization::unit(user:bob, organization:acme));"
+expect_success = true
+
+[[cases.assertions]]
+path = ""
+equals = "organization_unit"
