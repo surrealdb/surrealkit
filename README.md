@@ -1,7 +1,7 @@
 # SurrealKit
 
 [![Crates.io](https://img.shields.io/crates/v/surrealkit.svg)](https://crates.io/crates/surrealkit) [![Documentation](https://docs.rs/surrealkit/badge.svg)](https://docs.rs/surrealkit)
-[![License](https://img.shields.io/badge/license-Unlicense-blue.svg)](https://unlicense.org/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
 
 SurrealKit is a schema management and migration tool for SurrealDB. It lets you define your schema as `.surql` files and keeps your database in sync with them.
 
@@ -82,7 +82,7 @@ Initialise a new project:
 surrealkit init
 ```
 
-This creates a directory `/database` with the necessary scaffolding
+This creates a `database/` directory with the project scaffolding and lets you pick optional features to include. See [Templates](#templates) for details.
 
 Connection details can be provided via CLI arguments, environment variables, or a `.env` file. The resolution order is: CLI args > system env vars > `.env` file > defaults.
 
@@ -114,6 +114,95 @@ surrealkit --host http://localhost:8000 --ns my_ns --db my_db --user root --pass
 These can be set as system environment variables or in a `.env` file.
 
 SurrealKit creates and manages its internal sync and rollout metadata tables on your configured database.
+
+## Templates
+
+`surrealkit init` scaffolds a project from a template and lets you choose which optional features to include:
+
+```sh
+surrealkit init
+```
+
+In a terminal this shows a checklist of the template's features. Pick the ones you want and SurrealKit writes their schema, seed, and test files into `database/`. It always creates the base layout first: `schema/`, `rollouts/`, `snapshots/`, `seed/`, `tests/`, `setup.surql`, and `surrealkit.toml`.
+
+### Choosing features without a prompt
+
+When there is no terminal (such as CI) or you pass any of these flags, init runs without prompting:
+
+| Flag             | Behaviour                                                            |
+| ---------------- | ------------------------------------------------------------------- |
+| `--feature <id>` | Enable a feature by id. Repeatable, and pulls in what it requires.  |
+| `-y`, `--yes`    | Take the template's default features.                               |
+| `--minimal`      | Scaffold the base project only, with no features.                   |
+| `--force`        | Overwrite files that already exist. The default is to skip them.    |
+
+```sh
+surrealkit init --feature organizations --feature teams
+surrealkit init -y
+surrealkit init --minimal
+```
+
+A feature can depend on other features. Selecting one adds what it requires, and init prints what it added.
+
+### Using your own template
+
+Point `--from` at a local path or a git repository instead of the bundled template, or pick a bundled template by name with `--template`:
+
+```sh
+surrealkit init --from ./path/to/template
+surrealkit init --from https://github.com/your-org/your-template.git
+surrealkit init --from https://github.com/your-org/your-template.git#v1.0.0
+surrealkit init --template default
+```
+
+Git sources are cloned with `git clone --depth 1`, so `git` must be on your PATH. Pin a branch, tag, or commit with `#rev`, and target a subdirectory with `#rev:subdir`.
+
+### Template layout
+
+A template is a directory with a `template.toml` manifest plus the files each feature contributes:
+
+```toml
+schema_version = 1
+name = "default"
+display_name = "My starter"
+description = "Shown above the feature checklist"
+
+[[features]]
+id = "organizations"
+name = "Organizations"
+description = "Shown next to the feature in the checklist"
+default = false
+schema   = ["schema/organization/organization.surql"]
+seed     = ["seed/organization_permissions.surql"]
+suites   = ["tests/suites/organization.toml"]
+fixtures = ["tests/fixtures/organization_seed.surql"]
+
+[[features]]
+id = "teams"
+name = "Teams"
+requires = ["organizations"]
+schema = ["schema/team/team.surql"]
+```
+
+Each feature lists the files it adds, grouped by where they land:
+
+- `schema` files are copied into `database/schema/`
+- `seed` files into `database/seed/`
+- `suites` files into `database/tests/suites/`
+- `fixtures` files into `database/tests/fixtures/`
+
+Set `default = true` to pre-check a feature in the prompt and include it with `-y`. Use `requires` to declare dependencies on other features.
+
+### Bundled template
+
+The bundled template provides an organization and access-control model with four opt-in features:
+
+- **Organizations**: organizations, roles that bundle permissions, a per-app permission catalog, employees, and invitations.
+- **Teams**: teams within an organization, with per-member roles.
+- **Organization units**: a department and region hierarchy with unit-scoped permissions.
+- **Subsidiaries and delegation**: parent and child organizations with cross-org delegated permissions.
+
+Teams, units, and subsidiaries each require the organizations feature.
 
 ## Team Workflow
 
@@ -236,12 +325,12 @@ surrealkit seed
 Use `${VAR_NAME}` tokens in any `.surql` file (schema, seed, or rollout SQL) and bind values to them at runtime. Useful for credentials, table prefixes, or environment names that differ between dev, staging, and prod.
 
 ```sql
--- database/schema/roles.surql
-DROP ROLE IF EXISTS ${talent_username};
-DEFINE ROLE ${talent_username} PERMISSIONS FULL;
+-- database/schema/access.surql
+REMOVE USER IF EXISTS ${talent_username} ON DATABASE;
+DEFINE USER ${talent_username} ON DATABASE PASSWORD "${talent_password}" ROLES EDITOR;
 
 -- database/schema/tables.surql
-DEFINE TABLE ${schema_prefix}_users SCHEMAFULL;
+DEFINE TABLE IF NOT EXISTS ${schema_prefix}_users SCHEMAFULL;
 ```
 
 ### Resolution Priority
@@ -264,6 +353,7 @@ Place a `surrealkit.toml` at the project root (created by `surrealkit init`):
 [variables]
 schema_prefix = "myapp"
 talent_username = "talent_rw"
+talent_password = "change_me_in_prod"
 environment = "development"
 ```
 

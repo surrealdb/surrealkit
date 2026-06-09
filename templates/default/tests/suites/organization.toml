@@ -1,0 +1,101 @@
+name = "organization"
+tags = ["organization", "auth"]
+
+[[fixtures]]
+name = "organization_seed"
+actor = "root"
+file = "../fixtures/organization_seed.surql"
+
+[[cases]]
+name = "metadata_defines_org_model"
+kind = "schema_metadata"
+actor = "root"
+sql = "INFO FOR DB;"
+contains = [
+  "organization",
+  "organization_role",
+  "organization_permission",
+  "employee_of",
+  "fn::organization::permissible",
+]
+
+[[cases]]
+name = "owner_is_provisioned_with_system_role"
+kind = "sql_expect"
+actor = "root"
+sql = "RETURN (SELECT VALUE name FROM organization_role WHERE organization = organization:acme AND kind = 'system')[0];"
+allow = true
+
+[[cases.assertions]]
+path = ""
+equals = "Owner"
+
+[[cases]]
+name = "owner_is_superuser"
+kind = "sql_expect"
+actor = "root"
+sql = "RETURN fn::organization::permissible(user:alice, organization:acme, 'roles/manage');"
+allow = true
+
+[[cases.assertions]]
+path = ""
+equals = true
+
+[[cases]]
+name = "member_has_granted_permission"
+kind = "sql_expect"
+actor = "root"
+sql = "RETURN fn::organization::permissible(user:bob, organization:acme, 'employees/view');"
+allow = true
+
+[[cases.assertions]]
+path = ""
+equals = true
+
+[[cases]]
+name = "member_lacks_ungranted_permission"
+kind = "sql_expect"
+actor = "root"
+sql = "RETURN fn::organization::permissible(user:bob, organization:acme, 'employees/manage');"
+allow = true
+
+[[cases.assertions]]
+path = ""
+equals = false
+
+[[cases]]
+name = "non_employee_is_denied"
+kind = "sql_expect"
+actor = "root"
+sql = "RETURN fn::organization::permissible(user:carol, organization:acme, 'employees/view');"
+allow = true
+
+[[cases.assertions]]
+path = ""
+equals = false
+
+[[cases]]
+name = "employee_helper_recognises_owner"
+kind = "sql_expect"
+actor = "root"
+sql = "RETURN fn::organization::employee(user:alice, organization:acme);"
+allow = true
+
+[[cases.assertions]]
+path = ""
+equals = true
+
+[[cases]]
+name = "invitation_accept_creates_employee"
+kind = "schema_behavior"
+actor = "root"
+setup_sql = [
+  "LET $role = (SELECT VALUE id FROM organization_role WHERE organization = organization:acme AND name = 'Member' LIMIT 1)[0]; CREATE organization_invitation:inv_carol SET organization_role = $role, email = 'carol@example.com', token = 'tok-carol', expires = time::now() + 7d, created_by = user:alice;",
+]
+action_sql = "UPDATE organization_invitation:inv_carol SET used_at = time::now(), used_by = user:carol;"
+verify_sql = "RETURN fn::organization::employee(user:carol, organization:acme);"
+expect_success = true
+
+[[cases.assertions]]
+path = ""
+equals = true

@@ -1,0 +1,47 @@
+name = "subsidiaries"
+tags = ["organization", "subsidiaries"]
+
+[[fixtures]]
+name = "organization_seed"
+actor = "root"
+file = "../fixtures/organization_seed.surql"
+
+[[cases]]
+name = "metadata_defines_subsidiary_model"
+kind = "schema_metadata"
+actor = "root"
+sql = "INFO FOR DB;"
+contains = ["has_subsidiary", "organization_delegation_grant"]
+
+[[cases]]
+name = "delegated_role_grants_permission_in_subsidiary"
+kind = "schema_behavior"
+actor = "root"
+setup_sql = [
+  "CREATE organization:sub SET name = 'Sub', slug = 'sub', owner = user:alice;",
+  "RELATE organization:acme->has_subsidiary->organization:sub SET status = 'active';",
+  "LET $subrole = (SELECT VALUE id FROM organization_role WHERE organization = organization:sub AND name = 'Owner' LIMIT 1)[0]; RELATE organization:acme->organization_delegation_grant->organization:sub SET subject = user:bob, role = $subrole, scope = 'organization';",
+]
+action_sql = "RETURN fn::organization::permissible(user:bob, organization:sub, 'organization/manage');"
+verify_sql = "RETURN fn::organization::permissible(user:bob, organization:sub, 'organization/manage');"
+expect_success = true
+
+[[cases.assertions]]
+path = ""
+equals = true
+
+[[cases]]
+name = "without_delegation_permission_is_denied"
+kind = "schema_behavior"
+actor = "root"
+setup_sql = [
+  "CREATE organization:sub2 SET name = 'Sub Two', slug = 'sub-two', owner = user:alice;",
+  "RELATE organization:acme->has_subsidiary->organization:sub2 SET status = 'active';",
+]
+action_sql = "RETURN fn::organization::permissible(user:bob, organization:sub2, 'organization/manage');"
+verify_sql = "RETURN fn::organization::permissible(user:bob, organization:sub2, 'organization/manage');"
+expect_success = true
+
+[[cases.assertions]]
+path = ""
+equals = false

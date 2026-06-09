@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use anyhow::{Result, anyhow, bail};
@@ -135,6 +135,34 @@ impl TemplateVars {
 struct ProjectConfig {
 	#[serde(default)]
 	variables: HashMap<String, String>,
+	#[serde(default)]
+	typegen: TypegenConfig,
+}
+
+/// The `[typegen]` section of `surrealkit.toml`.
+#[derive(Debug, Default, Clone, Deserialize)]
+pub struct TypegenConfig {
+	/// Directory for generated TypeScript types. When set, TS generation is
+	/// enabled: `surrealkit typegen` and `sync --watch` write an `index.ts` here.
+	pub typescript: Option<PathBuf>,
+	/// Optional formatter command run on the generated file after writing
+	/// (e.g. `"biome check --write"`, `"prettier --write"`, `"eslint --fix"`).
+	/// The generated file path is appended as the final argument. Failures are
+	/// non-fatal warnings.
+	pub format: Option<String>,
+}
+
+/// Load the `[typegen]` section from `surrealkit.toml`. `toml_path` defaults to
+/// `./surrealkit.toml` when `None`. A missing file (or missing section) yields
+/// [`TypegenConfig::default`].
+pub fn load_typegen_config(toml_path: Option<&Path>) -> Result<TypegenConfig> {
+	let cfg_path = toml_path.unwrap_or_else(|| Path::new("surrealkit.toml"));
+	if !cfg_path.exists() {
+		return Ok(TypegenConfig::default());
+	}
+	let raw = std::fs::read_to_string(cfg_path)?;
+	let cfg: ProjectConfig = toml::from_str(&raw)?;
+	Ok(cfg.typegen)
 }
 
 #[cfg(test)]
@@ -385,6 +413,45 @@ mod tests {
 		std::fs::write(&cfg, "this is = not = valid = toml [[[").unwrap();
 		let err = build_vars(&[], Some(&cfg)).unwrap_err();
 		let _ = err;
+	}
+
+	#[test]
+	fn load_typegen_config_reads_typescript_path() {
+		let tmp = TempDir::new().unwrap();
+		let cfg = tmp.path().join("surrealkit.toml");
+		std::fs::write(&cfg, "[typegen]\ntypescript = \"../src/types\"\n").unwrap();
+		let parsed = load_typegen_config(Some(&cfg)).unwrap();
+		assert_eq!(parsed.typescript.as_deref(), Some(Path::new("../src/types")));
+	}
+
+	#[test]
+	fn load_typegen_config_reads_format_command() {
+		let tmp = TempDir::new().unwrap();
+		let cfg = tmp.path().join("surrealkit.toml");
+		std::fs::write(
+			&cfg,
+			"[typegen]\ntypescript = \"./types\"\nformat = \"biome check --write\"\n",
+		)
+		.unwrap();
+		let parsed = load_typegen_config(Some(&cfg)).unwrap();
+		assert_eq!(parsed.format.as_deref(), Some("biome check --write"));
+	}
+
+	#[test]
+	fn load_typegen_config_missing_section_is_none() {
+		let tmp = TempDir::new().unwrap();
+		let cfg = tmp.path().join("surrealkit.toml");
+		std::fs::write(&cfg, "[variables]\nfoo = \"bar\"\n").unwrap();
+		let parsed = load_typegen_config(Some(&cfg)).unwrap();
+		assert!(parsed.typescript.is_none());
+	}
+
+	#[test]
+	fn load_typegen_config_missing_file_is_default() {
+		let tmp = TempDir::new().unwrap();
+		let missing = tmp.path().join("nope.toml");
+		let parsed = load_typegen_config(Some(&missing)).unwrap();
+		assert!(parsed.typescript.is_none());
 	}
 
 	// `SURREALKIT_VAR_*` env var pickup is exercised by integration usage; testing it
