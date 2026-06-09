@@ -7,6 +7,7 @@ use surrealdb::engine::any::Any;
 use crate::constants::setup_surql_path;
 use crate::scaffold::DEFAULT_SETUP;
 
+#[doc(hidden)]
 pub async fn run_setup(db: &Surreal<Any>, folder: &str) -> Result<()> {
 	let setup_file = setup_surql_path(folder);
 
@@ -25,6 +26,16 @@ pub async fn run_setup(db: &Surreal<Any>, folder: &str) -> Result<()> {
 
 	db.query(&sql).await?.check()?;
 
+	db.query(DEFAULT_SETUP).await?.check()?;
+	Ok(())
+}
+
+/// Initialize the metadata tables without touching the filesystem.
+///
+/// Used by the embedded/library sync path, which has no project folder to
+/// scaffold — so it must not write a `setup.surql` into the caller's working
+/// directory the way [`run_setup`] does.
+pub(crate) async fn run_setup_embedded(db: &Surreal<Any>) -> Result<()> {
 	db.query(DEFAULT_SETUP).await?.check()?;
 	Ok(())
 }

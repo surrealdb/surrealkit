@@ -6,12 +6,18 @@ use surrealdb::engine::any::{Any, connect};
 use surrealdb::opt::Config;
 use surrealdb::opt::capabilities::Capabilities;
 use surrealkit::constants::DEFAULT_ROOT_DIR;
-use surrealkit::schema_state::EntityKey;
+// CLI-backing filesystem functions live behind their modules (doc-hidden); the
+// library happy-path uses the `Sync` builder and `Rollout` facade exported at the
+// crate root.
+use surrealkit::rollout::{
+	RolloutExecutionOpts, RolloutPlanOpts, run_baseline, run_complete, run_plan, run_rollback,
+	run_start, run_status,
+};
+use surrealkit::seed::seed_from_dir;
+use surrealkit::setup::run_setup;
 use surrealkit::{
-	EmbeddedSchemaFile, RolloutExecutionOpts, RolloutPhase, RolloutPlanOpts, RolloutSpec,
-	RolloutStep, RolloutStepKind, SyncOpts, TemplateVars, run_baseline, run_complete,
-	run_complete_with_spec, run_plan, run_rollback, run_rollback_with_spec, run_setup, run_start,
-	run_start_with_spec, run_status, run_sync_embedded, run_sync_embedded_with_opts, seed_from_dir,
+	EmbeddedSchemaFile, EntityKey, EntityKind, Rollout, RolloutPhase, RolloutSpec, RolloutStep,
+	Sync, TemplateVars,
 };
 
 async fn mem_db() -> Surreal<Any> {
@@ -68,7 +74,7 @@ async fn sync_embedded_applies_schema_and_tracks_file() {
 		sql: "DEFINE TABLE person SCHEMALESS;",
 	}];
 
-	run_sync_embedded(&db, DEFAULT_ROOT_DIR, FILES).await.expect("run_sync_embedded");
+	Sync::embedded(FILES).run(&db).await.expect("sync embedded");
 
 	let mut resp = db.query("SELECT key FROM __entity WHERE ns = 'sync';").await.expect("query");
 	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
@@ -85,8 +91,8 @@ async fn sync_embedded_is_idempotent() {
 		sql: "DEFINE TABLE idempotent_test SCHEMALESS;",
 	}];
 
-	run_sync_embedded(&db, DEFAULT_ROOT_DIR, FILES).await.expect("first sync");
-	run_sync_embedded(&db, DEFAULT_ROOT_DIR, FILES).await.expect("second sync");
+	Sync::embedded(FILES).run(&db).await.expect("first sync");
+	Sync::embedded(FILES).run(&db).await.expect("second sync");
 
 	let mut resp = db.query("SELECT key FROM __entity WHERE ns = 'sync';").await.expect("query");
 	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
@@ -107,7 +113,7 @@ async fn sync_embedded_prunes_removed_files() {
 			sql: "DEFINE TABLE beta SCHEMALESS;",
 		},
 	];
-	run_sync_embedded(&db, DEFAULT_ROOT_DIR, TWO_FILES).await.expect("initial sync");
+	Sync::embedded(TWO_FILES).run(&db).await.expect("initial sync");
 
 	let mut resp =
 		db.query("SELECT key FROM __entity WHERE ns = 'sync' ORDER BY key;").await.expect("query");
@@ -118,22 +124,7 @@ async fn sync_embedded_prunes_removed_files() {
 		path: "database/schema/alpha.surql",
 		sql: "DEFINE TABLE alpha SCHEMALESS;",
 	}];
-	run_sync_embedded_with_opts(
-		&db,
-		DEFAULT_ROOT_DIR,
-		ONE_FILE,
-		&SyncOpts {
-			watch: false,
-			debounce_ms: 0,
-			dry_run: false,
-			fail_fast: true,
-			prune: true,
-			allow_shared_prune: false,
-			..Default::default()
-		},
-	)
-	.await
-	.expect("pruning sync");
+	Sync::embedded(ONE_FILE).prune(true).run(&db).await.expect("pruning sync");
 
 	let mut resp = db.query("SELECT key FROM __entity WHERE ns = 'sync';").await.expect("query");
 	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
@@ -147,9 +138,8 @@ async fn sync_embedded_self_heals_catalog_drift() {
 	// live DB (e.g., a `run_sql REMOVE …` rollout step dropped it but didn't
 	// update the catalog). On the next sync, the pruner emits REMOVE for that
 	// entity. Without `IF EXISTS` the REMOVE fails with "X does not exist" and
-	// halts the whole prune batch (sync.rs::prune_managed_entities joins all
-	// statements). With `IF EXISTS` the prune succeeds and the catalog row is
-	// reaped, so drift self-heals on the next sync.
+	// halts the whole prune batch. With `IF EXISTS` the prune succeeds and the
+	// catalog row is reaped, so drift self-heals on the next sync.
 
 	let db = mem_db().await;
 
@@ -158,7 +148,7 @@ async fn sync_embedded_self_heals_catalog_drift() {
 		sql: "DEFINE TABLE drift_target SCHEMAFULL;\n\
 		      DEFINE FIELD nickname ON drift_target TYPE string;",
 	}];
-	run_sync_embedded(&db, DEFAULT_ROOT_DIR, WITH_FIELD).await.expect("initial sync");
+	Sync::embedded(WITH_FIELD).run(&db).await.expect("initial sync");
 
 	// Simulate the rollout step that dropped the field by raw `run_sql`:
 	// the live DB no longer has it, but __entity still tracks it.
@@ -172,22 +162,11 @@ async fn sync_embedded_self_heals_catalog_drift() {
 	// (still present) AND the field (already gone). Pre-fix, the field prune
 	// errors and the table is never reached.
 	static EMPTY: &[EmbeddedSchemaFile] = &[];
-	run_sync_embedded_with_opts(
-		&db,
-		DEFAULT_ROOT_DIR,
-		EMPTY,
-		&SyncOpts {
-			watch: false,
-			debounce_ms: 0,
-			dry_run: false,
-			fail_fast: true,
-			prune: true,
-			allow_shared_prune: false,
-			..Default::default()
-		},
-	)
-	.await
-	.expect("pruning sync should self-heal drift, not error on missing field");
+	Sync::embedded(EMPTY)
+		.prune(true)
+		.run(&db)
+		.await
+		.expect("pruning sync should self-heal drift, not error on missing field");
 
 	let mut resp = db.query("SELECT * FROM __entity WHERE ns = 'sync';").await.expect("query");
 	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
@@ -203,26 +182,44 @@ async fn sync_embedded_dry_run_makes_no_changes() {
 		sql: "DEFINE TABLE dry_run_test SCHEMALESS;",
 	}];
 
-	run_sync_embedded_with_opts(
-		&db,
-		DEFAULT_ROOT_DIR,
-		FILES,
-		&SyncOpts {
-			watch: false,
-			debounce_ms: 0,
-			dry_run: true,
-			fail_fast: true,
-			prune: true,
-			allow_shared_prune: false,
-			..Default::default()
-		},
-	)
-	.await
-	.expect("dry run");
+	Sync::embedded(FILES).dry_run(true).run(&db).await.expect("dry run");
 
 	let mut resp = db.query("SELECT * FROM __entity WHERE ns = 'sync';").await.expect("query");
 	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
 	assert!(rows.is_empty(), "dry run must not write tracking records");
+}
+
+#[tokio::test]
+async fn sync_embedded_does_not_scaffold_files_on_disk() {
+	// Regression: embedded/library sync must initialize the metadata tables in the
+	// database only — it must NOT write a `database/setup.surql` (or create a
+	// `database/` directory) in the process's working directory. That filesystem
+	// scaffolding is a CLI concern; under `cargo test` the CWD is the crate root,
+	// so the old behavior leaked e.g. `crates/<crate>/database/setup.surql`.
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (tmp, _restore) = enter_tempdir();
+
+	let db = mem_db().await;
+
+	static FILES: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/thing.surql",
+		sql: "DEFINE TABLE thing SCHEMALESS;",
+	}];
+
+	Sync::embedded(FILES).run(&db).await.expect("embedded sync");
+
+	// The `path` above is only a tracking key — nothing should hit the filesystem.
+	assert!(
+		!tmp.path().join("database").exists(),
+		"embedded sync must not create a `database/` directory on disk (found one in CWD)"
+	);
+
+	// And the metadata tables must still have been set up in the DB.
+	db.query("SELECT * FROM __entity LIMIT 1;")
+		.await
+		.expect("query __entity")
+		.check()
+		.expect("__entity must exist after embedded sync");
 }
 
 #[tokio::test]
@@ -234,7 +231,6 @@ async fn rollout_status_is_empty_when_no_rollouts_exist() {
 // Regression: run_status crashed (SIGABRT via panic=abort) when called after a rollout
 // had been completed, because resp.take::<Vec<serde_json::Value>> panics over HTTP/CBOR
 // when rows include SurrealDB datetime fields (started_at, completed_at).
-// Both the targeted selector and the list-all form must work without panicking.
 #[tokio::test]
 async fn rollout_status_does_not_crash_after_completed_rollout() {
 	let _guard = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
@@ -300,7 +296,7 @@ fn write_schema_file(dir: &Path, name: &str, sql: &str) {
 }
 
 #[tokio::test]
-async fn rollout_full_lifecycle_via_library() {
+async fn rollout_full_lifecycle_via_cli_functions() {
 	let _guard = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (tmp, _restore) = enter_tempdir();
 
@@ -357,7 +353,7 @@ async fn rollout_full_lifecycle_via_library() {
 }
 
 #[tokio::test]
-async fn rollout_rollback_after_start_via_library() {
+async fn rollout_rollback_after_start_via_cli_functions() {
 	let _guard = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (tmp, _restore) = enter_tempdir();
 
@@ -448,46 +444,30 @@ async fn query_rollout_status(db: &Surreal<Any>, rollout_id: &str) -> Option<Str
 	rows.into_iter().next()?.get("status")?.as_str().map(str::to_string)
 }
 
-// Builds a minimal RolloutSpec that adds one table via inline SQL (no filesystem).
+// Builds a minimal code-driven RolloutSpec that adds one table via inline SQL,
+// with a rollback step that removes it. Uses the builder + step constructors —
+// the type system guarantees each step's shape.
 fn add_table_spec(id: &str, table: &str) -> RolloutSpec {
-	RolloutSpec {
-		id: id.to_string(),
-		name: id.to_string(),
-		source_schema_hash: String::new(),
-		target_schema_hash: String::new(),
-		compatibility: "phased".to_string(),
-		renames: vec![],
-		steps: vec![
-			RolloutStep {
-				id: "apply".to_string(),
-				phase: RolloutPhase::Start,
-				kind: RolloutStepKind::ApplySchema,
-				files: vec![],
-				sql: Some(format!("DEFINE TABLE {table} SCHEMALESS;")),
-				expect: None,
-				entities: vec![],
-				idempotent: None,
-			},
-			RolloutStep {
-				id: "rollback".to_string(),
-				phase: RolloutPhase::Rollback,
-				kind: RolloutStepKind::RemoveEntities,
-				files: vec![],
-				sql: None,
-				expect: None,
-				entities: vec![EntityKey {
-					kind: "table".to_string(),
-					scope: None,
-					name: table.to_string(),
-				}],
-				idempotent: None,
-			},
-		],
-	}
+	RolloutSpec::builder(id)
+		.step(RolloutStep::apply_schema(
+			"apply",
+			RolloutPhase::Start,
+			format!("DEFINE TABLE {table} SCHEMALESS;"),
+		))
+		.step(RolloutStep::remove_entities(
+			"rollback",
+			RolloutPhase::Rollback,
+			vec![EntityKey {
+				kind: EntityKind::Table,
+				scope: None,
+				name: table.to_string(),
+			}],
+		))
+		.build()
 }
 
 #[tokio::test]
-async fn rollout_with_spec_full_lifecycle() {
+async fn rollout_facade_full_lifecycle() {
 	let db = mem_db().await;
 
 	static SOURCE: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
@@ -506,23 +486,26 @@ async fn rollout_with_spec_full_lifecycle() {
 	];
 
 	// Establish baseline using the source schema.
-	run_sync_embedded(&db, DEFAULT_ROOT_DIR, SOURCE).await.expect("baseline sync");
+	Sync::embedded(SOURCE).run(&db).await.expect("baseline sync");
 
-	let spec = add_table_spec("add_invoice", "invoice");
+	let rollout = Rollout::new(add_table_spec("add_invoice", "invoice"), TARGET);
 
-	run_start_with_spec(&db, DEFAULT_ROOT_DIR, &spec, TARGET, &TemplateVars::default())
-		.await
-		.expect("start_with_spec");
-	assert_eq!(query_rollout_status(&db, &spec.id).await.as_deref(), Some("ready_to_complete"));
+	rollout.start(&db).await.expect("start");
+	assert_eq!(
+		query_rollout_status(&db, "add_invoice").await.as_deref(),
+		Some("ready_to_complete")
+	);
 
-	run_complete_with_spec(&db, DEFAULT_ROOT_DIR, &spec, &TemplateVars::default())
-		.await
-		.expect("complete_with_spec");
-	assert_eq!(query_rollout_status(&db, &spec.id).await.as_deref(), Some("completed"));
+	// The structured status report is available via the facade.
+	let report = rollout.status(&db).await.expect("status").expect("record exists");
+	assert_eq!(report.status, Some(surrealkit::RolloutStatus::ReadyToComplete));
+
+	rollout.complete(&db).await.expect("complete");
+	assert_eq!(query_rollout_status(&db, "add_invoice").await.as_deref(), Some("completed"));
 }
 
 #[tokio::test]
-async fn rollout_with_spec_rollback() {
+async fn rollout_facade_rollback() {
 	let db = mem_db().await;
 
 	static SOURCE: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
@@ -540,21 +523,17 @@ async fn rollout_with_spec_rollback() {
 		},
 	];
 
-	run_sync_embedded(&db, DEFAULT_ROOT_DIR, SOURCE).await.expect("baseline sync");
+	Sync::embedded(SOURCE).run(&db).await.expect("baseline sync");
 
-	let spec = add_table_spec("add_variant", "variant");
+	let rollout = Rollout::new(add_table_spec("add_variant", "variant"), TARGET);
 
-	run_start_with_spec(&db, DEFAULT_ROOT_DIR, &spec, TARGET, &TemplateVars::default())
-		.await
-		.expect("start_with_spec");
-	run_rollback_with_spec(&db, DEFAULT_ROOT_DIR, &spec, &TemplateVars::default())
-		.await
-		.expect("rollback_with_spec");
-	assert_eq!(query_rollout_status(&db, &spec.id).await.as_deref(), Some("rolled_back"));
+	rollout.start(&db).await.expect("start");
+	rollout.rollback(&db).await.expect("rollback");
+	assert_eq!(query_rollout_status(&db, "add_variant").await.as_deref(), Some("rolled_back"));
 }
 
 #[tokio::test]
-async fn rollout_with_spec_blocks_concurrent_rollout() {
+async fn rollout_facade_blocks_concurrent_rollout() {
 	let db = mem_db().await;
 
 	static SOURCE: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
@@ -582,20 +561,54 @@ async fn rollout_with_spec_blocks_concurrent_rollout() {
 		},
 	];
 
-	run_sync_embedded(&db, DEFAULT_ROOT_DIR, SOURCE).await.expect("baseline sync");
+	Sync::embedded(SOURCE).run(&db).await.expect("baseline sync");
 
-	let spec_a = add_table_spec("add_session_x", "session");
-	run_start_with_spec(&db, DEFAULT_ROOT_DIR, &spec_a, TARGET_A, &TemplateVars::default())
-		.await
-		.expect("first rollout starts");
+	let rollout_a = Rollout::new(add_table_spec("add_session_x", "session"), TARGET_A);
+	rollout_a.start(&db).await.expect("first rollout starts");
 
 	// A second, different rollout must be rejected while the first is active.
-	let spec_b = add_table_spec("add_token_x", "token");
-	let err =
-		run_start_with_spec(&db, DEFAULT_ROOT_DIR, &spec_b, TARGET_B, &TemplateVars::default())
-			.await
-			.expect_err("concurrent rollout must be rejected");
+	let rollout_b = Rollout::new(add_table_spec("add_token_x", "token"), TARGET_B);
+	let err = rollout_b.start(&db).await.expect_err("concurrent rollout must be rejected");
 	assert!(err.to_string().contains("active"), "error should mention active rollout: {err}");
+}
+
+#[tokio::test]
+async fn rollout_abandon_unsticks_active_rollout() {
+	let db = mem_db().await;
+
+	static SOURCE: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/widget.surql",
+		sql: "DEFINE TABLE widget SCHEMALESS;",
+	}];
+	static TARGET_A: &[EmbeddedSchemaFile] = &[
+		EmbeddedSchemaFile {
+			path: "database/schema/widget.surql",
+			sql: "DEFINE TABLE widget SCHEMALESS;",
+		},
+		EmbeddedSchemaFile {
+			path: "database/schema/gadget.surql",
+			sql: "DEFINE TABLE gadget SCHEMALESS;",
+		},
+	];
+
+	Sync::embedded(SOURCE).run(&db).await.expect("baseline sync");
+
+	let stuck = Rollout::new(add_table_spec("stuck_rollout", "gadget"), TARGET_A);
+	stuck.start(&db).await.expect("start");
+
+	// A second rollout is blocked while the first is active.
+	let next = Rollout::new(add_table_spec("next_rollout", "gizmo"), &[]);
+	next.start(&db).await.expect_err("blocked by active rollout");
+
+	// Abandoning the stuck rollout frees the lane.
+	Rollout::<'_>::abandon(&db, "stuck_rollout").await.expect("abandon");
+	assert_eq!(query_rollout_status(&db, "stuck_rollout").await.as_deref(), Some("rolled_back"));
+
+	next.start(&db).await.expect("new rollout can start after abandon");
+	assert_eq!(
+		query_rollout_status(&db, "next_rollout").await.as_deref(),
+		Some("ready_to_complete")
+	);
 }
 
 // Template variable tests
@@ -615,19 +628,7 @@ async fn sync_embedded_with_vars_substitutes_table_name() {
 		sql: "DEFINE TABLE ${prefix}_users SCHEMALESS;",
 	}];
 
-	run_sync_embedded_with_opts(
-		&db,
-		DEFAULT_ROOT_DIR,
-		FILES,
-		&SyncOpts {
-			fail_fast: true,
-			prune: true,
-			vars: template_vars,
-			..Default::default()
-		},
-	)
-	.await
-	.expect("sync with vars");
+	Sync::embedded(FILES).vars(template_vars).run(&db).await.expect("sync with vars");
 
 	let mut resp = db.query("INFO FOR DB;").await.expect("INFO FOR DB");
 	let info: Option<serde_json::Value> = resp.take(0).expect("take");
@@ -652,18 +653,7 @@ async fn sync_embedded_with_undefined_var_returns_error() {
 		sql: "DEFINE TABLE ${undefined_var} SCHEMALESS;",
 	}];
 
-	let err = run_sync_embedded_with_opts(
-		&db,
-		DEFAULT_ROOT_DIR,
-		FILES,
-		&SyncOpts {
-			fail_fast: true,
-			prune: true,
-			..Default::default()
-		},
-	)
-	.await
-	.expect_err("undefined var must error");
+	let err = Sync::embedded(FILES).run(&db).await.expect_err("undefined var must error");
 
 	// Variable name lives in the cause chain (wrapped by file-path context); {:#} prints full
 	// chain.
@@ -722,8 +712,8 @@ async fn seed_with_undefined_var_returns_error() {
 }
 
 #[tokio::test]
-async fn rollout_apply_schema_step_with_files_substitutes_vars() {
-	// ApplySchema with files reads from disk; rollout_run_sql_step_with_vars covers inline sql.
+async fn rollout_apply_files_step_substitutes_vars() {
+	// ApplyFiles reads from disk; rollout_run_sql_step_with_vars covers inline SQL.
 	let _lock = FS_LOCK.lock().unwrap();
 	let (tmp, _cwd) = enter_tempdir();
 
@@ -733,24 +723,13 @@ async fn rollout_apply_schema_step_with_files_substitutes_vars() {
 	std::fs::write(&schema_path, "DEFINE TABLE ${tbl_name} SCHEMALESS;")
 		.expect("write schema file");
 
-	let spec = RolloutSpec {
-		id: "apply_schema_with_vars".to_string(),
-		name: "apply_schema_with_vars".to_string(),
-		source_schema_hash: String::new(),
-		target_schema_hash: String::new(),
-		compatibility: "phased".to_string(),
-		renames: vec![],
-		steps: vec![RolloutStep {
-			id: "apply".to_string(),
-			phase: RolloutPhase::Start,
-			kind: RolloutStepKind::ApplySchema,
-			files: vec![schema_path.to_string_lossy().into_owned()],
-			sql: None,
-			expect: None,
-			entities: vec![],
-			idempotent: None,
-		}],
-	};
+	let spec = RolloutSpec::builder("apply_files_with_vars")
+		.step(RolloutStep::apply_files(
+			"apply",
+			RolloutPhase::Start,
+			vec![schema_path.to_string_lossy().into_owned()],
+		))
+		.build();
 
 	let mut vars = std::collections::HashMap::new();
 	vars.insert("TBL_NAME".to_string(), "applied_table".to_string());
@@ -758,9 +737,7 @@ async fn rollout_apply_schema_step_with_files_substitutes_vars() {
 		vars,
 	};
 
-	run_start_with_spec(&db, DEFAULT_ROOT_DIR, &spec, &[], &template_vars)
-		.await
-		.expect("apply_schema with vars");
+	Rollout::new(spec, &[]).vars(template_vars).start(&db).await.expect("apply_files with vars");
 
 	let mut resp = db.query("INFO FOR DB;").await.expect("INFO FOR DB");
 	let info: Option<serde_json::Value> = resp.take(0).expect("take");
@@ -786,18 +763,7 @@ async fn sync_error_context_includes_offending_file_path() {
 		sql: "DEFINE TABLE ${ABSENT_VAR}_table SCHEMALESS;",
 	}];
 
-	let err = run_sync_embedded_with_opts(
-		&db,
-		DEFAULT_ROOT_DIR,
-		FILES,
-		&SyncOpts {
-			fail_fast: true,
-			prune: true,
-			..Default::default()
-		},
-	)
-	.await
-	.expect_err("undefined var must error");
+	let err = Sync::embedded(FILES).run(&db).await.expect_err("undefined var must error");
 
 	let chain = format!("{err:#}");
 	assert!(chain.contains("ABSENT_VAR"), "error chain must name the variable: {chain}");
@@ -813,24 +779,13 @@ async fn rollout_run_sql_step_with_vars() {
 
 	// A run_sql step that references a template variable.
 	// SurrealDB creates schemaless tables on demand, so no pre-setup needed.
-	let spec = RolloutSpec {
-		id: "rollout_with_var".to_string(),
-		name: "rollout_with_var".to_string(),
-		source_schema_hash: String::new(),
-		target_schema_hash: String::new(),
-		compatibility: "phased".to_string(),
-		renames: vec![],
-		steps: vec![RolloutStep {
-			id: "insert_record".to_string(),
-			phase: RolloutPhase::Start,
-			kind: RolloutStepKind::RunSql,
-			files: vec![],
-			sql: Some("CREATE vartest:1 SET marker = '${marker_value}';".to_string()),
-			expect: None,
-			entities: vec![],
-			idempotent: Some(true),
-		}],
-	};
+	let spec = RolloutSpec::builder("rollout_with_var")
+		.step(RolloutStep::run_sql(
+			"insert_record",
+			RolloutPhase::Start,
+			"CREATE vartest:1 SET marker = '${marker_value}';",
+		))
+		.build();
 
 	let mut vars = std::collections::HashMap::new();
 	vars.insert("MARKER_VALUE".to_string(), "hello_from_var".to_string());
@@ -838,9 +793,7 @@ async fn rollout_run_sql_step_with_vars() {
 		vars,
 	};
 
-	run_start_with_spec(&db, DEFAULT_ROOT_DIR, &spec, &[], &template_vars)
-		.await
-		.expect("start with var");
+	Rollout::new(spec, &[]).vars(template_vars).start(&db).await.expect("start with var");
 
 	let mut resp = db.query("SELECT marker FROM vartest WHERE id = vartest:1;").await.expect("q");
 	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");

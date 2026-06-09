@@ -34,7 +34,7 @@ fn toml_to_surreal(val: toml::Value) -> surrealdb_types::Value {
 }
 
 use super::types::{ActorKind, ActorSpec};
-use crate::config::{AuthLevel, Cfg};
+use crate::config::{AuthLevel, DbCfg};
 use crate::core::create_surreal_client;
 
 #[derive(Debug, Clone)]
@@ -56,7 +56,7 @@ pub fn merged_actor_specs(
 }
 
 pub async fn build_actor_sessions(
-	cfg: &Cfg,
+	cfg: &DbCfg,
 	host: &str,
 	namespace: &str,
 	database: &str,
@@ -76,7 +76,7 @@ pub async fn build_actor_sessions(
 }
 
 async fn build_default_bootstrap_session(
-	cfg: &Cfg,
+	cfg: &DbCfg,
 	host: &str,
 	namespace: &str,
 	database: &str,
@@ -123,7 +123,7 @@ async fn build_default_bootstrap_session(
 async fn build_session(
 	name: &str,
 	spec: &ActorSpec,
-	cfg: &Cfg,
+	cfg: &DbCfg,
 	host: &str,
 	namespace: &str,
 	database: &str,

@@ -1,9 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
 
 use anyhow::{Context, Result, anyhow, bail};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use walkdir::WalkDir;
 
 use crate::constants::{
@@ -38,16 +40,153 @@ pub struct CatalogSnapshot {
 	pub operations: Vec<Operation>,
 }
 
+/// The category of a SurrealDB schema object that SurrealKit manages.
+///
+/// Each variant corresponds to a `DEFINE <KIND>` statement and serializes to the
+/// lowercase SurrealDB keyword (e.g. [`EntityKind::Table`] ⇄ `"table"`,
+/// [`EntityKind::Api`] ⇄ `"api"`). This keeps catalog snapshots, rollout TOML, and
+/// the `__entity` metadata table wire-compatible with previous releases that stored
+/// `kind` as a plain string.
+///
+/// [`EntityKind::Other`] is a forward-compatibility hatch: it preserves any kind
+/// string written by a newer or foreign version of SurrealKit so existing state
+/// still round-trips byte-for-byte instead of failing to deserialize. The schema
+/// parser never produces `Other` — it accepts only the known keywords.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum EntityKind {
+	Table,
+	Field,
+	Index,
+	Event,
+	Function,
+	Param,
+	Access,
+	Analyzer,
+	User,
+	Api,
+	Bucket,
+	Model,
+	Sequence,
+	Config,
+	Module,
+	/// An unrecognized kind preserved verbatim from persisted state.
+	Other(String),
+}
+
+impl EntityKind {
+	/// The lowercase SurrealDB keyword for this kind (e.g. `"table"`).
+	pub fn as_str(&self) -> &str {
+		match self {
+			Self::Table => "table",
+			Self::Field => "field",
+			Self::Index => "index",
+			Self::Event => "event",
+			Self::Function => "function",
+			Self::Param => "param",
+			Self::Access => "access",
+			Self::Analyzer => "analyzer",
+			Self::User => "user",
+			Self::Api => "api",
+			Self::Bucket => "bucket",
+			Self::Model => "model",
+			Self::Sequence => "sequence",
+			Self::Config => "config",
+			Self::Module => "module",
+			Self::Other(s) => s.as_str(),
+		}
+	}
+
+	/// Map a known lowercase keyword to its variant, or `None` if unrecognized.
+	fn from_known(s: &str) -> Option<Self> {
+		Some(match s {
+			"table" => Self::Table,
+			"field" => Self::Field,
+			"index" => Self::Index,
+			"event" => Self::Event,
+			"function" => Self::Function,
+			"param" => Self::Param,
+			"access" => Self::Access,
+			"analyzer" => Self::Analyzer,
+			"user" => Self::User,
+			"api" => Self::Api,
+			"bucket" => Self::Bucket,
+			"model" => Self::Model,
+			"sequence" => Self::Sequence,
+			"config" => Self::Config,
+			"module" => Self::Module,
+			_ => return None,
+		})
+	}
+
+	/// Parse a kind string from persisted state, falling back to [`EntityKind::Other`]
+	/// for unrecognized values so old/foreign data still round-trips.
+	pub fn from_storage(s: &str) -> Self {
+		Self::from_known(&s.to_ascii_lowercase()).unwrap_or_else(|| Self::Other(s.to_string()))
+	}
+}
+
+impl fmt::Display for EntityKind {
+	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+		f.write_str(self.as_str())
+	}
+}
+
+impl FromStr for EntityKind {
+	type Err = anyhow::Error;
+
+	/// Parse a SurrealDB keyword (case-insensitive) into a known [`EntityKind`].
+	/// Unknown keywords are an error — use [`EntityKind::from_storage`] for the
+	/// lenient, `Other`-preserving variant.
+	fn from_str(s: &str) -> Result<Self> {
+		Self::from_known(&s.to_ascii_lowercase())
+			.ok_or_else(|| anyhow!("unknown entity kind: {s:?}"))
+	}
+}
+
+// Ordering delegates to the keyword string so EntityKey/CatalogEntity sort
+// identically to when `kind` was a plain `String` (lexical by keyword).
+impl PartialOrd for EntityKind {
+	fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+		Some(self.cmp(other))
+	}
+}
+
+impl Ord for EntityKind {
+	fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+		self.as_str().cmp(other.as_str())
+	}
+}
+
+impl Serialize for EntityKind {
+	fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+		serializer.serialize_str(self.as_str())
+	}
+}
+
+impl<'de> Deserialize<'de> for EntityKind {
+	fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+		let s = String::deserialize(deserializer)?;
+		Ok(Self::from_storage(&s))
+	}
+}
+
+/// Identifies one SurrealDB object managed by SurrealKit. The `(kind, scope, name)`
+/// triple is the object's identity for diffing and for the `__entity` metadata key.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct EntityKey {
-	pub kind: String,
+	/// What kind of object this is.
+	pub kind: EntityKind,
+	/// The parent scope: the table name for `field`/`event`/`index`, the level
+	/// (`DATABASE`/`NAMESPACE`) for `access`/`user`, and `None` for top-level
+	/// objects like `table`/`function`/`param`.
 	pub scope: Option<String>,
+	/// The object's name.
 	pub name: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
 pub struct CatalogEntity {
-	pub kind: String,
+	pub kind: EntityKind,
 	pub scope: Option<String>,
 	pub name: String,
 	pub source_path: String,
@@ -343,35 +482,35 @@ pub fn render_remove_sql(entities: &[EntityKey], api_supported: bool) -> Result<
 	// drift self-heals.
 	let mut out = Vec::new();
 	for entity in ordered {
-		let stmt = match entity.kind.as_str() {
-			"field" => format!(
+		let stmt = match &entity.kind {
+			EntityKind::Field => format!(
 				"REMOVE FIELD IF EXISTS {} ON {};",
 				entity.name,
 				scope_or_err(&entity, "FIELD")?
 			),
-			"event" => format!(
+			EntityKind::Event => format!(
 				"REMOVE EVENT IF EXISTS {} ON {};",
 				entity.name,
 				scope_or_err(&entity, "EVENT")?
 			),
-			"index" => format!(
+			EntityKind::Index => format!(
 				"REMOVE INDEX IF EXISTS {} ON {};",
 				entity.name,
 				scope_or_err(&entity, "INDEX")?
 			),
-			"table" => format!("REMOVE TABLE IF EXISTS {};", entity.name),
-			"function" => format!("REMOVE FUNCTION IF EXISTS {};", entity.name),
-			"param" => format!("REMOVE PARAM IF EXISTS {};", entity.name),
-			"access" => match &entity.scope {
+			EntityKind::Table => format!("REMOVE TABLE IF EXISTS {};", entity.name),
+			EntityKind::Function => format!("REMOVE FUNCTION IF EXISTS {};", entity.name),
+			EntityKind::Param => format!("REMOVE PARAM IF EXISTS {};", entity.name),
+			EntityKind::Access => match &entity.scope {
 				Some(scope) => format!("REMOVE ACCESS IF EXISTS {} ON {};", entity.name, scope),
 				None => format!("REMOVE ACCESS IF EXISTS {};", entity.name),
 			},
-			"analyzer" => format!("REMOVE ANALYZER IF EXISTS {};", entity.name),
-			"user" => match &entity.scope {
+			EntityKind::Analyzer => format!("REMOVE ANALYZER IF EXISTS {};", entity.name),
+			EntityKind::User => match &entity.scope {
 				Some(scope) => format!("REMOVE USER IF EXISTS {} ON {};", entity.name, scope),
 				None => format!("REMOVE USER IF EXISTS {};", entity.name),
 			},
-			"api" => {
+			EntityKind::Api => {
 				if api_supported {
 					format!("REMOVE API IF EXISTS {};", entity.name)
 				} else {
@@ -382,12 +521,13 @@ Use a manual migration or upgrade server support.",
 					);
 				}
 			}
-			"bucket" => format!("REMOVE BUCKET IF EXISTS {};", entity.name),
-			"model" => format!("REMOVE MODEL IF EXISTS {};", entity.name),
-			"sequence" => format!("REMOVE SEQUENCE IF EXISTS {};", entity.name),
-			"config" => format!("REMOVE CONFIG IF EXISTS {};", entity.name),
-			"module" => format!("REMOVE MODULE IF EXISTS {};", entity.name),
-			_ => continue,
+			EntityKind::Bucket => format!("REMOVE BUCKET IF EXISTS {};", entity.name),
+			EntityKind::Model => format!("REMOVE MODEL IF EXISTS {};", entity.name),
+			EntityKind::Sequence => format!("REMOVE SEQUENCE IF EXISTS {};", entity.name),
+			EntityKind::Config => format!("REMOVE CONFIG IF EXISTS {};", entity.name),
+			EntityKind::Module => format!("REMOVE MODULE IF EXISTS {};", entity.name),
+			// Unknown kinds from foreign/newer state: skip rather than fail the prune batch.
+			EntityKind::Other(_) => continue,
 		};
 		out.push(stmt);
 	}
@@ -401,25 +541,25 @@ fn scope_or_err(entity: &EntityKey, object: &str) -> Result<String> {
 }
 
 fn removal_sort_key(entity: &EntityKey) -> (usize, Option<String>, String, String) {
-	let weight = match entity.kind.as_str() {
-		"index" => 0,
-		"event" => 1,
-		"field" => 2,
-		"access" => 3,
-		"user" => 4,
-		"function" => 5,
-		"param" => 6,
-		"api" => 7,
-		"analyzer" => 8,
-		"bucket" => 9,
-		"model" => 10,
-		"module" => 11,
-		"sequence" => 12,
-		"config" => 13,
-		"table" => 14,
-		_ => 15,
+	let weight = match entity.kind {
+		EntityKind::Index => 0,
+		EntityKind::Event => 1,
+		EntityKind::Field => 2,
+		EntityKind::Access => 3,
+		EntityKind::User => 4,
+		EntityKind::Function => 5,
+		EntityKind::Param => 6,
+		EntityKind::Api => 7,
+		EntityKind::Analyzer => 8,
+		EntityKind::Bucket => 9,
+		EntityKind::Model => 10,
+		EntityKind::Module => 11,
+		EntityKind::Sequence => 12,
+		EntityKind::Config => 13,
+		EntityKind::Table => 14,
+		EntityKind::Other(_) => 15,
 	};
-	(weight, entity.scope.clone(), entity.kind.clone(), entity.name.clone())
+	(weight, entity.scope.clone(), entity.kind.to_string(), entity.name.clone())
 }
 
 fn normalize_path(path: &Path) -> Result<String> {
@@ -603,16 +743,16 @@ fn parse_define_entity(stmt: &str) -> Option<CatalogEntity> {
 		return None;
 	}
 
-	let kind = tokens[1].to_ascii_lowercase();
+	let kind = EntityKind::from_str(tokens[1]).ok()?;
 	let mut idx = 2;
 	idx = skip_modifiers(&tokens, idx);
 	if idx >= tokens.len() {
 		return None;
 	}
 
-	let (scope, name) = match kind.as_str() {
-		"table" => (None, clean_ident(tokens[idx])),
-		"field" | "event" | "index" => {
+	let (scope, name) = match &kind {
+		EntityKind::Table => (None, clean_ident(tokens[idx])),
+		EntityKind::Field | EntityKind::Event | EntityKind::Index => {
 			let name = clean_ident(tokens[idx]);
 			let on_idx = find_token(&tokens, idx + 1, "ON")?;
 			let mut scope_idx = on_idx + 1;
@@ -624,9 +764,16 @@ fn parse_define_entity(stmt: &str) -> Option<CatalogEntity> {
 			}
 			(Some(clean_ident(tokens[scope_idx])), name)
 		}
-		"function" | "param" | "analyzer" | "api" | "bucket" | "model" | "sequence" | "config"
-		| "module" => (None, clean_ident(tokens[idx])),
-		"access" | "user" => {
+		EntityKind::Function
+		| EntityKind::Param
+		| EntityKind::Analyzer
+		| EntityKind::Api
+		| EntityKind::Bucket
+		| EntityKind::Model
+		| EntityKind::Sequence
+		| EntityKind::Config
+		| EntityKind::Module => (None, clean_ident(tokens[idx])),
+		EntityKind::Access | EntityKind::User => {
 			let name = clean_ident(tokens[idx]);
 			let scope = find_token(&tokens, idx + 1, "ON").and_then(|on_idx| {
 				let i = on_idx + 1;
@@ -719,6 +866,34 @@ mod tests {
 	use super::*;
 
 	#[test]
+	fn entity_kind_serializes_to_lowercase_keyword() {
+		// Wire-compat: kind must serialize to the same lowercase strings that
+		// previous releases stored, so existing catalog snapshots / TOML / __entity
+		// rows keep round-tripping.
+		assert_eq!(serde_json::to_string(&EntityKind::Table).unwrap(), "\"table\"");
+		assert_eq!(serde_json::to_string(&EntityKind::Api).unwrap(), "\"api\"");
+		assert_eq!(serde_json::to_string(&EntityKind::Module).unwrap(), "\"module\"");
+	}
+
+	#[test]
+	fn entity_kind_deserializes_known_and_unknown() {
+		assert_eq!(serde_json::from_str::<EntityKind>("\"table\"").unwrap(), EntityKind::Table);
+		// An unknown kind from a newer/foreign writer must survive instead of failing.
+		let other: EntityKind = serde_json::from_str("\"galaxy\"").unwrap();
+		assert_eq!(other, EntityKind::Other("galaxy".to_string()));
+		assert_eq!(other.as_str(), "galaxy");
+		// ...and round-trip back to the original string.
+		assert_eq!(serde_json::to_string(&other).unwrap(), "\"galaxy\"");
+	}
+
+	#[test]
+	fn entity_kind_from_str_is_strict_and_case_insensitive() {
+		assert_eq!("TABLE".parse::<EntityKind>().unwrap(), EntityKind::Table);
+		assert_eq!("Field".parse::<EntityKind>().unwrap(), EntityKind::Field);
+		assert!("galaxy".parse::<EntityKind>().is_err());
+	}
+
+	#[test]
 	fn schema_diff_detects_added_modified_removed() {
 		let old = SchemaSnapshot {
 			version: 1,
@@ -779,7 +954,7 @@ mod tests {
 
 		let catalog = build_catalog_snapshot(&files, false).expect("catalog build");
 		assert!(catalog.entities.contains(&CatalogEntity {
-			kind: "table".to_string(),
+			kind: EntityKind::Table,
 			scope: None,
 			name: "person".to_string(),
 			source_path: "database/schema/root.surql".to_string(),
@@ -787,29 +962,33 @@ mod tests {
 			file_hash: "x".to_string(),
 		}));
 		assert!(catalog.entities.iter().any(|entity| {
-			entity.kind == "field"
+			entity.kind == EntityKind::Field
 				&& entity.scope.as_deref() == Some("person")
 				&& entity.name == "name"
 				&& entity.source_path == "database/schema/root.surql"
 		}));
-		assert!(catalog.entities.iter().any(|entity| entity.kind == "api" && entity.name == "v1"));
-		assert!(
-			catalog.entities.iter().any(|e| e.kind == "bucket" && e.name == "assets"),
-			"bucket should be captured"
-		);
-		assert!(
-			catalog.entities.iter().any(|e| e.kind == "sequence" && e.name == "order_no"),
-			"sequence should be captured"
-		);
-		assert!(
-			catalog.entities.iter().any(|e| e.kind == "config" && e.name == "GRAPHQL"),
-			"config should be captured by its kind keyword"
-		);
 		assert!(
 			catalog
 				.entities
 				.iter()
-				.any(|e| { e.kind == "module" && e.scope.is_none() && e.name == "mod::math" }),
+				.any(|entity| entity.kind == EntityKind::Api && entity.name == "v1")
+		);
+		assert!(
+			catalog.entities.iter().any(|e| e.kind == EntityKind::Bucket && e.name == "assets"),
+			"bucket should be captured"
+		);
+		assert!(
+			catalog.entities.iter().any(|e| e.kind == EntityKind::Sequence && e.name == "order_no"),
+			"sequence should be captured"
+		);
+		assert!(
+			catalog.entities.iter().any(|e| e.kind == EntityKind::Config && e.name == "GRAPHQL"),
+			"config should be captured by its kind keyword"
+		);
+		assert!(
+			catalog.entities.iter().any(|e| {
+				e.kind == EntityKind::Module && e.scope.is_none() && e.name == "mod::math"
+			}),
 			"module should be captured with its mod:: name"
 		);
 	}
@@ -834,27 +1013,27 @@ mod tests {
 	fn render_remove_sql_covers_new_kinds() {
 		let entities = vec![
 			EntityKey {
-				kind: "bucket".to_string(),
+				kind: EntityKind::Bucket,
 				scope: None,
 				name: "assets".to_string(),
 			},
 			EntityKey {
-				kind: "sequence".to_string(),
+				kind: EntityKind::Sequence,
 				scope: None,
 				name: "order_no".to_string(),
 			},
 			EntityKey {
-				kind: "config".to_string(),
+				kind: EntityKind::Config,
 				scope: None,
 				name: "GRAPHQL".to_string(),
 			},
 			EntityKey {
-				kind: "model".to_string(),
+				kind: EntityKind::Model,
 				scope: None,
 				name: "ml::sentiment".to_string(),
 			},
 			EntityKey {
-				kind: "module".to_string(),
+				kind: EntityKind::Module,
 				scope: None,
 				name: "mod::math".to_string(),
 			},
@@ -890,17 +1069,17 @@ mod tests {
 		// be removed after fields (which are dropped first) but before the table.
 		let entities = vec![
 			EntityKey {
-				kind: "table".into(),
+				kind: EntityKind::Table,
 				scope: None,
 				name: "person".into(),
 			},
 			EntityKey {
-				kind: "module".into(),
+				kind: EntityKind::Module,
 				scope: None,
 				name: "mod::math".into(),
 			},
 			EntityKey {
-				kind: "field".into(),
+				kind: EntityKind::Field,
 				scope: Some("person".into()),
 				name: "age".into(),
 			},
@@ -917,17 +1096,17 @@ mod tests {
 	fn render_remove_sql_respects_api_support() {
 		let entities = vec![
 			EntityKey {
-				kind: "table".to_string(),
+				kind: EntityKind::Table,
 				scope: None,
 				name: "person".to_string(),
 			},
 			EntityKey {
-				kind: "field".to_string(),
+				kind: EntityKind::Field,
 				scope: Some("person".to_string()),
 				name: "nickname".to_string(),
 			},
 			EntityKey {
-				kind: "api".to_string(),
+				kind: EntityKind::Api,
 				scope: None,
 				name: "v1".to_string(),
 			},
@@ -950,77 +1129,77 @@ mod tests {
 		// catalog drift is self-healing.
 		let entities = vec![
 			EntityKey {
-				kind: "field".into(),
+				kind: EntityKind::Field,
 				scope: Some("person".into()),
 				name: "nickname".into(),
 			},
 			EntityKey {
-				kind: "event".into(),
+				kind: EntityKind::Event,
 				scope: Some("person".into()),
 				name: "audit".into(),
 			},
 			EntityKey {
-				kind: "index".into(),
+				kind: EntityKind::Index,
 				scope: Some("person".into()),
 				name: "name_idx".into(),
 			},
 			EntityKey {
-				kind: "table".into(),
+				kind: EntityKind::Table,
 				scope: None,
 				name: "person".into(),
 			},
 			EntityKey {
-				kind: "function".into(),
+				kind: EntityKind::Function,
 				scope: None,
 				name: "fn::greet".into(),
 			},
 			EntityKey {
-				kind: "param".into(),
+				kind: EntityKind::Param,
 				scope: None,
 				name: "$greeting".into(),
 			},
 			EntityKey {
-				kind: "access".into(),
+				kind: EntityKind::Access,
 				scope: Some("DATABASE".into()),
 				name: "user_jwt".into(),
 			},
 			EntityKey {
-				kind: "analyzer".into(),
+				kind: EntityKind::Analyzer,
 				scope: None,
 				name: "blank".into(),
 			},
 			EntityKey {
-				kind: "user".into(),
+				kind: EntityKind::User,
 				scope: Some("DATABASE".into()),
 				name: "admin".into(),
 			},
 			EntityKey {
-				kind: "api".into(),
+				kind: EntityKind::Api,
 				scope: None,
 				name: "v1".into(),
 			},
 			EntityKey {
-				kind: "bucket".into(),
+				kind: EntityKind::Bucket,
 				scope: None,
 				name: "assets".into(),
 			},
 			EntityKey {
-				kind: "model".into(),
+				kind: EntityKind::Model,
 				scope: None,
 				name: "ml::sentiment".into(),
 			},
 			EntityKey {
-				kind: "sequence".into(),
+				kind: EntityKind::Sequence,
 				scope: None,
 				name: "order_no".into(),
 			},
 			EntityKey {
-				kind: "config".into(),
+				kind: EntityKind::Config,
 				scope: None,
 				name: "GRAPHQL".into(),
 			},
 			EntityKey {
-				kind: "module".into(),
+				kind: EntityKind::Module,
 				scope: None,
 				name: "mod::math".into(),
 			},
@@ -1092,7 +1271,7 @@ mod tests {
 		let (entities, ops) = parse_schema_statements(&file, true)
 			.expect("allow_all_statements should parse mixed file");
 		assert_eq!(entities.len(), 1);
-		assert_eq!(entities[0].kind, "table");
+		assert_eq!(entities[0].kind, EntityKind::Table);
 		assert_eq!(ops.len(), 1);
 		assert!(ops[0].sql.contains("INSERT INTO person"));
 	}
@@ -1422,7 +1601,7 @@ mod tests {
 		let (entities, _ops) =
 			parse_schema_statements(&file, false).expect("LET should be allowed");
 		assert_eq!(entities.len(), 1);
-		assert_eq!(entities[0].kind, "table");
+		assert_eq!(entities[0].kind, EntityKind::Table);
 	}
 
 	#[test]
@@ -1430,7 +1609,7 @@ mod tests {
 		let old = CatalogSnapshot {
 			version: 2,
 			entities: vec![CatalogEntity {
-				kind: "field".to_string(),
+				kind: EntityKind::Field,
 				scope: Some("person".to_string()),
 				name: "nickname".to_string(),
 				source_path: "database/schema/a.surql".to_string(),
@@ -1442,7 +1621,7 @@ mod tests {
 		let new = CatalogSnapshot {
 			version: 2,
 			entities: vec![CatalogEntity {
-				kind: "field".to_string(),
+				kind: EntityKind::Field,
 				scope: Some("person".to_string()),
 				name: "nickname".to_string(),
 				source_path: "database/schema/a.surql".to_string(),
@@ -1591,7 +1770,7 @@ mod tests {
 		let (entities, _ops) =
 			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS table");
 		assert_eq!(entities.len(), 1);
-		assert_eq!(entities[0].kind, "table");
+		assert_eq!(entities[0].kind, EntityKind::Table);
 		assert_eq!(entities[0].name, "person");
 		assert!(entities[0].scope.is_none());
 	}
@@ -1606,7 +1785,7 @@ mod tests {
 		let (entities, _ops) =
 			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS field");
 		assert_eq!(entities.len(), 1);
-		assert_eq!(entities[0].kind, "field");
+		assert_eq!(entities[0].kind, EntityKind::Field);
 		assert_eq!(entities[0].name, "email");
 		assert_eq!(entities[0].scope.as_deref(), Some("person"));
 	}
@@ -1621,7 +1800,7 @@ mod tests {
 		let (entities, _ops) =
 			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS event");
 		assert_eq!(entities.len(), 1);
-		assert_eq!(entities[0].kind, "event");
+		assert_eq!(entities[0].kind, EntityKind::Event);
 		assert_eq!(entities[0].name, "changed");
 		assert_eq!(entities[0].scope.as_deref(), Some("person"));
 	}
@@ -1636,7 +1815,7 @@ mod tests {
 		let (entities, _ops) =
 			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS index");
 		assert_eq!(entities.len(), 1);
-		assert_eq!(entities[0].kind, "index");
+		assert_eq!(entities[0].kind, EntityKind::Index);
 		assert_eq!(entities[0].name, "by_email");
 		assert_eq!(entities[0].scope.as_deref(), Some("person"));
 	}
@@ -1652,7 +1831,7 @@ mod tests {
 		let (entities, _ops) =
 			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS function");
 		assert_eq!(entities.len(), 1);
-		assert_eq!(entities[0].kind, "function");
+		assert_eq!(entities[0].kind, EntityKind::Function);
 		assert_eq!(entities[0].name, "fn::greet");
 	}
 
@@ -1666,7 +1845,7 @@ mod tests {
 		let (entities, _ops) =
 			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS param");
 		assert_eq!(entities.len(), 1);
-		assert_eq!(entities[0].kind, "param");
+		assert_eq!(entities[0].kind, EntityKind::Param);
 		assert_eq!(entities[0].name, "$env");
 	}
 
@@ -1680,7 +1859,7 @@ mod tests {
 		let (entities, _ops) =
 			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS analyzer");
 		assert_eq!(entities.len(), 1);
-		assert_eq!(entities[0].kind, "analyzer");
+		assert_eq!(entities[0].kind, EntityKind::Analyzer);
 		assert_eq!(entities[0].name, "english");
 	}
 
@@ -1694,7 +1873,7 @@ mod tests {
 		let (entities, _ops) =
 			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS access");
 		assert_eq!(entities.len(), 1);
-		assert_eq!(entities[0].kind, "access");
+		assert_eq!(entities[0].kind, EntityKind::Access);
 		assert_eq!(entities[0].name, "admin");
 		assert_eq!(entities[0].scope.as_deref(), Some("DATABASE"));
 	}
@@ -1709,7 +1888,7 @@ mod tests {
 		let (entities, _ops) =
 			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS user");
 		assert_eq!(entities.len(), 1);
-		assert_eq!(entities[0].kind, "user");
+		assert_eq!(entities[0].kind, EntityKind::User);
 		assert_eq!(entities[0].name, "app");
 		assert_eq!(entities[0].scope.as_deref(), Some("DATABASE"));
 	}
@@ -1724,7 +1903,7 @@ mod tests {
 		let (entities, _ops) =
 			parse_schema_statements(&file, false).expect("should parse IF NOT EXISTS module");
 		assert_eq!(entities.len(), 1);
-		assert_eq!(entities[0].kind, "module");
+		assert_eq!(entities[0].kind, EntityKind::Module);
 		assert_eq!(entities[0].name, "mod::math");
 		assert!(entities[0].scope.is_none());
 	}
@@ -1774,7 +1953,7 @@ mod tests {
 		let old = CatalogSnapshot {
 			version: 2,
 			entities: vec![CatalogEntity {
-				kind: "table".to_string(),
+				kind: EntityKind::Table,
 				scope: None,
 				name: "person".to_string(),
 				source_path: "database/schema/a.surql".to_string(),
@@ -1786,7 +1965,7 @@ mod tests {
 		let new = CatalogSnapshot {
 			version: 2,
 			entities: vec![CatalogEntity {
-				kind: "table".to_string(),
+				kind: EntityKind::Table,
 				scope: None,
 				name: "person".to_string(),
 				source_path: "database/schema/a.surql".to_string(),

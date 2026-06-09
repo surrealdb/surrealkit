@@ -13,16 +13,16 @@ use anyhow::{Result, bail};
 use rust_dotenv::dotenv::DotEnv;
 pub use types::TestOpts;
 
-use crate::config::{AuthLevel, Cfg, ConfigOverrides};
+use crate::config::{AuthLevel, DbCfg, DbOverrides};
 use crate::variables::TemplateVars;
 
 pub async fn run_test(
 	dotenv: Option<&DotEnv>,
 	opts: TestOpts,
 	vars: TemplateVars,
-	overrides: &ConfigOverrides,
+	overrides: &DbOverrides,
 ) -> Result<()> {
-	let cfg = Cfg::from_env(dotenv, overrides)?;
+	let cfg = DbCfg::from_env(dotenv, overrides)?;
 	if matches!(cfg.auth_level(), AuthLevel::Database) {
 		bail!(
 			"`surrealkit test` requires auth level 'root' or 'namespace'/'ns'; got 'database'. \
