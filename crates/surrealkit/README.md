@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/surrealkit.svg)](https://crates.io/crates/surrealkit)
 [![Documentation](https://docs.rs/surrealkit/badge.svg)](https://docs.rs/surrealkit)
-[![License](https://img.shields.io/badge/license-Unlicense-blue.svg)](https://unlicense.org/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 This document covers **SurrealKit as a Rust library**. If you are looking for the CLI, see the [project README](../../README.md).
 

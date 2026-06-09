@@ -2,7 +2,7 @@
 
 [![Crates.io](https://img.shields.io/crates/v/surrealkit-macros.svg)](https://crates.io/crates/surrealkit-macros)
 [![Documentation](https://docs.rs/surrealkit-macros/badge.svg)](https://docs.rs/surrealkit-macros)
-[![License](https://img.shields.io/badge/license-Unlicense-blue.svg)](https://unlicense.org/)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
 Proc-macros for [SurrealKit](https://github.com/surrealdb/surrealkit). Embeds `.surql` schema files into your binary at compile time.
 

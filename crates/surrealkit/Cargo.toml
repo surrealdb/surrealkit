@@ -1,6 +1,6 @@
 [package]
 name = 'surrealkit'
-description = 'Manage migrations, seeding and tests for your SurrealDB via CLI'
+description = 'Manage migrations, seeding, typgen and tests for SurrealDB via CLI'
 version = '0.7.0'
 edition = '2024'
 authors = ['Chiru Boggavarapu <chiru@foretag.co>', 'Tobie Morgan Hitchcock <tobie@surrealdb.com>']
@@ -9,7 +9,7 @@ license = 'Apache-2.0'
 keywords = ['surrealdb', 'migrations', 'seed', 'testing', 'manage']
 
 [dependencies]
-surrealkit-macros = { path = '../surrealkit-macros', version = '0.6.0' }
+surrealkit-macros = { path = '../surrealkit-macros', version = '0.7.0' }
 anyhow = '1'
 clap = { version = '4.5.47', features = ['derive'] }
 hex = '0.4'
@@ -18,8 +18,8 @@ serde_json = '1.0'
 toml = '0.8'
 rust_dotenv = '0.1.2'
 sha2 = '0.10'
-surrealdb = { version = '3.0.5', features = ['protocol-http', 'jwks'] }
-surrealdb-types = { version = '3.0.5' }
+surrealdb = { version = '3.1.3', features = ['protocol-http', 'jwks'] }
+surrealdb-types = { version = '3.1.3' }
 time = { version = '0.3', features = ['macros', 'formatting'] }
 tokio = { version = '1.47', features = ['macros', 'rt-multi-thread', 'signal', 'time'] }
 walkdir = '2.5'
@@ -30,8 +30,8 @@ inquire = '0.7'
 tempfile = '3'
 
 [dev-dependencies]
-surrealdb = { version = '3.0.5', features = ['kv-mem'] }
-test-case = "3"
+surrealdb = { version = '3.1.3', features = ['kv-mem'] }
+test-case = '3'
 
 [lints]
 workspace = true
