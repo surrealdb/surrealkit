@@ -37,6 +37,12 @@ pub struct SyncOpts {
 	pub vars: TemplateVars,
 	/// Root folder for the database directory (default: `./database`).
 	pub folder: String,
+	/// When set (via `[typegen] typescript` in `surrealkit.toml`), regenerate
+	/// TypeScript types into this directory after applying schema changes.
+	pub typegen_ts_out: Option<std::path::PathBuf>,
+	/// Optional formatter command (`[typegen] format`) run on the regenerated
+	/// `index.ts`.
+	pub typegen_ts_format: Option<String>,
 }
 
 /// Schema file embedded at compile time via [`embed_schema!`].
@@ -102,6 +108,8 @@ pub async fn run_sync_embedded(
 			allow_all_statements: false,
 			vars: TemplateVars::default(),
 			folder: String::new(),
+			typegen_ts_out: None,
+			typegen_ts_format: None,
 		},
 	)
 	.await
@@ -305,8 +313,30 @@ async fn run_sync_with_files(
 		store_last_sync_meta(db).await?;
 	}
 
+	let has_changes = changed_count > 0 || stale_count > 0 || !removed_paths.is_empty();
+
+	// Regenerate TypeScript types when configured. Gate on actual changes (or a
+	// missing output file) so idle watch ticks don't re-introspect every cycle.
+	if let Some(ts_dir) = &opts.typegen_ts_out
+		&& !opts.dry_run
+	{
+		let ts_path = ts_dir.join("index.ts");
+		if has_changes || !ts_path.exists() {
+			match crate::typegen::generate(db).await {
+				Ok(doc) => match crate::typegen::write_typescript_formatted(
+					&doc,
+					ts_dir,
+					opts.typegen_ts_format.as_deref(),
+				) {
+					Ok(path) => println!("typegen: wrote {}", path.display()),
+					Err(err) => eprintln!("typegen: failed to write types: {err:#}"),
+				},
+				Err(err) => eprintln!("typegen: failed to introspect schema: {err:#}"),
+			}
+		}
+	}
+
 	if watch_mode {
-		let has_changes = changed_count > 0 || stale_count > 0 || !removed_paths.is_empty();
 		if has_changes {
 			if opts.dry_run {
 				println!(

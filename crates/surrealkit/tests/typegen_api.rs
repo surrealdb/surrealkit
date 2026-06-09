@@ -2,7 +2,9 @@ use surrealdb::Surreal;
 use surrealdb::engine::any::{Any, connect};
 use surrealdb::opt::Config;
 use surrealdb::opt::capabilities::Capabilities;
-use surrealkit::typegen::{FieldType, PrimitiveType, TypegenOpts, generate, run_typegen};
+use surrealkit::typegen::{
+	FieldType, PrimitiveType, TypegenOpts, format_file, generate, render_typescript, run_typegen,
+};
 
 async fn mem_db() -> Surreal<Any> {
 	let cfg = Config::new().capabilities(Capabilities::all());
@@ -132,6 +134,8 @@ async fn run_typegen_writes_valid_json_file() {
 			out: Some(out.clone()),
 			stdout: false,
 			pretty: true,
+			ts_out: None,
+			ts_format: None,
 		},
 	)
 	.await
@@ -144,4 +148,93 @@ async fn run_typegen_writes_valid_json_file() {
 	assert_eq!(parsed["database"], "typegen_test");
 	assert!(parsed["tables"].as_array().expect("tables array").iter().any(|t| t["name"] == "user"));
 	assert!(!parsed["generatedAt"].as_str().expect("generatedAt").is_empty());
+}
+
+#[tokio::test]
+async fn render_typescript_emits_sdk_interfaces() {
+	let db = mem_db().await;
+	define_schema(&db).await;
+
+	let doc = generate(&db).await.expect("generate");
+	let ts = render_typescript(&doc).expect("render ts");
+
+	// PascalCase interface + synthesized typed id.
+	assert!(ts.contains("export interface User {"), "got:\n{ts}");
+	assert!(ts.contains("id: RecordId<'user'>;"), "got:\n{ts}");
+	// Field mappings from the introspected schema.
+	assert!(ts.contains("name: string;"), "got:\n{ts}");
+	assert!(ts.contains("nickname?: string;"), "got:\n{ts}");
+	assert!(ts.contains("tags: string[];"), "got:\n{ts}");
+	assert!(ts.contains("best_friend: RecordId<'user'>;"), "got:\n{ts}");
+	// Dotted sub-field becomes a nested object property.
+	assert!(ts.contains("address: {"), "got:\n{ts}");
+	assert!(ts.contains("city: string;"), "got:\n{ts}");
+	// SDK import line.
+	assert!(ts.contains("import type { RecordId } from 'surrealdb';"), "got:\n{ts}");
+}
+
+#[tokio::test]
+async fn run_typegen_writes_typescript_file_when_configured() {
+	let db = mem_db().await;
+	define_schema(&db).await;
+
+	let tmp = tempfile::TempDir::new().expect("temp dir");
+	let json_out = tmp.path().join("schema.json");
+	let ts_dir = tmp.path().join("types");
+
+	run_typegen(
+		&db,
+		"./database",
+		"surrealkit_test",
+		"typegen_test",
+		TypegenOpts {
+			out: Some(json_out.clone()),
+			stdout: false,
+			pretty: true,
+			ts_out: Some(ts_dir.clone()),
+			ts_format: None,
+		},
+	)
+	.await
+	.expect("run_typegen");
+
+	assert!(json_out.exists(), "json should still be written");
+	let ts = std::fs::read_to_string(ts_dir.join("index.ts")).expect("read index.ts");
+	assert!(ts.contains("export interface User {"), "got:\n{ts}");
+	assert!(ts.contains("id: RecordId<'user'>;"), "got:\n{ts}");
+}
+
+#[test]
+fn format_file_runs_command_with_path_appended() {
+	// Bogus command must not panic and must leave the file untouched.
+	let tmp = tempfile::TempDir::new().expect("temp dir");
+	let target = tmp.path().join("index.ts");
+	std::fs::write(&target, "original\n").expect("write");
+	format_file("surrealkit-no-such-formatter-xyz --write", &target);
+	assert_eq!(std::fs::read_to_string(&target).unwrap(), "original\n");
+
+	// Empty command is a no-op.
+	format_file("   ", &target);
+	assert_eq!(std::fs::read_to_string(&target).unwrap(), "original\n");
+}
+
+#[cfg(unix)]
+#[test]
+fn format_file_invokes_program_on_the_written_file() {
+	// A stand-in "formatter" that appends a marker to the file it is given.
+	// Proves the configured command runs with the generated path as final arg.
+	let tmp = tempfile::TempDir::new().expect("temp dir");
+	let script = tmp.path().join("fmt.sh");
+	std::fs::write(&script, "#!/bin/sh\nprintf '// formatted\\n' >> \"$1\"\n")
+		.expect("write script");
+	let mut perms = std::fs::metadata(&script).unwrap().permissions();
+	std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+	std::fs::set_permissions(&script, perms).expect("chmod");
+
+	let target = tmp.path().join("index.ts");
+	std::fs::write(&target, "export interface User {}\n").expect("write");
+	format_file(script.to_str().unwrap(), &target);
+
+	let contents = std::fs::read_to_string(&target).expect("read");
+	assert!(contents.contains("// formatted"), "formatter did not run, got:\n{contents}");
 }
