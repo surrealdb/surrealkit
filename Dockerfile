@@ -7,6 +7,7 @@ WORKDIR /src
 # Pre-fetch dependencies to maximize layer caching.
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
+COPY templates ./templates
 
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
