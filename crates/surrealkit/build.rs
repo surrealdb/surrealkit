@@ -1,4 +1,4 @@
-//! Embeds the repo's `/templates` tree into the binary at compile time.
+//! Embeds the crate's `templates/` tree into the binary at compile time.
 //!
 //! Generates `$OUT_DIR/embedded_templates.rs` defining a `TEMPLATES` static of
 //! `EmbeddedTemplateFile` entries (one per file), which `templates::source`
@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 fn main() {
 	let manifest_dir = std::env::var("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR");
 	let templates_dir = PathBuf::from(&manifest_dir)
-		.join("../../templates")
+		.join("templates")
 		.canonicalize()
 		.expect("templates directory not found");
 
