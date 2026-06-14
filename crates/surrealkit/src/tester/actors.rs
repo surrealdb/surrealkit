@@ -108,8 +108,10 @@ async fn build_default_bootstrap_session(
 				.await
 				.with_context(|| format!("switching bootstrap actor to db={database}"))?;
 		}
-		AuthLevel::Database => {
-			unreachable!("AuthLevel::Database is rejected by tester::run_test before reaching here")
+		AuthLevel::Database | AuthLevel::None => {
+			unreachable!(
+				"AuthLevel::Database/None are rejected by tester::run_test before reaching here"
+			)
 		}
 	}
 

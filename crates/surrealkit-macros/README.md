@@ -4,7 +4,7 @@
 [![Documentation](https://docs.rs/surrealkit-macros/badge.svg)](https://docs.rs/surrealkit-macros)
 [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](https://www.apache.org/licenses/LICENSE-2.0)
 
-Proc-macros for [SurrealKit](https://github.com/surrealdb/surrealkit). Embeds `.surql` schema files into your binary at compile time.
+Proc-macros for [SurrealKit](https://github.com/surrealdb/surrealkit). Embeds `.surql` schema and seed files into your binary at compile time.
 
 ---
 
@@ -48,6 +48,24 @@ surrealkit::embed_schema!("my/schema/dir");
 ```
 
 The generated module is always named `embedded_schema` regardless of the path.
+
+---
+
+## `embed_seed!`
+
+`embed_seed!` is the seed-file counterpart of `embed_schema!`. It bakes `.surql` seed files into the binary and generates an `embedded_seed::seed(db)` function. Seeding is tracked in the `__seed` table, so each file runs only on first boot or when its content changes.
+
+```rust
+// Reads database/seed/**/*.surql relative to your Cargo.toml.
+surrealkit::embed_seed!();
+surrealkit::embed_seed!("my/seed/dir"); // custom path
+
+# async fn run(db: &surrealkit::Surreal<surrealkit::engine::any::Any>) -> anyhow::Result<()> {
+embedded_seed::seed(db).await?;
+# Ok(()) }
+```
+
+The generated module is always named `embedded_seed` and exposes a `SEEDS: &[surrealkit::EmbeddedSeedFile]` static plus an async `seed(db)` function.
 
 ---
 

@@ -16,7 +16,7 @@ pub mod variables;
 // Re-exported dependencies used in the public API surface.
 pub use anyhow;
 pub use surrealdb::{self, Surreal, engine};
-pub use surrealkit_macros::embed_schema;
+pub use surrealkit_macros::{embed_schema, embed_seed};
 
 // Connecting.
 pub use config::{AuthLevel, DbCfg, DbOverrides, connect};
@@ -32,7 +32,7 @@ pub use rollout::{
 pub use schema_state::{EntityKey, EntityKind};
 
 // Seeding.
-pub use seed::seed;
+pub use seed::{EmbeddedSeedFile, Seed, seed};
 
 // Type generation (programmatic).
 pub use typegen::{SchemaTypes, TypegenOpts, generate};

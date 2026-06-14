@@ -5,7 +5,6 @@ use rust_dotenv::dotenv::DotEnv;
 use surrealkit::config::{DbCfg, DbOverrides, connect};
 use surrealkit::core::exec_surql;
 use surrealkit::rollout::{self, RolloutExecutionOpts, RolloutPlanOpts};
-use surrealkit::seed;
 use surrealkit::setup::run_setup;
 use surrealkit::sync::{self, SyncOpts};
 use surrealkit::tester::{TestOpts, run_test};
@@ -108,7 +107,13 @@ enum Commands {
 		#[command(subcommand)]
 		command: RolloutCommands,
 	},
-	Seed,
+	/// Run seed files. Each file runs only on first boot or when its content
+	/// changes (tracked in the `__seed` table). Use `--force` to re-run all.
+	Seed {
+		/// Re-run every seed file, ignoring the `__seed` tracking table.
+		#[arg(long)]
+		force: bool,
+	},
 	Status,
 	Apply {
 		path: PathBuf,
@@ -366,9 +371,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 				.await?;
 			}
 		},
-		Commands::Seed => {
+		Commands::Seed {
+			force,
+		} => {
 			let db = connect(&cfg).await?;
-			seed::seed(&db, &folder, &template_vars).await?;
+			surrealkit::Seed::from_dir(folder.clone())
+				.vars(template_vars)
+				.force(force)
+				.run(&db)
+				.await?;
 		}
 		Commands::Status => {
 			let db = connect(&cfg).await?;

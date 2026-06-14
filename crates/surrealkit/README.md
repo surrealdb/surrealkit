@@ -46,7 +46,31 @@ let db = connect(&cfg).await?;
 # Ok(()) }
 ```
 
-For an in-process SurrealDB (e.g. `mem://`, `rocksdb://`), construct a `Surreal` directly and pass it to any library function:
+### Embedded databases
+
+SurrealKit works against an in-process SurrealDB such as `mem://`, `surrealkv://`, or `rocksdb://`. Because Cargo unifies features across the dependency graph, you only need to enable the engine on **your own** `surrealdb` dependency. SurrealKit itself stays engine-agnostic:
+
+```toml
+[dependencies]
+surrealkit = "0.7"
+surrealdb = { version = "3", features = ["kv-surrealkv"] }
+```
+
+`connect` detects embedded endpoints and skips authentication automatically (a fresh embedded datastore has no users), so the same `DbCfg`/`connect` flow works:
+
+```rust,no_run
+use surrealkit::{DbCfg, DbOverrides, connect};
+
+# async fn run() -> anyhow::Result<()> {
+let cfg = DbCfg::from_env(None, &DbOverrides {
+    host: Some("surrealkv://./data".into()),
+    ..Default::default()
+})?;
+let db = connect(&cfg).await?; // no signin; goes straight to use_ns/use_db
+# Ok(()) }
+```
+
+Or construct a `Surreal` directly and pass it to any library function:
 
 ```rust,no_run
 use surrealdb::engine::any::connect;
@@ -58,6 +82,8 @@ let db = connect(("mem://", Config::new().capabilities(Capabilities::all()))).aw
 db.use_ns("my_ns").use_db("my_db").await?;
 # Ok(()) }
 ```
+
+Endpoints treated as embedded (no signin): `mem://`, `surrealkv://`, `rocksdb://`, `speedb://`, `file://`, `tikv://`, `indxdb://`. Pass `--auth-level none` (CLI) to force this for any endpoint.
 
 ---
 
@@ -214,6 +240,8 @@ Rollout::abandon(db, "20260604__add_account").await?;
 
 ## Seeding
 
+Seeding is **idempotent**: each file is tracked in the `__seed` table by a content hash, so it runs only on first boot or when its `sql` changes. This makes it safe to call on every startup, so re-running a seed of fixed-id records no longer errors.
+
 [`seed`] runs `.surql` files from a `seed/` directory (lexicographic order), applying template variables:
 
 ```rust,no_run
@@ -223,6 +251,39 @@ Rollout::abandon(db, "20260604__add_account").await?;
 seed(db, "database", &TemplateVars::default()).await?;
 # Ok(()) }
 ```
+
+### Embedded seeds (`embed_seed!` / `Seed`)
+
+To ship seeds inside a production binary, with no filesystem at runtime, bake them in with `embed_seed!` (the counterpart to `embed_schema!`):
+
+```rust,ignore
+// Reads database/seed/**/*.surql relative to your Cargo.toml at compile time.
+surrealkit::embed_seed!();
+
+# async fn run(db: &surrealkit::Surreal<surrealkit::engine::any::Any>) -> anyhow::Result<()> {
+embedded_seed::seed(db).await?; // runs each file once; tracked in __seed
+# Ok(()) }
+```
+
+For runtime control, use the [`Seed`] builder directly:
+
+```rust,no_run
+use surrealkit::{EmbeddedSeedFile, Seed, Surreal};
+use surrealkit::engine::any::Any;
+
+static SEEDS: &[EmbeddedSeedFile] = &[EmbeddedSeedFile {
+    path: "database/seed/countries.surql",
+    sql:  "INSERT INTO country [ { id: 'us', name: 'United States' } ];",
+}];
+
+# async fn run(db: &Surreal<Any>) -> anyhow::Result<()> {
+Seed::embedded(SEEDS).run(db).await?;            // first boot only
+Seed::embedded(SEEDS).force(true).run(db).await?; // re-run everything
+Seed::from_dir("database").run(db).await?;        // or seed from disk
+# Ok(()) }
+```
+
+Like [`EmbeddedSchemaFile`], `EmbeddedSeedFile::path` is a **stable tracking key** (not a path that must exist on disk) and `sql` is the content. Changing `sql` while holding `path` constant re-runs the file.
 
 ---
 
@@ -234,9 +295,10 @@ seed(db, "database", &TemplateVars::default()).await?;
 
 ## Metadata tables
 
-SurrealKit maintains two internal tables in your namespace/database, created automatically:
+SurrealKit maintains these internal tables in your namespace/database, created automatically:
 
 | Table | Purpose |
 |---|---|
 | `__entity` | Tracks every schema object SurrealKit manages (content hash, tracking key) |
 | `__rollout` | Tracks rollout execution state (see the status lifecycle above) |
+| `__seed` | Tracks applied seed files by content hash so they run only once / on change |

@@ -170,8 +170,8 @@ impl RunnerContext {
 				self.cfg.ns().to_string(),
 				format!("{}_sk_test_{}_{}", self.cfg.db(), self.run_id, slug),
 			),
-			AuthLevel::Database => {
-				unreachable!("AuthLevel::Database is rejected by tester::run_test")
+			AuthLevel::Database | AuthLevel::None => {
+				unreachable!("AuthLevel::Database/None are rejected by tester::run_test")
 			}
 		};
 		let host = self.cfg.host().to_string();
@@ -713,8 +713,8 @@ async fn cleanup_suite_db(cfg: &DbCfg, host: &str, namespace: &str, database: &s
 			let resp = db.query(drop_db).await?;
 			let _ = resp.check();
 		}
-		AuthLevel::Database => {
-			unreachable!("AuthLevel::Database is rejected by tester::run_test")
+		AuthLevel::Database | AuthLevel::None => {
+			unreachable!("AuthLevel::Database/None are rejected by tester::run_test")
 		}
 	}
 	Ok(())

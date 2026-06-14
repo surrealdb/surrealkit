@@ -99,7 +99,26 @@ surrealkit --host http://localhost:8000 --ns my_ns --db my_db --user root --pass
 | `--db`         | Database name                                                          | `test`                  |
 | `--user`       | Database user                                                          | `root`                  |
 | `--pass`       | Database password                                                      | `root`                  |
-| `--auth-level` | Authentication level: `root`, `namespace` / `ns`, or `database` / `db` | `root`                  |
+| `--auth-level` | Authentication level: `root`, `namespace` / `ns`, `database` / `db`, or `none` | `root`                  |
+
+### Embedded databases
+
+SurrealKit can manage an in-process SurrealDB by pointing `--host` at an embedded endpoint. Authentication is skipped automatically (a fresh embedded datastore has no users):
+
+```bash
+surrealkit --host surrealkv://./data --ns my_ns --db my_db sync
+surrealkit --host surrealkv://./data --ns my_ns --db my_db seed
+```
+
+Embedded schemes: `surrealkv://`, `rocksdb://`, `speedb://`, `mem://`, `file://`, `tikv://`. Pass `--auth-level none` to force the no-signin path on any endpoint.
+
+The **prebuilt CLI bundles only the in-memory engine** to stay light. For a CLI that can open on-disk engines, build with the matching feature:
+
+```bash
+cargo install surrealkit --features kv-surrealkv   # or kv-rocksdb, or `embedded` for all
+```
+
+Embedded engines are single-process, so run the CLI while your application is stopped (it holds an exclusive lock on the datastore). For schema management inside your application at startup, use the [library](crates/surrealkit/README.md) instead, which needs no engine feature on SurrealKit itself.
 
 ### Environment Variables
 
@@ -108,7 +127,7 @@ surrealkit --host http://localhost:8000 --ns my_ns --db my_db --user root --pass
 - `SURREALDB_NAMESPACE` (fallback: `DATABASE_NAMESPACE`)
 - `SURREALDB_USER` (fallback: `DATABASE_USER`)
 - `SURREALDB_PASSWORD` (fallback: `DATABASE_PASSWORD`)
-- `SURREALDB_AUTH_LEVEL` (fallback: `DATABASE_AUTH_LEVEL`) — accepted values: `root`, `namespace` / `ns`, `database` / `db`
+- `SURREALDB_AUTH_LEVEL` (fallback: `DATABASE_AUTH_LEVEL`), accepted values: `root`, `namespace` / `ns`, `database` / `db`, `none`
 - `SURREALDB_FOLDER` — root folder for schema, rollouts, snapshots, seed, and tests (default: `./database`)
 
 These can be set as system environment variables or in a `.env` file.
@@ -314,11 +333,14 @@ Repair never re-executes per-step SQL — it only reconciles `__rollout` and
 
 ### Seeding
 
-Seeding runs on demand:
+Seeding runs on demand and is **idempotent**. Each file is tracked in the `__seed` table by a content hash and runs only on first boot or when its content changes, so it is safe to run repeatedly (and on every deploy):
 
 ```sh
-surrealkit seed
+surrealkit seed           # applies new/changed seed files; skips unchanged ones
+surrealkit seed --force   # re-run every seed file, ignoring the tracking table
 ```
+
+To ship seeds inside a binary (no filesystem at runtime), use the library's `embed_seed!` macro. See the [library README](crates/surrealkit/README.md#embedded-seeds-embed_seed--seed).
 
 ## Template Variables
 

@@ -9,6 +9,7 @@ use surrealdb::opt::capabilities::Capabilities;
 
 // Path is relative to this crate's Cargo.toml.
 surrealkit::embed_schema!("tests/fixtures/embed_schema");
+surrealkit::embed_seed!("tests/fixtures/embed_seed");
 
 async fn mem_db() -> Surreal<Any> {
 	let cfg = Config::new().capabilities(Capabilities::all());
@@ -40,4 +41,26 @@ async fn embed_schema_sync_applies_schema() {
 		.map(|m| m.contains_key("widget"))
 		.unwrap_or(false);
 	assert!(has_widget, "embedded sync should have created the 'widget' table");
+}
+
+#[test]
+fn embed_seed_generates_seed_slice() {
+	assert!(
+		embedded_seed::SEEDS.iter().any(|f| f.sql.contains("CREATE widget:gadget")),
+		"embedded SEEDS should include the fixture file"
+	);
+}
+
+#[tokio::test]
+async fn embed_seed_runs_once_and_tracks() {
+	let db = mem_db().await;
+	embedded_seed::seed(&db).await.expect("generated seed must apply");
+	// A second run is a no-op thanks to `__seed` tracking. Without it the
+	// `CREATE widget:gadget` would fail with "already exists".
+	embedded_seed::seed(&db).await.expect("second seed run must be a tracked no-op");
+
+	let mut resp = db.query("SELECT count() FROM widget GROUP ALL").await.expect("count widget");
+	let count: Option<serde_json::Value> = resp.take(0).expect("take");
+	let n = count.and_then(|v| v["count"].as_u64()).unwrap_or(0);
+	assert_eq!(n, 1, "seed should have run exactly once");
 }
