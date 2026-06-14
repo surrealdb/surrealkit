@@ -26,11 +26,11 @@ DEFINE INDEX IF NOT EXISTS by_seed_key ON __seed FIELDS key UNIQUE;";
 /// Produced by the [`embed_seed!`](crate::embed_seed) macro, or constructed by
 /// hand for use with [`Seed::embedded`].
 ///
-/// - **`path` is a stable tracking key**, *not* a path that must exist on disk.
-///   SurrealKit records it in the `__seed` table to detect content changes and
-///   decide whether a file still needs to run. Keep it stable across releases.
-/// - **`sql` is the content** that gets executed. Changing `sql` while holding
-///   `path` constant is what triggers a re-run on the next seed.
+/// - **`path` is a stable tracking key**, *not* a path that must exist on disk. SurrealKit records
+///   it in the `__seed` table to detect content changes and decide whether a file still needs to
+///   run. Keep it stable across releases.
+/// - **`sql` is the content** that gets executed. Changing `sql` while holding `path` constant is
+///   what triggers a re-run on the next seed.
 pub struct EmbeddedSeedFile {
 	pub path: &'static str,
 	pub sql: &'static str,
@@ -265,11 +265,7 @@ async fn store_seed_hash(db: &Surreal<Any>, key: &str, hash: &str) -> Result<()>
 		 DELETE __seed WHERE key = $key; \
 		 CREATE __seed CONTENT {{ key: $key, hash: $hash, applied_at: time::now() }};",
 	);
-	db.query(sql)
-		.bind(("key", key.to_string()))
-		.bind(("hash", hash.to_string()))
-		.await?
-		.check()?;
+	db.query(sql).bind(("key", key.to_string())).bind(("hash", hash.to_string())).await?.check()?;
 	Ok(())
 }
 

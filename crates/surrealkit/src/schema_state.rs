@@ -1,8 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt;
-use std::fs;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
+use std::{fmt, fs};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
