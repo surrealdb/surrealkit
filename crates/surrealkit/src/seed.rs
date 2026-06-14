@@ -8,8 +8,18 @@ use surrealdb::engine::any::Any;
 
 use crate::constants::seed_dir;
 use crate::core::{display, exec_surql, sha256_hex};
-use crate::setup::run_setup_embedded;
 use crate::variables::TemplateVars;
+
+/// Lazily provisions the `__seed` tracking table. Run as part of the first write
+/// in a seed run, so seeding stays decoupled from `setup` and works on instances
+/// provisioned before this table existed. `IF NOT EXISTS` keeps it idempotent
+/// and a no-op once the table is present (e.g. created by `surrealkit setup`).
+const ENSURE_SEED_TABLE: &str = "\
+DEFINE TABLE IF NOT EXISTS __seed SCHEMAFULL PERMISSIONS NONE; \
+DEFINE FIELD IF NOT EXISTS key ON __seed TYPE string; \
+DEFINE FIELD IF NOT EXISTS hash ON __seed TYPE string; \
+DEFINE FIELD IF NOT EXISTS applied_at ON __seed TYPE datetime DEFAULT time::now(); \
+DEFINE INDEX IF NOT EXISTS by_seed_key ON __seed FIELDS key UNIQUE;";
 
 /// A seed file baked into the binary at compile time.
 ///
@@ -92,7 +102,6 @@ impl<'a> Seed<'a> {
 		} = self;
 		match source {
 			SeedSource::Embedded(files) => {
-				run_setup_embedded(db).await?;
 				let tracked = load_seed_hashes(db).await?;
 				let mut stats = SeedStats::default();
 				for f in files {
@@ -114,7 +123,6 @@ impl<'a> Seed<'a> {
 						Move your seed files into {}/seed/ instead.",
 						folder, folder
 					);
-					run_setup_embedded(db).await?;
 					let tracked = load_seed_hashes(db).await?;
 					let mut stats = SeedStats::default();
 					let raw = fs::read_to_string(&deprecated)
@@ -208,7 +216,6 @@ async fn run_dir(db: &Surreal<Any>, dir: &Path, vars: &TemplateVars, force: bool
 
 	println!("Seeding from {} ({} files found)", display(dir), files.len());
 
-	run_setup_embedded(db).await?;
 	let tracked = load_seed_hashes(db).await?;
 	let mut stats = SeedStats::default();
 
@@ -223,9 +230,17 @@ async fn run_dir(db: &Surreal<Any>, dir: &Path, vars: &TemplateVars, force: bool
 }
 
 /// Load all tracked seed hashes (`key` to `hash`) from the `__seed` table.
+///
+/// The table is created lazily on first write (see [`store_seed_hash`]), so it
+/// may not exist yet on a fresh datastore or an instance provisioned before it
+/// was introduced. A read against a missing table yields no tracked hashes,
+/// which simply means every seed is treated as new — so we never define schema
+/// here and tolerate the table's absence.
 async fn load_seed_hashes(db: &Surreal<Any>) -> Result<BTreeMap<String, String>> {
-	let mut resp = db.query("SELECT key, hash FROM __seed;").await?;
-	let rows: Vec<serde_json::Value> = resp.take(0)?;
+	let rows: Vec<serde_json::Value> = match db.query("SELECT key, hash FROM __seed;").await {
+		Ok(mut resp) => resp.take(0).unwrap_or_default(),
+		Err(_) => Vec::new(),
+	};
 
 	let mut out = BTreeMap::new();
 	for row in rows {
@@ -238,16 +253,23 @@ async fn load_seed_hashes(db: &Surreal<Any>) -> Result<BTreeMap<String, String>>
 	Ok(out)
 }
 
-/// Record (or overwrite) the hash for a seed `key` in the `__seed` table.
+/// Record (or overwrite) the hash for a seed `key` in the `__seed` table,
+/// provisioning the table first if it doesn't exist yet (see [`ENSURE_SEED_TABLE`]).
+///
+/// This is the only place that defines schema, and it runs only when a seed
+/// actually executes — so a run where every file is unchanged performs no DDL
+/// and needs no `DEFINE` privileges.
 async fn store_seed_hash(db: &Surreal<Any>, key: &str, hash: &str) -> Result<()> {
-	db.query(
-		"DELETE __seed WHERE key = $key; \
-		 CREATE __seed CONTENT { key: $key, hash: $hash, applied_at: time::now() };",
-	)
-	.bind(("key", key.to_string()))
-	.bind(("hash", hash.to_string()))
-	.await?
-	.check()?;
+	let sql = format!(
+		"{ENSURE_SEED_TABLE} \
+		 DELETE __seed WHERE key = $key; \
+		 CREATE __seed CONTENT {{ key: $key, hash: $hash, applied_at: time::now() }};",
+	);
+	db.query(sql)
+		.bind(("key", key.to_string()))
+		.bind(("hash", hash.to_string()))
+		.await?
+		.check()?;
 	Ok(())
 }
 
