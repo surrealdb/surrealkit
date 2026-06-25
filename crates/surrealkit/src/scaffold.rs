@@ -144,6 +144,23 @@ DEFINE FIELD OVERWRITE last_error ON __rollout
 DEFINE INDEX OVERWRITE by_rollout_id ON __rollout
 	FIELDS id
 	UNIQUE;
+
+DEFINE TABLE OVERWRITE __seed SCHEMAFULL
+	PERMISSIONS NONE;
+
+DEFINE FIELD OVERWRITE key ON __seed
+	TYPE string;
+
+DEFINE FIELD OVERWRITE hash ON __seed
+	TYPE string;
+
+DEFINE FIELD OVERWRITE applied_at ON __seed
+	TYPE datetime
+	DEFAULT time::now();
+
+DEFINE INDEX OVERWRITE by_seed_key ON __seed
+	FIELDS key
+	UNIQUE;
 "#;
 
 pub const DEFAULT_TEST_CONFIG: &str = r#"[defaults]

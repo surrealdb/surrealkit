@@ -1,47 +1,210 @@
+use std::collections::BTreeMap;
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, anyhow};
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 
 use crate::constants::seed_dir;
-use crate::core::{display, exec_surql};
+use crate::core::{display, exec_surql, sha256_hex};
 use crate::variables::TemplateVars;
 
-pub async fn seed(db: &Surreal<Any>, folder: &str, vars: &TemplateVars) -> Result<()> {
-	let seed_dir = seed_dir(folder);
-	let seed_file = crate::constants::deprecated_seed_surql_path(folder);
+/// Lazily provisions the `__seed` tracking table. Run as part of the first write
+/// in a seed run, so seeding stays decoupled from `setup` and works on instances
+/// provisioned before this table existed. `IF NOT EXISTS` keeps it idempotent
+/// and a no-op once the table is present (e.g. created by `surrealkit setup`).
+const ENSURE_SEED_TABLE: &str = "\
+DEFINE TABLE IF NOT EXISTS __seed SCHEMAFULL PERMISSIONS NONE; \
+DEFINE FIELD IF NOT EXISTS key ON __seed TYPE string; \
+DEFINE FIELD IF NOT EXISTS hash ON __seed TYPE string; \
+DEFINE FIELD IF NOT EXISTS applied_at ON __seed TYPE datetime DEFAULT time::now(); \
+DEFINE INDEX IF NOT EXISTS by_seed_key ON __seed FIELDS key UNIQUE;";
 
-	if seed_dir.is_dir() {
-		seed_from_dir(db, &seed_dir, vars).await
-	} else if seed_file.exists() {
-		eprintln!(
-			"warning: {}/seed.surql is deprecated and will be removed in v1. \
-			Move your seed files into {}/seed/ instead.",
-			folder, folder
-		);
-		let sql = fs::read_to_string(&seed_file)
-			.with_context(|| format!("reading {}", display(&seed_file)))?;
-		let sql = vars.apply(&sql)?;
-		exec_surql(db, &sql).await
-	} else {
-		Err(anyhow!("no seed found: create {}/seed.surql or a {}/seed/ directory", folder, folder))
+/// A seed file baked into the binary at compile time.
+///
+/// Produced by the [`embed_seed!`](crate::embed_seed) macro, or constructed by
+/// hand for use with [`Seed::embedded`].
+///
+/// - **`path` is a stable tracking key**, *not* a path that must exist on disk. SurrealKit records
+///   it in the `__seed` table to detect content changes and decide whether a file still needs to
+///   run. Keep it stable across releases.
+/// - **`sql` is the content** that gets executed. Changing `sql` while holding `path` constant is
+///   what triggers a re-run on the next seed.
+pub struct EmbeddedSeedFile {
+	pub path: &'static str,
+	pub sql: &'static str,
+}
+
+enum SeedSource<'a> {
+	Embedded(&'a [EmbeddedSeedFile]),
+	Dir(String),
+}
+
+/// Runs seed `.surql` files, tracking each one in the `__seed` table so it only
+/// executes on first boot or when its content hash changes.
+///
+/// ```rust,no_run
+/// # use surrealkit::{Seed, EmbeddedSeedFile, Surreal};
+/// # use surrealkit::engine::any::Any;
+/// static SEEDS: &[EmbeddedSeedFile] = &[EmbeddedSeedFile {
+///     path: "database/seed/countries.surql",
+///     sql:  "INSERT INTO country [ { id: 'us', name: 'United States' } ];",
+/// }];
+/// # async fn run(db: &Surreal<Any>) -> anyhow::Result<()> {
+/// Seed::embedded(SEEDS).run(db).await?;        // runs once; no-op on next boot
+/// Seed::embedded(SEEDS).force(true).run(db).await?; // re-run everything
+/// # Ok(()) }
+/// ```
+pub struct Seed<'a> {
+	source: SeedSource<'a>,
+	vars: TemplateVars,
+	force: bool,
+}
+
+impl<'a> Seed<'a> {
+	/// Seed from files embedded in the binary (see [`EmbeddedSeedFile`]).
+	pub fn embedded(files: &'a [EmbeddedSeedFile]) -> Self {
+		Self {
+			source: SeedSource::Embedded(files),
+			vars: TemplateVars::default(),
+			force: false,
+		}
 	}
+
+	/// Seed from a project folder on disk. Resolves `<folder>/seed/` (preferred)
+	/// or the deprecated `<folder>/seed.surql` single file.
+	pub fn from_dir(folder: impl Into<String>) -> Self {
+		Self {
+			source: SeedSource::Dir(folder.into()),
+			vars: TemplateVars::default(),
+			force: false,
+		}
+	}
+
+	/// Template variables applied to each file before execution.
+	pub fn vars(mut self, vars: TemplateVars) -> Self {
+		self.vars = vars;
+		self
+	}
+
+	/// Re-run every file regardless of its tracked hash.
+	pub fn force(mut self, force: bool) -> Self {
+		self.force = force;
+		self
+	}
+
+	pub async fn run(self, db: &Surreal<Any>) -> Result<()> {
+		let Seed {
+			source,
+			vars,
+			force,
+		} = self;
+		match source {
+			SeedSource::Embedded(files) => {
+				let tracked = load_seed_hashes(db).await?;
+				let mut stats = SeedStats::default();
+				for f in files {
+					apply_seed(db, f.path, f.sql, &tracked, force, &vars, &mut stats).await?;
+				}
+				stats.report();
+				Ok(())
+			}
+			SeedSource::Dir(folder) => {
+				let dir = seed_dir(&folder);
+				#[expect(deprecated)]
+				let deprecated = crate::constants::deprecated_seed_surql_path(&folder);
+
+				if dir.is_dir() {
+					run_dir(db, &dir, &vars, force).await
+				} else if deprecated.exists() {
+					eprintln!(
+						"warning: {}/seed.surql is deprecated and will be removed in v1. \
+						Move your seed files into {}/seed/ instead.",
+						folder, folder
+					);
+					let tracked = load_seed_hashes(db).await?;
+					let mut stats = SeedStats::default();
+					let raw = fs::read_to_string(&deprecated)
+						.with_context(|| format!("reading {}", display(&deprecated)))?;
+					let key = display(&deprecated);
+					apply_seed(db, &key, &raw, &tracked, force, &vars, &mut stats).await?;
+					stats.report();
+					Ok(())
+				} else {
+					Err(anyhow!(
+						"no seed found: create {}/seed.surql or a {}/seed/ directory",
+						folder,
+						folder
+					))
+				}
+			}
+		}
+	}
+}
+
+/// Seed a project `folder` from disk. Equivalent to
+/// `Seed::from_dir(folder).vars(vars.clone()).run(db)`.
+///
+/// Seeding is idempotent: each file runs only on first boot or when its content
+/// changes. Use [`Seed::force`] (or the CLI `--force` flag) to re-run everything.
+pub async fn seed(db: &Surreal<Any>, folder: &str, vars: &TemplateVars) -> Result<()> {
+	Seed::from_dir(folder).vars(vars.clone()).run(db).await
 }
 
 #[doc(hidden)]
 pub async fn seed_from_dir(db: &Surreal<Any>, dir: &Path, vars: &TemplateVars) -> Result<()> {
-	let mut files: Vec<_> = fs::read_dir(dir)
+	run_dir(db, dir, vars, false).await
+}
+
+/// Counters for a single seed run.
+#[derive(Default)]
+struct SeedStats {
+	executed: usize,
+	skipped: usize,
+}
+
+impl SeedStats {
+	fn report(&self) {
+		println!("Seeded {} file(s); {} unchanged", self.executed, self.skipped);
+	}
+}
+
+/// Hash, decide, and (if needed) execute a single seed file, recording its hash.
+async fn apply_seed(
+	db: &Surreal<Any>,
+	key: &str,
+	raw_sql: &str,
+	tracked: &BTreeMap<String, String>,
+	force: bool,
+	vars: &TemplateVars,
+	stats: &mut SeedStats,
+) -> Result<()> {
+	let hash = sha256_hex(raw_sql.as_bytes());
+
+	if !force && tracked.get(key).is_some_and(|prev| prev == &hash) {
+		println!("  skipping {key} (unchanged)");
+		stats.skipped += 1;
+		return Ok(());
+	}
+
+	println!("  executing {key}");
+	let sql =
+		vars.apply(raw_sql).with_context(|| format!("applying template variables in {key}"))?;
+	exec_surql(db, &sql).await.with_context(|| format!("executing {key}"))?;
+	store_seed_hash(db, key, &hash).await?;
+	stats.executed += 1;
+	Ok(())
+}
+
+/// Run all `.surql` files directly inside `dir` (single level, lexicographic),
+/// with `__seed` hash tracking.
+async fn run_dir(db: &Surreal<Any>, dir: &Path, vars: &TemplateVars, force: bool) -> Result<()> {
+	let mut files: Vec<PathBuf> = fs::read_dir(dir)
 		.with_context(|| format!("reading directory {}", display(dir)))?
 		.filter_map(|entry| {
-			let entry = entry.ok()?;
-			let path = entry.path();
-			if path.extension().and_then(|e| e.to_str()) == Some("surql") {
-				Some(path)
-			} else {
-				None
-			}
+			let path = entry.ok()?.path();
+			(path.extension().and_then(|e| e.to_str()) == Some("surql")).then_some(path)
 		})
 		.collect();
 
@@ -53,17 +216,56 @@ pub async fn seed_from_dir(db: &Surreal<Any>, dir: &Path, vars: &TemplateVars) -
 
 	println!("Seeding from {} ({} files found)", display(dir), files.len());
 
+	let tracked = load_seed_hashes(db).await?;
+	let mut stats = SeedStats::default();
+
 	for path in &files {
-		println!("  executing {}", display(path));
-		let sql = fs::read_to_string(path).with_context(|| format!("reading {}", display(path)))?;
-		let sql = vars
-			.apply(&sql)
-			.with_context(|| format!("applying template variables in {}", display(path)))?;
-		exec_surql(db, &sql).await.with_context(|| format!("executing {}", display(path)))?;
+		let raw = fs::read_to_string(path).with_context(|| format!("reading {}", display(path)))?;
+		let key = display(path);
+		apply_seed(db, &key, &raw, &tracked, force, vars, &mut stats).await?;
 	}
 
-	println!("Seeded {} files", files.len());
+	stats.report();
+	Ok(())
+}
 
+/// Load all tracked seed hashes (`key` to `hash`) from the `__seed` table.
+///
+/// The table is created lazily on first write (see [`store_seed_hash`]), so it
+/// may not exist yet on a fresh datastore or an instance provisioned before it
+/// was introduced. A read against a missing table yields no tracked hashes,
+/// which simply means every seed is treated as new — so we never define schema
+/// here and tolerate the table's absence.
+async fn load_seed_hashes(db: &Surreal<Any>) -> Result<BTreeMap<String, String>> {
+	let rows: Vec<serde_json::Value> = match db.query("SELECT key, hash FROM __seed;").await {
+		Ok(mut resp) => resp.take(0).unwrap_or_default(),
+		Err(_) => Vec::new(),
+	};
+
+	let mut out = BTreeMap::new();
+	for row in rows {
+		let key = row.get("key").and_then(|v| v.as_str()).map(str::to_string);
+		let hash = row.get("hash").and_then(|v| v.as_str()).map(str::to_string);
+		if let (Some(key), Some(hash)) = (key, hash) {
+			out.insert(key, hash);
+		}
+	}
+	Ok(out)
+}
+
+/// Record (or overwrite) the hash for a seed `key` in the `__seed` table,
+/// provisioning the table first if it doesn't exist yet (see [`ENSURE_SEED_TABLE`]).
+///
+/// This is the only place that defines schema, and it runs only when a seed
+/// actually executes — so a run where every file is unchanged performs no DDL
+/// and needs no `DEFINE` privileges.
+async fn store_seed_hash(db: &Surreal<Any>, key: &str, hash: &str) -> Result<()> {
+	let sql = format!(
+		"{ENSURE_SEED_TABLE} \
+		 DELETE __seed WHERE key = $key; \
+		 CREATE __seed CONTENT {{ key: $key, hash: $hash, applied_at: time::now() }};",
+	);
+	db.query(sql).bind(("key", key.to_string())).bind(("hash", hash.to_string())).await?.check()?;
 	Ok(())
 }
 
@@ -175,5 +377,80 @@ mod tests {
 			db.query("SELECT count() FROM chunk_0 GROUP ALL").await.unwrap().take(0).unwrap();
 		let n = count.and_then(|v| v["count"].as_u64()).unwrap_or(0);
 		assert_eq!(n, records_per_file as u64);
+	}
+
+	async fn seed_count(db: &Surreal<Any>) -> u64 {
+		count_rows(db, "__seed").await
+	}
+
+	/// Number of rows in a table (0 when it doesn't exist).
+	async fn count_rows(db: &Surreal<Any>, table: &str) -> u64 {
+		let q = format!("SELECT count() FROM {table} GROUP ALL");
+		let count: Option<serde_json::Value> = db.query(q).await.unwrap().take(0).unwrap();
+		count.and_then(|v| v["count"].as_u64()).unwrap_or(0)
+	}
+
+	#[tokio::test]
+	async fn embedded_seed_runs_once_then_skips_unchanged() {
+		// Each execution appends a row; counting `marker` rows counts executions.
+		static SEEDS: &[EmbeddedSeedFile] = &[EmbeddedSeedFile {
+			path: "database/seed/people.surql",
+			sql: "CREATE marker SET at = time::now();",
+		}];
+
+		let db = mem_db().await;
+		Seed::embedded(SEEDS).run(&db).await.unwrap();
+		// A second run with the same content must be a no-op.
+		Seed::embedded(SEEDS).run(&db).await.unwrap();
+
+		assert_eq!(count_rows(&db, "marker").await, 1, "unchanged seed should run exactly once");
+		assert_eq!(seed_count(&db).await, 1, "one __seed row tracked");
+	}
+
+	#[tokio::test]
+	async fn embedded_seed_reruns_when_content_changes() {
+		let db = mem_db().await;
+
+		static V1: &[EmbeddedSeedFile] = &[EmbeddedSeedFile {
+			path: "database/seed/people.surql",
+			sql: "CREATE marker SET at = time::now();",
+		}];
+		// Same tracking key, different content, so it must re-run.
+		static V2: &[EmbeddedSeedFile] = &[EmbeddedSeedFile {
+			path: "database/seed/people.surql",
+			sql: "CREATE marker SET at = time::now(); -- v2",
+		}];
+
+		Seed::embedded(V1).run(&db).await.unwrap();
+		Seed::embedded(V2).run(&db).await.unwrap();
+
+		assert_eq!(count_rows(&db, "marker").await, 2, "changed content should re-run");
+	}
+
+	#[tokio::test]
+	async fn force_reruns_unchanged_seed() {
+		static SEEDS: &[EmbeddedSeedFile] = &[EmbeddedSeedFile {
+			path: "database/seed/people.surql",
+			sql: "CREATE marker SET at = time::now();",
+		}];
+
+		let db = mem_db().await;
+		Seed::embedded(SEEDS).run(&db).await.unwrap();
+		Seed::embedded(SEEDS).force(true).run(&db).await.unwrap();
+
+		assert_eq!(count_rows(&db, "marker").await, 2, "force should re-run even when unchanged");
+	}
+
+	#[tokio::test]
+	async fn dir_seed_is_idempotent_across_runs() {
+		let tmp = TempDir::new().unwrap();
+		fs::write(tmp.path().join("01.surql"), "CREATE once:1 SET n = 1;").unwrap();
+
+		let db = mem_db().await;
+		seed_from_dir(&db, tmp.path(), &TemplateVars::default()).await.unwrap();
+		// Re-running would error (`CREATE` on an existing id) if it weren't tracked.
+		seed_from_dir(&db, tmp.path(), &TemplateVars::default()).await.unwrap();
+
+		assert_eq!(seed_count(&db).await, 1, "one tracked seed file");
 	}
 }

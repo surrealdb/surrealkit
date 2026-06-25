@@ -11,13 +11,11 @@ mod manifest;
 mod select;
 mod source;
 
-pub use select::InitOpts;
-
 use anyhow::Result;
-use surrealkit::scaffold;
-
 use emit::EmitPlan;
+pub use select::InitOpts;
 use source::TemplateSource;
+use surrealkit::scaffold;
 
 /// Run `surrealkit init`: scaffold the base project and layer on the selected
 /// template features.

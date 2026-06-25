@@ -29,6 +29,17 @@ pub async fn run_test(
 			 Database-scoped users cannot create the per-suite database needed for test isolation."
 		);
 	}
+	// Embedded endpoints resolve to `AuthLevel::None` (no signin). The test
+	// harness signs in per actor and creates an isolated namespace/database per
+	// suite, which the no-auth path does not yet support.
+	if matches!(cfg.auth_level(), AuthLevel::None)
+		|| crate::config::is_embedded_endpoint(cfg.host())
+	{
+		bail!(
+			"`surrealkit test` does not yet support embedded engines or auth level 'none'; \
+			 use a server endpoint with auth level 'root' or 'namespace'/'ns'."
+		);
+	}
 	let loaded = loader::load_specs(cfg.folder())?;
 	let filter_input = types::FilterInput {
 		suite_pattern: opts.suite.clone(),

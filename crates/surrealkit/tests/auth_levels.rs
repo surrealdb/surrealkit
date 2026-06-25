@@ -60,6 +60,7 @@ fn make_cfg(url: &str, auth_level: AuthLevel, user: &str, pass: &str) -> DbCfg {
 					AuthLevel::Root => "root",
 					AuthLevel::Namespace => "namespace",
 					AuthLevel::Database => "database",
+					AuthLevel::None => "none",
 				}
 				.into(),
 			),

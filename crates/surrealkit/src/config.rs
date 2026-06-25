@@ -19,6 +19,13 @@ pub enum AuthLevel {
 	Namespace,
 	/// Sign in as a database-scoped user. Credentials must exist on the target database.
 	Database,
+	/// Skip authentication entirely and go straight to `use_ns`/`use_db`.
+	///
+	/// This is the right choice for embedded engines such as `surrealkv://`,
+	/// `rocksdb://`, and `mem://`, which have no users defined on a fresh datastore.
+	/// It is selected automatically when the host is an embedded endpoint; pass
+	/// `--auth-level none` to force it for any endpoint.
+	None,
 }
 
 impl AuthLevel {
@@ -27,9 +34,28 @@ impl AuthLevel {
 			"root" => Some(Self::Root),
 			"namespace" | "ns" => Some(Self::Namespace),
 			"database" | "db" => Some(Self::Database),
+			"none" | "no-auth" | "noauth" => Some(Self::None),
 			_ => None,
 		}
 	}
+}
+
+/// Returns `true` for endpoints served by an in-process embedded engine, which
+/// have no authentication on a fresh datastore. Matching is case-insensitive on
+/// the URL scheme.
+pub(crate) fn is_embedded_endpoint(host: &str) -> bool {
+	let lower = host.to_ascii_lowercase();
+	const EMBEDDED_SCHEMES: &[&str] = &[
+		"mem://",
+		"surrealkv://",
+		"surrealkv+versioned://",
+		"rocksdb://",
+		"speedb://",
+		"file://",
+		"tikv://",
+		"indxdb://",
+	];
+	EMBEDDED_SCHEMES.iter().any(|scheme| lower.starts_with(scheme))
 }
 
 #[derive(Debug, Clone, Default)]
@@ -184,6 +210,40 @@ mod tests {
 			unset_env("DATABASE_PASSWORD");
 			unset_env("DATABASE_AUTH_LEVEL");
 		}
+	}
+
+	#[test]
+	fn is_embedded_endpoint_matches_local_schemes() {
+		for host in [
+			"mem://",
+			"surrealkv://./data",
+			"SURREALKV://Data",
+			"surrealkv+versioned://./data",
+			"rocksdb://./db",
+			"speedb://./db",
+			"file://./db",
+			"tikv://127.0.0.1:2379",
+			"indxdb://mydb",
+		] {
+			assert!(is_embedded_endpoint(host), "expected embedded: {host}");
+		}
+	}
+
+	#[test]
+	fn is_embedded_endpoint_rejects_remote_schemes() {
+		for host in
+			["http://localhost:8000", "https://db.example.com", "ws://localhost:8000", "wss://x"]
+		{
+			assert!(!is_embedded_endpoint(host), "expected remote: {host}");
+		}
+	}
+
+	#[test]
+	fn auth_level_parses_none_spellings() {
+		assert_eq!(AuthLevel::parse("none"), Some(AuthLevel::None));
+		assert_eq!(AuthLevel::parse("NONE"), Some(AuthLevel::None));
+		assert_eq!(AuthLevel::parse("no-auth"), Some(AuthLevel::None));
+		assert_eq!(AuthLevel::parse("noauth"), Some(AuthLevel::None));
 	}
 
 	// resolve() unit tests use unique key names, safe to run in parallel
@@ -374,7 +434,21 @@ pub async fn connect(cfg: &DbCfg) -> Result<Surreal<Any>> {
 		.await
 		.with_context(|| format!("Failed connecting to {}", cfg.host))?;
 
-	match cfg.auth_level {
+	// Embedded engines have no users on a fresh datastore, so signing in would
+	// fail. Auto-detect them and skip auth (unless the user forced a level).
+	let auth_level = if is_embedded_endpoint(&cfg.host) {
+		AuthLevel::None
+	} else {
+		cfg.auth_level.clone()
+	};
+
+	match auth_level {
+		AuthLevel::None => {
+			db.use_ns(&cfg.ns)
+				.use_db(&cfg.db)
+				.await
+				.with_context(|| format!("use_ns/use_db failed for ns={} db={}", cfg.ns, cfg.db))?;
+		}
 		AuthLevel::Root => {
 			db.signin(Root {
 				username: cfg.user.clone(),

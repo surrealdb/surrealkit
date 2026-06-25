@@ -29,8 +29,24 @@ rustls = { version = '0.23', default-features = false, features = ['aws-lc-rs'] 
 inquire = '0.7'
 tempfile = '3'
 
+[features]
+# The published CLI binary bundles only the in-memory engine, keeping the
+# prebuilt artifact light. Remote connections (protocol-http/jwks) are always
+# available. Build the CLI with --features kv-surrealkv (or `embedded`) for an
+# embedded build.
+#
+# Library consumers do NOT need these features to target an embedded engine:
+# Cargo unifies features across the dependency graph, so enabling e.g.
+# `surrealdb/kv-surrealkv` in your own crate is enough for SurrealKit's
+# `Surreal<Any>` to open `surrealkv://`.
+default = ['kv-mem']
+kv-mem = ['surrealdb/kv-mem']
+kv-surrealkv = ['surrealdb/kv-surrealkv']
+kv-rocksdb = ['surrealdb/kv-rocksdb']
+# Convenience: a full embedded CLI with every supported local engine.
+embedded = ['kv-surrealkv', 'kv-rocksdb', 'kv-mem']
+
 [dev-dependencies]
-surrealdb = { version = '3.1.4', features = ['kv-mem'] }
 test-case = '3'
 
 [lints]
