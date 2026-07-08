@@ -17,9 +17,9 @@ jobs:
         runs-on: ubuntu-22.04
         timeout-minutes: 5
         env:
+            SURREAL_PATH: rocksdb:/tmp/test_db.db
             SURREAL_USER: root
             SURREAL_PASS: secret
-            SURREAL_PATH: memory
             DEFAULT_NAMESPACE: test_ns
             DEFAULT_DATABASE: test_db
             SURREALDB_FOLDER: ${{ github.workspace }}/database
