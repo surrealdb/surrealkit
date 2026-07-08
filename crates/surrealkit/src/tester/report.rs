@@ -6,38 +6,54 @@ use anyhow::{Context, Result};
 use super::types::RunReport;
 
 pub fn print_human_report<W: Write>(out: &mut W, report: &RunReport) -> Result<()> {
-	writeln!(out, "Test run summary:")?;
+	let status = if report.suites_failed > 0 || report.cases_failed > 0 {
+		"FAIL"
+	} else {
+		"PASS"
+	};
+	writeln!(out, "Test run: {status} ({}ms)", report.duration_ms)?;
+	writeln!(out, "")?;
+
+	writeln!(out, "Summary")?;
 	writeln!(out, "  suites: {} total, {} failed", report.suites_total, report.suites_failed)?;
 	writeln!(
 		out,
-		"  cases: {} total, {} passed, {} failed",
+		"  cases : {} total, {} passed, {} failed",
 		report.cases_total, report.cases_passed, report.cases_failed
 	)?;
-	writeln!(out, "  duration_ms: {}", report.duration_ms)?;
 
-	for suite in &report.suites {
-		writeln!(
-			out,
-			"suite {} [{} / {}]: {} passed, {} failed",
-			suite.suite_name,
-			suite.namespace,
-			suite.database,
-			suite.cases_passed,
-			suite.cases_failed
-		)?;
-		for (index, case) in suite.cases.iter().enumerate() {
-			if case.passed {
+	if report.suites_failed > 0 {
+		writeln!(out, "")?;
+		writeln!(out, "Failures ({})", report.suites_failed)?;
+		for suite in &report.suites {
+			if suite.cases_failed == 0 {
 				continue;
 			}
-			writeln!(out, "  FAIL case #{}", index + 1)?;
-			for assertion in &case.assertions {
-				if assertion.passed {
+
+			writeln!(out, "  suite `{}`", suite.suite_name,)?;
+			writeln!(out, "    file     : {}", suite.suite_file)?;
+			writeln!(out, "    namespace: {}", suite.namespace)?;
+			writeln!(out, "    database : {}", suite.database)?;
+			writeln!(
+				out,
+				"    result   : {} passed, {} failed",
+				suite.cases_passed, suite.cases_failed
+			)?;
+			for (index, case) in suite.cases.iter().enumerate() {
+				if case.passed {
 					continue;
 				}
-				writeln!(out, "    - {} (failed)", assertion.name)?;
+				writeln!(out, "    case `{}` (#{})", case.name, index + 1)?;
+				for assertion in &case.assertions {
+					if assertion.passed {
+						continue;
+					}
+					writeln!(out, "      - `{}` (failed): {}", assertion.name, assertion.message)?;
+				}
 			}
 		}
 	}
+
 	Ok(())
 }
 
@@ -64,11 +80,11 @@ mod tests {
 		print_human_report(&mut output, &report)?;
 		let text = String::from_utf8(output)?;
 		insta::assert_snapshot!(text, @"
-		Test run summary:
+		Test run: PASS (1000ms)
+
+		Summary
 		  suites: 1 total, 0 failed
-		  cases: 1 total, 1 passed, 0 failed
-		  duration_ms: 1000
-		suite test_suite_name [test_ns / test_db]: 1 passed, 0 failed
+		  cases : 1 total, 1 passed, 0 failed
 		");
 		Ok(())
 	}
@@ -80,13 +96,20 @@ mod tests {
 		print_human_report(&mut output, &report)?;
 		let text = String::from_utf8(output)?;
 		insta::assert_snapshot!(text, @"
-		Test run summary:
-		  suites: 1 total, 0 failed
-		  cases: 1 total, 0 passed, 1 failed
-		  duration_ms: 1000
-		suite test_suite_name [test_ns / test_db]: 0 passed, 1 failed
-		  FAIL case #1
-		    - test_assertion_name (failed)
+		Test run: FAIL (1000ms)
+
+		Summary
+		  suites: 1 total, 1 failed
+		  cases : 1 total, 0 passed, 1 failed
+
+		Failures (1)
+		  suite `test_suite_name`
+		    file     : test_suite_file.yaml
+		    namespace: test_ns
+		    database : test_db
+		    result   : 0 passed, 1 failed
+		    case `test_case_name` (#1)
+		      - `test_assertion_name` (failed): assertion failed for some reasons
 		");
 		Ok(())
 	}
@@ -179,12 +202,17 @@ mod tests {
 		let cases_total = cases.len();
 		let cases_passed = cases.iter().filter(|c| c.passed).count();
 		let cases_failed = cases.iter().filter(|c| !c.passed).count();
+		let suites_failed = if cases_failed > 0 {
+			1
+		} else {
+			0
+		};
 		RunReport {
 			started_at: "2020-01-01T00:00:00Z".into(),
 			finished_at: "2020-01-01T00:00:01Z".into(),
 			duration_ms: 1000,
 			suites_total: 1,
-			suites_failed: 0,
+			suites_failed,
 			cases_total,
 			cases_passed,
 			cases_failed,
