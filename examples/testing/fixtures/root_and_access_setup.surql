@@ -10,6 +10,8 @@ DEFINE FIELD OVERWRITE joined_at ON customer TYPE datetime;
 DEFINE FIELD OVERWRITE created_at ON customer TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE tier ON customer TYPE string VALUE IF age >= 18 THEN "adult" ELSE "minor" END;
 
+CREATE customer:alice CONTENT { name: 'Alice', age: 12, joined_at: <datetime>'2025-01-10T00:00:00Z' };
+
 DEFINE TABLE OVERWRITE app_user SCHEMAFULL
 	PERMISSIONS
 		FOR select, create, update WHERE true,

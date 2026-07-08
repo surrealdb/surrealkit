@@ -84,7 +84,7 @@ name = "access_user_permissions_matrix"
 kind = "permissions_matrix"
 actor = "access_user"
 table = "customer"
-record_id = "alpha"
+record_id = "alice"
 
 [[cases.rules]]
 action = "create"

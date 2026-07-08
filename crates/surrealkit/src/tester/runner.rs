@@ -326,41 +326,102 @@ async fn run_case(
 
 			let mut assertions = Vec::new();
 			for (idx, rule) in spec.rules.iter().enumerate() {
-				let seed_sql = format!(
-					"DEFINE FIELD IF NOT EXISTS _marker ON {} TYPE option<string> DEFAULT NONE;",
-					spec.table
-				);
-				execute_sql_value(&root.db, &seed_sql).await?;
-				let content = record_content(&root.db, &spec.table, &record_id).await?;
-				let sql = match rule.action {
+				let result = match rule.action {
 					PermissionAction::Create => {
-						let mut create_content = content.clone();
-						create_content.remove("id");
-						let content_sql = create_content.to_sql();
-						format!(
-							"CREATE {}:{}_create_{} CONTENT {};",
-							spec.table, record_id, idx, content_sql
-						)
+						let mut content = record_content(&root.db, &spec.table, &record_id).await?;
+						content.remove("id");
+						let new_record_id = format!("{}:new_{}", spec.table, record_id);
+						let action_sql =
+							format!("CREATE {} CONTENT {};", new_record_id, content.to_sql());
+						let verify_sql = format!("SELECT * FROM ONLY {};", new_record_id);
+						execute_sql_value(&actor.db, &action_sql).await?;
+						let result = execute_sql_value(&root.db, &verify_sql).await?;
+						result
+							.as_object()
+							.ok_or_else(|| {
+								anyhow!(
+									"New record with id={} expected, got {} response from query={} with user={}",
+									new_record_id,
+									result.to_string(),
+									verify_sql,
+									actor_name
+								)
+							})
+							.map(|_| ())
 					}
 					PermissionAction::Select => {
-						format!("SELECT * FROM {}:{};", spec.table, record_id)
+						let verify_sql =
+							format!("SELECT * FROM ONLY {}:{};", spec.table, record_id);
+						let result = execute_sql_value(&actor.db, &verify_sql).await?;
+						result
+							.as_object()
+							.ok_or_else(|| {
+								anyhow!(
+									"Record with id={} expected, got {} response from query={}",
+									record_id,
+									result.to_string(),
+									verify_sql
+								)
+							})
+							.map(|_| ())
 					}
-					PermissionAction::Update => format!(
-						"UPDATE {}:{} SET _marker = 'updated_{}';",
-						spec.table, record_id, idx
-					),
+					PermissionAction::Update => {
+						let seed_sql = format!(
+							"DEFINE FIELD IF NOT EXISTS _marker ON {} TYPE option<string> DEFAULT NONE;",
+							spec.table
+						);
+						execute_sql_value(&root.db, &seed_sql).await?;
+
+						let new_marker = format!("updated_{}", idx);
+						let action_sql = format!(
+							"UPDATE {}:{} SET _marker = '{}';",
+							spec.table, record_id, new_marker
+						);
+						let verify_sql =
+							format!("SELECT _marker FROM ONLY {}:{};", spec.table, record_id);
+						execute_sql_value(&actor.db, &action_sql).await?;
+						let result = execute_sql_value(&root.db, &verify_sql).await?;
+						result
+							.as_object()
+							.and_then(|o| {
+								(o.get("_marker").and_then(|s| s.as_str()) == Some(&new_marker))
+									.then_some(o)
+							})
+							.ok_or_else(|| {
+								anyhow!(
+									"Updated record with _marker={} expected, got {} response from query={}",
+									new_marker,
+									result.to_string(),
+									verify_sql
+								)
+							})
+							.map(|_| ())
+					}
 					PermissionAction::Delete => {
-						format!(
-							"LET $before = DELETE ONLY {}:{} RETURN BEFORE; IF $before IS NONE {{ THROW 'cannot delete record' }};",
-							spec.table, record_id
-						)
+						let action_sql = format!("DELETE {}:{}", spec.table, record_id);
+						let verify_sql =
+							format!("SELECT * FROM ONLY {}:{};", spec.table, record_id);
+						execute_sql_value(&actor.db, &action_sql).await?;
+						let result = execute_sql_value(&root.db, &verify_sql).await?;
+						result.as_null().ok_or_else(|| {
+							anyhow!(
+								"expected no records, got {} response from query={}",
+								result.to_string(),
+								verify_sql
+							)
+						})
 					}
-					PermissionAction::Query => rule.sql.clone().ok_or_else(|| {
-						anyhow!("permissions_matrix action=query in '{}' requires sql", case.name)
-					})?,
+					PermissionAction::Query => {
+						let verify_sql = rule.sql.clone().ok_or_else(|| {
+							anyhow!(
+								"permissions_matrix action=query in '{}' requires sql",
+								case.name
+							)
+						})?;
+						execute_sql_value(&actor.db, &verify_sql).await.map(|_| ())
+					}
 				};
 
-				let result = execute_sql_value(&actor.db, &sql).await;
 				let mut report = evaluate_outcome(
 					format!("rule_{}", idx + 1),
 					result,
@@ -369,7 +430,7 @@ async fn run_case(
 					None,
 				)?;
 				if !report.passed {
-					report.message = format!("{}; sql={}", report.message, sql);
+					report.message = format!("{}", report.message);
 				}
 				assertions.push(report);
 			}
@@ -588,7 +649,7 @@ fn actor_assertion_context(actor: &ActorSession) -> JsonAssertionContext {
 
 fn evaluate_outcome(
 	label: String,
-	result: Result<Value>,
+	result: Result<()>,
 	allow: bool,
 	error_contains: Option<&str>,
 	error_code: Option<&str>,
