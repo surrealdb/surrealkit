@@ -48,6 +48,7 @@ embedded = ['kv-surrealkv', 'kv-rocksdb', 'kv-mem']
 
 [dev-dependencies]
 test-case = '3'
+insta = { version = '1', features = ['json'] }
 
 [lints]
 workspace = true
