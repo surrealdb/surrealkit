@@ -87,6 +87,10 @@ table = "customer"
 record_id = "alpha"
 
 [[cases.rules]]
+action = "create"
+allow = true
+
+[[cases.rules]]
 action = "select"
 allow = true
 

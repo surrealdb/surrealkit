@@ -8,7 +8,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
-use surrealdb_types::SurrealValue;
+use surrealdb_types::{SurrealValue, ToSql};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::Semaphore;
@@ -327,20 +327,26 @@ async fn run_case(
 			let mut assertions = Vec::new();
 			for (idx, rule) in spec.rules.iter().enumerate() {
 				let seed_sql = format!(
-					"UPSERT {}:{} MERGE {{ __surrealkit_perm_seed: true }};",
-					spec.table, record_id
+					"DEFINE FIELD IF NOT EXISTS _marker ON {} TYPE option<string> DEFAULT NONE;",
+					spec.table
 				);
-				let _ = execute_sql_value(&root.db, &seed_sql).await;
+				execute_sql_value(&root.db, &seed_sql).await?;
+				let content = record_content(&root.db, &spec.table, &record_id).await?;
 				let sql = match rule.action {
-					PermissionAction::Create => format!(
-						"CREATE {}:{}_create_{} CONTENT {{ marker: 'perm' }};",
-						spec.table, record_id, idx
-					),
+					PermissionAction::Create => {
+						let mut create_content = content.clone();
+						create_content.remove("id");
+						let content_sql = create_content.to_sql();
+						format!(
+							"CREATE {}:{}_create_{} CONTENT {};",
+							spec.table, record_id, idx, content_sql
+						)
+					}
 					PermissionAction::Select => {
 						format!("SELECT * FROM {}:{};", spec.table, record_id)
 					}
 					PermissionAction::Update => format!(
-						"UPDATE {}:{} SET marker = 'updated_{}';",
+						"UPDATE {}:{} SET _marker = 'updated_{}';",
 						spec.table, record_id, idx
 					),
 					PermissionAction::Delete => {
@@ -628,6 +634,18 @@ async fn execute_sql_value(db: &Surreal<Any>, sql: &str) -> Result<Value> {
 	let raw: surrealdb_types::Value = response.take(0)?;
 	let json = Value::from_value(raw).unwrap_or(Value::Null);
 	Ok(json)
+}
+
+async fn record_content(
+	db: &Surreal<Any>,
+	table: &str,
+	record_id: &str,
+) -> Result<surrealdb_types::Object> {
+	let sql = format!("SELECT * FROM ONLY {}:{};", table, record_id);
+	let mut response = db.query(&sql).await?.check()?;
+	let value: surrealdb_types::Value = response.take(0)?;
+	let map = value.as_object().ok_or_else(|| anyhow!("record is not an object: {}", sql))?.clone();
+	Ok(map)
 }
 
 async fn apply_fixture(
