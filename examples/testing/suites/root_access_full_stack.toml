@@ -109,25 +109,33 @@ error_contains = "permission"
 
 # API routes are examples: adjust path/status to match your SurrealDB API surface.
 [[cases]]
-name = "root_api_health_example"
+name = "root_api_example"
 kind = "api_request"
 actor = "root"
 method = "GET"
-path = "/api/v1/health"
+path = "/test"
 expected_status = 200
 
 [[cases.header_assertions]]
 name = "content-type"
 exists = true
 
+[[cases.body_assertions]]
+path = ".result"
+equals = "OK"
+
 [[cases]]
-name = "access_user_api_profile_example"
+name = "access_user_api_example"
 kind = "api_request"
 actor = "access_user"
 method = "GET"
-path = "/api/v1/profile"
+path = "/test"
 expected_status = 200
 
 [[cases.header_assertions]]
 name = "content-type"
 exists = true
+
+[[cases.body_assertions]]
+path = ".result"
+equals = "OK"

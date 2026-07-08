@@ -175,15 +175,15 @@ impl RunnerContext {
 			}
 		};
 		let host = self.cfg.host().to_string();
-
+		let base_url =
+			self.base_url.as_ref().map(|url| format!("{}/api/{}/{}", url, namespace, database));
 		let actors =
 			self.prepare_suite(&suite, &host, &namespace, &database, DEFAULT_ROOT_DIR).await?;
 		let mut cases = Vec::new();
 
 		for case in &suite.spec.cases {
 			let case_start = Instant::now();
-			let case_result =
-				run_case(case, &actors, self.base_url.as_deref(), self.timeout_ms).await;
+			let case_result = run_case(case, &actors, base_url.as_deref(), self.timeout_ms).await;
 
 			let report = match case_result {
 				Ok(mut report) => {

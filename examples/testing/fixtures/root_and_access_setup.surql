@@ -44,4 +44,15 @@ DEFINE FUNCTION OVERWRITE fn::format_customer($name: string, $age: number) {
 	RETURN string::concat($name, "#", <string>$age);
 };
 
-DEFINE API "/v1";
+DEFINE API "/test"
+	FOR get
+		MIDDLEWARE
+			api::res::body("json")
+		THEN {
+			{
+				status: 200,
+				body: {
+					result: "OK"
+				}
+			}
+		}
