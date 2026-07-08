@@ -7,7 +7,7 @@ mod report;
 mod runner;
 mod types;
 
-use std::env;
+use std::{env, io};
 
 use anyhow::{Result, bail};
 use rust_dotenv::dotenv::DotEnv;
@@ -57,7 +57,9 @@ pub async fn run_test(
 		runner::RunnerContext::new(cfg, opts.clone(), loaded.global, base_url, timeout_ms, vars);
 	let report = ctx.run(suites).await?;
 
-	report::print_human_report(&report);
+	let stdout = io::stdout();
+	let mut out = stdout.lock();
+	report::print_human_report(&mut out, &report)?;
 	if let Some(path) = &opts.json_out {
 		report::write_json_report(path, &report)?;
 	}

@@ -28,6 +28,7 @@ regex = '1'
 rustls = { version = '0.23', default-features = false, features = ['aws-lc-rs'] }
 inquire = '0.7'
 tempfile = '3'
+indoc = "2"
 
 [features]
 # The published CLI binary bundles only the in-memory engine, keeping the
@@ -48,6 +49,7 @@ embedded = ['kv-surrealkv', 'kv-rocksdb', 'kv-mem']
 
 [dev-dependencies]
 test-case = '3'
+insta = { version = '1', features = ['json'] }
 
 [lints]
 workspace = true
