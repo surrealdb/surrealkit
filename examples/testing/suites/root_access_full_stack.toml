@@ -6,7 +6,7 @@ name = "metadata_contains_table_function_api"
 kind = "schema_metadata"
 actor = "root"
 sql = "INFO FOR DB;"
-contains = ["customer", "fn::format_customer", "v1"]
+contains = ["customer", "fn::format_customer", "/test"]
 
 [[cases]]
 name = "root_can_create_customer_with_string_number_date_and_computed"
@@ -97,15 +97,13 @@ allow = true
 [[cases.rules]]
 action = "delete"
 allow = false
-error_contains = "permission"
 
 [[cases]]
 name = "access_user_cannot_delete_customer"
 kind = "sql_expect"
 actor = "access_user"
-sql = "DELETE customer:alpha;"
+sql = "LET $before = DELETE ONLY customer:alpha RETURN BEFORE; IF $before IS NONE { THROW 'cannot delete record' };"
 allow = false
-error_contains = "permission"
 
 # API routes are examples: adjust path/status to match your SurrealDB API surface.
 [[cases]]

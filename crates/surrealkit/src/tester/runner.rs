@@ -344,7 +344,10 @@ async fn run_case(
 						spec.table, record_id, idx
 					),
 					PermissionAction::Delete => {
-						format!("DELETE {}:{};", spec.table, record_id)
+						format!(
+							"LET $before = DELETE ONLY {}:{} RETURN BEFORE; IF $before IS NONE {{ THROW 'cannot delete record' }};",
+							spec.table, record_id
+						)
 					}
 					PermissionAction::Query => rule.sql.clone().ok_or_else(|| {
 						anyhow!("permissions_matrix action=query in '{}' requires sql", case.name)
