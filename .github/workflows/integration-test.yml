@@ -1,0 +1,65 @@
+name: Integration Test
+
+on:
+    push:
+
+permissions:
+    contents: read
+
+jobs:
+    integration_test:
+        name: Surrealkit integration tests
+        runs-on: ubuntu-22.04
+        timeout-minutes: 5
+        env:
+            SURREAL_USER: root
+            SURREAL_PASS: secret
+            SURREAL_PATH: memory
+            DEFAULT_NAMESPACE: test_ns
+            DEFAULT_DATABASE: test_db
+            SURREALDB_FOLDER: ${{ github.workspace }}/database
+        services:
+            surrealdb:
+                image: surrealdb/surrealdb:v3.2.0
+                command: start
+                ports:
+                    - 8000:8000
+        steps:
+            - name: Wait for SurrealDB
+              shell: bash
+              run: |
+                  set -o pipefail
+                  for attempt in $(seq 1 30); do
+                    if curl -sf "http://127.0.0.1:8000/health" >/dev/null; then
+                      exit 0
+                    fi
+                    sleep 1
+                  done
+                  echo "SurrealDB did not become healthy in time."
+                  docker logs "${{ job.services.surrealdb.id }}" || true
+                  exit 1
+            - name: Checkout repository
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+              with:
+                  toolchain: 1.94.0
+            - name: Install surrealkit
+              run: cargo install --path crates/surrealkit --locked
+            - name: Prepare test environment
+              shell: bash
+              run: |
+                  surrealkit init --yes
+                  rm -rf database/tests
+                  cp -r examples/testing database/tests
+            - name: Run surrealkit tests
+              env:
+                  SURREALKIT_TEST_BASE_URL: http://127.0.0.1:8000
+                  SURREALDB_HOST: ws://127.0.0.1:8000
+                  SURREALDB_NAME: ${{ env.DEFAULT_DATABASE }}
+                  SURREALDB_NAMESPACE: ${{ env.DEFAULT_NAMESPACE }}
+                  SURREALDB_USER: ${{ env.SURREAL_USER }}
+                  SURREALDB_PASSWORD: ${{ env.SURREAL_PASS }}
+                  SURREALDB_AUTH_LEVEL: "root"
+              shell: bash
+              run: surrealkit test
