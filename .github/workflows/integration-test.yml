@@ -31,15 +31,23 @@ jobs:
                     - 8000:8000
         steps:
             - name: Checkout repository
-              uses: actions/checkout@v7
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
 
             - name: Install Rust toolchain
-              uses: dtolnay/rust-toolchain@v1
+              uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
               with:
                   toolchain: 1.94.0
 
             - name: Build surrealkit (debug)
-              run: cargo build --manifest-path crates/surrealkit/Cargo.toml --locked
+              env:
+                  CARGO_INCREMENTAL: 0
+                  RUSTFLAGS: "-C debuginfo=0"
+              run: |
+                cargo build \
+                    --manifest-path crates/surrealkit/Cargo.toml \
+                    --bin surrealkit \
+                    --no-default-features \
+                    --locked
 
             - name: Prepare test environment
               shell: bash
@@ -56,13 +64,12 @@ jobs:
                   SURREALDB_NAMESPACE: ${{ env.DEFAULT_NAMESPACE }}
                   SURREALDB_USER: ${{ env.SURREAL_USER }}
                   SURREALDB_PASSWORD: ${{ env.SURREAL_PASS }}
-                  SURREALDB_AUTH_LEVEL: "root"
               shell: bash
               run: ./target/debug/surrealkit test --json-out database/tests/report.json
 
             - name: Upload integration test report
               if: always()
-              uses: actions/upload-artifact@v7
+              uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
               with:
                   name: integration-test-report
                   path: database/tests/report.json
