@@ -1,7 +1,7 @@
 DEFINE TABLE OVERWRITE customer SCHEMAFULL
 	PERMISSIONS
 		FOR select WHERE $auth != NONE,
-		FOR create, update WHERE $auth != NONE,
+		FOR create, update WHERE !$auth.read_only,
 		FOR delete NONE;
 
 DEFINE FIELD OVERWRITE name ON customer TYPE string;
@@ -19,12 +19,14 @@ DEFINE TABLE OVERWRITE app_user SCHEMAFULL
 
 DEFINE FIELD OVERWRITE email ON app_user TYPE string;
 DEFINE FIELD OVERWRITE pass ON app_user TYPE string;
+DEFINE FIELD OVERWRITE read_only ON app_user TYPE bool DEFAULT true;
 DEFINE INDEX OVERWRITE app_user_email_unique ON TABLE app_user FIELDS email UNIQUE;
 
 DEFINE ACCESS app_access ON DATABASE TYPE RECORD
 	SIGNUP (
 		CREATE app_user CONTENT {
 			email: $email,
+			read_only: $read_only,
 			pass: crypto::argon2::generate($password)
 		}
 	)

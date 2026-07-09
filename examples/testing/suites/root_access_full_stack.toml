@@ -12,29 +12,16 @@ contains = ["customer", "fn::format_customer", "/test"]
 name = "root_can_create_customer_with_string_number_date_and_computed"
 kind = "schema_behavior"
 actor = "root"
-action_sql = "CREATE customer:alpha CONTENT { name: 'Alice', age: 27, joined_at: <datetime>'2025-01-15T00:00:00Z' };"
+action_sql = "CREATE customer:alpha CONTENT { name: 'Alpha', age: 27, joined_at: <datetime>'2025-01-15T00:00:00Z' };"
 verify_sql = "SELECT name, age, joined_at, tier, created_at FROM customer:alpha;"
 expect_success = true
-
-[[cases.assertions]]
-path = "0.name"
-equals = "Alice"
-
-[[cases.assertions]]
-path = "0.age"
-equals = 27
-
-[[cases.assertions]]
-path = "0.joined_at"
-contains = "2025-01-15"
-
-[[cases.assertions]]
-path = "0.tier"
-equals = "adult"
-
-[[cases.assertions]]
-path = "0.created_at"
-exists = true
+assertions = [
+  { path = "0.name", equals = "Alpha" },
+  { path = "0.age", equals = 27 },
+  { path = "0.joined_at", contains = "2025-01-15" },
+  { path = "0.tier", equals = "adult" },
+  { path = "0.created_at", exists = true },
+]
 
 [[cases]]
 name = "type_validation_rejects_invalid_number"
@@ -50,10 +37,9 @@ kind = "sql_expect"
 actor = "root"
 sql = "RETURN fn::format_customer('Alice', 27);"
 allow = true
-
-[[cases.assertions]]
-path = ""
-equals = "Alice#27"
+assertions = [
+  { path = ".", equals = "Alice#27" },
+]
 
 [[cases]]
 name = "root_can_create_graph_edge"
@@ -66,18 +52,23 @@ setup_sql = [
 action_sql = "RELATE person:alice->follows->person:bob CONTENT { since: <datetime>'2024-01-01T00:00:00Z' };"
 verify_sql = "SELECT out, in, since FROM follows WHERE out = person:alice AND in = person:bob;"
 expect_success = true
+assertions = [
+  { path = "0.out", contains = "person:alice" },
+  { path = "0.in", contains = "person:bob" },
+  { path = "0.since", contains = "2024-01-01" },
+]
 
-[[cases.assertions]]
-path = "0.out"
-contains = "person:alice"
+# Access user tests
 
-[[cases.assertions]]
-path = "0.in"
-contains = "person:bob"
-
-[[cases.assertions]]
-path = "0.since"
-contains = "2024-01-01"
+[[cases]]
+name = "access_user_is_not_read_only"
+kind = "sql_expect"
+actor = "access_user"
+sql = "RETURN $auth.read_only"
+allow = true
+assertions = [
+    { path = ".", equals = false }
+]
 
 [[cases]]
 name = "access_user_permissions_matrix"
@@ -85,29 +76,57 @@ kind = "permissions_matrix"
 actor = "access_user"
 table = "customer"
 record_id = "alice"
-
-[[cases.rules]]
-action = "create"
-allow = true
-
-[[cases.rules]]
-action = "select"
-allow = true
-
-[[cases.rules]]
-action = "update"
-allow = true
-
-[[cases.rules]]
-action = "delete"
-allow = false
+rules = [
+  { action = "create", allow = true },
+  { action = "select", allow = true },
+  { action = "update", allow = true },
+  { action = "delete", allow = false },
+]
 
 [[cases]]
 name = "access_user_cannot_delete_customer"
-kind = "sql_expect"
+kind = "schema_behavior"
 actor = "access_user"
-sql = "LET $before = DELETE ONLY customer:alpha RETURN BEFORE; IF $before IS NONE { THROW 'cannot delete record' };"
-allow = false
+action_sql = "DELETE customer:alice;"
+verify_sql = "SELECT id FROM ONLY customer:alice;"
+assertions = [
+  { path = ".id", equals = "customer:alice" },
+]
+
+# Readonly user tests
+
+[[cases]]
+name = "readonly_user_is_read_only"
+kind = "sql_expect"
+actor = "readonly_user"
+sql = "RETURN $auth.read_only"
+allow = true
+assertions = [
+    { path = ".", equals = true }
+]
+
+[[cases]]
+name = "readonly_user_permissions_matrix"
+kind = "permissions_matrix"
+actor = "readonly_user"
+table = "customer"
+record_id = "alice"
+rules = [
+  { action = "select", allow = true },
+  { action = "create", allow = false },
+  { action = "update", allow = false },
+  { action = "delete", allow = false },
+]
+
+[[cases]]
+name = "readonly_user_cannot_delete_customer"
+kind = "schema_behavior"
+actor = "readonly_user"
+action_sql = "DELETE customer:alice;"
+verify_sql = "SELECT id FROM ONLY customer:alice;"
+assertions = [
+  { path = ".id", equals = "customer:alice" },
+]
 
 # API routes are examples: adjust path/status to match your SurrealDB API surface.
 [[cases]]
