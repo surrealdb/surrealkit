@@ -8,7 +8,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
-use surrealdb_types::{SurrealValue, ToSql};
+use surrealdb_types::{RecordId, RecordIdKey, SurrealValue, uuid};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::Semaphore;
@@ -293,6 +293,147 @@ impl RunnerContext {
 	}
 }
 
+fn get_record_id(record: &surrealdb_types::Object) -> Result<RecordId> {
+	let value = record.get("id").ok_or_else(|| anyhow!("Record has no id"))?;
+	value.as_record().cloned().ok_or_else(|| anyhow!("Record id is not a record"))
+}
+
+async fn get_record(
+	db: &Surreal<Any>,
+	record_id: RecordId,
+) -> Result<Option<surrealdb_types::Object>> {
+	let mut response =
+		db.query("SELECT * FROM ONLY $record_id;").bind(("record_id", record_id)).await?.check()?;
+	let record: Option<surrealdb_types::Value> = response.take(0)?;
+	Ok(record.and_then(|x| x.as_object().cloned()))
+}
+
+async fn copy_record(
+	root_db: &Surreal<Any>,
+	record_id: RecordId,
+) -> Result<surrealdb_types::Object> {
+	let record = get_record(root_db, record_id.clone()).await?;
+	if record.is_none() {
+		bail!("Record {:?} cannot be copied", record_id);
+	}
+	let new_record_id = RecordId::new(record_id.table.clone(), RecordIdKey::rand());
+	let mut content = record.unwrap();
+	content.remove("id");
+	root_db
+		.query("CREATE $new_record_id CONTENT $content;")
+		.bind(("new_record_id", new_record_id.clone()))
+		.bind(("content", content))
+		.await?
+		.check()?;
+	match get_record(root_db, new_record_id).await? {
+		Some(record) => Ok(record),
+		None => bail!("New record was not copied"),
+	}
+}
+
+async fn assert_permission_action_create(
+	user_db: &Surreal<Any>,
+	root_db: &Surreal<Any>,
+	record_id: RecordId,
+) -> Result<()> {
+	let record = get_record(root_db, record_id.clone()).await?;
+	if record.is_none() {
+		bail!("permissions_matrix record {:?} is required to assert permissions", record_id);
+	}
+	let mut content = record.unwrap();
+	content.remove("id");
+	let new_record_id = RecordId::new(record_id.table.clone(), RecordIdKey::rand());
+
+	// assert create permission
+	user_db
+		.query("CREATE $new_record_id CONTENT $content;")
+		.bind(("new_record_id", new_record_id.clone()))
+		.bind(("content", content))
+		.await?
+		.check()?;
+
+	let record = get_record(root_db, new_record_id).await?;
+	if record.is_none() {
+		bail!("New record was not created");
+	}
+	Ok(())
+}
+
+async fn assert_permission_action_select(
+	user_db: &Surreal<Any>,
+	record_id: RecordId,
+) -> Result<()> {
+	// assert select permission
+	let record = get_record(user_db, record_id.clone()).await?;
+	if record.is_none() {
+		bail!("Record {:?} cannot be selected", record_id);
+	}
+	Ok(())
+}
+
+async fn assert_permission_action_update(
+	user_db: &Surreal<Any>,
+	root_db: &Surreal<Any>,
+	record_id: RecordId,
+) -> Result<()> {
+	root_db
+		.query(format!(
+			"DEFINE FIELD IF NOT EXISTS _marker ON {} TYPE option<string> DEFAULT NONE;",
+			record_id.table
+		))
+		.await?
+		.check()?;
+	let new_record = copy_record(root_db, record_id.clone()).await?;
+	let new_record_id = get_record_id(&new_record)?;
+	let new_marker = uuid::Uuid::new_v4().to_string();
+
+	// assert update permission
+	user_db
+		.query("UPDATE $new_record_id SET _marker = $new_marker;")
+		.bind(("new_record_id", new_record_id.clone()))
+		.bind(("new_marker", new_marker.clone()))
+		.await?
+		.check()?;
+
+	let record = get_record(root_db, new_record_id.clone()).await?;
+	let marker = record.as_ref().and_then(|r| r.get("_marker")).and_then(|m| m.as_string());
+	match marker {
+		Some(marker) if marker == &new_marker => Ok(()),
+		_ => bail!("Record {:?} cannot be updated", new_record_id),
+	}
+}
+
+async fn assert_permission_action_delete(
+	user_db: &Surreal<Any>,
+	root_db: &Surreal<Any>,
+	record_id: RecordId,
+) -> Result<()> {
+	let new_record = copy_record(root_db, record_id.clone()).await?;
+	let new_record_id = get_record_id(&new_record)?;
+
+	// assert delete permission
+	user_db
+		.query("DELETE $new_record_id;")
+		.bind(("new_record_id", new_record_id.clone()))
+		.await?
+		.check()?;
+
+	let record = get_record(root_db, new_record_id.clone()).await?;
+	if record.is_some() {
+		bail!("Record {:?} cannot be deleted", new_record_id);
+	}
+	Ok(())
+}
+
+async fn assert_permission_action_query(user_db: &Surreal<Any>, sql: &str) -> Result<()> {
+	let mut result = user_db.query(sql).await?.check()?;
+	let value: Option<surrealdb_types::Value> = result.take(0)?;
+	if value.is_none() {
+		bail!("Query {:?} returned no result", sql);
+	}
+	Ok(())
+}
+
 async fn run_case(
 	case: &crate::tester::types::CaseSpec,
 	actors: &HashMap<String, ActorSession>,
@@ -322,94 +463,26 @@ async fn run_case(
 			let actor_name = actor_name_or_default(spec.actor.as_deref());
 			let actor = require_actor(actors, actor_name)?;
 			let root = require_actor(actors, "root")?;
-			let record_id = spec.record_id.clone().unwrap_or_else(|| "perm_record".to_string());
+			let record_id_key = RecordIdKey::String(
+				spec.record_id.clone().unwrap_or_else(|| "perm_record".to_string()),
+			);
+			let record_id = RecordId::new(spec.table.clone(), record_id_key);
 
 			let mut assertions = Vec::new();
 			for (idx, rule) in spec.rules.iter().enumerate() {
+				let rec_id = record_id.clone();
 				let result = match rule.action {
 					PermissionAction::Create => {
-						let mut content = record_content(&root.db, &spec.table, &record_id).await?;
-						content.remove("id");
-						let new_record_id = format!("{}:new_{}", spec.table, record_id);
-						let action_sql =
-							format!("CREATE {} CONTENT {};", new_record_id, content.to_sql());
-						let verify_sql = format!("SELECT * FROM ONLY {};", new_record_id);
-						execute_sql_value(&actor.db, &action_sql).await?;
-						let result = execute_sql_value(&root.db, &verify_sql).await?;
-						result
-							.as_object()
-							.ok_or_else(|| {
-								anyhow!(
-									"New record with id={} expected, got {} response from query={} with user={}",
-									new_record_id,
-									result.to_string(),
-									verify_sql,
-									actor_name
-								)
-							})
-							.map(|_| ())
+						assert_permission_action_create(&actor.db, &root.db, rec_id).await
 					}
 					PermissionAction::Select => {
-						let verify_sql =
-							format!("SELECT * FROM ONLY {}:{};", spec.table, record_id);
-						let result = execute_sql_value(&actor.db, &verify_sql).await?;
-						result
-							.as_object()
-							.ok_or_else(|| {
-								anyhow!(
-									"Record with id={} expected, got {} response from query={}",
-									record_id,
-									result.to_string(),
-									verify_sql
-								)
-							})
-							.map(|_| ())
+						assert_permission_action_select(&actor.db, rec_id).await
 					}
 					PermissionAction::Update => {
-						let seed_sql = format!(
-							"DEFINE FIELD IF NOT EXISTS _marker ON {} TYPE option<string> DEFAULT NONE;",
-							spec.table
-						);
-						execute_sql_value(&root.db, &seed_sql).await?;
-
-						let new_marker = format!("updated_{}", idx);
-						let action_sql = format!(
-							"UPDATE {}:{} SET _marker = '{}';",
-							spec.table, record_id, new_marker
-						);
-						let verify_sql =
-							format!("SELECT _marker FROM ONLY {}:{};", spec.table, record_id);
-						execute_sql_value(&actor.db, &action_sql).await?;
-						let result = execute_sql_value(&root.db, &verify_sql).await?;
-						result
-							.as_object()
-							.and_then(|o| {
-								(o.get("_marker").and_then(|s| s.as_str()) == Some(&new_marker))
-									.then_some(o)
-							})
-							.ok_or_else(|| {
-								anyhow!(
-									"Updated record with _marker={} expected, got {} response from query={}",
-									new_marker,
-									result.to_string(),
-									verify_sql
-								)
-							})
-							.map(|_| ())
+						assert_permission_action_update(&actor.db, &root.db, rec_id).await
 					}
 					PermissionAction::Delete => {
-						let action_sql = format!("DELETE {}:{}", spec.table, record_id);
-						let verify_sql =
-							format!("SELECT * FROM ONLY {}:{};", spec.table, record_id);
-						execute_sql_value(&actor.db, &action_sql).await?;
-						let result = execute_sql_value(&root.db, &verify_sql).await?;
-						result.as_null().ok_or_else(|| {
-							anyhow!(
-								"expected no records, got {} response from query={}",
-								result.to_string(),
-								verify_sql
-							)
-						})
+						assert_permission_action_delete(&actor.db, &root.db, rec_id).await
 					}
 					PermissionAction::Query => {
 						let verify_sql = rule.sql.clone().ok_or_else(|| {
@@ -418,7 +491,7 @@ async fn run_case(
 								case.name
 							)
 						})?;
-						execute_sql_value(&actor.db, &verify_sql).await.map(|_| ())
+						assert_permission_action_query(&actor.db, &verify_sql).await
 					}
 				};
 
@@ -695,18 +768,6 @@ async fn execute_sql_value(db: &Surreal<Any>, sql: &str) -> Result<Value> {
 	let raw: surrealdb_types::Value = response.take(0)?;
 	let json = Value::from_value(raw).unwrap_or(Value::Null);
 	Ok(json)
-}
-
-async fn record_content(
-	db: &Surreal<Any>,
-	table: &str,
-	record_id: &str,
-) -> Result<surrealdb_types::Object> {
-	let sql = format!("SELECT * FROM ONLY {}:{};", table, record_id);
-	let mut response = db.query(&sql).await?.check()?;
-	let value: surrealdb_types::Value = response.take(0)?;
-	let map = value.as_object().ok_or_else(|| anyhow!("record is not an object: {}", sql))?.clone();
-	Ok(map)
 }
 
 async fn apply_fixture(
