@@ -12,6 +12,15 @@ DEFINE FIELD OVERWRITE tier ON customer TYPE string VALUE IF age >= 18 THEN "adu
 
 CREATE customer:alice CONTENT { name: 'Alice', age: 12, joined_at: <datetime>'2025-01-10T00:00:00Z' };
 
+
+DEFINE TABLE OVERWRITE customer_read_only SCHEMAFULL
+	PERMISSIONS
+		FOR select WHERE $auth != NONE,
+		FOR create, update, delete WHERE THROW "Read-only customer";
+DEFINE FIELD OVERWRITE name ON customer_read_only TYPE string;
+CREATE customer_read_only:bob CONTENT { name: 'Bob' };
+
+
 DEFINE TABLE OVERWRITE app_user SCHEMAFULL
 	PERMISSIONS
 		FOR select, create, update WHERE true,

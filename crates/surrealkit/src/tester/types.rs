@@ -168,6 +168,18 @@ pub enum PermissionAction {
 	Query,
 }
 
+impl PermissionAction {
+	pub fn label(&self) -> &'static str {
+		match self {
+			Self::Create => "create",
+			Self::Select => "select",
+			Self::Update => "update",
+			Self::Delete => "delete",
+			Self::Query => "query",
+		}
+	}
+}
+
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SchemaMetadataCase {

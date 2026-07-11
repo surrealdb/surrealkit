@@ -336,113 +336,174 @@ async fn copy_record(
 	}
 }
 
+async fn add_marker_field(db: &Surreal<Any>, table: &str) -> Result<()> {
+	db.query(format!(
+		"DEFINE FIELD IF NOT EXISTS _marker ON {} TYPE option<string> DEFAULT NONE;",
+		table
+	))
+	.await?
+	.check()?;
+	Ok(())
+}
+
+type AssertionResult = Result<(), AssertionError>;
+
+enum AssertionError {
+	PermissionThrow(String),
+	PermissionFailed(String),
+	InternalError(anyhow::Error),
+}
+
+impl AssertionError {
+	fn failed<E: std::fmt::Display>(error: E) -> Self {
+		Self::PermissionFailed(format!("{error}"))
+	}
+
+	fn throw<E: std::fmt::Display>(error: E) -> Self {
+		Self::PermissionThrow(format!("{error}"))
+	}
+}
+
+impl From<anyhow::Error> for AssertionError {
+	fn from(error: anyhow::Error) -> Self {
+		AssertionError::InternalError(error)
+	}
+}
+
+impl From<surrealdb::Error> for AssertionError {
+	fn from(error: surrealdb::Error) -> Self {
+		AssertionError::InternalError(anyhow::Error::from(error))
+	}
+}
+
+impl std::fmt::Display for AssertionError {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match self {
+			AssertionError::PermissionThrow(error) => write!(f, "permission throw: {error}"),
+			AssertionError::PermissionFailed(error) => write!(f, "permission failed: {error}"),
+			AssertionError::InternalError(error) => write!(f, "internal error: {error}"),
+		}
+	}
+}
+
 async fn assert_permission_action_create(
 	user_db: &Surreal<Any>,
 	root_db: &Surreal<Any>,
 	record_id: RecordId,
-) -> Result<()> {
+) -> AssertionResult {
 	let record = get_record(root_db, record_id.clone()).await?;
-	if record.is_none() {
-		bail!("permissions_matrix record {:?} is required to assert permissions", record_id);
-	}
-	let mut content = record.unwrap();
+	let mut content = match record {
+		Some(record) => record,
+		None => {
+			return Err(AssertionError::throw(anyhow!(
+				"permissions_matrix record {:?} is required to assert permissions",
+				record_id
+			)));
+		}
+	};
 	content.remove("id");
 	let tmp_record_id = RecordId::new(record_id.table.clone(), RecordIdKey::rand());
 
 	// assert create permission
-	user_db
+	let create_result = user_db
 		.query("CREATE $tmp_record_id CONTENT $content;")
 		.bind(("tmp_record_id", tmp_record_id.clone()))
 		.bind(("content", content))
 		.await?
-		.check()?;
+		.check()
+		.map_err(AssertionError::throw);
 
 	let record = get_record(root_db, tmp_record_id.clone()).await?;
-	if record.is_none() {
-		bail!("New record was not created");
-	} else {
-		delete_record(root_db, tmp_record_id).await?;
+	if record.is_some() {
+		delete_record(root_db, tmp_record_id.clone()).await?;
 	}
-	Ok(())
+	create_result?;
+	match record {
+		None => Err(AssertionError::failed("New record was not created")),
+		Some(..) => Ok(()),
+	}
 }
 
 async fn assert_permission_action_select(
 	user_db: &Surreal<Any>,
 	record_id: RecordId,
-) -> Result<()> {
+) -> AssertionResult {
 	// assert select permission
-	let record = get_record(user_db, record_id.clone()).await?;
-	if record.is_none() {
-		bail!("Record {:?} cannot be selected", record_id);
+	let result = user_db
+		.query("SELECT * FROM ONLY $record_id;")
+		.bind(("record_id", record_id))
+		.await?
+		.check();
+
+	match result {
+		Err(err) => Err(AssertionError::throw(err)),
+		Ok(mut records) => match records.take::<Option<surrealdb_types::Value>>(0) {
+			Ok(Some(..)) => Ok(()),
+			_ => Err(AssertionError::failed("Record cannot be selected")),
+		},
 	}
-	Ok(())
 }
 
 async fn assert_permission_action_update(
 	user_db: &Surreal<Any>,
 	root_db: &Surreal<Any>,
 	record_id: RecordId,
-) -> Result<()> {
-	root_db
-		.query(format!(
-			"DEFINE FIELD IF NOT EXISTS _marker ON {} TYPE option<string> DEFAULT NONE;",
-			record_id.table
-		))
-		.await?
-		.check()?;
+) -> AssertionResult {
+	add_marker_field(root_db, &record_id.table).await?;
 	let tmp_record = copy_record(root_db, record_id.clone()).await?;
 	let tmp_record_id = get_record_id(&tmp_record)?;
 	let new_marker = uuid::Uuid::new_v4().to_string();
 
 	// assert update permission
-	user_db
+	let update_result = user_db
 		.query("UPDATE $tmp_record_id SET _marker = $new_marker;")
 		.bind(("tmp_record_id", tmp_record_id.clone()))
 		.bind(("new_marker", new_marker.clone()))
 		.await?
-		.check()?;
+		.check()
+		.map_err(AssertionError::throw);
 
 	let record = get_record(root_db, tmp_record_id.clone()).await?;
 	let marker = record.as_ref().and_then(|r| r.get("_marker")).and_then(|m| m.as_string());
 	if record.is_some() {
 		delete_record(root_db, tmp_record_id.clone()).await?;
 	}
-	return match marker {
+	update_result?;
+	match marker {
 		Some(marker) if marker == &new_marker => Ok(()),
-		_ => bail!("Record {:?} cannot be updated", tmp_record_id),
-	};
+		_ => Err(AssertionError::failed("Record cannot be updated")),
+	}
 }
 
 async fn assert_permission_action_delete(
 	user_db: &Surreal<Any>,
 	root_db: &Surreal<Any>,
 	record_id: RecordId,
-) -> Result<()> {
+) -> AssertionResult {
 	let tmp_record = copy_record(root_db, record_id.clone()).await?;
 	let tmp_record_id = get_record_id(&tmp_record)?;
 
 	// assert delete permission
-	user_db
+	let delete_result = user_db
 		.query("DELETE $tmp_record_id;")
 		.bind(("tmp_record_id", tmp_record_id.clone()))
 		.await?
-		.check()?;
+		.check()
+		.map_err(AssertionError::throw);
 
 	let record = get_record(root_db, tmp_record_id.clone()).await?;
 	if record.is_some() {
 		delete_record(root_db, tmp_record_id.clone()).await?;
-		bail!("Record {:?} cannot be deleted", tmp_record_id);
 	}
-	Ok(())
+	delete_result?;
+	match record {
+		None => Ok(()),
+		Some(..) => Err(AssertionError::failed("Record cannot be deleted")),
+	}
 }
 
-async fn assert_permission_action_query(user_db: &Surreal<Any>, sql: &str) -> Result<()> {
-	let mut result = user_db.query(sql).await?.check()?;
-	let value: Option<surrealdb_types::Value> = result.take(0)?;
-	if value.is_none() {
-		bail!("Query {:?} returned no result", sql);
-	}
-	Ok(())
+async fn assert_permission_action_query(user_db: &Surreal<Any>, sql: &str) -> AssertionResult {
+	user_db.query(sql).await?.check().map(|_| ()).map_err(AssertionError::throw)
 }
 
 async fn run_case(
@@ -506,8 +567,12 @@ async fn run_case(
 					}
 				};
 
+				if let Err(AssertionError::InternalError(error)) = result {
+					return Err(error);
+				}
+
 				let mut report = evaluate_outcome(
-					format!("rule_{}", idx + 1),
+					format!("action:{} (#{})", rule.action.label(), idx + 1),
 					result,
 					rule.allow,
 					rule.error_contains.as_deref(),
@@ -733,7 +798,7 @@ fn actor_assertion_context(actor: &ActorSession) -> JsonAssertionContext {
 
 fn evaluate_outcome(
 	label: String,
-	result: Result<()>,
+	result: AssertionResult,
 	allow: bool,
 	error_contains: Option<&str>,
 	error_code: Option<&str>,

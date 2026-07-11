@@ -80,8 +80,23 @@ rules = [
   { action = "create", allow = true },
   { action = "select", allow = true },
   { action = "update", allow = true },
-  { action = "delete", allow = false },
+  { action = "delete", allow = false, error_contains = "permission failed" },
 ]
+
+[[cases]]
+name = "access_user_permissions_matrix_permission_throws"
+kind = "permissions_matrix"
+actor = "access_user"
+table = "customer_read_only"
+record_id = "bob"
+rules = [
+  { action = "create", allow = false, error_contains = "Read-only customer" },
+  { action = "select", allow = true },
+  { action = "update", allow = false, error_contains = "Read-only customer" },
+  { action = "delete", allow = false, error_contains = "Read-only customer" }
+]
+
+
 
 [[cases]]
 name = "access_user_cannot_delete_customer"
