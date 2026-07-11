@@ -308,6 +308,11 @@ async fn get_record(
 	Ok(record.and_then(|x| x.as_object().cloned()))
 }
 
+async fn delete_record(db: &Surreal<Any>, record_id: RecordId) -> Result<()> {
+	db.query("DELETE $record_id;").bind(("record_id", record_id)).await?.check()?;
+	Ok(())
+}
+
 async fn copy_record(
 	root_db: &Surreal<Any>,
 	record_id: RecordId,
@@ -316,16 +321,16 @@ async fn copy_record(
 	if record.is_none() {
 		bail!("Record {:?} cannot be copied", record_id);
 	}
-	let new_record_id = RecordId::new(record_id.table.clone(), RecordIdKey::rand());
+	let tmp_record_id = RecordId::new(record_id.table.clone(), RecordIdKey::rand());
 	let mut content = record.unwrap();
 	content.remove("id");
 	root_db
-		.query("CREATE $new_record_id CONTENT $content;")
-		.bind(("new_record_id", new_record_id.clone()))
+		.query("CREATE $tmp_record_id CONTENT $content;")
+		.bind(("tmp_record_id", tmp_record_id.clone()))
 		.bind(("content", content))
 		.await?
 		.check()?;
-	match get_record(root_db, new_record_id).await? {
+	match get_record(root_db, tmp_record_id).await? {
 		Some(record) => Ok(record),
 		None => bail!("New record was not copied"),
 	}
@@ -342,19 +347,21 @@ async fn assert_permission_action_create(
 	}
 	let mut content = record.unwrap();
 	content.remove("id");
-	let new_record_id = RecordId::new(record_id.table.clone(), RecordIdKey::rand());
+	let tmp_record_id = RecordId::new(record_id.table.clone(), RecordIdKey::rand());
 
 	// assert create permission
 	user_db
-		.query("CREATE $new_record_id CONTENT $content;")
-		.bind(("new_record_id", new_record_id.clone()))
+		.query("CREATE $tmp_record_id CONTENT $content;")
+		.bind(("tmp_record_id", tmp_record_id.clone()))
 		.bind(("content", content))
 		.await?
 		.check()?;
 
-	let record = get_record(root_db, new_record_id).await?;
+	let record = get_record(root_db, tmp_record_id.clone()).await?;
 	if record.is_none() {
 		bail!("New record was not created");
+	} else {
+		delete_record(root_db, tmp_record_id).await?;
 	}
 	Ok(())
 }
@@ -383,24 +390,27 @@ async fn assert_permission_action_update(
 		))
 		.await?
 		.check()?;
-	let new_record = copy_record(root_db, record_id.clone()).await?;
-	let new_record_id = get_record_id(&new_record)?;
+	let tmp_record = copy_record(root_db, record_id.clone()).await?;
+	let tmp_record_id = get_record_id(&tmp_record)?;
 	let new_marker = uuid::Uuid::new_v4().to_string();
 
 	// assert update permission
 	user_db
-		.query("UPDATE $new_record_id SET _marker = $new_marker;")
-		.bind(("new_record_id", new_record_id.clone()))
+		.query("UPDATE $tmp_record_id SET _marker = $new_marker;")
+		.bind(("tmp_record_id", tmp_record_id.clone()))
 		.bind(("new_marker", new_marker.clone()))
 		.await?
 		.check()?;
 
-	let record = get_record(root_db, new_record_id.clone()).await?;
+	let record = get_record(root_db, tmp_record_id.clone()).await?;
 	let marker = record.as_ref().and_then(|r| r.get("_marker")).and_then(|m| m.as_string());
-	match marker {
-		Some(marker) if marker == &new_marker => Ok(()),
-		_ => bail!("Record {:?} cannot be updated", new_record_id),
+	if record.is_some() {
+		delete_record(root_db, tmp_record_id.clone()).await?;
 	}
+	return match marker {
+		Some(marker) if marker == &new_marker => Ok(()),
+		_ => bail!("Record {:?} cannot be updated", tmp_record_id),
+	};
 }
 
 async fn assert_permission_action_delete(
@@ -408,19 +418,20 @@ async fn assert_permission_action_delete(
 	root_db: &Surreal<Any>,
 	record_id: RecordId,
 ) -> Result<()> {
-	let new_record = copy_record(root_db, record_id.clone()).await?;
-	let new_record_id = get_record_id(&new_record)?;
+	let tmp_record = copy_record(root_db, record_id.clone()).await?;
+	let tmp_record_id = get_record_id(&tmp_record)?;
 
 	// assert delete permission
 	user_db
-		.query("DELETE $new_record_id;")
-		.bind(("new_record_id", new_record_id.clone()))
+		.query("DELETE $tmp_record_id;")
+		.bind(("tmp_record_id", tmp_record_id.clone()))
 		.await?
 		.check()?;
 
-	let record = get_record(root_db, new_record_id.clone()).await?;
+	let record = get_record(root_db, tmp_record_id.clone()).await?;
 	if record.is_some() {
-		bail!("Record {:?} cannot be deleted", new_record_id);
+		delete_record(root_db, tmp_record_id.clone()).await?;
+		bail!("Record {:?} cannot be deleted", tmp_record_id);
 	}
 	Ok(())
 }
