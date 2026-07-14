@@ -1,0 +1,91 @@
+name: Integration Test
+
+on:
+    push:
+        paths:
+            - "Cargo.toml"
+            - "examples/testing/**"
+            - "crates/surrealkit/src/tester/**"
+            - ".github/workflows/integration-test.yml"
+
+permissions:
+    contents: read
+
+jobs:
+    integration_test:
+        name: Surrealkit integration tests
+        runs-on: ubuntu-22.04
+        timeout-minutes: 5
+        env:
+            SURREALKIT_TEST_BASE_URL: http://127.0.0.1:8000
+            SURREALDB_FOLDER: ${{ github.workspace }}/database
+            SURREALDB_HOST: ws://127.0.0.1:8000
+            SURREALDB_NAME: test_db
+            SURREALDB_NAMESPACE: test_ns
+            SURREALDB_USER: root
+            SURREALDB_PASSWORD: secret
+
+        services:
+            surrealdb:
+                image: surrealdb/surrealdb:v3.2.0
+                command: start --user root --pass secret memory
+                ports:
+                    - 8000:8000
+        steps:
+            - name: Verify root signin works
+              shell: bash
+              run: |
+                set -euo pipefail
+                for attempt in $(seq 1 20); do
+                    code="$(curl -sS -o /tmp/signin.json -w "%{http_code}" \
+                        -X POST "${{ env.SURREALKIT_TEST_BASE_URL }}/signin" \
+                        -H "Content-Type: application/json" \
+                        -d '{"user":"${{ env.SURREALDB_USER }}","pass":"${{ env.SURREALDB_PASSWORD }}"}' || true)"
+                    if [ "$code" = "200" ]; then
+                        echo "signin ok"
+                        exit 0
+                    fi
+                    echo "signin not ready (HTTP $code), retrying..."
+                    sleep 1
+                done
+                echo "signin failed after retries"
+                cat /tmp/signin.json || true
+                docker logs "${{ job.services.surrealdb.id }}" || true
+                exit 1
+            - name: Checkout repository
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+              with:
+                  toolchain: 1.94.0
+
+            - name: Build surrealkit (debug)
+              env:
+                  CARGO_INCREMENTAL: 0
+                  RUSTFLAGS: "-C debuginfo=0"
+              run: |
+                cargo build \
+                    --manifest-path crates/surrealkit/Cargo.toml \
+                    --bin surrealkit \
+                    --no-default-features \
+                    --locked
+
+            - name: Prepare test environment
+              shell: bash
+              run: |
+                  ./target/debug/surrealkit init --yes
+                  rm -rf database/tests
+                  cp -r examples/testing database/tests
+
+            - name: Run surrealkit tests
+              shell: bash
+              run: ./target/debug/surrealkit test --json-out database/tests/report.json
+
+            - name: Upload integration test report
+              if: always()
+              uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
+              with:
+                  name: integration-test-report
+                  path: database/tests/report.json
+                  if-no-files-found: warn

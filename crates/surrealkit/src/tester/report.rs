@@ -69,6 +69,10 @@ pub fn print_human_report<W: Write>(out: &mut W, report: &RunReport) -> Result<(
 					n = index + 1,
 					case_name = case.name
 				)?;
+				if let Some(message) = &case.message {
+					writeln!(out, "\n{}\n", message.trim())?;
+				}
+
 				for assertion in &case.assertions {
 					if assertion.passed {
 						continue;
@@ -143,6 +147,10 @@ mod tests {
 		- result   : 0 passed, 1 failed
 
 		Case 1: test_case_name
+
+		Case mutli-line
+		message with some details
+
 		- test_no_message_assertion
 		- test_short_assertion: assertion failed for some reasons
 		- test_multi_line_assertion:
@@ -230,7 +238,15 @@ mod tests {
 			passed: false,
 			kind: "sql_expect".into(),
 			duration_ms: 1000,
-			message: None,
+			message: Some(
+				indoc::indoc!(
+					"
+				Case mutli-line
+				message with some details
+				"
+				)
+				.into(),
+			),
 			assertions: vec![
 				AssertionReport {
 					name: "test_no_message_assertion".into(),

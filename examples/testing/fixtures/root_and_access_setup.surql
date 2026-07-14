@@ -1,7 +1,7 @@
 DEFINE TABLE OVERWRITE customer SCHEMAFULL
 	PERMISSIONS
 		FOR select WHERE $auth != NONE,
-		FOR create, update WHERE $auth != NONE,
+		FOR create, update WHERE !$auth.read_only,
 		FOR delete NONE;
 
 DEFINE FIELD OVERWRITE name ON customer TYPE string;
@@ -10,6 +10,17 @@ DEFINE FIELD OVERWRITE joined_at ON customer TYPE datetime;
 DEFINE FIELD OVERWRITE created_at ON customer TYPE datetime DEFAULT time::now();
 DEFINE FIELD OVERWRITE tier ON customer TYPE string VALUE IF age >= 18 THEN "adult" ELSE "minor" END;
 
+CREATE customer:alice CONTENT { name: 'Alice', age: 12, joined_at: <datetime>'2025-01-10T00:00:00Z' };
+
+
+DEFINE TABLE OVERWRITE customer_read_only SCHEMAFULL
+	PERMISSIONS
+		FOR select WHERE $auth != NONE,
+		FOR create, update, delete WHERE THROW "Read-only customer";
+DEFINE FIELD OVERWRITE name ON customer_read_only TYPE string;
+CREATE customer_read_only:bob CONTENT { name: 'Bob' };
+
+
 DEFINE TABLE OVERWRITE app_user SCHEMAFULL
 	PERMISSIONS
 		FOR select, create, update WHERE true,
@@ -17,12 +28,14 @@ DEFINE TABLE OVERWRITE app_user SCHEMAFULL
 
 DEFINE FIELD OVERWRITE email ON app_user TYPE string;
 DEFINE FIELD OVERWRITE pass ON app_user TYPE string;
+DEFINE FIELD OVERWRITE read_only ON app_user TYPE bool DEFAULT true;
 DEFINE INDEX OVERWRITE app_user_email_unique ON TABLE app_user FIELDS email UNIQUE;
 
 DEFINE ACCESS app_access ON DATABASE TYPE RECORD
 	SIGNUP (
 		CREATE app_user CONTENT {
 			email: $email,
+			read_only: $read_only,
 			pass: crypto::argon2::generate($password)
 		}
 	)
@@ -44,4 +57,15 @@ DEFINE FUNCTION OVERWRITE fn::format_customer($name: string, $age: number) {
 	RETURN string::concat($name, "#", <string>$age);
 };
 
-DEFINE API v1;
+DEFINE API "/test"
+	FOR get
+		MIDDLEWARE
+			api::res::body("json")
+		THEN {
+			{
+				status: 200,
+				body: {
+					result: "OK"
+				}
+			}
+		}

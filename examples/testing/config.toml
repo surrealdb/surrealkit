@@ -14,5 +14,13 @@ kind = "root"
 [actors.access_user]
 kind = "record"
 access = "app_access"
-signup_params = { email = "viewer@example.com", password = "viewer-password" }
+signup_params = { email = "viewer@example.com", password = "viewer-password", read_only = false }
 signin_params = { email = "viewer@example.com", password = "viewer-password" }
+
+
+# Record access actor authenticated through DEFINE ACCESS app_access.
+[actors.readonly_user]
+kind = "record"
+access = "app_access"
+signup_params = { email = "readonly@example.com", password = "readonly-password", read_only = true }
+signin_params = { email = "readonly@example.com", password = "readonly-password" }
