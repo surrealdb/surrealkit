@@ -35,7 +35,7 @@ pub fn assert_json_value_with_context(
 	if found.is_none() {
 		return Ok(AssertionReport {
 			name: label,
-			passed: exists == assertion.exists.unwrap_or(false),
+			passed: assertion.exists == Some(false),
 			message: format!("path '{}' not found", assertion.path),
 		});
 	}
@@ -254,6 +254,85 @@ mod tests {
 		});
 		let got = lookup_path(&value, "a.b.1.c").expect("path should exist");
 		assert_eq!(got, &serde_json::json!(2));
+	}
+
+	#[test]
+	fn missing_json_path_fails_by_default() {
+		let actual = serde_json::json!({"present": 1});
+		let assertion = JsonAssertionSpec {
+			path: "missing".to_string(),
+			exists: None,
+			equals: Some(serde_json::json!(1)),
+			equals_auth: None,
+			contains: None,
+			regex: None,
+		};
+
+		let report = assert_json_value_with_context(
+			&actual,
+			&assertion,
+			0,
+			&JsonAssertionContext::default(),
+		)
+		.expect("assertion should evaluate");
+
+		assert!(!report.passed);
+		assert_eq!(report.message, "path 'missing' not found");
+	}
+
+	#[test]
+	fn missing_json_path_can_be_asserted_explicitly() {
+		let actual = serde_json::json!({"present": 1});
+		let assertion = JsonAssertionSpec {
+			path: "missing".to_string(),
+			exists: Some(false),
+			equals: None,
+			equals_auth: None,
+			contains: None,
+			regex: None,
+		};
+
+		let report = assert_json_value_with_context(
+			&actual,
+			&assertion,
+			0,
+			&JsonAssertionContext::default(),
+		)
+		.expect("assertion should evaluate");
+
+		assert!(report.passed, "{}", report.message);
+	}
+
+	#[test]
+	fn present_json_path_match_and_mismatch_are_unchanged() {
+		let actual = serde_json::json!({"present": 1});
+		let matching = JsonAssertionSpec {
+			path: "present".to_string(),
+			exists: None,
+			equals: Some(serde_json::json!(1)),
+			equals_auth: None,
+			contains: None,
+			regex: None,
+		};
+		let mismatching = JsonAssertionSpec {
+			equals: Some(serde_json::json!(2)),
+			..matching.clone()
+		};
+
+		let matched =
+			assert_json_value_with_context(&actual, &matching, 0, &JsonAssertionContext::default())
+				.expect("matching assertion should evaluate");
+		let mismatched = assert_json_value_with_context(
+			&actual,
+			&mismatching,
+			1,
+			&JsonAssertionContext::default(),
+		)
+		.expect("mismatching assertion should evaluate");
+
+		assert!(matched.passed, "{}", matched.message);
+		assert!(!mismatched.passed);
+		assert!(mismatched.message.contains("expected Number(2), got Number(1)"));
 	}
 
 	#[test]
