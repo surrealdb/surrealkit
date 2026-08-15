@@ -83,6 +83,16 @@ async fn sync_embedded_applies_schema_and_tracks_file() {
 }
 
 #[tokio::test]
+async fn sync_embedded_accepts_explicit_empty_source_set() {
+	let db = mem_db().await;
+
+	Sync::embedded(&[])
+		.run(&db)
+		.await
+		.expect("explicit empty embedded schema remains valid");
+}
+
+#[tokio::test]
 async fn sync_embedded_is_idempotent() {
 	let db = mem_db().await;
 

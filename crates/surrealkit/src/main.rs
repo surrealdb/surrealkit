@@ -258,9 +258,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 			allow_shared_prune,
 			allow_all_statements,
 		} => {
-			let db = connect(&cfg).await?;
 			let typegen_cfg = surrealkit::variables::load_typegen_config(None)?;
-			sync::run_sync(
+			let files = sync::collect_filesystem_schema_files(&folder)?;
+			let db = connect(&cfg).await?;
+			sync::run_sync_with_filesystem_sources(
 				&db,
 				SyncOpts {
 					watch,
@@ -275,6 +276,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 					typegen_ts_out: typegen_cfg.typescript,
 					typegen_ts_format: typegen_cfg.format,
 				},
+				files,
 			)
 			.await?;
 		}
