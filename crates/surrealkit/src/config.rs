@@ -135,7 +135,7 @@ impl DbCfg {
 				auth_level_str
 			)
 		})?;
-		let folder = resolve(&None, &["SURREALDB_FOLDER"], dotenv, DEFAULT_ROOT_DIR);
+		let folder = resolve(&overrides.folder, &["SURREALDB_FOLDER"], dotenv, DEFAULT_ROOT_DIR);
 
 		Ok(Self {
 			host,
@@ -266,6 +266,7 @@ mod tests {
 			unset_env("DATABASE_USER");
 			unset_env("DATABASE_PASSWORD");
 			unset_env("DATABASE_AUTH_LEVEL");
+			unset_env("SURREALDB_FOLDER");
 		}
 	}
 
@@ -393,6 +394,48 @@ mod tests {
 		assert_eq!(cfg.ns(), "myns");
 		assert_eq!(cfg.user(), "admin");
 		assert_eq!(cfg.pass(), "secret");
+	}
+
+	#[test]
+	fn folder_override_is_honoured() {
+		// Regression: `from_env` passed `&None` here instead of `overrides.folder`,
+		// so `--folder` was parsed, stored, and then silently discarded.
+		let _guard = ENV_LOCK.lock().unwrap();
+		clear_db_env();
+		let overrides = DbOverrides {
+			folder: Some("./custom-db".into()),
+			..Default::default()
+		};
+		let cfg = DbCfg::from_env(None, &overrides).unwrap();
+		assert_eq!(cfg.folder(), "./custom-db");
+	}
+
+	#[test]
+	fn folder_override_beats_env_var() {
+		let _guard = ENV_LOCK.lock().unwrap();
+		clear_db_env();
+		unsafe { set_env("SURREALDB_FOLDER", "./from-env") };
+		let overrides = DbOverrides {
+			folder: Some("./from-cli".into()),
+			..Default::default()
+		};
+		let cfg = DbCfg::from_env(None, &overrides).unwrap();
+		assert_eq!(cfg.folder(), "./from-cli");
+		clear_db_env();
+	}
+
+	#[test]
+	fn folder_falls_back_to_env_then_default() {
+		let _guard = ENV_LOCK.lock().unwrap();
+		clear_db_env();
+		unsafe { set_env("SURREALDB_FOLDER", "./from-env") };
+		assert_eq!(DbCfg::from_env(None, &DbOverrides::default()).unwrap().folder(), "./from-env");
+
+		clear_db_env();
+		assert_eq!(
+			DbCfg::from_env(None, &DbOverrides::default()).unwrap().folder(),
+			DEFAULT_ROOT_DIR
+		);
 	}
 
 	#[test]

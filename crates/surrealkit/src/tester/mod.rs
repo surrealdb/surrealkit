@@ -41,11 +41,7 @@ pub async fn run_test(
 		);
 	}
 	let loaded = loader::load_specs(cfg.folder())?;
-	let filter_input = types::FilterInput {
-		suite_pattern: opts.suite.clone(),
-		case_pattern: opts.case.clone(),
-		tags: opts.tags.clone(),
-	};
+	let filter_input = types::FilterInput::from_opts(&opts);
 	let suites = filters::apply_filters(loaded.suites, &filter_input);
 	if suites.is_empty() {
 		bail!("No suites matched the selected filters");

@@ -30,6 +30,10 @@ pub struct SyncOpts {
 	pub fail_fast: bool,
 	pub prune: bool,
 	pub allow_shared_prune: bool,
+	/// Permit a prune that would remove *every* entity this sync manages because
+	/// no schema files were found. Off by default: an empty file set almost always
+	/// means a misconfigured folder, not an intentional teardown.
+	pub allow_empty_prune: bool,
 	/// Allow non-DEFINE statements (e.g. INSERT, UPDATE) in schema files.
 	/// When set, schema files are not parsed for catalog entity tracking;
 	/// they are applied as-is and only file-level hashes are tracked.
@@ -124,6 +128,7 @@ pub struct Sync<'a> {
 	prune: bool,
 	fail_fast: bool,
 	allow_shared_prune: bool,
+	allow_empty_prune: bool,
 	allow_all_statements: bool,
 	dry_run: bool,
 	vars: TemplateVars,
@@ -138,6 +143,7 @@ impl<'a> Sync<'a> {
 			prune: true,
 			fail_fast: true,
 			allow_shared_prune: false,
+			allow_empty_prune: false,
 			allow_all_statements: false,
 			dry_run: false,
 			vars: TemplateVars::default(),
@@ -147,6 +153,13 @@ impl<'a> Sync<'a> {
 	/// Remove database objects no longer present in the schema slice (default: `true`).
 	pub fn prune(mut self, prune: bool) -> Self {
 		self.prune = prune;
+		self
+	}
+
+	/// Allow a prune that would remove every managed entity because no schema files
+	/// were found (default: `false`). See [`SyncOpts::allow_empty_prune`].
+	pub fn allow_empty_prune(mut self, allow: bool) -> Self {
+		self.allow_empty_prune = allow;
 		self
 	}
 
@@ -192,6 +205,7 @@ impl<'a> Sync<'a> {
 			fail_fast: self.fail_fast,
 			prune: self.prune,
 			allow_shared_prune: self.allow_shared_prune,
+			allow_empty_prune: self.allow_empty_prune,
 			allow_all_statements: self.allow_all_statements,
 			vars: self.vars,
 			folder: String::new(),
@@ -328,6 +342,23 @@ async fn run_sync_with_files(
 		}
 		if shared && !opts.allow_shared_prune {
 			bail!("database is marked shared; refusing stale prune without --allow-shared-prune");
+		}
+		// An empty file set makes every managed entity look stale, so an unguarded
+		// prune here drops the whole schema. In practice this means the folder is
+		// wrong (a mistyped --folder, or running from the wrong directory), not that
+		// the user meant to tear the database down.
+		if opts.prune && files.is_empty() && !opts.allow_empty_prune {
+			bail!(
+				"refusing to prune all {stale_count} managed entities: no schema files were found{}.\n\
+				 This usually means the schema folder is wrong rather than that the schema was deleted.\n\
+				 Check --folder / SURREALDB_FOLDER, or pass --allow-empty-prune if you really do want \
+				 to remove everything.",
+				if opts.folder.is_empty() {
+					String::new()
+				} else {
+					format!(" in {}/schema", opts.folder)
+				}
+			);
 		}
 	}
 

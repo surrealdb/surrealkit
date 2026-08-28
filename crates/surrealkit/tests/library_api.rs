@@ -141,6 +141,63 @@ async fn sync_embedded_prunes_removed_files() {
 }
 
 #[tokio::test]
+async fn sync_embedded_refuses_to_prune_everything_when_no_files_found() {
+	let db = mem_db().await;
+
+	static FILES: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/alpha.surql",
+		sql: "DEFINE TABLE alpha SCHEMALESS;",
+	}];
+	Sync::embedded(FILES).run(&db).await.expect("initial sync");
+
+	// An empty file set makes every managed entity look stale. That almost always
+	// means the schema folder is misconfigured, so it must be refused rather than
+	// silently dropping the whole schema.
+	let err = Sync::embedded(&[]).run(&db).await.expect_err("empty sync must be refused");
+	let msg = format!("{err:#}");
+	assert!(msg.contains("refusing to prune"), "unexpected error: {msg}");
+	assert!(msg.contains("--allow-empty-prune"), "error must name the override: {msg}");
+
+	// Nothing was removed.
+	let mut resp = db.query("SELECT key FROM __entity WHERE ns = 'sync';").await.expect("query");
+	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
+	assert_eq!(rows.len(), 1, "guard must not have pruned anything");
+
+	let mut resp = db.query("INFO FOR DB;").await.expect("info");
+	let info: Option<serde_json::Value> = resp.take(0).expect("take");
+	let tables = info.as_ref().and_then(|v| v.get("tables")).expect("tables");
+	assert!(tables.get("alpha").is_some(), "alpha table must still exist");
+}
+
+#[tokio::test]
+async fn sync_embedded_empty_prune_is_allowed_with_opt_in() {
+	let db = mem_db().await;
+
+	static FILES: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/alpha.surql",
+		sql: "DEFINE TABLE alpha SCHEMALESS;",
+	}];
+	Sync::embedded(FILES).run(&db).await.expect("initial sync");
+
+	Sync::embedded(&[])
+		.allow_empty_prune(true)
+		.run(&db)
+		.await
+		.expect("opt-in empty prune should succeed");
+
+	let mut resp = db.query("SELECT key FROM __entity WHERE ns = 'sync';").await.expect("query");
+	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
+	assert!(rows.is_empty(), "opt-in prune should have removed tracking");
+}
+
+#[tokio::test]
+async fn sync_embedded_empty_is_fine_when_nothing_is_managed() {
+	// The guard must only fire when there is something to lose.
+	let db = mem_db().await;
+	Sync::embedded(&[]).run(&db).await.expect("empty sync on empty db is a no-op");
+}
+
+#[tokio::test]
 async fn sync_embedded_self_heals_catalog_drift() {
 	// Catalog drift: an entity tracked in __entity is already missing from the
 	// live DB (e.g., a `run_sql REMOVE …` rollout step dropped it but didn't
@@ -169,9 +226,13 @@ async fn sync_embedded_self_heals_catalog_drift() {
 	// Drop the file entirely so the pruner is asked to remove BOTH the table
 	// (still present) AND the field (already gone). Pre-fix, the field prune
 	// errors and the table is never reached.
+	// An empty file set is just a convenient way to make every entity stale here.
+	// That trips the empty-prune guard, so opt out of it explicitly: this test is
+	// about prune mechanics, not about the guard.
 	static EMPTY: &[EmbeddedSchemaFile] = &[];
 	Sync::embedded(EMPTY)
 		.prune(true)
+		.allow_empty_prune(true)
 		.run(&db)
 		.await
 		.expect("pruning sync should self-heal drift, not error on missing field");
