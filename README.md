@@ -228,6 +228,149 @@ The bundled template provides an organization and access-control model with four
 
 Teams, units, and subsidiaries each require the organizations feature.
 
+## Schema Modules and Targets
+
+By default a project has one unnamed schema (`database/schema`) applied to one
+database. That is still the default and needs no configuration.
+
+For larger projects, declare **schema modules** — independently tracked sets of
+schema files — and **targets** — named databases to apply them to.
+
+```toml
+# surrealkit.toml
+[schema.core]
+
+[schema.billing]
+depends_on = ["core"]
+
+[target.acme]
+ns = "acme"
+db = "prod"
+primary = true
+
+[target.globex]
+ns = "globex"
+db = "prod"
+pass_env = "GLOBEX_DB_PASSWORD"   # never inline a password
+```
+
+```
+database/
+  schema/                    # the default module
+  modules/
+    core/schema/
+    billing/schema/
+```
+
+```bash
+surrealkit sync                              # every declared module, primary target
+surrealkit sync --schema billing             # billing (and core, its dependency)
+surrealkit sync --schema billing --no-deps   # billing alone
+surrealkit sync --target acme                # every module, one target
+surrealkit sync --all                        # the full matrix
+surrealkit sync --all --keep-going           # don't stop at the first failure
+```
+
+### Why modules matter
+
+Each module owns its own metadata, so **a module only ever prunes its own
+database objects**. Without modules, syncing one schema against a database that
+another schema had populated would remove the other's tables.
+
+Named modules live under `modules/<name>/` rather than inside `database/schema`,
+because the default module walks its schema directory recursively — nesting would
+make it collect the named module's files and claim ownership of them.
+
+Configure a custom location with `[schema.<name>] path` if you need one.
+
+### Dependencies
+
+`depends_on` orders application, so a module is never applied before what it
+depends on. Selecting a module pulls its dependencies in, like `cargo build -p`;
+`--no-deps` opts out. Cycles are rejected before anything touches a database.
+
+### Targets and credentials
+
+A target inherits everything it does not set from the ambient configuration
+(`--host`/`--ns`/`--db` and the `SURREALDB_*` variables), so it usually only needs
+`ns` and `db`.
+
+Passwords are read from the environment via `pass_env`. A literal `pass` or
+`password` key in `surrealkit.toml` is rejected, and an unset `pass_env` fails
+before any connection is opened rather than part-way through a fan-out.
+
+A target may restrict which modules apply to it:
+
+```toml
+[target.warehouse]
+ns = "internal"
+db = "analytics"
+schemas = ["core", "analytics"]
+```
+
+### Fan-out semantics
+
+Targets are applied one at a time. Modules within a target stop at the first
+failure, since they are dependency-ordered and the rest would build on a broken
+base; targets also stop at the first failure unless you pass `--keep-going`.
+
+There is no cross-database transaction, so a failed run can leave some targets
+applied and others not. Every operation is idempotent, so re-running after a fix
+is safe. `surrealkit sync --all` exits non-zero if any pair failed.
+
+## Type Generation
+
+`surrealkit typegen` introspects the live database and emits a JSON description
+of its tables, fields, functions and params — and, when configured, TypeScript
+types.
+
+```bash
+surrealkit typegen                 # writes database/types/schema.json
+surrealkit typegen --stdout        # print instead
+surrealkit typegen --out types.json
+```
+
+Configure TypeScript output in `surrealkit.toml`:
+
+```toml
+[typegen]
+# Directory for generated TypeScript. Setting this enables TS generation:
+# `surrealkit typegen` and `surrealkit sync` both write <dir>/index.ts.
+typescript = "src/types"
+
+# Optional formatter run on the generated file. The path is appended as the
+# final argument. Failures are warnings, not errors.
+format = "biome check --write"
+```
+
+With `typescript` set, `surrealkit sync` regenerates types after applying schema
+changes, so the generated types never drift from the database.
+
+## Vite Plugin
+
+[`vite-plugin-surrealkit`](packages/vite-plugin-surrealkit) runs `surrealkit sync`
+from a Vite dev server or build, so schema changes apply as you edit.
+
+```bash
+npm install --save-dev vite-plugin-surrealkit
+```
+
+```ts
+// vite.config.ts
+import surrealkit from "vite-plugin-surrealkit";
+
+export default defineConfig({
+    plugins: [
+        surrealkit({
+            schemas: ["core", "billing"],   // optional: restrict modules
+            reloadOnSync: true,
+        }),
+    ],
+});
+```
+
+See the [plugin README](packages/vite-plugin-surrealkit/README.md) for all options.
+
 ## Team Workflow
 
 SurrealKit now separates schema authoring, dev sync, and shared/prod rollouts:
@@ -436,7 +579,7 @@ error: template variable 'SCHEMA_PREFIX' is not defined
 
 ## Testing Framework
 
-[Testing Example](https://github.com/ForetagInc/surrealkit/blob/main/examples/testing/README.md)
+[Testing Example](https://github.com/surrealdb/surrealkit/blob/main/examples/testing/README.md)
 
 ```sh
 surrealkit test

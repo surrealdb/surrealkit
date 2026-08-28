@@ -14,10 +14,11 @@ This crate is re-exported through the main `surrealkit` crate. You do not normal
 
 ```toml
 [dependencies]
-surrealkit = { version = "0.6", default-features = false }
+surrealkit = "1.0.0-beta.1"
 ```
 
-`default-features = false` omits the CLI dependencies (TLS, file-watching, etc.) and keeps only the library surface.
+The macros are re-exported from `surrealkit`, so depend on that rather than on
+`surrealkit-macros` directly.
 
 ---
 

@@ -12,7 +12,7 @@ The library is useful when you want schema management to happen inside your proc
 
 ```toml
 [dependencies]
-surrealkit = "0.7"
+surrealkit = "1.0.0-beta.1"
 ```
 
 ---
@@ -52,7 +52,7 @@ SurrealKit works against an in-process SurrealDB such as `mem://`, `surrealkv://
 
 ```toml
 [dependencies]
-surrealkit = "0.7"
+surrealkit = "1.0.0-beta.1"
 surrealdb = { version = "3", features = ["kv-surrealkv"] }
 ```
 
