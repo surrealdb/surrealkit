@@ -26,7 +26,7 @@ jobs:
     integration_test:
         name: Surrealkit integration tests
         runs-on: ubuntu-22.04
-        timeout-minutes: 5
+        timeout-minutes: 15
         env:
             SURREALKIT_TEST_BASE_URL: http://127.0.0.1:8000
             SURREALDB_FOLDER: ${{ github.workspace }}/database
@@ -100,7 +100,17 @@ jobs:
             # Exercises connect() for real against root, namespace and database
             # auth levels. These skip silently when the URL is unset.
             - name: Run auth-level integration tests
-              run: cargo test --manifest-path crates/surrealkit/Cargo.toml --test auth_levels --locked
+              # Same feature set as the build step above, so this reuses that
+              # compilation rather than resolving surrealdb's features differently
+              # and rebuilding it. auth_levels needs a live server (mem:// disables
+              # auth), so it needs no storage-engine feature.
+              run: |
+                cargo test \
+                    --manifest-path crates/surrealkit/Cargo.toml \
+                    --test auth_levels \
+                    --no-default-features \
+                    --features cli \
+                    --locked
 
             - name: Upload integration test report
               if: always()
