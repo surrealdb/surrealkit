@@ -36,6 +36,10 @@ async fn mem_db() -> Surreal<Any> {
 }
 
 // Tests that change cwd must hold this lock to avoid races.
+//
+// Always taken with `unwrap_or_else(|e| e.into_inner())`: a panicking test poisons
+// the mutex, and a bare `unwrap()` would turn that single failure into a cascade of
+// `PoisonError`s across every other cwd test, hiding which one actually broke.
 static FS_LOCK: Mutex<()> = Mutex::new(());
 
 struct RestoreCwd(std::path::PathBuf);
@@ -55,7 +59,7 @@ fn enter_tempdir() -> (tempfile::TempDir, RestoreCwd) {
 
 #[tokio::test]
 async fn setup_initialises_metadata_tables() {
-	let _lock = FS_LOCK.lock().unwrap();
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (_tmp, _cwd) = enter_tempdir();
 	let db = mem_db().await;
 	run_setup(&db, DEFAULT_ROOT_DIR).await.expect("run_setup");
@@ -278,9 +282,10 @@ async fn sync_embedded_does_not_scaffold_files_on_disk() {
 	Sync::embedded(FILES).run(&db).await.expect("embedded sync");
 
 	// The `path` above is only a tracking key — nothing should hit the filesystem.
+	let leaked = walk_paths(tmp.path());
 	assert!(
 		!tmp.path().join("database").exists(),
-		"embedded sync must not create a `database/` directory on disk (found one in CWD)"
+		"embedded sync must not create a `database/` directory on disk; found: {leaked:?}"
 	);
 
 	// And the metadata tables must still have been set up in the DB.
@@ -292,7 +297,60 @@ async fn sync_embedded_does_not_scaffold_files_on_disk() {
 }
 
 #[tokio::test]
+async fn rollout_facade_does_not_scaffold_files_on_disk() {
+	// Regression: Rollout::{start,complete,rollback} hardcoded ./database and
+	// routed through run_setup, so a code-driven rollout created
+	// `./database/setup.surql` in the caller's working directory -- the same leak
+	// run_setup_embedded was introduced to avoid for Sync.
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (tmp, _restore) = enter_tempdir();
+
+	let db = mem_db().await;
+	let spec = add_table_spec("no_scaffold_rollout", "scaffold_probe");
+
+	let rollout = Rollout::new(spec, &[]);
+	rollout.start(&db).await.expect("start");
+	rollout.complete(&db).await.expect("complete");
+
+	let leaked: Vec<String> = walk_paths(tmp.path());
+	assert!(
+		!tmp.path().join("database").exists(),
+		"code-driven rollout must not create a `database/` directory on disk; found: {leaked:?}"
+	);
+
+	// The metadata tables were still initialised in the database.
+	db.query("SELECT * FROM __rollout LIMIT 1;")
+		.await
+		.expect("query __rollout")
+		.check()
+		.expect("__rollout must exist after a code-driven rollout");
+}
+
+#[tokio::test]
+async fn rollout_facade_folder_opts_into_scaffolding() {
+	// The CLI workflow still wants setup.surql on disk; `.folder()` opts in.
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (tmp, _restore) = enter_tempdir();
+
+	let db = mem_db().await;
+	let spec = add_table_spec("scaffold_rollout", "scaffold_probe_2");
+
+	Rollout::new(spec, &[]).folder("database").start(&db).await.expect("start with folder");
+
+	assert!(
+		tmp.path().join("database").join("setup.surql").exists(),
+		"`.folder()` must scaffold setup.surql"
+	);
+}
+
+#[tokio::test]
 async fn rollout_status_is_empty_when_no_rollouts_exist() {
+	// `run_status` is a CLI entry point: it calls run_setup, which scaffolds
+	// `<folder>/setup.surql` relative to the process cwd. Without the lock and a
+	// tempdir this test drops that file into whichever tempdir a concurrent cwd
+	// test is using, making *that* test fail instead of this one.
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (_tmp, _restore) = enter_tempdir();
 	let db = mem_db().await;
 	run_status(&db, DEFAULT_ROOT_DIR, None).await.expect("run_status on empty DB");
 }
@@ -735,7 +793,7 @@ async fn sync_embedded_with_undefined_var_returns_error() {
 
 #[tokio::test]
 async fn seed_with_vars_substitutes_in_seed_file() {
-	let _lock = FS_LOCK.lock().unwrap();
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (tmp, _cwd) = enter_tempdir();
 
 	let db = mem_db().await;
@@ -761,7 +819,7 @@ async fn seed_with_vars_substitutes_in_seed_file() {
 
 #[tokio::test]
 async fn seed_with_undefined_var_returns_error() {
-	let _lock = FS_LOCK.lock().unwrap();
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (tmp, _cwd) = enter_tempdir();
 
 	let db = mem_db().await;
@@ -783,7 +841,7 @@ async fn seed_with_undefined_var_returns_error() {
 #[tokio::test]
 async fn rollout_apply_files_step_substitutes_vars() {
 	// ApplyFiles reads from disk; rollout_run_sql_step_with_vars covers inline SQL.
-	let _lock = FS_LOCK.lock().unwrap();
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (tmp, _cwd) = enter_tempdir();
 
 	let db = mem_db().await;
@@ -872,4 +930,22 @@ async fn rollout_run_sql_step_with_vars() {
 		Some("hello_from_var"),
 		"template variable should have been substituted in run_sql step"
 	);
+}
+
+/// List every path under `root`, relative, for diagnosing filesystem leaks.
+fn walk_paths(root: &Path) -> Vec<String> {
+	fn rec(dir: &Path, root: &Path, out: &mut Vec<String>) {
+		if let Ok(entries) = std::fs::read_dir(dir) {
+			for e in entries.flatten() {
+				let p = e.path();
+				out.push(p.strip_prefix(root).unwrap_or(&p).display().to_string());
+				if p.is_dir() {
+					rec(&p, root, out);
+				}
+			}
+		}
+	}
+	let mut out = Vec::new();
+	rec(root, root, &mut out);
+	out
 }

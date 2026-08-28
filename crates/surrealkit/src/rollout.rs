@@ -409,6 +409,7 @@ pub struct Rollout<'a> {
 	spec: RolloutSpec,
 	target_files: &'a [crate::sync::EmbeddedSchemaFile],
 	vars: TemplateVars,
+	folder: Option<String>,
 }
 
 impl<'a> Rollout<'a> {
@@ -422,7 +423,20 @@ impl<'a> Rollout<'a> {
 			spec,
 			target_files,
 			vars: TemplateVars::default(),
+			folder: None,
 		}
+	}
+
+	/// Opt into the filesystem-backed workflow, scaffolding `<folder>/setup.surql`
+	/// when it is missing.
+	///
+	/// Without this a rollout is purely in-database and writes nothing to disk.
+	/// Before v1 the folder defaulted to `./database` unconditionally, so running a
+	/// code-driven rollout from a library created `./database/setup.surql` in the
+	/// caller's working directory.
+	pub fn folder(mut self, folder: impl Into<String>) -> Self {
+		self.folder = Some(folder.into());
+		self
 	}
 
 	/// Set template variables applied to step SQL before execution.
@@ -440,19 +454,20 @@ impl<'a> Rollout<'a> {
 	/// if this rollout is already in a terminal state, or if a step fails (the
 	/// rollout is left in the `failed` state).
 	pub async fn start(&self, db: &Surreal<Any>) -> Result<()> {
-		run_start_with_spec(db, default_folder(), &self.spec, self.target_files, &self.vars).await
+		run_start_with_spec(db, self.folder.as_deref(), &self.spec, self.target_files, &self.vars)
+			.await
 	}
 
 	/// Run the `complete` (contract) phase, applying destructive changes and marking
 	/// the rollout completed.
 	pub async fn complete(&self, db: &Surreal<Any>) -> Result<()> {
-		run_complete_with_spec(db, default_folder(), &self.spec, &self.vars).await
+		run_complete_with_spec(db, self.folder.as_deref(), &self.spec, &self.vars).await
 	}
 
 	/// Run the `rollback` phase, undoing the `start` phase and marking the rollout
 	/// rolled back.
 	pub async fn rollback(&self, db: &Surreal<Any>) -> Result<()> {
-		run_rollback_with_spec(db, default_folder(), &self.spec, &self.vars).await
+		run_rollback_with_spec(db, self.folder.as_deref(), &self.spec, &self.vars).await
 	}
 
 	/// Fetch this rollout's current status, or `None` if it has never been started.
@@ -490,10 +505,6 @@ pub struct RolloutStatusReport {
 	pub completed_at: Option<String>,
 	pub last_error: Option<String>,
 	pub steps: Vec<RolloutStepStatus>,
-}
-
-fn default_folder() -> &'static str {
-	crate::constants::DEFAULT_ROOT_DIR
 }
 
 #[derive(Debug, Clone)]
@@ -746,12 +757,18 @@ pub async fn run_start(
 /// Pass `&TemplateVars::default()` if no substitution is needed.
 pub(crate) async fn run_start_with_spec(
 	db: &Surreal<Any>,
-	folder: &str,
+	folder: Option<&str>,
 	spec: &RolloutSpec,
 	target_files: &[crate::sync::EmbeddedSchemaFile],
 	vars: &TemplateVars,
 ) -> Result<()> {
-	run_setup(db, folder).await?;
+	// `Some` selects the CLI's filesystem workflow, which scaffolds
+	// `<folder>/setup.surql` when missing. Code-driven rollouts pass `None` so
+	// nothing is written into the caller's working directory.
+	match folder {
+		Some(folder) => run_setup(db, folder).await?,
+		None => crate::setup::run_setup_embedded(db).await?,
+	}
 	validate_rollout_spec(spec)?;
 	let schema_files = embedded_to_schema_files(target_files);
 	if !spec.target_schema_hash.is_empty() {
@@ -851,11 +868,17 @@ pub async fn run_complete(
 /// if no substitution is needed.
 pub(crate) async fn run_complete_with_spec(
 	db: &Surreal<Any>,
-	folder: &str,
+	folder: Option<&str>,
 	spec: &RolloutSpec,
 	vars: &TemplateVars,
 ) -> Result<()> {
-	run_setup(db, folder).await?;
+	// `Some` selects the CLI's filesystem workflow, which scaffolds
+	// `<folder>/setup.surql` when missing. Code-driven rollouts pass `None` so
+	// nothing is written into the caller's working directory.
+	match folder {
+		Some(folder) => run_setup(db, folder).await?,
+		None => crate::setup::run_setup_embedded(db).await?,
+	}
 	validate_rollout_spec(spec)?;
 	complete_inner(db, &make_loaded_spec(spec), vars).await
 }
@@ -933,11 +956,17 @@ pub async fn run_rollback(
 /// if no substitution is needed.
 pub(crate) async fn run_rollback_with_spec(
 	db: &Surreal<Any>,
-	folder: &str,
+	folder: Option<&str>,
 	spec: &RolloutSpec,
 	vars: &TemplateVars,
 ) -> Result<()> {
-	run_setup(db, folder).await?;
+	// `Some` selects the CLI's filesystem workflow, which scaffolds
+	// `<folder>/setup.surql` when missing. Code-driven rollouts pass `None` so
+	// nothing is written into the caller's working directory.
+	match folder {
+		Some(folder) => run_setup(db, folder).await?,
+		None => crate::setup::run_setup_embedded(db).await?,
+	}
 	validate_rollout_spec(spec)?;
 	rollback_inner(db, &make_loaded_spec(spec), vars).await
 }
