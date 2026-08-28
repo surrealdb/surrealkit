@@ -29,6 +29,16 @@ pub enum AuthLevel {
 }
 
 impl AuthLevel {
+	/// Parse an auth level from its CLI/config spelling, erroring with the accepted
+	/// values rather than returning `None`.
+	pub fn parse_str(s: &str) -> Result<Self> {
+		Self::parse(s).ok_or_else(|| {
+			anyhow::anyhow!(
+				"invalid auth level {s:?}: expected root, namespace/ns, database/db, or none"
+			)
+		})
+	}
+
 	fn parse(s: &str) -> Option<Self> {
 		match s.to_ascii_lowercase().as_str() {
 			"root" => Some(Self::Root),
@@ -146,6 +156,28 @@ impl DbCfg {
 			auth_level,
 			folder,
 		})
+	}
+
+	/// A copy of this config with the supplied fields replaced. `None` inherits,
+	/// which is what lets a `[target.*]` section name only its `ns`/`db`.
+	pub fn overridden(
+		&self,
+		host: Option<String>,
+		ns: Option<String>,
+		db: Option<String>,
+		user: Option<String>,
+		pass: Option<String>,
+		auth_level: Option<AuthLevel>,
+	) -> Self {
+		Self {
+			host: host.unwrap_or_else(|| self.host.clone()),
+			ns: ns.unwrap_or_else(|| self.ns.clone()),
+			db: db.unwrap_or_else(|| self.db.clone()),
+			user: user.unwrap_or_else(|| self.user.clone()),
+			pass: pass.unwrap_or_else(|| self.pass.clone()),
+			auth_level: auth_level.unwrap_or_else(|| self.auth_level.clone()),
+			folder: self.folder.clone(),
+		}
 	}
 
 	pub fn host(&self) -> &str {

@@ -83,6 +83,8 @@ pub fn deprecated_seed_surql_path(folder: &str) -> PathBuf {
 pub struct Layout {
 	folder: String,
 	module: Module,
+	/// Set by `[schema.<name>] path`, overriding the conventional schema dir.
+	schema_dir: Option<PathBuf>,
 }
 
 impl Layout {
@@ -91,6 +93,28 @@ impl Layout {
 		Self {
 			folder: folder.into(),
 			module,
+			schema_dir: None,
+		}
+	}
+
+	/// Like [`Layout::new`], but with an explicit schema directory from
+	/// `[schema.<name>] path`. Relative paths resolve against the project folder.
+	pub fn with_schema_dir(
+		folder: impl Into<String>,
+		module: Module,
+		schema_dir: impl Into<PathBuf>,
+	) -> Self {
+		let folder = folder.into();
+		let dir = schema_dir.into();
+		let dir = if dir.is_absolute() {
+			dir
+		} else {
+			PathBuf::from(&folder).join(dir)
+		};
+		Self {
+			folder,
+			module,
+			schema_dir: Some(dir),
 		}
 	}
 
@@ -121,7 +145,7 @@ impl Layout {
 
 	/// Directory holding this module's `.surql` schema files.
 	pub fn schema_dir(&self) -> PathBuf {
-		self.root().join("schema")
+		self.schema_dir.clone().unwrap_or_else(|| self.root().join("schema"))
 	}
 
 	/// Directory holding this module's rollout manifests.

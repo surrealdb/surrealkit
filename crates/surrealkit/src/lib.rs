@@ -4,6 +4,7 @@ pub mod config;
 pub mod constants;
 pub mod core;
 pub mod module;
+pub mod project;
 pub mod rollout;
 pub mod scaffold;
 pub mod schema_state;
@@ -20,6 +21,7 @@ pub use anyhow;
 pub use config::{AuthLevel, DbCfg, DbOverrides, connect};
 // Rollouts (the staged, reversible path).
 pub use module::{Module, Partition};
+pub use project::{ProjectConfig, Target};
 pub use rollout::{
 	Rollout, RolloutAction, RolloutCompatibility, RolloutPhase, RolloutSpec, RolloutSpecBuilder,
 	RolloutStatus, RolloutStatusReport, RolloutStep, RolloutStepStatus,
