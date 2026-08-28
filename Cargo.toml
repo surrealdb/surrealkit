@@ -138,3 +138,12 @@ unwrap_used = 'warn'
 # Checks for the use of bindings with a single leading underscore.
 # https://rust-lang.github.io/rust-clippy/master/index.html#used_underscore_binding
 used_underscore_binding = 'warn'
+
+# Library code must not print directly: `surrealkit` is a library as well as a
+# CLI, so unconditional writes to stdout/stderr are unsuppressible noise for
+# consumers. Library modules emit through the `log` facade instead; the binary
+# (src/main.rs and its `templates` module) allows these crate-wide, and installs a
+# logger that reproduces the CLI's output exactly.
+# https://rust-lang.github.io/rust-clippy/master/#print_stdout
+print_stdout = 'deny'
+print_stderr = 'deny'

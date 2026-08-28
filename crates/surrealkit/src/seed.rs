@@ -149,7 +149,7 @@ struct SeedStats {
 
 impl SeedStats {
 	fn report(&self) {
-		println!("Seeded {} file(s); {} unchanged", self.executed, self.skipped);
+		log::info!("Seeded {} file(s); {} unchanged", self.executed, self.skipped);
 	}
 }
 
@@ -166,12 +166,12 @@ async fn apply_seed(
 	let hash = sha256_hex(raw_sql.as_bytes());
 
 	if !force && tracked.get(key).is_some_and(|prev| prev == &hash) {
-		println!("  skipping {key} (unchanged)");
+		log::info!("  skipping {key} (unchanged)");
 		stats.skipped += 1;
 		return Ok(());
 	}
 
-	println!("  executing {key}");
+	log::info!("  executing {key}");
 	let sql =
 		vars.apply(raw_sql).with_context(|| format!("applying template variables in {key}"))?;
 	exec_surql(db, &sql).await.with_context(|| format!("executing {key}"))?;
@@ -197,7 +197,7 @@ async fn run_dir(db: &Surreal<Any>, dir: &Path, vars: &TemplateVars, force: bool
 
 	files.sort();
 
-	println!("Seeding from {} ({} files found)", display(dir), files.len());
+	log::info!("Seeding from {} ({} files found)", display(dir), files.len());
 
 	let tracked = load_seed_hashes(db).await?;
 	let mut stats = SeedStats::default();

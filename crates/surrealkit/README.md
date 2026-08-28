@@ -17,6 +17,29 @@ surrealkit = "1.0.0-beta.1"
 
 ---
 
+## Logging
+
+SurrealKit emits progress (files applied, entities pruned, seeds executed)
+through the [`log`](https://docs.rs/log) facade. Without a logger installed the
+library is silent, which is the right default for a dependency.
+
+To see progress, install any `log` implementation:
+
+```rust,ignore
+env_logger::init();
+Sync::embedded(SCHEMA).run(&db).await?;
+// INFO  applied database/schema/person.surql
+```
+
+Records are emitted under the `surrealkit` target, so you can filter them:
+
+```bash
+RUST_LOG=surrealkit=info cargo run
+```
+
+Errors are still returned as `Result`; logging is for progress, not for failure
+reporting.
+
 ## Concepts: sync vs rollout
 
 SurrealKit gives you two ways to get schema into a database. Pick based on whether the database is disposable or shared.

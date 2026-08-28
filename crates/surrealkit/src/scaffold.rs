@@ -58,18 +58,18 @@ pub fn scaffold(folder: &str) -> Result<()> {
 			.context("Writing surrealkit.toml")?;
 	}
 
-	println!("Scaffolded project in {}\n", folder);
-	println!("  surrealkit.toml");
-	println!("  {}/", folder);
-	println!("  ├── schema/");
-	println!("  ├── rollouts/");
-	println!("  ├── snapshots/");
-	println!("  ├── tests/");
-	println!("  │   ├── suites/");
-	println!("  │   └── fixtures/");
-	println!("  ├── seed/");
-	println!("  │   └── seed.surql");
-	println!("  └── setup.surql");
+	log::info!("Scaffolded project in {}\n", folder);
+	log::info!("  surrealkit.toml");
+	log::info!("  {}/", folder);
+	log::info!("  ├── schema/");
+	log::info!("  ├── rollouts/");
+	log::info!("  ├── snapshots/");
+	log::info!("  ├── tests/");
+	log::info!("  │   ├── suites/");
+	log::info!("  │   └── fixtures/");
+	log::info!("  ├── seed/");
+	log::info!("  │   └── seed.surql");
+	log::info!("  └── setup.surql");
 	Ok(())
 }
 

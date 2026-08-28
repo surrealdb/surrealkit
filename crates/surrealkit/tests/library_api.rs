@@ -78,6 +78,51 @@ async fn setup_initialises_metadata_tables() {
 		.expect("__rollout must exist");
 }
 
+/// Captures everything the library logs during one call.
+///
+/// Library modules emit through the `log` facade rather than printing directly,
+/// so a consumer gets silence unless they install a logger. This asserts the
+/// records actually reach a logger, and by extension that nothing bypasses it.
+struct CapturingLogger {
+	records: Mutex<Vec<String>>,
+}
+
+impl log::Log for CapturingLogger {
+	fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+		true
+	}
+	fn log(&self, record: &log::Record<'_>) {
+		if record.target().starts_with("surrealkit") {
+			self.records.lock().unwrap_or_else(|e| e.into_inner()).push(record.args().to_string());
+		}
+	}
+	fn flush(&self) {}
+}
+
+static CAPTURED: CapturingLogger = CapturingLogger {
+	records: Mutex::new(Vec::new()),
+};
+
+#[tokio::test]
+async fn library_progress_goes_through_the_log_facade() {
+	// If set_logger fails another test already installed one; either way the
+	// assertion below is about our records.
+	let _ = log::set_logger(&CAPTURED).map(|()| log::set_max_level(log::LevelFilter::Trace));
+
+	let db = mem_db().await;
+	static FILES: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/logged.surql",
+		sql: "DEFINE TABLE logged_thing SCHEMALESS;",
+	}];
+	Sync::embedded(FILES).run(&db).await.expect("sync");
+
+	let records = CAPTURED.records.lock().unwrap_or_else(|e| e.into_inner());
+	assert!(
+		records.iter().any(|r| r.contains("database/schema/logged.surql")),
+		"sync progress must be emitted through `log`, not printed directly: {records:?}"
+	);
+}
+
 #[tokio::test]
 async fn sync_embedded_applies_schema_and_tracks_file() {
 	let db = mem_db().await;

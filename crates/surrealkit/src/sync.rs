@@ -79,7 +79,7 @@ pub async fn run_sync(db: &Surreal<Any>, opts: SyncOpts) -> Result<()> {
 
 	if opts.watch {
 		run_sync_once(db, &opts, true).await?;
-		println!(
+		log::info!(
 			"Watch mode active ({}ms interval). Waiting for schema changes... (Ctrl+C to stop)",
 			opts.debounce_ms.max(250)
 		);
@@ -87,7 +87,7 @@ pub async fn run_sync(db: &Surreal<Any>, opts: SyncOpts) -> Result<()> {
 		loop {
 			tokio::select! {
 				_ = tokio::signal::ctrl_c() => {
-					println!("\nStopping schema watch.");
+					log::info!("\nStopping schema watch.");
 					break;
 				}
 				_ = tokio::time::sleep(Duration::from_millis(opts.debounce_ms.max(250))) => {
@@ -95,7 +95,7 @@ pub async fn run_sync(db: &Surreal<Any>, opts: SyncOpts) -> Result<()> {
 						if opts.fail_fast {
 							return Err(err);
 						}
-						eprintln!("sync iteration error: {err:#}");
+						log::error!("sync iteration error: {err:#}");
 					}
 				}
 			}
@@ -285,7 +285,7 @@ async fn run_sync_with_files(
 	let managed = load_managed_entities(db, &opts.module).await?;
 
 	if files.is_empty() && !watch_mode {
-		println!(
+		log::info!(
 			"No schema files found in {}",
 			Layout::new(opts.folder.clone(), opts.module.clone()).schema_dir().display()
 		);
@@ -308,7 +308,7 @@ async fn run_sync_with_files(
 		changed_count += 1;
 		if opts.dry_run {
 			if !watch_mode {
-				println!("DRY RUN: would apply {}", file.path);
+				log::info!("DRY RUN: would apply {}", file.path);
 			}
 			synced_paths.insert(file.path.clone());
 			continue;
@@ -322,7 +322,7 @@ async fn run_sync_with_files(
 		match exec_surql(db, &sql).await {
 			Ok(_) => {
 				if !watch_mode {
-					println!("applied {}", file.path);
+					log::info!("applied {}", file.path);
 				}
 				store_sync_hash(db, &opts.module, &file.path, &file.hash).await?;
 				synced_paths.insert(file.path.clone());
@@ -330,7 +330,7 @@ async fn run_sync_with_files(
 			Err(err) => {
 				apply_errors += 1;
 				failed_paths.insert(file.path.clone());
-				eprintln!("error applying {}: {err:#}", file.path);
+				log::error!("error applying {}: {err:#}", file.path);
 				if opts.fail_fast {
 					return Err(err);
 				}
@@ -403,9 +403,9 @@ async fn run_sync_with_files(
 		let remove_sql = render_remove_sql(&stale_entities, true)?;
 		if opts.dry_run {
 			if !watch_mode {
-				println!("DRY RUN: would prune {} stale managed entities", remove_sql.len());
+				log::info!("DRY RUN: would prune {} stale managed entities", remove_sql.len());
 				for stmt in &remove_sql {
-					println!("  {}", stmt);
+					log::info!("  {}", stmt);
 				}
 			}
 		} else if shared {
@@ -433,19 +433,19 @@ async fn run_sync_with_files(
 	if !pending_operations.is_empty() {
 		if opts.dry_run {
 			if !watch_mode {
-				println!("DRY RUN: would run {} operation(s)", pending_operations.len());
+				log::info!("DRY RUN: would run {} operation(s)", pending_operations.len());
 			}
 		} else {
 			for op in &pending_operations {
 				match exec_surql(db, &op.sql).await {
 					Ok(_) => {
 						if !watch_mode {
-							println!("ran operation from {}", op.source_path);
+							log::info!("ran operation from {}", op.source_path);
 						}
 					}
 					Err(err) => {
 						apply_errors += 1;
-						eprintln!("error running operation from {}: {err:#}", op.source_path);
+						log::error!("error running operation from {}: {err:#}", op.source_path);
 						if opts.fail_fast {
 							return Err(err);
 						}
@@ -475,10 +475,10 @@ async fn run_sync_with_files(
 					ts_dir,
 					opts.typegen_ts_format.as_deref(),
 				) {
-					Ok(path) => println!("typegen: wrote {}", path.display()),
-					Err(err) => eprintln!("typegen: failed to write types: {err:#}"),
+					Ok(path) => log::info!("typegen: wrote {}", path.display()),
+					Err(err) => log::error!("typegen: failed to write types: {err:#}"),
 				},
-				Err(err) => eprintln!("typegen: failed to introspect schema: {err:#}"),
+				Err(err) => log::error!("typegen: failed to introspect schema: {err:#}"),
 			}
 		}
 	}
@@ -486,14 +486,14 @@ async fn run_sync_with_files(
 	if watch_mode {
 		if has_changes {
 			if opts.dry_run {
-				println!(
+				log::info!(
 					"Change detected (dry-run): {} schema file(s), {} stale entity(ies), {} stale tracking file(s) would be reconciled.",
 					changed_count,
 					stale_count,
 					removed_paths.len()
 				);
 			} else {
-				println!(
+				log::info!(
 					"Change detected and pushed: {} schema file(s) synced, {} stale entity(ies) pruned, {} stale tracking file(s) removed.",
 					changed_count,
 					pruned_count,
@@ -503,14 +503,14 @@ async fn run_sync_with_files(
 			let _ = std::io::stdout().flush();
 		}
 	} else if changed_count == 0 && removed_paths.is_empty() && stale_count == 0 {
-		println!("schema already in sync");
+		log::info!("schema already in sync");
 	}
 
 	if apply_errors > 0 {
-		eprintln!("sync completed with {} apply error(s)", apply_errors);
+		log::error!("sync completed with {} apply error(s)", apply_errors);
 	}
 	if stale_count > 0 && !opts.prune {
-		println!(
+		log::info!(
 			"detected {} stale managed entities; rerun without --no-prune to remove",
 			stale_count
 		);

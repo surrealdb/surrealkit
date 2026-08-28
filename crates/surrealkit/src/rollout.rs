@@ -565,7 +565,7 @@ pub async fn run_baseline(db: &Surreal<Any>, folder: &str, module: &Module) -> R
 	save_schema_snapshot(folder, &schema_snapshot)?;
 	save_catalog_snapshot(folder, &catalog_snapshot)?;
 
-	println!(
+	log::info!(
 		"Seeded managed entity baseline with {} schema file(s) and {} managed object(s).",
 		files.len(),
 		catalog_snapshot.entities.len()
@@ -605,20 +605,20 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 	let raw = toml::to_string_pretty(&spec).context("serializing rollout spec")?;
 
 	if opts.dry_run {
-		println!("Pending rollout plan:");
-		println!(
+		log::info!("Pending rollout plan:");
+		log::info!(
 			"  files: +{} ~{} -{}",
 			file_diff.added.len(),
 			file_diff.modified.len(),
 			file_diff.removed.len()
 		);
-		println!(
+		log::info!(
 			"  entities: +{} ~{} -{}",
 			catalog_diff.added.len(),
 			catalog_diff.modified.len(),
 			catalog_diff.removed.len()
 		);
-		println!("  would create: {}", path.display());
+		log::info!("  would create: {}", path.display());
 		return Ok(());
 	}
 
@@ -626,8 +626,8 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 	save_schema_snapshot(folder, &new_schema)?;
 	save_catalog_snapshot(folder, &new_catalog)?;
 
-	println!("Generated rollout manifest {}", path.display());
-	println!("Updated {}", catalog_snapshot_path(folder).display());
+	log::info!("Generated rollout manifest {}", path.display());
+	log::info!("Updated {}", catalog_snapshot_path(folder).display());
 	Ok(())
 }
 
@@ -646,7 +646,7 @@ pub async fn run_lint(folder: &str, opts: RolloutExecutionOpts) -> Result<()> {
 			current_hash
 		);
 	}
-	println!("Rollout {} is valid (checksum {}).", rollout.spec.id, rollout.checksum);
+	log::info!("Rollout {} is valid (checksum {}).", rollout.spec.id, rollout.checksum);
 	Ok(())
 }
 
@@ -704,7 +704,7 @@ pub async fn run_status(db: &Surreal<Any>, folder: &str, selector: Option<String
 	let rows: Vec<Value> =
 		raw_rows.into_iter().map(|v| Value::from_value(v).unwrap_or(Value::Null)).collect();
 	if rows.is_empty() {
-		println!("No rollout records found.");
+		log::info!("No rollout records found.");
 		return Ok(());
 	}
 
@@ -712,15 +712,15 @@ pub async fn run_status(db: &Surreal<Any>, folder: &str, selector: Option<String
 		let id = string_field(&row, "id").unwrap_or_else(|| "<unknown>".to_string());
 		let name = string_field(&row, "name").unwrap_or_else(|| "<unnamed>".to_string());
 		let status = string_field(&row, "status").unwrap_or_else(|| "<unknown>".to_string());
-		println!("{} [{}] {}", id, status, name);
+		log::info!("{} [{}] {}", id, status, name);
 		if let Some(started_at) = string_field(&row, "started_at") {
-			println!("  started_at: {}", started_at);
+			log::info!("  started_at: {}", started_at);
 		}
 		if let Some(completed_at) = string_field(&row, "completed_at") {
-			println!("  completed_at: {}", completed_at);
+			log::info!("  completed_at: {}", completed_at);
 		}
 		if let Some(last_error) = string_field(&row, "last_error") {
-			println!("  last_error: {}", last_error);
+			log::info!("  last_error: {}", last_error);
 		}
 
 		let steps = row.get("steps").and_then(|v| v.as_array()).cloned().unwrap_or_default();
@@ -729,9 +729,9 @@ pub async fn run_status(db: &Surreal<Any>, folder: &str, selector: Option<String
 			let phase = string_field(&step, "phase").unwrap_or_else(|| "?".to_string());
 			let kind = string_field(&step, "kind").unwrap_or_else(|| "?".to_string());
 			let status = string_field(&step, "status").unwrap_or_else(|| "?".to_string());
-			println!("  - {} [{}:{}] {}", step_id, phase, kind, status);
+			log::info!("  - {} [{}:{}] {}", step_id, phase, kind, status);
 			if let Some(err) = string_field(&step, "error") {
-				println!("    error: {}", err);
+				log::info!("    error: {}", err);
 			}
 		}
 	}
@@ -861,7 +861,7 @@ async fn start_inner(
 		}
 		set_rollout_status(db, &rollout.spec.id, RolloutStatus::ReadyToComplete, None, None)
 			.await?;
-		println!("Rollout {} is ready to complete.", rollout.spec.id);
+		log::info!("Rollout {} is ready to complete.", rollout.spec.id);
 		Ok(())
 	}
 	.await;
@@ -950,7 +950,7 @@ async fn complete_inner(
 			Some(OffsetDateTime::now_utc().format(&Rfc3339)?),
 		)
 		.await?;
-		println!("Completed rollout {}.", rollout.spec.id);
+		log::info!("Completed rollout {}.", rollout.spec.id);
 		Ok(())
 	}
 	.await;
@@ -1011,7 +1011,7 @@ async fn rollback_inner(
 		match string_field(&row, "status").as_deref() {
 			Some("completed") => bail!("rollout '{}' is already completed", rollout.spec.id),
 			Some("rolled_back") => {
-				println!("Rollout {} is already rolled back.", rollout.spec.id);
+				log::info!("Rollout {} is already rolled back.", rollout.spec.id);
 				return Ok(());
 			}
 			_ => {}
@@ -1040,7 +1040,7 @@ async fn rollback_inner(
 			Some(OffsetDateTime::now_utc().format(&Rfc3339)?),
 		)
 		.await?;
-		println!("Rolled back rollout {}.", rollout.spec.id);
+		log::info!("Rolled back rollout {}.", rollout.spec.id);
 		Ok(())
 	}
 	.await;
@@ -1082,7 +1082,7 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 					Some(OffsetDateTime::now_utc().format(&Rfc3339)?),
 				)
 				.await?;
-				println!(
+				log::info!(
 					"Repaired rollout {}: running_complete → completed.",
 					rollout.spec.id
 				);
@@ -1099,7 +1099,7 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 					Some(OffsetDateTime::now_utc().format(&Rfc3339)?),
 				)
 				.await?;
-				println!(
+				log::info!(
 					"Repaired rollout {}: running_rollback → rolled_back.",
 					rollout.spec.id
 				);
@@ -1115,13 +1115,13 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 					None,
 				)
 				.await?;
-				println!(
+				log::info!(
 					"Repaired rollout {}: running_start → failed (re-run start or rollback).",
 					rollout.spec.id
 				);
 			}
 			"completed" | "rolled_back" => {
-				println!("Rollout {} is already in a terminal state ({}); nothing to repair.", rollout.spec.id, status);
+				log::info!("Rollout {} is already in a terminal state ({}); nothing to repair.", rollout.spec.id, status);
 			}
 			other => bail!(
 				"rollout '{}' is not in a repairable state (status={})",
@@ -1164,7 +1164,7 @@ pub async fn run_abandon_rollout(
 				bail!("rollout '{}' is already completed; nothing to abandon", rollout_id)
 			}
 			Some("rolled_back") => {
-				println!("Rollout {} is already rolled back.", rollout_id);
+				log::info!("Rollout {} is already rolled back.", rollout_id);
 				return Ok(());
 			}
 			_ => {}
@@ -1177,7 +1177,7 @@ pub async fn run_abandon_rollout(
 			Some(OffsetDateTime::now_utc().format(&Rfc3339)?),
 		)
 		.await?;
-		println!("Abandoned rollout {} (forced → rolled_back).", rollout_id);
+		log::info!("Abandoned rollout {} (forced → rolled_back).", rollout_id);
 		Ok(())
 	}
 	.await;

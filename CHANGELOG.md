@@ -50,6 +50,12 @@ an existing database re-applies nothing and prunes nothing.
 
 ### Changed
 
+- **The library no longer prints to stdout/stderr.** Progress now goes through
+  the [`log`](https://docs.rs/log) facade, so a library consumer gets silence by
+  default instead of unsuppressible console output; install any `log`
+  implementation to see it. The CLI installs its own logger and its output is
+  unchanged — verified byte-for-byte across every command. `-v/--verbose`, which
+  was previously parsed and then ignored, now raises the log level.
 - **`surrealkit.toml` is discovered by walking up from the working directory.**
   It was read only from the exact directory, so running from a subdirectory of a
   project silently lost every variable and typegen setting.

@@ -1,6 +1,9 @@
 // These tests mutate process-global environment variables, so they serialise on
 // `ENV_LOCK`. The guard is deliberately held across `.await` points: releasing it
 // early would let a concurrent test overwrite the env this one is asserting on.
+// Tests print their own diagnostics (which auth backends were exercised or
+// skipped); the no-direct-printing rule is for library code.
+#![allow(clippy::print_stdout, clippy::print_stderr)]
 #![expect(
 	clippy::await_holding_lock,
 	reason = "ENV_LOCK serialises env-mutating tests; the guard must span the whole test body"

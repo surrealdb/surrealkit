@@ -1,3 +1,8 @@
+// The binary is the one place that may write to the console directly: it owns the
+// CLI's output format. Library modules go through `log` (see CliLogger below).
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
+use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
@@ -379,6 +384,65 @@ fn report_pairs(results: &[PairResult]) {
 	}
 }
 
+/// The CLI's logger.
+///
+/// SurrealKit's library modules emit progress through the `log` facade so that
+/// library consumers get silence by default. The CLI installs this to turn that
+/// back into exactly the output it printed before: **no level prefix, no
+/// timestamp, no target**, `info` on stdout and `warn`/`error` on stderr —
+/// matching the `println!`/`eprintln!` split those calls replaced.
+///
+/// `env_logger` is deliberately not used: it writes everything to stderr with a
+/// level prefix, which would be a visible CLI change.
+struct CliLogger {
+	level: log::LevelFilter,
+}
+
+impl log::Log for CliLogger {
+	fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+		// Only SurrealKit's own output; dependencies stay quiet unless -v is given.
+		metadata.level() <= self.level && metadata.target().starts_with("surrealkit")
+	}
+
+	fn log(&self, record: &log::Record<'_>) {
+		if !self.enabled(record.metadata()) {
+			return;
+		}
+		match record.level() {
+			log::Level::Error | log::Level::Warn => {
+				let mut err = std::io::stderr().lock();
+				let _ = writeln!(err, "{}", record.args());
+			}
+			_ => {
+				// Flushed per line: progress must appear during long syncs and in
+				// watch mode, where stdout is a pipe more often than a terminal.
+				let mut out = std::io::stdout().lock();
+				let _ = writeln!(out, "{}", record.args());
+				let _ = out.flush();
+			}
+		}
+	}
+
+	fn flush(&self) {
+		let _ = std::io::stdout().flush();
+		let _ = std::io::stderr().flush();
+	}
+}
+
+/// Install the CLI logger. `-v/--verbose` raises the level to `debug`.
+fn init_logging(verbose: bool) {
+	let level = if verbose {
+		log::LevelFilter::Debug
+	} else {
+		log::LevelFilter::Info
+	};
+	let logger = Box::leak(Box::new(CliLogger {
+		level,
+	}));
+	// Only fails if a logger is already installed, which cannot happen here.
+	let _ = log::set_logger(logger).map(|()| log::set_max_level(level));
+}
+
 /// Load `.env` / `.env.local` from the current working directory when present.
 fn load_env() -> Option<DotEnv> {
 	let has_env =
@@ -398,6 +462,7 @@ async fn main() -> Result<()> {
 	let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
 	let args = Cli::parse();
+	init_logging(args.verbose);
 	let env = load_env();
 	let overrides = DbOverrides {
 		host: args.host,

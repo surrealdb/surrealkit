@@ -212,7 +212,7 @@ impl RunnerContext {
 		if !self.opts.keep_db
 			&& let Err(err) = cleanup_suite_db(&self.cfg, &host, &namespace, &database).await
 		{
-			eprintln!("warning: failed to clean up test db {}/{}: {:#}", namespace, database, err);
+			log::warn!("failed to clean up test db {}/{}: {:#}", namespace, database, err);
 		}
 
 		Ok(SuiteReport {

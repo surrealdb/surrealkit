@@ -87,13 +87,13 @@ pub fn format_file(command: &str, path: &std::path::Path) {
 	let args: Vec<&str> = parts.collect();
 	match std::process::Command::new(program).args(&args).arg(path).status() {
 		Ok(status) if status.success() => {
-			eprintln!("typegen: formatted {} with `{command}`", path.display());
+			log::info!("typegen: formatted {} with `{command}`", path.display());
 		}
 		Ok(status) => {
-			eprintln!("typegen: formatter `{command}` exited with {status}");
+			log::warn!("typegen: formatter `{command}` exited with {status}");
 		}
 		Err(err) => {
-			eprintln!("typegen: failed to run formatter `{command}`: {err}");
+			log::error!("typegen: failed to run formatter `{command}`: {err}");
 		}
 	}
 }
@@ -127,7 +127,7 @@ pub async fn run_typegen(
 	let json = emit::to_json(&doc, opts.pretty)?;
 
 	if opts.stdout {
-		println!("{json}");
+		log::info!("{json}");
 		return Ok(());
 	}
 
@@ -136,11 +136,11 @@ pub async fn run_typegen(
 		std::fs::create_dir_all(parent)?;
 	}
 	std::fs::write(&path, format!("{json}\n"))?;
-	eprintln!("typegen: wrote {}", path.display());
+	log::info!("typegen: wrote {}", path.display());
 
 	if let Some(ts_dir) = &opts.ts_out {
 		let ts_path = write_typescript_formatted(&doc, ts_dir, opts.ts_format.as_deref())?;
-		eprintln!("typegen: wrote {}", ts_path.display());
+		log::info!("typegen: wrote {}", ts_path.display());
 	}
 	Ok(())
 }
