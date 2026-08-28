@@ -1,0 +1,1 @@
+DEFINE TABLE mod_core_thing SCHEMALESS;
