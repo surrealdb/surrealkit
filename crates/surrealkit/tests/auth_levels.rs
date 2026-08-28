@@ -43,13 +43,25 @@ fn server_url() -> Option<String> {
 	std::env::var("SURREALKIT_AUTH_TEST_URL").ok().filter(|s| !s.is_empty())
 }
 
+/// The test server's root credentials.
+///
+/// Read from the environment rather than hardcoded, because the server they must
+/// match is configured elsewhere -- CI starts SurrealDB with `--pass secret`.
+/// Defaults suit a local `surreal start --user root --pass root`.
+fn root_credentials() -> (String, String) {
+	let user = std::env::var("SURREALDB_USER").ok().filter(|s| !s.is_empty());
+	let pass = std::env::var("SURREALDB_PASSWORD").ok().filter(|s| !s.is_empty());
+	(user.unwrap_or_else(|| "root".into()), pass.unwrap_or_else(|| "root".into()))
+}
+
 /// Open a root connection to the test server using the raw surrealdb client.
 async fn root_conn(url: &str) -> surrealdb::Surreal<surrealdb::engine::any::Any> {
 	let cfg = Config::new().capabilities(Capabilities::all());
 	let db = surreal_connect((url, cfg)).await.expect("connect to test server");
+	let (username, password) = root_credentials();
 	db.signin(Root {
-		username: "root".to_string(),
-		password: "root".to_string(),
+		username,
+		password,
 	})
 	.await
 	.expect("root signin on test server");
@@ -159,7 +171,8 @@ async fn connect_root_auth() {
 		return;
 	};
 
-	let cfg = make_cfg(&url, AuthLevel::Root, "root", "root");
+	let (root_user, root_pass) = root_credentials();
+	let cfg = make_cfg(&url, AuthLevel::Root, &root_user, &root_pass);
 	let db = connect(&cfg).await.expect("root connect");
 	db.query("RETURN 1;").await.expect("query").check().expect("check");
 }
