@@ -380,9 +380,9 @@ async fn run_sync_with_files(
 				}
 			}
 		} else if shared {
-			acquire_lock(db, "global").await?;
+			let lock = acquire_lock(db, "global").await?;
 			let result = prune_managed_entities(db, &stale_entities).await;
-			let release = release_lock(db, "global").await;
+			let release = release_lock(db, &lock).await;
 			match (result, release) {
 				(Err(err), _) => return Err(err),
 				(Ok(_), Err(err)) => return Err(err),

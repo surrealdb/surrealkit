@@ -782,7 +782,7 @@ async fn start_inner(
 	target_catalog: &CatalogSnapshot,
 	vars: &TemplateVars,
 ) -> Result<()> {
-	acquire_lock(db, "global").await?;
+	let lock = acquire_lock(db, "global").await?;
 	let result = async {
 		ensure_no_conflicting_active_rollout(db, &rollout.spec.id).await?;
 		let record = load_rollout_record(db, &rollout.spec.id).await?;
@@ -823,7 +823,7 @@ async fn start_inner(
 		Ok(())
 	}
 	.await;
-	let release = release_lock(db, "global").await;
+	let release = release_lock(db, &lock).await;
 	match (result, release) {
 		(Err(err), _) => Err(err),
 		(Ok(_), Err(err)) => Err(err),
@@ -865,7 +865,7 @@ async fn complete_inner(
 	rollout: &LoadedRolloutSpec,
 	vars: &TemplateVars,
 ) -> Result<()> {
-	acquire_lock(db, "global").await?;
+	let lock = acquire_lock(db, "global").await?;
 	let result = async {
 		let row = load_rollout_record(db, &rollout.spec.id)
 			.await?
@@ -905,7 +905,7 @@ async fn complete_inner(
 		Ok(())
 	}
 	.await;
-	let release = release_lock(db, "global").await;
+	let release = release_lock(db, &lock).await;
 	match (result, release) {
 		(Err(err), _) => Err(err),
 		(Ok(_), Err(err)) => Err(err),
@@ -947,7 +947,7 @@ async fn rollback_inner(
 	rollout: &LoadedRolloutSpec,
 	vars: &TemplateVars,
 ) -> Result<()> {
-	acquire_lock(db, "global").await?;
+	let lock = acquire_lock(db, "global").await?;
 	let result = async {
 		let row = load_rollout_record(db, &rollout.spec.id)
 			.await?
@@ -988,7 +988,7 @@ async fn rollback_inner(
 		Ok(())
 	}
 	.await;
-	let release = release_lock(db, "global").await;
+	let release = release_lock(db, &lock).await;
 	match (result, release) {
 		(Err(err), _) => Err(err),
 		(Ok(_), Err(err)) => Err(err),
@@ -1006,7 +1006,7 @@ pub async fn run_repair(db: &Surreal<Any>, folder: &str, opts: RolloutExecutionO
 }
 
 async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<()> {
-	acquire_lock(db, "global").await?;
+	let lock = acquire_lock(db, "global").await?;
 	let result = async {
 		let row = load_rollout_record(db, &rollout.spec.id)
 			.await?
@@ -1074,7 +1074,7 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 		Ok(())
 	}
 	.await;
-	let release = release_lock(db, "global").await;
+	let release = release_lock(db, &lock).await;
 	match (result, release) {
 		(Err(err), _) => Err(err),
 		(Ok(_), Err(err)) => Err(err),
@@ -1092,7 +1092,7 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 /// fresh sync or a new rollout afterwards. Already-terminal rollouts are a no-op.
 #[doc(hidden)]
 pub async fn run_abandon_rollout(db: &Surreal<Any>, rollout_id: &str) -> Result<()> {
-	acquire_lock(db, "global").await?;
+	let lock = acquire_lock(db, "global").await?;
 	let result = async {
 		let row = load_rollout_record(db, rollout_id)
 			.await?
@@ -1119,7 +1119,7 @@ pub async fn run_abandon_rollout(db: &Surreal<Any>, rollout_id: &str) -> Result<
 		Ok(())
 	}
 	.await;
-	let release = release_lock(db, "global").await;
+	let release = release_lock(db, &lock).await;
 	match (result, release) {
 		(Err(err), _) => Err(err),
 		(Ok(_), Err(err)) => Err(err),
@@ -1830,27 +1830,110 @@ fn step_checksum(step: &RolloutStep) -> Result<String> {
 	Ok(sha256_hex(&raw))
 }
 
-pub(crate) async fn acquire_lock(db: &Surreal<Any>, lock_key: &str) -> Result<()> {
-	let owner = std::env::var("SURREALKIT_OWNER").unwrap_or_else(|_| "surrealkit".to_string());
-	db.query(
-		"DELETE __entity WHERE ns = 'lock' AND key = $key; \
-		 CREATE __entity CONTENT { \
-		 	ns: 'lock', \
-		 	key: $key, \
-		 	val: { owner: $owner }, \
-		 	updated_at: time::now() \
-		 };",
-	)
-	.bind(("key", lock_key.to_string()))
-	.bind(("owner", owner))
-	.await?
-	.check()?;
-	Ok(())
+/// How long an acquired lock is honoured before another process may take it over.
+///
+/// A lock is only released explicitly, so without an expiry a crashed run would
+/// wedge the project permanently. 15 minutes is comfortably longer than any real
+/// sync or rollout phase.
+const LOCK_TTL_SECS: u64 = 900;
+
+/// Proof that this process holds a lock. Required to release it, so one process
+/// cannot release another's lock.
+#[derive(Debug, Clone)]
+pub(crate) struct LockToken {
+	key: String,
+	owner: String,
 }
 
-pub(crate) async fn release_lock(db: &Surreal<Any>, lock_key: &str) -> Result<()> {
-	db.query("DELETE __entity WHERE ns = 'lock' AND key = $key;")
+/// Identifies the holder in contention messages. The pid distinguishes concurrent
+/// runs that share a `SURREALKIT_OWNER` (e.g. two CI jobs).
+fn lock_owner_id() -> String {
+	let base = std::env::var("SURREALKIT_OWNER").unwrap_or_else(|_| "surrealkit".to_string());
+	format!("{base}/{}", std::process::id())
+}
+
+/// Take the named lock, or fail if another process holds it.
+///
+/// This is a real mutual exclusion: the `by_ns_key` unique index rejects a second
+/// holder. Expired locks -- and locks written before v1, which carry no
+/// `expires_at` -- are taken over in the same statement, so a crashed run does not
+/// need a manual cleanup.
+pub(crate) async fn acquire_lock(db: &Surreal<Any>, lock_key: &str) -> Result<LockToken> {
+	let owner = lock_owner_id();
+
+	// The conditional DELETE clears only an expired (or pre-v1) holder; the CREATE
+	// then violates `by_ns_key` if a live holder remains, aborting the transaction
+	// and leaving that holder untouched.
+	let sql = format!(
+		"BEGIN; \
+		 DELETE __entity WHERE ns = 'lock' AND key = $key \
+		 	AND (val.expires_at = NONE OR val.expires_at < time::now()); \
+		 CREATE __entity CONTENT {{ \
+		 	ns: 'lock', \
+		 	key: $key, \
+		 	val: {{ owner: $owner, acquired_at: time::now(), expires_at: time::now() + {LOCK_TTL_SECS}s }}, \
+		 	updated_at: time::now() \
+		 }}; \
+		 COMMIT;"
+	);
+
+	let attempt = match db
+		.query(sql)
 		.bind(("key", lock_key.to_string()))
+		.bind(("owner", owner.clone()))
+		.await
+	{
+		Ok(resp) => resp.check(),
+		Err(err) => Err(err),
+	};
+
+	match attempt {
+		Ok(_) => Ok(LockToken {
+			key: lock_key.to_string(),
+			owner,
+		}),
+		Err(err) => {
+			// The transaction error is generic, so read the holder back to say who.
+			match describe_lock_holder(db, lock_key).await {
+				Ok(Some(holder)) => bail!(
+					"another surrealkit run holds the '{lock_key}' lock ({holder}).\n\
+					 Wait for it to finish, or if it crashed, clear the lock with:\n\
+					 \x20   DELETE __entity WHERE ns = 'lock' AND key = '{lock_key}';\n\
+					 It is taken over automatically {LOCK_TTL_SECS}s after it was acquired."
+				),
+				// No holder: the failure was something else (or we lost a benign race).
+				_ => Err(err).with_context(|| format!("acquiring the '{lock_key}' lock")),
+			}
+		}
+	}
+}
+
+/// Render the current holder of `lock_key` as `owner, held for Ns`, if any.
+async fn describe_lock_holder(db: &Surreal<Any>, lock_key: &str) -> Result<Option<String>> {
+	let mut resp = db
+		.query(
+			"SELECT val.owner AS owner, val.acquired_at AS acquired_at \
+			 FROM __entity WHERE ns = 'lock' AND key = $key LIMIT 1;",
+		)
+		.bind(("key", lock_key.to_string()))
+		.await?;
+	let row: Option<serde_json::Value> = resp.take(0)?;
+	Ok(row.map(|r| {
+		let owner = r.get("owner").and_then(|v| v.as_str()).unwrap_or("unknown owner");
+		match r.get("acquired_at").and_then(|v| v.as_str()) {
+			Some(at) => format!("held by {owner} since {at}"),
+			None => format!("held by {owner}"),
+		}
+	}))
+}
+
+/// Release a lock this process holds. Releasing someone else's lock is a no-op:
+/// the owner check is what stops a slow run from clearing the lock a newer run
+/// legitimately took over.
+pub(crate) async fn release_lock(db: &Surreal<Any>, token: &LockToken) -> Result<()> {
+	db.query("DELETE __entity WHERE ns = 'lock' AND key = $key AND val.owner = $owner;")
+		.bind(("key", token.key.clone()))
+		.bind(("owner", token.owner.clone()))
 		.await?
 		.check()?;
 	Ok(())
@@ -2012,6 +2095,76 @@ mod tests {
 			.check()
 			.expect("setup schema check");
 		db
+	}
+
+	#[tokio::test]
+	async fn lock_excludes_a_second_holder() {
+		// Before v1 `acquire_lock` did `DELETE` then `CREATE`, so it always
+		// "succeeded" and provided no mutual exclusion at all.
+		let db = connect_mem_db().await;
+
+		let first = acquire_lock(&db, "global").await.expect("first acquire");
+		let err = acquire_lock(&db, "global").await.expect_err("second acquire must fail");
+		let msg = format!("{err:#}");
+		assert!(msg.contains("holds the 'global' lock"), "unexpected error: {msg}");
+
+		// The original holder is intact.
+		let holder = describe_lock_holder(&db, "global").await.expect("describe").expect("holder");
+		assert!(holder.contains(&lock_owner_id()), "holder changed: {holder}");
+
+		release_lock(&db, &first).await.expect("release");
+		let second = acquire_lock(&db, "global").await.expect("acquire after release");
+		release_lock(&db, &second).await.expect("release second");
+	}
+
+	#[tokio::test]
+	async fn releasing_someone_elses_lock_is_a_no_op() {
+		let db = connect_mem_db().await;
+		let real = acquire_lock(&db, "global").await.expect("acquire");
+
+		let forged = LockToken {
+			key: "global".to_string(),
+			owner: "someone-else/1".to_string(),
+		};
+		release_lock(&db, &forged).await.expect("release call itself succeeds");
+
+		// The genuine holder still holds it.
+		assert!(
+			describe_lock_holder(&db, "global").await.expect("describe").is_some(),
+			"forged release must not have cleared the lock"
+		);
+		assert!(acquire_lock(&db, "global").await.is_err(), "lock must still be held");
+
+		release_lock(&db, &real).await.expect("real release");
+	}
+
+	#[tokio::test]
+	async fn expired_and_pre_v1_locks_are_taken_over() {
+		// Pre-v1 lock rows carry no `expires_at`. They must not wedge the project
+		// forever, so they are treated as expired.
+		let db = connect_mem_db().await;
+		db.query(
+			"CREATE __entity CONTENT { ns:'lock', key:'global', \
+			 val:{ owner:'crashed-0.7-run' }, updated_at: time::now() };",
+		)
+		.await
+		.expect("seed legacy lock")
+		.check()
+		.expect("seed legacy lock");
+
+		let token = acquire_lock(&db, "global").await.expect("must take over a pre-v1 lock");
+		let holder = describe_lock_holder(&db, "global").await.expect("describe").expect("holder");
+		assert!(holder.contains(&lock_owner_id()), "expected takeover, got: {holder}");
+		release_lock(&db, &token).await.expect("release");
+	}
+
+	#[tokio::test]
+	async fn distinct_lock_keys_do_not_contend() {
+		let db = connect_mem_db().await;
+		let a = acquire_lock(&db, "global").await.expect("a");
+		let b = acquire_lock(&db, "other").await.expect("distinct key must not contend");
+		release_lock(&db, &a).await.expect("release a");
+		release_lock(&db, &b).await.expect("release b");
 	}
 
 	fn sample_loaded_spec(id: &str) -> LoadedRolloutSpec {
