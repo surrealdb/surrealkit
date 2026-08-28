@@ -56,13 +56,6 @@ pub fn typegen_output_path(folder: &str) -> PathBuf {
 	types_dir(folder).join("schema.json")
 }
 
-#[deprecated(
-	note = "Deprecated path: `{folder}/seed.surql` (before the seed/ directory was introduced)"
-)]
-pub fn deprecated_seed_surql_path(folder: &str) -> PathBuf {
-	PathBuf::from(folder).join("seed.surql")
-}
-
 /// Resolves the on-disk paths for one schema module within a project folder.
 ///
 /// The default module keeps the pre-v1 layout exactly, so an existing project is

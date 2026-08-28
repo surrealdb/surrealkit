@@ -90,6 +90,47 @@ pub struct DbCfg {
 	pub folder: String,
 }
 
+/// The `DATABASE_*` aliases accepted before v1, paired with their replacements.
+const LEGACY_ENV_ALIASES: &[(&str, &str)] = &[
+	("DATABASE_HOST", "SURREALDB_HOST"),
+	("DATABASE_NAME", "SURREALDB_NAME"),
+	("DATABASE_NAMESPACE", "SURREALDB_NAMESPACE"),
+	("DATABASE_USER", "SURREALDB_USER"),
+	("DATABASE_PASSWORD", "SURREALDB_PASSWORD"),
+	("DATABASE_AUTH_LEVEL", "SURREALDB_AUTH_LEVEL"),
+];
+
+/// Fail when a removed `DATABASE_*` variable is set without its replacement.
+///
+/// Silently ignoring it would be the worst outcome: an unrecognised
+/// `DATABASE_HOST` is not an error, it falls back to `http://localhost:8000`, so
+/// a deployment would quietly connect to the *wrong database* instead of failing.
+fn reject_orphaned_legacy_env(dotenv: Option<&DotEnv>) -> Result<()> {
+	let lookup = |key: &str| -> Option<String> {
+		env::var(key)
+			.ok()
+			.filter(|v| !v.is_empty())
+			.or_else(|| dotenv.and_then(|d| d.get_var(key.to_string())).filter(|v| !v.is_empty()))
+	};
+
+	let orphaned: Vec<String> = LEGACY_ENV_ALIASES
+		.iter()
+		.filter(|(legacy, modern)| lookup(legacy).is_some() && lookup(modern).is_none())
+		.map(|(legacy, modern)| format!("  {legacy} -> {modern}"))
+		.collect();
+
+	if !orphaned.is_empty() {
+		anyhow::bail!(
+			"the DATABASE_* environment variables were removed in SurrealKit 1.0, but \
+			 these are still set with no SURREALDB_* replacement:\n{}\n\
+			 Rename them. They are rejected rather than ignored because ignoring them \
+			 would silently fall back to the defaults and connect to the wrong database.",
+			orphaned.join("\n")
+		);
+	}
+	Ok(())
+}
+
 /// Resolve a config value with priority: CLI override → system env vars → .env file → default.
 fn resolve(
 	cli: &Option<String>,
@@ -121,24 +162,14 @@ fn resolve(
 
 impl DbCfg {
 	pub fn from_env(dotenv: Option<&DotEnv>, overrides: &DbOverrides) -> Result<Self> {
-		let host = resolve(
-			&overrides.host,
-			&["SURREALDB_HOST", "DATABASE_HOST"],
-			dotenv,
-			"http://localhost:8000",
-		);
-		let db = resolve(&overrides.db, &["SURREALDB_NAME", "DATABASE_NAME"], dotenv, "test");
-		let ns =
-			resolve(&overrides.ns, &["SURREALDB_NAMESPACE", "DATABASE_NAMESPACE"], dotenv, "db");
-		let user = resolve(&overrides.user, &["SURREALDB_USER", "DATABASE_USER"], dotenv, "root");
-		let pass =
-			resolve(&overrides.pass, &["SURREALDB_PASSWORD", "DATABASE_PASSWORD"], dotenv, "root");
-		let auth_level_str = resolve(
-			&overrides.auth_level,
-			&["SURREALDB_AUTH_LEVEL", "DATABASE_AUTH_LEVEL"],
-			dotenv,
-			"root",
-		);
+		reject_orphaned_legacy_env(dotenv)?;
+		let host = resolve(&overrides.host, &["SURREALDB_HOST"], dotenv, "http://localhost:8000");
+		let db = resolve(&overrides.db, &["SURREALDB_NAME"], dotenv, "test");
+		let ns = resolve(&overrides.ns, &["SURREALDB_NAMESPACE"], dotenv, "db");
+		let user = resolve(&overrides.user, &["SURREALDB_USER"], dotenv, "root");
+		let pass = resolve(&overrides.pass, &["SURREALDB_PASSWORD"], dotenv, "root");
+		let auth_level_str =
+			resolve(&overrides.auth_level, &["SURREALDB_AUTH_LEVEL"], dotenv, "root");
 		let auth_level = AuthLevel::parse(&auth_level_str).ok_or_else(|| {
 			anyhow::anyhow!(
 				"invalid auth level {:?}: expected root, namespace/ns, or database/db",
@@ -397,7 +428,7 @@ mod tests {
 
 	#[test]
 	fn from_env_uses_defaults_with_no_overrides() {
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 		let cfg = DbCfg::from_env(None, &DbOverrides::default()).unwrap();
 		assert_eq!(cfg.host(), "http://localhost:8000");
@@ -409,7 +440,7 @@ mod tests {
 
 	#[test]
 	fn from_env_respects_all_overrides() {
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 		let overrides = DbOverrides {
 			host: Some("http://custom:9000".into()),
@@ -432,7 +463,7 @@ mod tests {
 	fn folder_override_is_honoured() {
 		// Regression: `from_env` passed `&None` here instead of `overrides.folder`,
 		// so `--folder` was parsed, stored, and then silently discarded.
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 		let overrides = DbOverrides {
 			folder: Some("./custom-db".into()),
@@ -444,7 +475,7 @@ mod tests {
 
 	#[test]
 	fn folder_override_beats_env_var() {
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 		unsafe { set_env("SURREALDB_FOLDER", "./from-env") };
 		let overrides = DbOverrides {
@@ -458,7 +489,7 @@ mod tests {
 
 	#[test]
 	fn folder_falls_back_to_env_then_default() {
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 		unsafe { set_env("SURREALDB_FOLDER", "./from-env") };
 		assert_eq!(DbCfg::from_env(None, &DbOverrides::default()).unwrap().folder(), "./from-env");
@@ -472,7 +503,7 @@ mod tests {
 
 	#[test]
 	fn from_env_defaults_to_root_auth_level() {
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 		let cfg = DbCfg::from_env(None, &DbOverrides::default()).unwrap();
 		assert_eq!(cfg.auth_level(), &AuthLevel::Root);
@@ -480,7 +511,7 @@ mod tests {
 
 	#[test]
 	fn from_env_parses_auth_level_override() {
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 
 		for (input, expected) in [
@@ -504,7 +535,7 @@ mod tests {
 
 	#[test]
 	fn from_env_reads_auth_level_from_env_var() {
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 		unsafe { set_env("SURREALDB_AUTH_LEVEL", "namespace") };
 		let cfg = DbCfg::from_env(None, &DbOverrides::default()).unwrap();
@@ -514,7 +545,7 @@ mod tests {
 
 	#[test]
 	fn from_env_rejects_unknown_auth_level() {
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 		let overrides = DbOverrides {
 			auth_level: Some("superadmin".into()),
@@ -525,8 +556,54 @@ mod tests {
 	}
 
 	#[test]
+	fn orphaned_legacy_env_var_is_rejected_not_ignored() {
+		// Ignoring it would silently fall back to http://localhost:8000 and connect
+		// to the wrong database, which is worse than failing.
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+		clear_db_env();
+		unsafe { set_env("DATABASE_HOST", "http://legacy:8000") };
+
+		let err = DbCfg::from_env(None, &DbOverrides::default()).unwrap_err().to_string();
+		assert!(err.contains("DATABASE_HOST"), "error should name the variable: {err}");
+		assert!(err.contains("SURREALDB_HOST"), "error should name the replacement: {err}");
+
+		clear_db_env();
+	}
+
+	#[test]
+	fn legacy_var_alongside_its_replacement_is_accepted_and_ignored() {
+		// Both set means the deployment has already migrated; the leftover is inert.
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+		clear_db_env();
+		unsafe {
+			set_env("DATABASE_HOST", "http://legacy:8000");
+			set_env("SURREALDB_HOST", "http://modern:8000");
+		}
+
+		let cfg = DbCfg::from_env(None, &DbOverrides::default()).unwrap();
+		assert_eq!(cfg.host(), "http://modern:8000");
+
+		clear_db_env();
+	}
+
+	#[test]
+	fn legacy_env_vars_no_longer_resolve_values() {
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+		clear_db_env();
+		// Set every legacy var *and* its replacement, so the guard passes and we can
+		// assert the legacy values are not the ones used.
+		unsafe {
+			set_env("DATABASE_NAMESPACE", "legacyns");
+			set_env("SURREALDB_NAMESPACE", "modernns");
+		}
+		let cfg = DbCfg::from_env(None, &DbOverrides::default()).unwrap();
+		assert_eq!(cfg.ns(), "modernns");
+		clear_db_env();
+	}
+
+	#[test]
 	fn from_env_reads_surrealdb_env_vars() {
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 		unsafe {
 			set_env("SURREALDB_HOST", "http://envhost:8000");
@@ -548,7 +625,7 @@ mod tests {
 
 	#[test]
 	fn cli_overrides_beat_env_vars() {
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 		unsafe { set_env("SURREALDB_HOST", "http://envhost:8000") };
 		let overrides = DbOverrides {

@@ -122,12 +122,17 @@ Embedded engines are single-process, so run the CLI while your application is st
 
 ### Environment Variables
 
-- `SURREALDB_HOST` (fallback: `DATABASE_HOST`)
-- `SURREALDB_NAME` (fallback: `DATABASE_NAME`)
-- `SURREALDB_NAMESPACE` (fallback: `DATABASE_NAMESPACE`)
-- `SURREALDB_USER` (fallback: `DATABASE_USER`)
-- `SURREALDB_PASSWORD` (fallback: `DATABASE_PASSWORD`)
-- `SURREALDB_AUTH_LEVEL` (fallback: `DATABASE_AUTH_LEVEL`), accepted values: `root`, `namespace` / `ns`, `database` / `db`, `none`
+- `SURREALDB_HOST`
+- `SURREALDB_NAME`
+- `SURREALDB_NAMESPACE`
+- `SURREALDB_USER`
+- `SURREALDB_PASSWORD`
+- `SURREALDB_AUTH_LEVEL`, accepted values: `root`, `namespace` / `ns`, `database` / `db`, `none`
+
+> The `DATABASE_*` aliases were removed in 1.0. If one is set without its
+> `SURREALDB_*` replacement, SurrealKit fails with an explanatory error rather
+> than ignoring it — ignoring it would silently fall back to the defaults and
+> connect to the wrong database.
 - `SURREALDB_FOLDER` — root folder for schema, rollouts, snapshots, seed, and tests (default: `./database`)
 
 These can be set as system environment variables or in a `.env` file.
@@ -483,7 +488,7 @@ Optional env fallbacks:
 
 - `SURREALKIT_TEST_BASE_URL`
 - `SURREALKIT_TEST_TIMEOUT_MS`
-- `SURREALDB_HOST` or `DATABASE_HOST` (used as API base URL fallback when test-specific base URL is not set)
+- `SURREALDB_HOST` (used as API base URL fallback when test-specific base URL is not set)
 
 ### Example Suite
 

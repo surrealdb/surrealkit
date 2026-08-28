@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result, anyhow, bail};
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 
@@ -73,7 +73,7 @@ impl<'a> Seed<'a> {
 	}
 
 	/// Seed from a project folder on disk. Resolves `<folder>/seed/` (preferred)
-	/// or the deprecated `<folder>/seed.surql` single file.
+	/// Reads `<folder>/seed/*.surql`.
 	pub fn from_dir(folder: impl Into<String>) -> Self {
 		Self {
 			source: SeedSource::Dir(folder.into()),
@@ -112,32 +112,15 @@ impl<'a> Seed<'a> {
 			}
 			SeedSource::Dir(folder) => {
 				let dir = seed_dir(&folder);
-				#[expect(deprecated)]
-				let deprecated = crate::constants::deprecated_seed_surql_path(&folder);
-
-				if dir.is_dir() {
-					run_dir(db, &dir, &vars, force).await
-				} else if deprecated.exists() {
-					eprintln!(
-						"warning: {}/seed.surql is deprecated and will be removed in v1. \
-						Move your seed files into {}/seed/ instead.",
-						folder, folder
+				if !dir.is_dir() {
+					bail!(
+						"no seed directory at {}.\n\
+						 Create it and put your .surql files inside:\n\
+						 \x20   mkdir -p {0}",
+						display(&dir)
 					);
-					let tracked = load_seed_hashes(db).await?;
-					let mut stats = SeedStats::default();
-					let raw = fs::read_to_string(&deprecated)
-						.with_context(|| format!("reading {}", display(&deprecated)))?;
-					let key = display(&deprecated);
-					apply_seed(db, &key, &raw, &tracked, force, &vars, &mut stats).await?;
-					stats.report();
-					Ok(())
-				} else {
-					Err(anyhow!(
-						"no seed found: create {}/seed.surql or a {}/seed/ directory",
-						folder,
-						folder
-					))
 				}
+				run_dir(db, &dir, &vars, force).await
 			}
 		}
 	}
@@ -271,6 +254,26 @@ async fn store_seed_hash(db: &Surreal<Any>, key: &str, hash: &str) -> Result<()>
 
 #[cfg(test)]
 mod tests {
+	#[tokio::test]
+	async fn missing_seed_directory_names_the_path_and_the_fix() {
+		// The `<folder>/seed.surql` single-file fallback was removed in 1.0, so this
+		// is now a hard error rather than a silent fallback.
+		let tmp = tempfile::TempDir::new().expect("tmpdir");
+		let folder = tmp.path().to_string_lossy().to_string();
+		let db = surrealdb::engine::any::connect((
+			"mem://",
+			surrealdb::opt::Config::new()
+				.capabilities(surrealdb::opt::capabilities::Capabilities::all()),
+		))
+		.await
+		.expect("mem db");
+		db.use_ns("t").use_db("t").await.expect("use");
+
+		let err = Seed::from_dir(&folder).run(&db).await.unwrap_err().to_string();
+		assert!(err.contains("no seed directory"), "got: {err}");
+		assert!(err.contains("mkdir"), "error should say how to fix it: {err}");
+	}
+
 	use surrealdb::engine::any::connect;
 	use surrealdb::opt::Config;
 	use surrealdb::opt::capabilities::Capabilities;
