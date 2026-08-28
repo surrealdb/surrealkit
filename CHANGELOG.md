@@ -112,6 +112,13 @@ an existing database re-applies nothing and prunes nothing.
 - A flaky test: one case invoked a CLI entry point that scaffolds relative to the
   working directory without holding the test lock, leaking files into other
   tests' temporary directories.
+- **The auth-level tests never ran.** They skip silently unless
+  `SURREALKIT_AUTH_TEST_URL` is set, which no workflow did — and when first run
+  they failed, because their smoke query `SELECT 1` is rejected by SurrealDB 3.x.
+  Fixed and wired into the integration workflow, which already runs a real
+  SurrealDB service.
+- Broken intra-doc links that rendered as plain text on docs.rs. `cargo doc` now
+  runs in CI with `-D warnings`.
 - The Vite plugin declared the `Unlicense` while the repository is Apache-2.0,
   shipped its formatter as a runtime dependency, and had a Biome config that
   errored on every invocation and so had never actually run.
