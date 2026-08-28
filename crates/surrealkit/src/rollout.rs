@@ -504,7 +504,7 @@ impl<'a> Rollout<'a> {
 	/// without running rollback SQL. See [`run_abandon_rollout`] for the full
 	/// semantics — this does not revert applied schema changes.
 	pub async fn abandon(db: &Surreal<Any>, rollout_id: &str) -> Result<()> {
-		run_abandon_rollout(db, rollout_id).await
+		run_abandon_rollout(db, &Module::default_module(), rollout_id).await
 	}
 }
 
@@ -824,7 +824,7 @@ async fn start_inner(
 	target_catalog: &CatalogSnapshot,
 	vars: &TemplateVars,
 ) -> Result<()> {
-	let lock = acquire_lock(db, "global").await?;
+	let lock = acquire_lock(db, &rollout.spec.module()?, "global").await?;
 	let result = async {
 		ensure_no_conflicting_active_rollout(db, &rollout.spec.id).await?;
 		let record = load_rollout_record(db, &rollout.spec.id).await?;
@@ -913,7 +913,7 @@ async fn complete_inner(
 	rollout: &LoadedRolloutSpec,
 	vars: &TemplateVars,
 ) -> Result<()> {
-	let lock = acquire_lock(db, "global").await?;
+	let lock = acquire_lock(db, &rollout.spec.module()?, "global").await?;
 	let result = async {
 		let row = load_rollout_record(db, &rollout.spec.id)
 			.await?
@@ -1002,7 +1002,7 @@ async fn rollback_inner(
 	rollout: &LoadedRolloutSpec,
 	vars: &TemplateVars,
 ) -> Result<()> {
-	let lock = acquire_lock(db, "global").await?;
+	let lock = acquire_lock(db, &rollout.spec.module()?, "global").await?;
 	let result = async {
 		let row = load_rollout_record(db, &rollout.spec.id)
 			.await?
@@ -1062,7 +1062,7 @@ pub async fn run_repair(db: &Surreal<Any>, folder: &str, opts: RolloutExecutionO
 }
 
 async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<()> {
-	let lock = acquire_lock(db, "global").await?;
+	let lock = acquire_lock(db, &rollout.spec.module()?, "global").await?;
 	let result = async {
 		let row = load_rollout_record(db, &rollout.spec.id)
 			.await?
@@ -1149,8 +1149,12 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 /// undo any schema changes the rollout already applied — reconcile those with a
 /// fresh sync or a new rollout afterwards. Already-terminal rollouts are a no-op.
 #[doc(hidden)]
-pub async fn run_abandon_rollout(db: &Surreal<Any>, rollout_id: &str) -> Result<()> {
-	let lock = acquire_lock(db, "global").await?;
+pub async fn run_abandon_rollout(
+	db: &Surreal<Any>,
+	module: &Module,
+	rollout_id: &str,
+) -> Result<()> {
+	let lock = acquire_lock(db, module, "global").await?;
 	let result = async {
 		let row = load_rollout_record(db, rollout_id)
 			.await?
@@ -1926,6 +1930,8 @@ const LOCK_TTL_SECS: u64 = 900;
 /// cannot release another's lock.
 #[derive(Debug, Clone)]
 pub(crate) struct LockToken {
+	/// The module-qualified `__entity.ns` partition this lock lives in.
+	ns: String,
 	key: String,
 	owner: String,
 }
@@ -1943,18 +1949,23 @@ fn lock_owner_id() -> String {
 /// holder. Expired locks -- and locks written before v1, which carry no
 /// `expires_at` -- are taken over in the same statement, so a crashed run does not
 /// need a manual cleanup.
-pub(crate) async fn acquire_lock(db: &Surreal<Any>, lock_key: &str) -> Result<LockToken> {
+pub(crate) async fn acquire_lock(
+	db: &Surreal<Any>,
+	module: &Module,
+	lock_key: &str,
+) -> Result<LockToken> {
 	let owner = lock_owner_id();
+	let ns = module.partition(Partition::Lock);
 
 	// The conditional DELETE clears only an expired (or pre-v1) holder; the CREATE
 	// then violates `by_ns_key` if a live holder remains, aborting the transaction
 	// and leaving that holder untouched.
 	let sql = format!(
 		"BEGIN; \
-		 DELETE __entity WHERE ns = 'lock' AND key = $key \
+		 DELETE __entity WHERE ns = $ns AND key = $key \
 		 	AND (val.expires_at = NONE OR val.expires_at < time::now()); \
 		 CREATE __entity CONTENT {{ \
-		 	ns: 'lock', \
+		 	ns: $ns, \
 		 	key: $key, \
 		 	val: {{ owner: $owner, acquired_at: time::now(), expires_at: time::now() + {LOCK_TTL_SECS}s }}, \
 		 	updated_at: time::now() \
@@ -1964,6 +1975,7 @@ pub(crate) async fn acquire_lock(db: &Surreal<Any>, lock_key: &str) -> Result<Lo
 
 	let attempt = match db
 		.query(sql)
+		.bind(("ns", ns.clone()))
 		.bind(("key", lock_key.to_string()))
 		.bind(("owner", owner.clone()))
 		.await
@@ -1974,12 +1986,13 @@ pub(crate) async fn acquire_lock(db: &Surreal<Any>, lock_key: &str) -> Result<Lo
 
 	match attempt {
 		Ok(_) => Ok(LockToken {
+			ns,
 			key: lock_key.to_string(),
 			owner,
 		}),
 		Err(err) => {
 			// The transaction error is generic, so read the holder back to say who.
-			match describe_lock_holder(db, lock_key).await {
+			match describe_lock_holder(db, module, lock_key).await {
 				Ok(Some(holder)) => bail!(
 					"another surrealkit run holds the '{lock_key}' lock ({holder}).\n\
 					 Wait for it to finish, or if it crashed, clear the lock with:\n\
@@ -1994,12 +2007,17 @@ pub(crate) async fn acquire_lock(db: &Surreal<Any>, lock_key: &str) -> Result<Lo
 }
 
 /// Render the current holder of `lock_key` as `owner, held for Ns`, if any.
-async fn describe_lock_holder(db: &Surreal<Any>, lock_key: &str) -> Result<Option<String>> {
+async fn describe_lock_holder(
+	db: &Surreal<Any>,
+	module: &Module,
+	lock_key: &str,
+) -> Result<Option<String>> {
 	let mut resp = db
 		.query(
 			"SELECT val.owner AS owner, val.acquired_at AS acquired_at \
-			 FROM __entity WHERE ns = 'lock' AND key = $key LIMIT 1;",
+			 FROM __entity WHERE ns = $ns AND key = $key LIMIT 1;",
 		)
+		.bind(("ns", module.partition(Partition::Lock)))
 		.bind(("key", lock_key.to_string()))
 		.await?;
 	let row: Option<serde_json::Value> = resp.take(0)?;
@@ -2016,7 +2034,8 @@ async fn describe_lock_holder(db: &Surreal<Any>, lock_key: &str) -> Result<Optio
 /// the owner check is what stops a slow run from clearing the lock a newer run
 /// legitimately took over.
 pub(crate) async fn release_lock(db: &Surreal<Any>, token: &LockToken) -> Result<()> {
-	db.query("DELETE __entity WHERE ns = 'lock' AND key = $key AND val.owner = $owner;")
+	db.query("DELETE __entity WHERE ns = $ns AND key = $key AND val.owner = $owner;")
+		.bind(("ns", token.ns.clone()))
 		.bind(("key", token.key.clone()))
 		.bind(("owner", token.owner.clone()))
 		.await?
@@ -2188,26 +2207,35 @@ mod tests {
 		// "succeeded" and provided no mutual exclusion at all.
 		let db = connect_mem_db().await;
 
-		let first = acquire_lock(&db, "global").await.expect("first acquire");
-		let err = acquire_lock(&db, "global").await.expect_err("second acquire must fail");
+		let first =
+			acquire_lock(&db, &Module::default_module(), "global").await.expect("first acquire");
+		let err = acquire_lock(&db, &Module::default_module(), "global")
+			.await
+			.expect_err("second acquire must fail");
 		let msg = format!("{err:#}");
 		assert!(msg.contains("holds the 'global' lock"), "unexpected error: {msg}");
 
 		// The original holder is intact.
-		let holder = describe_lock_holder(&db, "global").await.expect("describe").expect("holder");
+		let holder = describe_lock_holder(&db, &Module::default_module(), "global")
+			.await
+			.expect("describe")
+			.expect("holder");
 		assert!(holder.contains(&lock_owner_id()), "holder changed: {holder}");
 
 		release_lock(&db, &first).await.expect("release");
-		let second = acquire_lock(&db, "global").await.expect("acquire after release");
+		let second = acquire_lock(&db, &Module::default_module(), "global")
+			.await
+			.expect("acquire after release");
 		release_lock(&db, &second).await.expect("release second");
 	}
 
 	#[tokio::test]
 	async fn releasing_someone_elses_lock_is_a_no_op() {
 		let db = connect_mem_db().await;
-		let real = acquire_lock(&db, "global").await.expect("acquire");
+		let real = acquire_lock(&db, &Module::default_module(), "global").await.expect("acquire");
 
 		let forged = LockToken {
+			ns: Module::default_module().partition(Partition::Lock),
 			key: "global".to_string(),
 			owner: "someone-else/1".to_string(),
 		};
@@ -2215,10 +2243,16 @@ mod tests {
 
 		// The genuine holder still holds it.
 		assert!(
-			describe_lock_holder(&db, "global").await.expect("describe").is_some(),
+			describe_lock_holder(&db, &Module::default_module(), "global")
+				.await
+				.expect("describe")
+				.is_some(),
 			"forged release must not have cleared the lock"
 		);
-		assert!(acquire_lock(&db, "global").await.is_err(), "lock must still be held");
+		assert!(
+			acquire_lock(&db, &Module::default_module(), "global").await.is_err(),
+			"lock must still be held"
+		);
 
 		release_lock(&db, &real).await.expect("real release");
 	}
@@ -2237,17 +2271,42 @@ mod tests {
 		.check()
 		.expect("seed legacy lock");
 
-		let token = acquire_lock(&db, "global").await.expect("must take over a pre-v1 lock");
-		let holder = describe_lock_holder(&db, "global").await.expect("describe").expect("holder");
+		let token = acquire_lock(&db, &Module::default_module(), "global")
+			.await
+			.expect("must take over a pre-v1 lock");
+		let holder = describe_lock_holder(&db, &Module::default_module(), "global")
+			.await
+			.expect("describe")
+			.expect("holder");
 		assert!(holder.contains(&lock_owner_id()), "expected takeover, got: {holder}");
 		release_lock(&db, &token).await.expect("release");
 	}
 
 	#[tokio::test]
+	async fn distinct_modules_do_not_contend_for_the_same_lock_key() {
+		// Per-module locks are what let `--all` fan out without one module's sync
+		// blocking another's.
+		let db = connect_mem_db().await;
+		let core = Module::new("core").unwrap();
+		let billing = Module::new("billing").unwrap();
+
+		let a = acquire_lock(&db, &core, "global").await.expect("core");
+		let b = acquire_lock(&db, &billing, "global").await.expect("billing must not contend");
+
+		// But the same module still excludes itself.
+		assert!(acquire_lock(&db, &core, "global").await.is_err(), "core must still exclude");
+
+		release_lock(&db, &a).await.expect("release core");
+		release_lock(&db, &b).await.expect("release billing");
+	}
+
+	#[tokio::test]
 	async fn distinct_lock_keys_do_not_contend() {
 		let db = connect_mem_db().await;
-		let a = acquire_lock(&db, "global").await.expect("a");
-		let b = acquire_lock(&db, "other").await.expect("distinct key must not contend");
+		let a = acquire_lock(&db, &Module::default_module(), "global").await.expect("a");
+		let b = acquire_lock(&db, &Module::default_module(), "other")
+			.await
+			.expect("distinct key must not contend");
 		release_lock(&db, &a).await.expect("release a");
 		release_lock(&db, &b).await.expect("release b");
 	}

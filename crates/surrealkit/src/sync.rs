@@ -9,6 +9,7 @@ use surrealdb::engine::any::Any;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use crate::constants::Layout;
 use crate::core::{exec_surql, sha256_hex};
 use crate::module::{Module, Partition};
 use crate::rollout::{
@@ -16,8 +17,8 @@ use crate::rollout::{
 	load_managed_entities, release_lock, upsert_managed_entities,
 };
 use crate::schema_state::{
-	CatalogEntity, EntityKey, SchemaFile, build_catalog_snapshot, collect_schema_files,
-	ensure_local_state_dirs, ensure_overwrite, render_remove_sql,
+	CatalogEntity, EntityKey, SchemaFile, build_catalog_snapshot, collect_schema_files_at,
+	ensure_local_state_dirs_for, ensure_overwrite, render_remove_sql,
 };
 use crate::setup::{run_setup, run_setup_embedded};
 use crate::variables::TemplateVars;
@@ -74,7 +75,7 @@ pub struct EmbeddedSchemaFile {
 #[doc(hidden)]
 pub async fn run_sync(db: &Surreal<Any>, opts: SyncOpts) -> Result<()> {
 	run_setup(db, &opts.folder).await?;
-	ensure_local_state_dirs(&opts.folder)?;
+	ensure_local_state_dirs_for(&Layout::new(opts.folder.clone(), opts.module.clone()))?;
 
 	if opts.watch {
 		run_sync_once(db, &opts, true).await?;
@@ -268,7 +269,8 @@ async fn sync_embedded(
 }
 
 async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> Result<()> {
-	let files = collect_schema_files(&opts.folder)?;
+	let layout = Layout::new(opts.folder.clone(), opts.module.clone());
+	let files = collect_schema_files_at(&layout.schema_dir())?;
 	run_sync_with_files(db, opts, &files, watch_mode).await
 }
 
@@ -283,7 +285,10 @@ async fn run_sync_with_files(
 	let managed = load_managed_entities(db, &opts.module).await?;
 
 	if files.is_empty() && !watch_mode {
-		println!("No schema files found in {}/schema", opts.folder);
+		println!(
+			"No schema files found in {}",
+			Layout::new(opts.folder.clone(), opts.module.clone()).schema_dir().display()
+		);
 	}
 
 	let file_paths: BTreeSet<String> = files.iter().map(|file| file.path.clone()).collect();
@@ -404,7 +409,7 @@ async fn run_sync_with_files(
 				}
 			}
 		} else if shared {
-			let lock = acquire_lock(db, "global").await?;
+			let lock = acquire_lock(db, &opts.module, "global").await?;
 			let result = prune_managed_entities(db, &opts.module, &stale_entities).await;
 			let release = release_lock(db, &lock).await;
 			match (result, release) {

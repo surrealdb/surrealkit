@@ -231,6 +231,15 @@ pub struct Operation {
 	pub source_path: String,
 }
 
+/// Create the on-disk directories a module needs (`schema/`, `rollouts/`,
+/// `snapshots/`).
+pub fn ensure_local_state_dirs_for(layout: &crate::constants::Layout) -> Result<()> {
+	for dir in [layout.schema_dir(), layout.rollouts_dir(), layout.state_dir()] {
+		fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+	}
+	Ok(())
+}
+
 pub fn ensure_local_state_dirs(folder: &str) -> Result<()> {
 	let sd = schema_dir(folder);
 	let rd = rollouts_dir(folder);
@@ -242,8 +251,14 @@ pub fn ensure_local_state_dirs(folder: &str) -> Result<()> {
 }
 
 pub fn collect_schema_files(folder: &str) -> Result<Vec<SchemaFile>> {
-	let sd = schema_dir(folder);
-	let mut files: Vec<PathBuf> = WalkDir::new(&sd)
+	collect_schema_files_at(&schema_dir(folder))
+}
+
+/// Collect `.surql` files from an explicit directory, recursively and in sorted
+/// order. Used by module-aware callers, which resolve the directory through
+/// [`Layout`](crate::constants::Layout) rather than the project folder.
+pub fn collect_schema_files_at(sd: &std::path::Path) -> Result<Vec<SchemaFile>> {
+	let mut files: Vec<PathBuf> = WalkDir::new(sd)
 		.follow_links(true)
 		.into_iter()
 		.filter_map(|e| e.ok())

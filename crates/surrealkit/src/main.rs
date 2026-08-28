@@ -25,6 +25,13 @@ pub struct Cli {
 	#[arg(short, long, global = true)]
 	verbose: bool,
 
+	/// Schema module to operate on. Modules are tracked independently: a module
+	/// only ever prunes its own database objects. Files live in
+	/// `<folder>/modules/<name>/schema`. Omit for the default module
+	/// (`<folder>/schema`), which is the pre-1.0 layout.
+	#[arg(short = 's', long, global = true, value_name = "NAME")]
+	schema: Option<String>,
+
 	/// Database host URL
 	#[arg(long, global = true)]
 	host: Option<String>,
@@ -230,6 +237,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 	let cfg = DbCfg::from_env(env.as_ref(), &overrides)?;
 	let folder = cfg.folder().to_owned();
+	// No --schema means the default module, whose paths and metadata partitions
+	// are exactly the pre-1.0 ones.
+	let module = match args.schema {
+		Some(name) => Module::new(name)?,
+		None => Module::default_module(),
+	};
 
 	match args.command {
 		Commands::Init {
@@ -279,7 +292,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 					allow_all_statements,
 					vars: template_vars,
 					folder: folder.clone(),
-					module: Module::default_module(),
+					module: module.clone(),
 					typegen_ts_out: typegen_cfg.typescript,
 					typegen_ts_format: typegen_cfg.format,
 				},
@@ -291,7 +304,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		} => match command {
 			RolloutCommands::Baseline => {
 				let db = connect(&cfg).await?;
-				rollout::run_baseline(&db, &folder, &Module::default_module()).await?;
+				rollout::run_baseline(&db, &folder, &module).await?;
 			}
 			RolloutCommands::Plan {
 				name,
