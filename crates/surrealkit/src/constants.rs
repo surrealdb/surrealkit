@@ -217,10 +217,10 @@ mod tests {
 		// If it did, the default module's recursive walk would also collect the
 		// named module's files and then claim ownership of them.
 		let default_schema = Layout::default_module("./database").schema_dir();
-		let billing = Layout::new("./database", Module::new("billing").unwrap()).schema_dir();
+		let named_schema = Layout::new("./database", Module::new("billing").unwrap()).schema_dir();
 		assert!(
-			!billing.starts_with(&default_schema),
-			"{billing:?} must not be inside {default_schema:?}"
+			!named_schema.starts_with(&default_schema),
+			"{named_schema:?} must not be inside {default_schema:?}"
 		);
 	}
 

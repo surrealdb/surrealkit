@@ -68,7 +68,7 @@ pub(crate) fn is_embedded_endpoint(host: &str) -> bool {
 	EMBEDDED_SCHEMES.iter().any(|scheme| lower.starts_with(scheme))
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 /// CLI-supplied connection overrides, each taking priority over the environment.
 pub struct DbOverrides {
 	pub host: Option<String>,
@@ -80,7 +80,7 @@ pub struct DbOverrides {
 	pub folder: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 /// A fully resolved database connection.
 ///
 /// Built by [`DbCfg::from_env`], which layers CLI overrides over the process
@@ -93,6 +93,41 @@ pub struct DbCfg {
 	pass: String,
 	pub auth_level: AuthLevel,
 	pub folder: String,
+}
+
+/// Shown in place of a password so `{:?}` cannot leak one.
+///
+/// [`DbCfg`] and [`DbOverrides`] hold resolved credentials and are reachable from
+/// other `Debug` types (`Target`, and the CLI's selection), so a derived `Debug`
+/// would print passwords into any log or panic message that formatted them.
+const REDACTED: &str = "<redacted>";
+
+impl std::fmt::Debug for DbCfg {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("DbCfg")
+			.field("host", &self.host)
+			.field("ns", &self.ns)
+			.field("db", &self.db)
+			.field("user", &self.user)
+			.field("pass", &REDACTED)
+			.field("auth_level", &self.auth_level)
+			.field("folder", &self.folder)
+			.finish()
+	}
+}
+
+impl std::fmt::Debug for DbOverrides {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("DbOverrides")
+			.field("host", &self.host)
+			.field("ns", &self.ns)
+			.field("db", &self.db)
+			.field("user", &self.user)
+			.field("pass", &self.pass.as_ref().map(|_| REDACTED))
+			.field("auth_level", &self.auth_level)
+			.field("folder", &self.folder)
+			.finish()
+	}
 }
 
 /// The `DATABASE_*` aliases accepted before v1, paired with their replacements.
@@ -475,6 +510,28 @@ mod tests {
 		assert_eq!(cfg.ns(), "myns");
 		assert_eq!(cfg.user(), "admin");
 		assert_eq!(cfg.pass(), "secret");
+	}
+
+	#[test]
+	fn debug_never_prints_the_password() {
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+		clear_db_env();
+		let overrides = DbOverrides {
+			pass: Some("hunter2".into()),
+			..Default::default()
+		};
+		let cfg = DbCfg::from_env(None, &overrides).unwrap();
+
+		let rendered = format!("{cfg:?}");
+		assert!(!rendered.contains("hunter2"), "DbCfg Debug leaked the password: {rendered}");
+		assert!(rendered.contains(REDACTED), "password should be shown redacted: {rendered}");
+
+		let rendered = format!("{overrides:?}");
+		assert!(!rendered.contains("hunter2"), "DbOverrides Debug leaked the password: {rendered}");
+
+		// A password that was never set must not look like one that was.
+		let empty = format!("{:?}", DbOverrides::default());
+		assert!(empty.contains("None"), "unset password should render as None: {empty}");
 	}
 
 	#[test]
