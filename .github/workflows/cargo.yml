@@ -43,6 +43,12 @@ jobs:
               env:
                   RUSTDOCFLAGS: -D warnings
 
+            # The binary declares `required-features = ["cli"]`, so a build that turns
+            # default features off must opt back in. integration-test.yml does exactly
+            # that, and this catches it without waiting for that workflow's path filter.
+            - name: Check binary without default features
+              run: cargo check -p surrealkit --bin surrealkit --no-default-features --features cli --locked
+
             - name: Format
               run: cargo fmt --all --check
 

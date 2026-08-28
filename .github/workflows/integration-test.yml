@@ -83,6 +83,7 @@ jobs:
                     --manifest-path crates/surrealkit/Cargo.toml \
                     --bin surrealkit \
                     --no-default-features \
+                    --features cli \
                     --locked
 
             - name: Prepare test environment
