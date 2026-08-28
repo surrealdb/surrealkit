@@ -1,18 +1,24 @@
-import { spawn } from "node:child_process";
-import path from "node:path";
+import { spawn } from 'node:child_process';
+import path from 'node:path';
 
-import picomatch from "picomatch";
+import picomatch from 'picomatch';
 import {
 	normalizePath,
 	type Plugin,
 	type ResolvedConfig,
 	type ViteDevServer,
-} from "vite";
+} from 'vite';
 
-const DEFAULT_SCHEMA_GLOBS = ["database/schema/**/*.surql"];
+// Covers both the default module (`database/schema`) and named modules
+// (`database/modules/<name>/schema`). Override with `schemaGlobs` for a custom
+// `[schema.<name>] path`.
+const DEFAULT_SCHEMA_GLOBS = [
+	'database/schema/**/*.surql',
+	'database/modules/*/schema/**/*.surql',
+];
 
-type RunMode = "serve" | "build";
-type LogLevel = "silent" | "error" | "info" | "debug";
+type RunMode = 'serve' | 'build';
+type LogLevel = 'silent' | 'error' | 'info' | 'debug';
 
 export interface SurrealkitPluginOptions {
 	/** SurrealKit binary (or executable path). */
@@ -23,6 +29,12 @@ export interface SurrealkitPluginOptions {
 	env?: Record<string, string>;
 	/** Additional args appended after `surrealkit sync`. */
 	syncArgs?: string[];
+	/** Schema modules to sync. Default: whatever `surrealkit sync` selects. */
+	schemas?: string[];
+	/** Database targets to sync to. Default: the primary/only target. */
+	targets?: string[];
+	/** Sync every declared module against every declared target. */
+	all?: boolean;
 	/** Globs (relative to Vite root) that trigger sync in dev. */
 	schemaGlobs?: string[];
 	/** Where the plugin runs. Default: ['serve']. */
@@ -44,6 +56,9 @@ interface ResolvedOptions {
 	cwd?: string;
 	env?: Record<string, string>;
 	syncArgs: string[];
+	schemas: string[];
+	targets: string[];
+	all: boolean;
 	schemaGlobs: string[];
 	include: Set<RunMode>;
 	runOnStartup: boolean;
@@ -55,16 +70,19 @@ interface ResolvedOptions {
 
 function resolveOptions(options: SurrealkitPluginOptions): ResolvedOptions {
 	return {
-		binary: options.binary ?? "surrealkit",
+		binary: options.binary ?? 'surrealkit',
 		cwd: options.cwd,
 		env: options.env,
 		syncArgs: options.syncArgs ?? [],
+		schemas: options.schemas ?? [],
+		targets: options.targets ?? [],
+		all: options.all ?? false,
 		schemaGlobs: options.schemaGlobs ?? DEFAULT_SCHEMA_GLOBS,
-		include: new Set(options.include ?? ["serve"]),
+		include: new Set(options.include ?? ['serve']),
 		runOnStartup: options.runOnStartup ?? true,
 		reloadOnSync: options.reloadOnSync ?? false,
 		debounceMs: options.debounceMs ?? 150,
-		logLevel: options.logLevel ?? "info",
+		logLevel: options.logLevel ?? 'info',
 		failBuildOnError: options.failBuildOnError ?? true,
 	};
 }
@@ -90,18 +108,24 @@ function runSyncCommand(
 	onDebugLine?: (line: string) => void,
 ): Promise<CommandResult> {
 	return new Promise((resolve, reject) => {
-		const commandArgs = ["sync", ...options.syncArgs];
+		const commandArgs = [
+			'sync',
+			...options.schemas.flatMap((name) => ['--schema', name]),
+			...options.targets.flatMap((name) => ['--target', name]),
+			...(options.all ? ['--all'] : []),
+			...options.syncArgs,
+		];
 		const child = spawn(options.binary, commandArgs, {
 			cwd: options.cwd ?? root,
 			env: {
 				...process.env,
 				...options.env,
 			},
-			shell: process.platform === "win32",
-			stdio: ["ignore", "pipe", "pipe"],
+			shell: process.platform === 'win32',
+			stdio: ['ignore', 'pipe', 'pipe'],
 		});
 
-		let output = "";
+		let output = '';
 
 		const consume = (chunk: string): void => {
 			output += chunk;
@@ -110,7 +134,7 @@ function runSyncCommand(
 			}
 
 			const lines = chunk
-				.split("\n")
+				.split('\n')
 				.map((line) => line.trimEnd())
 				.filter(Boolean);
 			for (const line of lines) {
@@ -118,13 +142,13 @@ function runSyncCommand(
 			}
 		};
 
-		child.stdout?.setEncoding("utf8");
-		child.stderr?.setEncoding("utf8");
-		child.stdout?.on("data", consume);
-		child.stderr?.on("data", consume);
+		child.stdout?.setEncoding('utf8');
+		child.stderr?.setEncoding('utf8');
+		child.stdout?.on('data', consume);
+		child.stderr?.on('data', consume);
 
-		child.on("error", reject);
-		child.on("close", (code, signal) => {
+		child.on('error', reject);
+		child.on('close', (code, signal) => {
 			resolve({
 				code,
 				signal,
@@ -162,25 +186,31 @@ export function surrealkitPlugin(
 
 	const log = {
 		error: (message: string): void => {
-			if (options.logLevel === "silent") {
+			if (options.logLevel === 'silent') {
 				return;
 			}
 
-			(config?.logger ?? console).error(`[vite-plugin-surrealkit] ${message}`);
+			(config?.logger ?? console).error(
+				`[vite-plugin-surrealkit] ${message}`,
+			);
 		},
 		info: (message: string): void => {
-			if (options.logLevel === "silent" || options.logLevel === "error") {
+			if (options.logLevel === 'silent' || options.logLevel === 'error') {
 				return;
 			}
 
-			(config?.logger ?? console).info(`[vite-plugin-surrealkit] ${message}`);
+			(config?.logger ?? console).info(
+				`[vite-plugin-surrealkit] ${message}`,
+			);
 		},
 		debug: (message: string): void => {
-			if (options.logLevel !== "debug") {
+			if (options.logLevel !== 'debug') {
 				return;
 			}
 
-			(config?.logger ?? console).info(`[vite-plugin-surrealkit] ${message}`);
+			(config?.logger ?? console).info(
+				`[vite-plugin-surrealkit] ${message}`,
+			);
 		},
 	};
 
@@ -201,42 +231,54 @@ export function surrealkitPlugin(
 				queuedReason = undefined;
 				log.info(`running \`surrealkit sync\` (${currentReason})`);
 
-				const result = await runSyncCommand(options, config.root, (line) => {
-					log.debug(line);
-				}).catch((err: unknown) => {
-					const message = err instanceof Error ? err.message : String(err);
+				const result = await runSyncCommand(
+					options,
+					config.root,
+					(line) => {
+						log.debug(line);
+					},
+				).catch((err: unknown) => {
+					const message =
+						err instanceof Error ? err.message : String(err);
 					log.error(`failed to start SurrealKit process: ${message}`);
 					return {
 						code: 1,
 						signal: null,
-						output: "",
+						output: '',
 					} satisfies CommandResult;
 				});
 
 				if (result.code === 0) {
-					log.info("Database schema sync completed successfully");
+					log.info('Database schema sync completed successfully');
 
-					if (options.reloadOnSync && currentReason !== "startup" && server) {
-						server.ws.send({ type: "full-reload" });
-						log.debug("sent full-reload to browser");
+					if (
+						options.reloadOnSync &&
+						currentReason !== 'startup' &&
+						server
+					) {
+						server.ws.send({ type: 'full-reload' });
+						log.debug('sent full-reload to browser');
 					}
 				} else {
 					const exit =
 						result.code === null
-							? `signal ${result.signal ?? "unknown"}`
+							? `signal ${result.signal ?? 'unknown'}`
 							: `exit code ${result.code}`;
-					const detail = result.output ? `\n${result.output}` : "";
+					const detail = result.output ? `\n${result.output}` : '';
 					const message = `sync failed (${exit})${detail}`;
 
 					log.error(message);
 
-					if (config.command === "build" && options.failBuildOnError) {
+					if (
+						config.command === 'build' &&
+						options.failBuildOnError
+					) {
 						throw new Error(message);
 					}
 				}
 
 				if (queued) {
-					currentReason = queuedReason ?? "queued";
+					currentReason = queuedReason ?? 'queued';
 				}
 			} while (queued);
 		} finally {
@@ -254,15 +296,18 @@ export function surrealkitPlugin(
 	};
 
 	return {
-		name: "vite-plugin-surrealkit",
+		name: 'vite-plugin-surrealkit',
 
 		configResolved(resolved) {
 			config = resolved;
-			matchesSchemaFile = createMatcher(resolved.root, options.schemaGlobs);
+			matchesSchemaFile = createMatcher(
+				resolved.root,
+				options.schemaGlobs,
+			);
 
 			if (options.include.size === 0) {
 				log.error(
-					"no include modes configured; plugin is effectively disabled",
+					'no include modes configured; plugin is effectively disabled',
 				);
 			}
 		},
@@ -270,19 +315,19 @@ export function surrealkitPlugin(
 		async buildStart() {
 			if (
 				!config ||
-				!options.include.has("build") ||
-				config.command !== "build"
+				!options.include.has('build') ||
+				config.command !== 'build'
 			) {
 				return;
 			}
 
 			if (options.runOnStartup) {
-				await runSync("build-start");
+				await runSync('build-start');
 			}
 		},
 
 		configureServer(devServer) {
-			if (!options.include.has("serve")) {
+			if (!options.include.has('serve')) {
 				return;
 			}
 
@@ -297,7 +342,7 @@ export function surrealkitPlugin(
 			}
 
 			const onSchemaEvent =
-				(event: "add" | "change" | "unlink") =>
+				(event: 'add' | 'change' | 'unlink') =>
 				(filePath: string): void => {
 					if (!matchesSchemaFile || !matchesSchemaFile(filePath)) {
 						return;
@@ -309,18 +354,18 @@ export function surrealkitPlugin(
 					scheduleSync(`${event}`);
 				};
 
-			const onAdd = onSchemaEvent("add");
-			const onChange = onSchemaEvent("change");
-			const onUnlink = onSchemaEvent("unlink");
+			const onAdd = onSchemaEvent('add');
+			const onChange = onSchemaEvent('change');
+			const onUnlink = onSchemaEvent('unlink');
 
-			devServer.watcher.on("add", onAdd);
-			devServer.watcher.on("change", onChange);
-			devServer.watcher.on("unlink", onUnlink);
+			devServer.watcher.on('add', onAdd);
+			devServer.watcher.on('change', onChange);
+			devServer.watcher.on('unlink', onUnlink);
 
-			devServer.httpServer?.once("close", () => {
-				devServer.watcher.off("add", onAdd);
-				devServer.watcher.off("change", onChange);
-				devServer.watcher.off("unlink", onUnlink);
+			devServer.httpServer?.once('close', () => {
+				devServer.watcher.off('add', onAdd);
+				devServer.watcher.off('change', onChange);
+				devServer.watcher.off('unlink', onUnlink);
 
 				if (timer) {
 					clearTimeout(timer);
@@ -329,7 +374,7 @@ export function surrealkitPlugin(
 			});
 
 			if (options.runOnStartup) {
-				scheduleSync("startup");
+				scheduleSync('startup');
 			}
 		},
 	};

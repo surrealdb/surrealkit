@@ -1,0 +1,52 @@
+name: Vite plugin CI
+
+# The plugin previously had no CI at all: publish-vite-plugin.yml runs only on a
+# `vite-plugin-v*` tag, so a broken build was only discovered at publish time.
+on:
+    push:
+        branches:
+            - "**"
+        paths:
+            - "packages/vite-plugin-surrealkit/**"
+            - ".github/workflows/vite-plugin-ci.yml"
+    pull_request:
+        paths:
+            - "packages/vite-plugin-surrealkit/**"
+            - ".github/workflows/vite-plugin-ci.yml"
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+jobs:
+    check:
+        name: Lint, typecheck and build
+        runs-on: ubuntu-latest
+        defaults:
+            run:
+                working-directory: packages/vite-plugin-surrealkit
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+            - name: Setup Node.js
+              uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+              with:
+                  node-version: 22
+
+            # NOTE: the package commits a bun.lock but no package-lock.json, so
+            # `npm ci` is impossible and installs here are unpinned. Matches what
+            # publish-vite-plugin.yml already does; converging on one package
+            # manager is tracked separately.
+            - name: Install dependencies
+              run: npm install
+
+            - name: Lint
+              run: npm run lint
+
+            - name: Typecheck
+              run: npm run typecheck
+
+            - name: Build
+              run: npm run build
