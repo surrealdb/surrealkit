@@ -69,6 +69,7 @@ pub(crate) fn is_embedded_endpoint(host: &str) -> bool {
 }
 
 #[derive(Debug, Clone, Default)]
+/// CLI-supplied connection overrides, each taking priority over the environment.
 pub struct DbOverrides {
 	pub host: Option<String>,
 	pub ns: Option<String>,
@@ -80,6 +81,10 @@ pub struct DbOverrides {
 }
 
 #[derive(Debug, Clone)]
+/// A fully resolved database connection.
+///
+/// Built by [`DbCfg::from_env`], which layers CLI overrides over the process
+/// environment, then `.env`, then defaults.
 pub struct DbCfg {
 	host: String,
 	ns: String,
@@ -161,6 +166,11 @@ fn resolve(
 }
 
 impl DbCfg {
+	/// Resolve a connection with priority: CLI override → process environment →
+	/// `.env` file → default.
+	///
+	/// Errors if a removed `DATABASE_*` variable is set without its `SURREALDB_*`
+	/// replacement; see [`reject_orphaned_legacy_env`].
 	pub fn from_env(dotenv: Option<&DotEnv>, overrides: &DbOverrides) -> Result<Self> {
 		reject_orphaned_legacy_env(dotenv)?;
 		let host = resolve(&overrides.host, &["SURREALDB_HOST"], dotenv, "http://localhost:8000");
@@ -211,30 +221,37 @@ impl DbCfg {
 		}
 	}
 
+	/// The endpoint URL.
 	pub fn host(&self) -> &str {
 		&self.host
 	}
 
+	/// The namespace.
 	pub fn ns(&self) -> &str {
 		&self.ns
 	}
 
+	/// The database.
 	pub fn db(&self) -> &str {
 		&self.db
 	}
 
+	/// The username used to sign in.
 	pub fn user(&self) -> &str {
 		&self.user
 	}
 
+	/// The password used to sign in.
 	pub fn pass(&self) -> &str {
 		&self.pass
 	}
 
+	/// The authentication level used when connecting.
 	pub fn auth_level(&self) -> &AuthLevel {
 		&self.auth_level
 	}
 
+	/// The project folder holding schema, seeds and rollouts.
 	pub fn folder(&self) -> &str {
 		&self.folder
 	}

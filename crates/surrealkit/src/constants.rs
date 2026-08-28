@@ -2,56 +2,72 @@ use std::path::PathBuf;
 
 use crate::module::Module;
 
+/// The project folder used when neither `--folder` nor `SURREALDB_FOLDER` is set.
 pub const DEFAULT_ROOT_DIR: &str = "./database";
 
+/// `<folder>/setup.surql` — the metadata-table definitions, scaffolded on first run.
 pub fn setup_surql_path(folder: &str) -> PathBuf {
 	PathBuf::from(folder).join("setup.surql")
 }
 
+/// `<folder>/schema` — the default module's schema files.
+///
+/// For module-aware paths use [`Layout::schema_dir`].
 pub fn schema_dir(folder: &str) -> PathBuf {
 	PathBuf::from(folder).join("schema")
 }
 
+/// `<folder>/rollouts` — the default module's rollout manifests.
 pub fn rollouts_dir(folder: &str) -> PathBuf {
 	PathBuf::from(folder).join("rollouts")
 }
 
+/// `<folder>/snapshots` — the default module's snapshot directory.
 pub fn state_dir(folder: &str) -> PathBuf {
 	PathBuf::from(folder).join("snapshots")
 }
 
+/// The default module's file-hash snapshot, used to detect drift.
 pub fn schema_snapshot_path(folder: &str) -> PathBuf {
 	state_dir(folder).join("schema_snapshot.json")
 }
 
+/// The default module's entity-catalog snapshot, diffed to plan rollouts.
 pub fn catalog_snapshot_path(folder: &str) -> PathBuf {
 	state_dir(folder).join("catalog_snapshot.json")
 }
 
+/// `<folder>/tests` — test suites and fixtures. Not module-scoped.
 pub fn tests_dir(folder: &str) -> PathBuf {
 	PathBuf::from(folder).join("tests")
 }
 
+/// `<folder>/tests/suites` — the `.toml` suite definitions.
 pub fn suites_dir(folder: &str) -> PathBuf {
 	tests_dir(folder).join("suites")
 }
 
+/// `<folder>/tests/fixtures` — `.surql` fixtures referenced by suites.
 pub fn fixtures_dir(folder: &str) -> PathBuf {
 	tests_dir(folder).join("fixtures")
 }
 
+/// `<folder>/seed` — the default module's seed files.
 pub fn seed_dir(folder: &str) -> PathBuf {
 	PathBuf::from(folder).join("seed")
 }
 
+/// `<folder>/seed/seed.surql` — the seed file `surrealkit init` scaffolds.
 pub fn seed_surql_path(folder: &str) -> PathBuf {
 	seed_dir(folder).join("seed.surql")
 }
 
+/// `<folder>/types` — generated type artifacts.
 pub fn types_dir(folder: &str) -> PathBuf {
 	PathBuf::from(folder).join("types")
 }
 
+/// `<folder>/types/schema.json` — the generated schema document.
 pub fn typegen_output_path(folder: &str) -> PathBuf {
 	types_dir(folder).join("schema.json")
 }
