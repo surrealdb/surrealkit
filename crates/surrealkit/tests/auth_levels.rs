@@ -161,7 +161,7 @@ async fn connect_root_auth() {
 
 	let cfg = make_cfg(&url, AuthLevel::Root, "root", "root");
 	let db = connect(&cfg).await.expect("root connect");
-	db.query("SELECT 1;").await.expect("query").check().expect("check");
+	db.query("RETURN 1;").await.expect("query").check().expect("check");
 }
 
 #[tokio::test]
@@ -181,7 +181,7 @@ async fn connect_namespace_auth() {
 
 	let cfg = make_cfg(&url, AuthLevel::Namespace, "ns_user", "ns_pass");
 	let db = connect(&cfg).await.expect("namespace connect");
-	db.query("SELECT 1;").await.expect("query").check().expect("check");
+	db.query("RETURN 1;").await.expect("query").check().expect("check");
 }
 
 #[tokio::test]
@@ -201,7 +201,7 @@ async fn connect_database_auth() {
 
 	let cfg = make_cfg(&url, AuthLevel::Database, "db_user", "db_pass");
 	let db = connect(&cfg).await.expect("database connect");
-	db.query("SELECT 1;").await.expect("query").check().expect("check");
+	db.query("RETURN 1;").await.expect("query").check().expect("check");
 }
 
 #[tokio::test]
