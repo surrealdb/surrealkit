@@ -317,12 +317,10 @@ async fn copy_record(
 	root_db: &Surreal<Any>,
 	record_id: RecordId,
 ) -> Result<surrealdb_types::Object> {
-	let record = get_record(root_db, record_id.clone()).await?;
-	if record.is_none() {
+	let Some(mut content) = get_record(root_db, record_id.clone()).await? else {
 		bail!("Record {:?} cannot be copied", record_id);
-	}
+	};
 	let tmp_record_id = RecordId::new(record_id.table.clone(), RecordIdKey::rand());
-	let mut content = record.unwrap();
 	content.remove("id");
 	root_db
 		.query("CREATE $tmp_record_id CONTENT $content;")
@@ -571,16 +569,13 @@ async fn run_case(
 					return Err(error);
 				}
 
-				let mut report = evaluate_outcome(
+				let report = evaluate_outcome(
 					format!("action:{} (#{})", rule.action.label(), idx + 1),
 					result,
 					rule.allow,
 					rule.error_contains.as_deref(),
 					None,
 				)?;
-				if !report.passed {
-					report.message = format!("{}", report.message);
-				}
 				assertions.push(report);
 			}
 
@@ -709,6 +704,9 @@ async fn run_case(
 	}
 }
 
+// Each parameter is a distinct piece of the expectation being reported; bundling
+// them into a struct would only move the argument list to the call sites.
+#[expect(clippy::too_many_arguments)]
 fn report_sql_expect(
 	name: String,
 	kind: String,

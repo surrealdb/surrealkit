@@ -177,6 +177,63 @@ impl DbCfg {
 	}
 }
 
+pub async fn connect(cfg: &DbCfg) -> Result<Surreal<Any>> {
+	let db = create_surreal_client(&cfg.host)
+		.await
+		.with_context(|| format!("Failed connecting to {}", cfg.host))?;
+
+	// Embedded engines have no users on a fresh datastore, so signing in would
+	// fail. Auto-detect them and skip auth (unless the user forced a level).
+	let auth_level = if is_embedded_endpoint(&cfg.host) {
+		AuthLevel::None
+	} else {
+		cfg.auth_level.clone()
+	};
+
+	match auth_level {
+		AuthLevel::None => {
+			db.use_ns(&cfg.ns)
+				.use_db(&cfg.db)
+				.await
+				.with_context(|| format!("use_ns/use_db failed for ns={} db={}", cfg.ns, cfg.db))?;
+		}
+		AuthLevel::Root => {
+			db.signin(Root {
+				username: cfg.user.clone(),
+				password: cfg.pass.clone(),
+			})
+			.await
+			.context("root signin failed")?;
+			db.use_ns(&cfg.ns)
+				.use_db(&cfg.db)
+				.await
+				.with_context(|| format!("use_ns/use_db failed for ns={} db={}", cfg.ns, cfg.db))?;
+		}
+		AuthLevel::Namespace => {
+			db.signin(Namespace {
+				namespace: cfg.ns.clone(),
+				username: cfg.user.clone(),
+				password: cfg.pass.clone(),
+			})
+			.await
+			.context("namespace signin failed")?;
+			db.use_db(&cfg.db).await.with_context(|| format!("use_db failed for db={}", cfg.db))?;
+		}
+		AuthLevel::Database => {
+			db.signin(Database {
+				namespace: cfg.ns.clone(),
+				database: cfg.db.clone(),
+				username: cfg.user.clone(),
+				password: cfg.pass.clone(),
+			})
+			.await
+			.context("database signin failed")?;
+		}
+	}
+
+	Ok(db)
+}
+
 #[cfg(test)]
 mod tests {
 	use std::sync::Mutex;
@@ -427,61 +484,4 @@ mod tests {
 		assert_eq!(cfg.host(), "http://clihost:9000");
 		clear_db_env();
 	}
-}
-
-pub async fn connect(cfg: &DbCfg) -> Result<Surreal<Any>> {
-	let db = create_surreal_client(&cfg.host)
-		.await
-		.with_context(|| format!("Failed connecting to {}", cfg.host))?;
-
-	// Embedded engines have no users on a fresh datastore, so signing in would
-	// fail. Auto-detect them and skip auth (unless the user forced a level).
-	let auth_level = if is_embedded_endpoint(&cfg.host) {
-		AuthLevel::None
-	} else {
-		cfg.auth_level.clone()
-	};
-
-	match auth_level {
-		AuthLevel::None => {
-			db.use_ns(&cfg.ns)
-				.use_db(&cfg.db)
-				.await
-				.with_context(|| format!("use_ns/use_db failed for ns={} db={}", cfg.ns, cfg.db))?;
-		}
-		AuthLevel::Root => {
-			db.signin(Root {
-				username: cfg.user.clone(),
-				password: cfg.pass.clone(),
-			})
-			.await
-			.context("root signin failed")?;
-			db.use_ns(&cfg.ns)
-				.use_db(&cfg.db)
-				.await
-				.with_context(|| format!("use_ns/use_db failed for ns={} db={}", cfg.ns, cfg.db))?;
-		}
-		AuthLevel::Namespace => {
-			db.signin(Namespace {
-				namespace: cfg.ns.clone(),
-				username: cfg.user.clone(),
-				password: cfg.pass.clone(),
-			})
-			.await
-			.context("namespace signin failed")?;
-			db.use_db(&cfg.db).await.with_context(|| format!("use_db failed for db={}", cfg.db))?;
-		}
-		AuthLevel::Database => {
-			db.signin(Database {
-				namespace: cfg.ns.clone(),
-				database: cfg.db.clone(),
-				username: cfg.user.clone(),
-				password: cfg.pass.clone(),
-			})
-			.await
-			.context("database signin failed")?;
-		}
-	}
-
-	Ok(db)
 }

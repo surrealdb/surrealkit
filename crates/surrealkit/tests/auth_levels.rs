@@ -1,3 +1,11 @@
+// These tests mutate process-global environment variables, so they serialise on
+// `ENV_LOCK`. The guard is deliberately held across `.await` points: releasing it
+// early would let a concurrent test overwrite the env this one is asserting on.
+#![expect(
+	clippy::await_holding_lock,
+	reason = "ENV_LOCK serialises env-mutating tests; the guard must span the whole test body"
+)]
+
 /// Integration tests for all three SurrealDB authentication levels.
 ///
 /// The config-parsing tests in config.rs (unit tests) cover AuthLevel::parse,

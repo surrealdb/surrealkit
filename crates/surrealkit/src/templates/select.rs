@@ -71,6 +71,22 @@ fn announce_auto_added(manifest: &TemplateManifest, requested: &[String], closed
 	}
 }
 
+/// Render the multi-select labels for a template's features: `name — description`,
+/// falling back to the bare name when a feature has no description.
+///
+/// Split out of the interactive prompt so it stays compiled (and testable) under
+/// `cfg(test)`, where `prompt_features` is replaced by a non-interactive stub.
+fn feature_labels(manifest: &TemplateManifest) -> Vec<String> {
+	manifest
+		.features
+		.iter()
+		.map(|f| match &f.description {
+			Some(d) => format!("{} — {}", f.name, d),
+			None => f.name.clone(),
+		})
+		.collect()
+}
+
 #[cfg(not(test))]
 fn prompt_features(manifest: &TemplateManifest) -> Result<Vec<String>> {
 	use inquire::MultiSelect;
@@ -80,14 +96,7 @@ fn prompt_features(manifest: &TemplateManifest) -> Result<Vec<String>> {
 		return Ok(Vec::new());
 	}
 
-	let labels: Vec<String> = manifest
-		.features
-		.iter()
-		.map(|f| match &f.description {
-			Some(d) => format!("{} — {}", f.name, d),
-			None => f.name.clone(),
-		})
-		.collect();
+	let labels: Vec<String> = feature_labels(manifest);
 
 	let defaults: Vec<usize> =
 		manifest.features.iter().enumerate().filter_map(|(i, f)| f.default.then_some(i)).collect();
@@ -132,6 +141,33 @@ default = false
 "#,
 		)
 		.unwrap()
+	}
+
+	#[test]
+	fn feature_labels_render_name_and_description() {
+		let manifest = TemplateManifest::parse(
+			r#"
+schema_version = 1
+name = "t"
+[[features]]
+id = "organizations"
+name = "Organizations"
+description = "Orgs, roles and permissions"
+[[features]]
+id = "teams"
+name = "Teams"
+"#,
+		)
+		.unwrap();
+
+		let labels = feature_labels(&manifest);
+		assert_eq!(labels, vec!["Organizations — Orgs, roles and permissions", "Teams"]);
+	}
+
+	#[test]
+	fn feature_labels_empty_manifest_yields_no_labels() {
+		let manifest = TemplateManifest::parse("schema_version = 1\nname = \"t\"\n").unwrap();
+		assert!(feature_labels(&manifest).is_empty());
 	}
 
 	#[test]

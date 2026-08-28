@@ -1,0 +1,5 @@
+# `unwrap()` / `expect()` are idiomatic in tests: a panic is the failure report,
+# and forcing `?` there would only obscure which assertion broke. The workspace
+# `unwrap_used` / `expect_used` lints stay in force for library and binary code.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

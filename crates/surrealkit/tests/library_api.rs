@@ -1,3 +1,11 @@
+// These tests mutate process-global state (the current working directory), so they
+// serialise on `FS_LOCK`. The guard is deliberately held across `.await` points:
+// releasing it early would let a concurrent test chdir out from under this one.
+#![expect(
+	clippy::await_holding_lock,
+	reason = "FS_LOCK serialises cwd-mutating tests; the guard must span the whole test body"
+)]
+
 use std::path::Path;
 use std::sync::Mutex;
 

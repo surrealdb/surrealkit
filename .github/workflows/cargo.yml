@@ -26,14 +26,41 @@ jobs:
                   toolchain: 1.94.0
                   components: clippy, rustfmt
 
+            # `-D warnings` makes the [workspace.lints.clippy] table in the root
+            # Cargo.toml actually enforceable; --all-targets extends it to test code.
+            # `unwrap()`/`expect()` remain allowed in tests via clippy.toml.
             - name: Lint
-              run: cargo clippy
+              run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
             - name: Format
-              run: cargo fmt --check
+              run: cargo fmt --all --check
 
-            - name: Test crate
-              run: cargo test --manifest-path crates/surrealkit/Cargo.toml --all-features --locked
+            - name: Test workspace
+              run: cargo test --workspace --all-features --locked
+
+            # Catches packaging breaks on PRs instead of at tag time, when a partial
+            # release has already happened (see 8b83dd8, where templates were missing
+            # from the published crate).
+            #
+            # surrealkit itself cannot use `publish --dry-run`: it depends on
+            # surrealkit-macros by exact version, which is not on crates.io until the
+            # release tag publishes it. `package --list` needs no registry resolution
+            # and verifies the thing that actually broke -- the file manifest.
+            - name: Package dry-run (macros)
+              run: cargo publish --dry-run --manifest-path crates/surrealkit-macros/Cargo.toml --locked
+
+            - name: Package contents (surrealkit)
+              run: |
+                  set -euo pipefail
+                  files="$(cargo package --list --manifest-path crates/surrealkit/Cargo.toml --allow-dirty)"
+                  # build.rs bakes templates/ into the binary; without them `init` is broken.
+                  echo "$files" | grep -qx 'build.rs' || { echo '::error::build.rs missing from package'; exit 1; }
+                  count="$(echo "$files" | grep -c '^templates/' || true)"
+                  if [ "$count" -lt 20 ]; then
+                      echo "::error::only $count templates/ files in package (expected >= 20)"
+                      exit 1
+                  fi
+                  echo "packaged $count template files"
 
             # Publishes are idempotent: a version already on crates.io is
             # skipped (not an error), so a partially-failed release can be

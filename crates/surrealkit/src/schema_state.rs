@@ -426,8 +426,8 @@ sync runs inside an already-selected namespace/database. Provision these out-of-
 				truncate_stmt(normalized)
 			);
 		};
-		entity.source_path = file.path.clone();
-		entity.file_hash = file.hash.clone();
+		entity.source_path.clone_from(&file.path);
+		entity.file_hash.clone_from(&file.hash);
 		entity.statement_hash = sha256_hex(normalize_statement(normalized).as_bytes());
 		entities.push(entity);
 	}
@@ -1252,7 +1252,7 @@ mod tests {
 			sql: stmt.to_string(),
 		};
 		let (entities, ops) = parse_schema_statements(&file, true)
-			.expect(&format!("allow_all_statements should not fail for: {stmt}"));
+			.unwrap_or_else(|e| panic!("allow_all_statements should not fail for {stmt}: {e:#}"));
 		assert!(entities.is_empty(), "no catalog entity expected for: {stmt}");
 		assert_eq!(ops.len(), 1, "expected one operation for: {stmt}");
 		assert_eq!(ops[0].source_path, "database/schema/root.surql");
