@@ -45,8 +45,13 @@ an existing database re-applies nothing and prunes nothing.
   the same. The pre-1.0 forms are unchanged.
 - **Vite plugin:** `schemas`, `targets` and `all` options; the default watch
   globs now cover named modules.
+- **A `cli` cargo feature** (on by default, so `cargo install surrealkit` is
+  unaffected). `default-features = false` now genuinely drops `clap`, `inquire`,
+  `rustls`/`aws-lc-rs` and `tempfile` from a library consumer's dependency tree —
+  45 fewer entries — since none are used by the library itself.
 - **CI:** the Vite plugin is linted, typechecked and built on pushes and PRs; a
-  packaging check guards the published crate's file manifest.
+  packaging check guards the published crate's file manifest; and the
+  library-only build (`--no-default-features`) is linted so it cannot rot.
 
 ### Changed
 

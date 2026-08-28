@@ -17,6 +17,27 @@ surrealkit = "1.0.0-beta.1"
 
 ---
 
+## Cargo features
+
+`default = ["kv-mem", "cli"]`.
+
+The `cli` feature builds the `surrealkit` binary and pulls in the dependencies
+only it needs — `clap`, `inquire`, `rustls` (and its `aws-lc-rs` backend) and
+`tempfile`. Library consumers can drop all of them:
+
+```toml
+[dependencies]
+surrealkit = { version = "1.0.0-beta.1", default-features = false, features = ["kv-mem"] }
+```
+
+Storage engines: `kv-mem` (default), `kv-surrealkv`, `kv-rocksdb`, and `embedded`
+for all three. Remote connections over HTTP need no feature.
+
+> You do not need these features to target an embedded engine from a library:
+> cargo unifies features across the dependency graph, so enabling e.g.
+> `surrealdb/kv-surrealkv` in your own crate is enough for SurrealKit's
+> `Surreal<Any>` to open `surrealkv://`.
+
 ## Logging
 
 SurrealKit emits progress (files applied, entities pruned, seeds executed)

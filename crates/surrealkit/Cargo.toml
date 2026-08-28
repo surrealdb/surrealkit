@@ -16,7 +16,7 @@ license.workspace = true
 [dependencies]
 surrealkit-macros = { workspace = true }
 anyhow = { workspace = true }
-clap = { version = '4.5.47', features = ['derive'] }
+clap = { version = '4.5.47', features = ['derive'], optional = true }
 hex = '0.4'
 log = { workspace = true }
 serde = { workspace = true }
@@ -31,9 +31,9 @@ tokio = { version = '1.47', features = ['macros', 'rt-multi-thread', 'signal', '
 walkdir = { workspace = true }
 reqwest = { version = '0.12', default-features = false, features = ['json', 'rustls-tls'] }
 regex = '1'
-rustls = { version = '0.23', default-features = false, features = ['aws-lc-rs'] }
-inquire = '0.7'
-tempfile = '3'
+rustls = { version = '0.23', default-features = false, features = ['aws-lc-rs'], optional = true }
+inquire = { version = '0.7', optional = true }
+tempfile = { version = '3', optional = true }
 indoc = "2"
 
 [features]
@@ -46,14 +46,25 @@ indoc = "2"
 # Cargo unifies features across the dependency graph, so enabling e.g.
 # `surrealdb/kv-surrealkv` in your own crate is enough for SurrealKit's
 # `Surreal<Any>` to open `surrealkv://`.
-default = ['kv-mem']
+default = ['kv-mem', 'cli']
+# The `surrealkit` binary. On by default so `cargo install surrealkit` works, but
+# `default-features = false` drops clap, inquire, rustls (and its aws-lc-rs
+# backend) and tempfile from a library consumer's dependency tree -- none of them
+# are used by the library itself.
+cli = ['dep:clap', 'dep:inquire', 'dep:rustls', 'dep:tempfile']
 kv-mem = ['surrealdb/kv-mem']
 kv-surrealkv = ['surrealdb/kv-surrealkv']
 kv-rocksdb = ['surrealdb/kv-rocksdb']
 # Convenience: a full embedded CLI with every supported local engine.
 embedded = ['kv-surrealkv', 'kv-rocksdb', 'kv-mem']
 
+[[bin]]
+name = 'surrealkit'
+path = 'src/main.rs'
+required-features = ['cli']
+
 [dev-dependencies]
+tempfile = '3'
 test-case = '3'
 insta = { version = '1', features = ['json'] }
 

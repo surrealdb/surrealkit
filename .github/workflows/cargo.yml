@@ -32,6 +32,11 @@ jobs:
             - name: Lint
               run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
+            # The library must keep building without the `cli` feature, which is what
+            # lets a library consumer drop clap/inquire/rustls from their tree.
+            - name: Lint (library only)
+              run: cargo clippy -p surrealkit --lib --no-default-features --features kv-mem --locked -- -D warnings
+
             - name: Format
               run: cargo fmt --all --check
 
