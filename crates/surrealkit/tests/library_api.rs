@@ -14,6 +14,7 @@ use surrealdb::engine::any::{Any, connect};
 use surrealdb::opt::Config;
 use surrealdb::opt::capabilities::Capabilities;
 use surrealkit::constants::DEFAULT_ROOT_DIR;
+use surrealkit::module::Module;
 // CLI-backing filesystem functions live behind their modules (doc-hidden); the
 // library happy-path uses the `Sync` builder and `Rollout` facade exported at the
 // crate root.
@@ -201,6 +202,154 @@ async fn sync_embedded_empty_is_fine_when_nothing_is_managed() {
 	Sync::embedded(&[]).run(&db).await.expect("empty sync on empty db is a no-op");
 }
 
+/// Names of the tables currently defined in the database.
+async fn table_names(db: &Surreal<Any>) -> Vec<String> {
+	let mut resp = db.query("INFO FOR DB;").await.expect("info for db");
+	let info: Option<serde_json::Value> = resp.take(0).expect("take");
+	let mut names: Vec<String> = info
+		.as_ref()
+		.and_then(|v| v.get("tables"))
+		.and_then(|v| v.as_object())
+		.map(|m| m.keys().cloned().collect())
+		.unwrap_or_default();
+	names.sort();
+	names
+}
+
+#[tokio::test]
+async fn modules_do_not_prune_each_other() {
+	// The core multi-schema guarantee. Before v1 every sync treated *all* tracked
+	// entities as its own, so syncing module B against a database that module A had
+	// synced deleted A's tables outright.
+	let db = mem_db().await;
+
+	static CORE: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/core/account.surql",
+		sql: "DEFINE TABLE core_account SCHEMALESS;",
+	}];
+	static BILLING: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/billing/invoice.surql",
+		sql: "DEFINE TABLE billing_invoice SCHEMALESS;",
+	}];
+
+	Sync::embedded(CORE).module("core").expect("core").run(&db).await.expect("sync core");
+	Sync::embedded(BILLING)
+		.module("billing")
+		.expect("billing")
+		.run(&db)
+		.await
+		.expect("sync billing");
+
+	let tables = table_names(&db).await;
+	assert!(tables.contains(&"core_account".to_string()), "core survived billing: {tables:?}");
+	assert!(tables.contains(&"billing_invoice".to_string()), "billing applied: {tables:?}");
+
+	// Re-syncing core must not touch billing either.
+	Sync::embedded(CORE).module("core").expect("core").run(&db).await.expect("re-sync core");
+	let tables = table_names(&db).await;
+	assert!(tables.contains(&"billing_invoice".to_string()), "billing survived core: {tables:?}");
+}
+
+#[tokio::test]
+async fn a_module_prunes_only_its_own_entities() {
+	let db = mem_db().await;
+
+	static CORE: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/core/account.surql",
+		sql: "DEFINE TABLE core_account SCHEMALESS;",
+	}];
+	static BILLING_TWO: &[EmbeddedSchemaFile] = &[
+		EmbeddedSchemaFile {
+			path: "database/schema/billing/invoice.surql",
+			sql: "DEFINE TABLE billing_invoice SCHEMALESS;",
+		},
+		EmbeddedSchemaFile {
+			path: "database/schema/billing/plan.surql",
+			sql: "DEFINE TABLE billing_plan SCHEMALESS;",
+		},
+	];
+	static BILLING_ONE: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/billing/invoice.surql",
+		sql: "DEFINE TABLE billing_invoice SCHEMALESS;",
+	}];
+
+	Sync::embedded(CORE).module("core").expect("core").run(&db).await.expect("sync core");
+	Sync::embedded(BILLING_TWO)
+		.module("billing")
+		.expect("billing")
+		.run(&db)
+		.await
+		.expect("sync billing");
+
+	// Drop billing_plan from the billing module only.
+	Sync::embedded(BILLING_ONE)
+		.module("billing")
+		.expect("billing")
+		.run(&db)
+		.await
+		.expect("prune billing");
+
+	let tables = table_names(&db).await;
+	assert!(!tables.contains(&"billing_plan".to_string()), "billing_plan pruned: {tables:?}");
+	assert!(tables.contains(&"billing_invoice".to_string()), "billing_invoice kept: {tables:?}");
+	assert!(tables.contains(&"core_account".to_string()), "core untouched: {tables:?}");
+}
+
+#[tokio::test]
+async fn module_metadata_lands_in_its_own_partition() {
+	let db = mem_db().await;
+
+	static FILES: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/billing/invoice.surql",
+		sql: "DEFINE TABLE billing_invoice SCHEMALESS;",
+	}];
+	Sync::embedded(FILES).module("billing").expect("billing").run(&db).await.expect("sync");
+
+	let mut resp = db
+		.query("SELECT ns FROM __entity WHERE ns = 'sync@billing';")
+		.await
+		.expect("query billing partition");
+	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
+	assert_eq!(rows.len(), 1, "billing file hash must live in sync@billing");
+
+	// And nothing leaked into the default module's partition -- this is what makes
+	// a pre-v1 binary blind to named modules.
+	let mut resp =
+		db.query("SELECT ns FROM __entity WHERE ns = 'sync';").await.expect("query default");
+	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
+	assert!(rows.is_empty(), "named module must not write to the default partition");
+}
+
+#[tokio::test]
+async fn default_module_adopts_pre_v1_rows_without_pruning() {
+	// Upgrade path: a database written by 0.7 has its rows at ns='sync'/'schema'.
+	// The default module reads exactly those partitions, so an upgraded binary must
+	// see the schema as already in sync and issue no REMOVE.
+	let db = mem_db().await;
+
+	static FILES: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/legacy.surql",
+		sql: "DEFINE TABLE legacy_thing SCHEMALESS;",
+	}];
+	// Sync with no module: writes the bare partitions, exactly as 0.7 did.
+	Sync::embedded(FILES).run(&db).await.expect("initial sync");
+
+	let mut resp = db.query("SELECT ns FROM __entity WHERE ns = 'sync';").await.expect("query");
+	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
+	assert_eq!(rows.len(), 1, "pre-v1 rows live in the bare partition");
+
+	// Re-running as the explicit default module is a no-op, not a re-apply+prune.
+	Sync::embedded(FILES)
+		.module("default")
+		.expect("default")
+		.run(&db)
+		.await
+		.expect("explicit default module");
+
+	let tables = table_names(&db).await;
+	assert!(tables.contains(&"legacy_thing".to_string()), "table must survive: {tables:?}");
+}
+
 #[tokio::test]
 async fn sync_embedded_self_heals_catalog_drift() {
 	// Catalog drift: an entity tracked in __entity is already missing from the
@@ -368,7 +517,7 @@ async fn rollout_status_does_not_crash_after_completed_rollout() {
 	let db = mem_db().await;
 
 	write_schema_file(tmp.path(), "person.surql", "DEFINE TABLE person SCHEMALESS;");
-	run_baseline(&db, folder).await.expect("baseline");
+	run_baseline(&db, folder, &Module::default_module()).await.expect("baseline");
 
 	write_schema_file(tmp.path(), "account.surql", "DEFINE TABLE account SCHEMALESS;");
 	run_plan(
@@ -432,7 +581,7 @@ async fn rollout_full_lifecycle_via_cli_functions() {
 	let db = mem_db().await;
 
 	write_schema_file(tmp.path(), "person.surql", "DEFINE TABLE person SCHEMALESS;");
-	run_baseline(&db, folder).await.expect("baseline");
+	run_baseline(&db, folder, &Module::default_module()).await.expect("baseline");
 
 	// ns = 'schema' is the internal key used by the managed-entity tracker.
 	let mut resp = db.query("SELECT * FROM __entity WHERE ns = 'schema';").await.expect("query");
@@ -489,7 +638,7 @@ async fn rollout_rollback_after_start_via_cli_functions() {
 	let db = mem_db().await;
 
 	write_schema_file(tmp.path(), "order.surql", "DEFINE TABLE order SCHEMALESS;");
-	run_baseline(&db, folder).await.expect("baseline");
+	run_baseline(&db, folder, &Module::default_module()).await.expect("baseline");
 
 	write_schema_file(tmp.path(), "invoice.surql", "DEFINE TABLE invoice SCHEMALESS;");
 	run_plan(

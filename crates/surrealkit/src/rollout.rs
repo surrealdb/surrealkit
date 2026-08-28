@@ -14,6 +14,7 @@ use time::macros::format_description;
 
 use crate::constants::{catalog_snapshot_path, rollouts_dir};
 use crate::core::{exec_surql, sha256_hex};
+use crate::module::{Module, Partition};
 use crate::schema_state::{
 	CatalogDiff, CatalogEntity, CatalogSnapshot, EntityKey, EntityKind, FileDiff, SchemaFile,
 	build_catalog_snapshot, collect_schema_files, diff_catalog, diff_schema,
@@ -208,6 +209,14 @@ pub struct RolloutSpec {
 	/// rollouts.
 	#[serde(default)]
 	pub target_schema_hash: String,
+	/// The schema module this rollout belongs to. Defaults to the unnamed default
+	/// module, so manifests written before v1 load unchanged.
+	///
+	/// `skip_serializing_if` is not cosmetic: `manifest_checksum` is computed from
+	/// the serialized spec, so emitting this field for a default-module rollout
+	/// would change the checksum of every existing in-flight rollout.
+	#[serde(default = "default_module_name", skip_serializing_if = "is_default_module")]
+	pub module: String,
 	/// The migration strategy. See [`RolloutCompatibility`].
 	#[serde(default)]
 	pub compatibility: RolloutCompatibility,
@@ -217,6 +226,21 @@ pub struct RolloutSpec {
 	/// The steps to execute, grouped by [`RolloutPhase`].
 	#[serde(default)]
 	pub steps: Vec<RolloutStep>,
+}
+
+fn default_module_name() -> String {
+	Module::DEFAULT_NAME.to_string()
+}
+
+fn is_default_module(name: &String) -> bool {
+	name == Module::DEFAULT_NAME
+}
+
+impl RolloutSpec {
+	/// The validated schema module this rollout targets.
+	pub fn module(&self) -> Result<Module> {
+		Module::new(self.module.clone())
+	}
 }
 
 /// Reserved rename hint. Currently inert — carried for forward compatibility but
@@ -372,6 +396,7 @@ impl RolloutSpecBuilder {
 		let name = self.name.unwrap_or_else(|| self.id.clone());
 		RolloutSpec {
 			id: self.id,
+			module: default_module_name(),
 			name,
 			source_schema_hash: String::new(),
 			target_schema_hash: String::new(),
@@ -524,7 +549,7 @@ pub struct ManagedEntityRecord {
 }
 
 #[doc(hidden)]
-pub async fn run_baseline(db: &Surreal<Any>, folder: &str) -> Result<()> {
+pub async fn run_baseline(db: &Surreal<Any>, folder: &str, module: &Module) -> Result<()> {
 	run_setup(db, folder).await?;
 	ensure_local_state_dirs(folder)?;
 	if rollout_rows_exist(db).await? {
@@ -535,8 +560,8 @@ pub async fn run_baseline(db: &Surreal<Any>, folder: &str) -> Result<()> {
 	let schema_snapshot = snapshot_from_files(&files);
 	let catalog_snapshot = build_catalog_snapshot(&files, false)?;
 
-	replace_managed_entities(db, &catalog_snapshot.entities, None, "active").await?;
-	replace_sync_hashes(db, &files).await?;
+	replace_managed_entities(db, module, &catalog_snapshot.entities, None, "active").await?;
+	replace_sync_hashes(db, module, &files).await?;
 	save_schema_snapshot(folder, &schema_snapshot)?;
 	save_catalog_snapshot(folder, &catalog_snapshot)?;
 
@@ -735,7 +760,7 @@ pub async fn run_start(
 		);
 	}
 	let target_catalog = build_catalog_snapshot(&files, false)?;
-	let source_entities = load_managed_entities(db).await?;
+	let source_entities = load_managed_entities(db, &rollout.spec.module()?).await?;
 	let source_catalog = CatalogSnapshot {
 		version: 2,
 		entities: source_entities.into_iter().map(|r| r.entity).collect(),
@@ -783,7 +808,7 @@ pub(crate) async fn run_start_with_spec(
 		}
 	}
 	let target_catalog = build_catalog_snapshot(&schema_files, false)?;
-	let source_entities = load_managed_entities(db).await?;
+	let source_entities = load_managed_entities(db, &spec.module()?).await?;
 	let source_catalog = CatalogSnapshot {
 		version: 2,
 		entities: source_entities.into_iter().map(|r| r.entity).collect(),
@@ -915,7 +940,8 @@ async fn complete_inner(
 			return Err(err);
 		}
 		let target_entities = deserialize_entities_field(&row, "target_entities")?;
-		replace_managed_entities(db, &target_entities, None, "active").await?;
+		replace_managed_entities(db, &rollout.spec.module()?, &target_entities, None, "active")
+			.await?;
 		set_rollout_status(
 			db,
 			&rollout.spec.id,
@@ -1004,7 +1030,8 @@ async fn rollback_inner(
 			return Err(err);
 		}
 		let source_entities = deserialize_entities_field(&row, "source_entities")?;
-		replace_managed_entities(db, &source_entities, None, "active").await?;
+		replace_managed_entities(db, &rollout.spec.module()?, &source_entities, None, "active")
+			.await?;
 		set_rollout_status(
 			db,
 			&rollout.spec.id,
@@ -1045,7 +1072,8 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 		match status.as_str() {
 			"running_complete" => {
 				let target_entities = deserialize_entities_field(&row, "target_entities")?;
-				replace_managed_entities(db, &target_entities, None, "active").await?;
+				replace_managed_entities(db, &rollout.spec.module()?, &target_entities, None, "active")
+					.await?;
 				set_rollout_status(
 					db,
 					&rollout.spec.id,
@@ -1061,7 +1089,8 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 			}
 			"running_rollback" => {
 				let source_entities = deserialize_entities_field(&row, "source_entities")?;
-				replace_managed_entities(db, &source_entities, None, "active").await?;
+				replace_managed_entities(db, &rollout.spec.module()?, &source_entities, None, "active")
+					.await?;
 				set_rollout_status(
 					db,
 					&rollout.spec.id,
@@ -1169,8 +1198,14 @@ pub(crate) async fn load_active_rollout_id(db: &Surreal<Any>) -> Result<Option<S
 	Ok(row.and_then(|value| string_field(&value, "id")))
 }
 
-pub(crate) async fn load_managed_entities(db: &Surreal<Any>) -> Result<Vec<ManagedEntityRecord>> {
-	let mut resp = db.query("SELECT key, val FROM __entity WHERE ns = 'schema';").await?;
+pub(crate) async fn load_managed_entities(
+	db: &Surreal<Any>,
+	module: &Module,
+) -> Result<Vec<ManagedEntityRecord>> {
+	let mut resp = db
+		.query("SELECT key, val FROM __entity WHERE ns = $ns;")
+		.bind(("ns", module.partition(Partition::Schema)))
+		.await?;
 	let rows: Vec<Value> = resp.take(0)?;
 	let mut out = Vec::with_capacity(rows.len());
 	for row in rows {
@@ -1241,6 +1276,7 @@ fn entity_keys_payload(entities: &[EntityKey]) -> Vec<String> {
 
 pub(crate) async fn upsert_managed_entities(
 	db: &Surreal<Any>,
+	module: &Module,
 	entities: &[CatalogEntity],
 	active_rollout_id: Option<&str>,
 	state: &str,
@@ -1250,9 +1286,9 @@ pub(crate) async fn upsert_managed_entities(
 	}
 	db.query(
 		"FOR $e IN $entities { \
-		 	DELETE __entity WHERE ns = 'schema' AND key = $e.key; \
+		 	DELETE __entity WHERE ns = $ns AND key = $e.key; \
 		 	CREATE __entity CONTENT { \
-		 		ns: 'schema', \
+		 		ns: $ns, \
 		 		key: $e.key, \
 		 		val: { \
 		 			source_path: $e.source_path, \
@@ -1265,6 +1301,7 @@ pub(crate) async fn upsert_managed_entities(
 		 	}; \
 		 };",
 	)
+	.bind(("ns", module.partition(Partition::Schema)))
 	.bind(("entities", entities_payload(entities)))
 	.bind(("active_rollout_id", active_rollout_id.map(str::to_string)))
 	.bind(("state", state.to_string()))
@@ -1279,12 +1316,14 @@ fn entity_key_string(kind: &EntityKind, scope: Option<&str>, name: &str) -> Stri
 
 pub(crate) async fn delete_managed_entities(
 	db: &Surreal<Any>,
+	module: &Module,
 	entities: &[EntityKey],
 ) -> Result<()> {
 	if entities.is_empty() {
 		return Ok(());
 	}
-	db.query("DELETE __entity WHERE ns = 'schema' AND key INSIDE $keys;")
+	db.query("DELETE __entity WHERE ns = $ns AND key INSIDE $keys;")
+		.bind(("ns", module.partition(Partition::Schema)))
 		.bind(("keys", entity_keys_payload(entities)))
 		.await?
 		.check()?;
@@ -1293,15 +1332,18 @@ pub(crate) async fn delete_managed_entities(
 
 pub(crate) async fn replace_managed_entities(
 	db: &Surreal<Any>,
+	module: &Module,
 	entities: &[CatalogEntity],
 	active_rollout_id: Option<&str>,
 	state: &str,
 ) -> Result<()> {
+	// Scoped to `$ns`: unscoped, this wiped every module's catalog, not just
+	// the one being rolled out.
 	db.query(
-		"DELETE __entity WHERE ns = 'schema'; \
+		"DELETE __entity WHERE ns = $ns; \
 		 FOR $e IN $entities { \
 		 	CREATE __entity CONTENT { \
-		 		ns: 'schema', \
+		 		ns: $ns, \
 		 		key: $e.key, \
 		 		val: { \
 		 			source_path: $e.source_path, \
@@ -1314,6 +1356,7 @@ pub(crate) async fn replace_managed_entities(
 		 	}; \
 		 };",
 	)
+	.bind(("ns", module.partition(Partition::Schema)))
 	.bind(("entities", entities_payload(entities)))
 	.bind(("active_rollout_id", active_rollout_id.map(str::to_string)))
 	.bind(("state", state.to_string()))
@@ -1322,12 +1365,19 @@ pub(crate) async fn replace_managed_entities(
 	Ok(())
 }
 
-pub(crate) async fn replace_sync_hashes(db: &Surreal<Any>, files: &[SchemaFile]) -> Result<()> {
-	db.query("DELETE __entity WHERE ns = 'sync';").await?.check()?;
+pub(crate) async fn replace_sync_hashes(
+	db: &Surreal<Any>,
+	module: &Module,
+	files: &[SchemaFile],
+) -> Result<()> {
+	let ns = module.partition(Partition::Sync);
+	// Scoped to `$ns`: unscoped, this wiped every module's file hashes.
+	db.query("DELETE __entity WHERE ns = $ns;").bind(("ns", ns.clone())).await?.check()?;
 	for file in files {
 		db.query(
-			"CREATE __entity CONTENT { ns: 'sync', key: $path, val: { hash: $hash }, updated_at: time::now() };",
+			"CREATE __entity CONTENT { ns: $ns, key: $path, val: { hash: $hash }, updated_at: time::now() };",
 		)
+		.bind(("ns", ns.clone()))
 		.bind(("path", file.path.clone()))
 		.bind(("hash", file.hash.clone()))
 		.await?
@@ -1336,9 +1386,14 @@ pub(crate) async fn replace_sync_hashes(db: &Surreal<Any>, files: &[SchemaFile])
 	Ok(())
 }
 
-pub(crate) async fn delete_sync_hashes(db: &Surreal<Any>, paths: &[String]) -> Result<()> {
+pub(crate) async fn delete_sync_hashes(
+	db: &Surreal<Any>,
+	module: &Module,
+	paths: &[String],
+) -> Result<()> {
 	for path in paths {
-		db.query("DELETE __entity WHERE ns = 'sync' AND key = $path;")
+		db.query("DELETE __entity WHERE ns = $ns AND key = $path;")
+			.bind(("ns", module.partition(Partition::Sync)))
 			.bind(("path", path.clone()))
 			.await?
 			.check()?;
@@ -1387,6 +1442,7 @@ fn build_rollout_spec(
 
 	Ok(RolloutSpec {
 		id: rollout_id.to_string(),
+		module: default_module_name(),
 		name: name.to_string(),
 		source_schema_hash: hash_schema_snapshot(old_schema)?,
 		target_schema_hash: hash_schema_snapshot(new_schema)?,
@@ -2202,6 +2258,7 @@ mod tests {
 			checksum: "sum".to_string(),
 			spec: RolloutSpec {
 				id: id.to_string(),
+				module: default_module_name(),
 				name: "test".to_string(),
 				source_schema_hash: "src".to_string(),
 				target_schema_hash: "tgt".to_string(),
@@ -2420,20 +2477,22 @@ mod tests {
 		let entities: Vec<CatalogEntity> =
 			(0..25).map(|i| sample_entity(&format!("col_{i:02}"))).collect();
 
-		replace_managed_entities(&db, &entities, Some("r-1"), "active")
+		replace_managed_entities(&db, &Module::default_module(), &entities, Some("r-1"), "active")
 			.await
 			.expect("first batched replace");
 		assert_eq!(entity_row_count(&db).await, 25, "all entities land on first call");
 
 		// Re-running should still be idempotent — delete-all + recreate via the
 		// FOR loop should produce the same row count, not duplicates.
-		replace_managed_entities(&db, &entities, Some("r-1"), "active")
+		replace_managed_entities(&db, &Module::default_module(), &entities, Some("r-1"), "active")
 			.await
 			.expect("second batched replace");
 		assert_eq!(entity_row_count(&db).await, 25, "no duplicates on re-run");
 
 		// Empty replacement clears the schema namespace.
-		replace_managed_entities(&db, &[], None, "active").await.expect("empty replace");
+		replace_managed_entities(&db, &Module::default_module(), &[], None, "active")
+			.await
+			.expect("empty replace");
 		assert_eq!(entity_row_count(&db).await, 0, "empty entities clears ns=schema");
 	}
 

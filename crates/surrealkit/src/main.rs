@@ -4,6 +4,7 @@ use clap::{Parser, Subcommand};
 use rust_dotenv::dotenv::DotEnv;
 use surrealkit::config::{DbCfg, DbOverrides, connect};
 use surrealkit::core::exec_surql;
+use surrealkit::module::Module;
 use surrealkit::rollout::{self, RolloutExecutionOpts, RolloutPlanOpts};
 use surrealkit::setup::run_setup;
 use surrealkit::sync::{self, SyncOpts};
@@ -278,6 +279,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 					allow_all_statements,
 					vars: template_vars,
 					folder: folder.clone(),
+					module: Module::default_module(),
 					typegen_ts_out: typegen_cfg.typescript,
 					typegen_ts_format: typegen_cfg.format,
 				},
@@ -289,7 +291,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 		} => match command {
 			RolloutCommands::Baseline => {
 				let db = connect(&cfg).await?;
-				rollout::run_baseline(&db, &folder).await?;
+				rollout::run_baseline(&db, &folder, &Module::default_module()).await?;
 			}
 			RolloutCommands::Plan {
 				name,

@@ -10,6 +10,7 @@ use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
 use crate::core::{exec_surql, sha256_hex};
+use crate::module::{Module, Partition};
 use crate::rollout::{
 	acquire_lock, delete_managed_entities, delete_sync_hashes, load_active_rollout_id,
 	load_managed_entities, release_lock, upsert_managed_entities,
@@ -42,6 +43,9 @@ pub struct SyncOpts {
 	pub vars: TemplateVars,
 	/// Root folder for the database directory (default: `./database`).
 	pub folder: String,
+	/// The schema module this sync owns. Pruning is scoped to it, so a module
+	/// never removes another module's database objects.
+	pub module: Module,
 	/// When set (via `[typegen] typescript` in `surrealkit.toml`), regenerate
 	/// TypeScript types into this directory after applying schema changes.
 	pub typegen_ts_out: Option<std::path::PathBuf>,
@@ -129,6 +133,7 @@ pub struct Sync<'a> {
 	fail_fast: bool,
 	allow_shared_prune: bool,
 	allow_empty_prune: bool,
+	module: Module,
 	allow_all_statements: bool,
 	dry_run: bool,
 	vars: TemplateVars,
@@ -144,10 +149,28 @@ impl<'a> Sync<'a> {
 			fail_fast: true,
 			allow_shared_prune: false,
 			allow_empty_prune: false,
+			module: Module::default_module(),
 			allow_all_statements: false,
 			dry_run: false,
 			vars: TemplateVars::default(),
 		}
+	}
+
+	/// Apply this slice as a named schema module (default: the unnamed default
+	/// module).
+	///
+	/// Pruning is scoped to the module, so two modules can share one database
+	/// without removing each other's objects.
+	///
+	/// ```no_run
+	/// # use surrealkit::{Sync, EmbeddedSchemaFile, Surreal, engine::any::Any};
+	/// # async fn run(db: &Surreal<Any>, billing: &'static [EmbeddedSchemaFile]) -> anyhow::Result<()> {
+	/// Sync::embedded(billing).module("billing")?.run(db).await?;
+	/// # Ok(()) }
+	/// ```
+	pub fn module(mut self, name: impl Into<String>) -> anyhow::Result<Self> {
+		self.module = Module::new(name)?;
+		Ok(self)
 	}
 
 	/// Remove database objects no longer present in the schema slice (default: `true`).
@@ -206,6 +229,7 @@ impl<'a> Sync<'a> {
 			prune: self.prune,
 			allow_shared_prune: self.allow_shared_prune,
 			allow_empty_prune: self.allow_empty_prune,
+			module: self.module,
 			allow_all_statements: self.allow_all_statements,
 			vars: self.vars,
 			folder: String::new(),
@@ -255,8 +279,8 @@ async fn run_sync_with_files(
 	watch_mode: bool,
 ) -> Result<()> {
 	let desired_catalog = build_catalog_snapshot(files, opts.allow_all_statements)?;
-	let tracked = load_sync_hashes(db).await?;
-	let managed = load_managed_entities(db).await?;
+	let tracked = load_sync_hashes(db, &opts.module).await?;
+	let managed = load_managed_entities(db, &opts.module).await?;
 
 	if files.is_empty() && !watch_mode {
 		println!("No schema files found in {}/schema", opts.folder);
@@ -295,7 +319,7 @@ async fn run_sync_with_files(
 				if !watch_mode {
 					println!("applied {}", file.path);
 				}
-				store_sync_hash(db, &file.path, &file.hash).await?;
+				store_sync_hash(db, &opts.module, &file.path, &file.hash).await?;
 				synced_paths.insert(file.path.clone());
 			}
 			Err(err) => {
@@ -363,9 +387,9 @@ async fn run_sync_with_files(
 	}
 
 	if !opts.dry_run {
-		upsert_managed_entities(db, &effective_entities, None, "active").await?;
+		upsert_managed_entities(db, &opts.module, &effective_entities, None, "active").await?;
 		if !removed_paths.is_empty() {
-			delete_sync_hashes(db, &removed_paths).await?;
+			delete_sync_hashes(db, &opts.module, &removed_paths).await?;
 		}
 	}
 
@@ -381,7 +405,7 @@ async fn run_sync_with_files(
 			}
 		} else if shared {
 			let lock = acquire_lock(db, "global").await?;
-			let result = prune_managed_entities(db, &stale_entities).await;
+			let result = prune_managed_entities(db, &opts.module, &stale_entities).await;
 			let release = release_lock(db, &lock).await;
 			match (result, release) {
 				(Err(err), _) => return Err(err),
@@ -390,7 +414,7 @@ async fn run_sync_with_files(
 			}
 			pruned_count = stale_count;
 		} else {
-			prune_managed_entities(db, &stale_entities).await?;
+			prune_managed_entities(db, &opts.module, &stale_entities).await?;
 			pruned_count = stale_count;
 		}
 	}
@@ -490,16 +514,23 @@ async fn run_sync_with_files(
 	Ok(())
 }
 
-async fn prune_managed_entities(db: &Surreal<Any>, stale_entities: &[EntityKey]) -> Result<()> {
+async fn prune_managed_entities(
+	db: &Surreal<Any>,
+	module: &Module,
+	stale_entities: &[EntityKey],
+) -> Result<()> {
 	let sql = render_remove_sql(stale_entities, true)?.join("\n");
 	if !sql.trim().is_empty() {
 		exec_surql(db, &sql).await?;
 	}
-	delete_managed_entities(db, stale_entities).await
+	delete_managed_entities(db, module, stale_entities).await
 }
 
-async fn load_sync_hashes(db: &Surreal<Any>) -> Result<BTreeMap<String, String>> {
-	let mut resp = db.query("SELECT key, val FROM __entity WHERE ns = 'sync';").await?;
+async fn load_sync_hashes(db: &Surreal<Any>, module: &Module) -> Result<BTreeMap<String, String>> {
+	let mut resp = db
+		.query("SELECT key, val FROM __entity WHERE ns = $ns;")
+		.bind(("ns", module.partition(Partition::Sync)))
+		.await?;
 	let rows: Vec<serde_json::Value> = resp.take(0)?;
 
 	let mut out = BTreeMap::new();
@@ -514,15 +545,16 @@ async fn load_sync_hashes(db: &Surreal<Any>) -> Result<BTreeMap<String, String>>
 	Ok(out)
 }
 
-async fn store_sync_hash(db: &Surreal<Any>, path: &str, hash: &str) -> Result<()> {
+async fn store_sync_hash(db: &Surreal<Any>, module: &Module, path: &str, hash: &str) -> Result<()> {
 	db.query(
-        "DELETE __entity WHERE ns = 'sync' AND key = $path; \
-		 CREATE __entity CONTENT { ns: 'sync', key: $path, val: { hash: $hash }, updated_at: time::now() };",
-    )
-    .bind(("path", path.to_string()))
-    .bind(("hash", hash.to_string()))
-    .await?
-    .check()?;
+		"DELETE __entity WHERE ns = $ns AND key = $path; \
+		 CREATE __entity CONTENT { ns: $ns, key: $path, val: { hash: $hash }, updated_at: time::now() };",
+	)
+	.bind(("ns", module.partition(Partition::Sync)))
+	.bind(("path", path.to_string()))
+	.bind(("hash", hash.to_string()))
+	.await?
+	.check()?;
 	Ok(())
 }
 
