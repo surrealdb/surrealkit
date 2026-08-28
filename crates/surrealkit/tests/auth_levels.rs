@@ -32,11 +32,26 @@ use surrealkit::connect;
 use surrealkit::tester::{TestOpts, run_test};
 use surrealkit::variables::TemplateVars;
 
-/// Serialises tests that mutate SURREALDB_AUTH_LEVEL / DATABASE_AUTH_LEVEL.
+/// Serialises tests that mutate SURREALDB_AUTH_LEVEL.
 static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-const NS: &str = "surrealkit_auth_test";
-const DB: &str = "surrealkit_auth_test";
+/// Serialises the tests that talk to the shared test server.
+///
+/// `DEFINE USER` and namespace/database creation write to server-global catalog
+/// state, so running these concurrently makes SurrealDB reject them with
+/// "Transaction conflict: Write conflict". Per-test namespaces are not enough --
+/// the conflict is in the catalog, not the data.
+static SERVER_LOCK: Mutex<()> = Mutex::new(());
+
+/// Namespace and database for one test.
+///
+/// Each server test gets its own pair. Sharing one pair meant every test raced to
+/// create it via `use_ns`/`use_db`, which SurrealDB rejects with "Transaction
+/// conflict: Write conflict" when they run in parallel -- and it let the users one
+/// test defines be visible to another.
+fn scope(name: &str) -> String {
+	format!("surrealkit_auth_test_{name}")
+}
 
 /// Returns the test server URL, or None when not configured (skips the test).
 fn server_url() -> Option<String> {
@@ -55,7 +70,7 @@ fn root_credentials() -> (String, String) {
 }
 
 /// Open a root connection to the test server using the raw surrealdb client.
-async fn root_conn(url: &str) -> surrealdb::Surreal<surrealdb::engine::any::Any> {
+async fn root_conn(url: &str, scope: &str) -> surrealdb::Surreal<surrealdb::engine::any::Any> {
 	let cfg = Config::new().capabilities(Capabilities::all());
 	let db = surreal_connect((url, cfg)).await.expect("connect to test server");
 	let (username, password) = root_credentials();
@@ -65,17 +80,17 @@ async fn root_conn(url: &str) -> surrealdb::Surreal<surrealdb::engine::any::Any>
 	})
 	.await
 	.expect("root signin on test server");
-	db.use_ns(NS).use_db(DB).await.expect("use_ns/use_db");
+	db.use_ns(scope).use_db(scope).await.expect("use_ns/use_db");
 	db
 }
 
-fn make_cfg(url: &str, auth_level: AuthLevel, user: &str, pass: &str) -> DbCfg {
+fn make_cfg(url: &str, scope: &str, auth_level: AuthLevel, user: &str, pass: &str) -> DbCfg {
 	DbCfg::from_env(
 		None,
 		&DbOverrides {
 			host: Some(url.into()),
-			ns: Some(NS.into()),
-			db: Some(DB.into()),
+			ns: Some(scope.into()),
+			db: Some(scope.into()),
 			user: Some(user.into()),
 			pass: Some(pass.into()),
 			auth_level: Some(
@@ -171,8 +186,12 @@ async fn connect_root_auth() {
 		return;
 	};
 
+	let scope = scope("connect_root_auth");
+	let scope = scope.as_str();
+	let _server = SERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
 	let (root_user, root_pass) = root_credentials();
-	let cfg = make_cfg(&url, AuthLevel::Root, &root_user, &root_pass);
+	let cfg = make_cfg(&url, scope, AuthLevel::Root, &root_user, &root_pass);
 	let db = connect(&cfg).await.expect("root connect");
 	db.query("RETURN 1;").await.expect("query").check().expect("check");
 }
@@ -184,15 +203,19 @@ async fn connect_namespace_auth() {
 		return;
 	};
 
+	let scope = scope("connect_namespace_auth");
+	let scope = scope.as_str();
+	let _server = SERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
 	// Provision a namespace-scoped user via root.
-	let root = root_conn(&url).await;
-	root.query("DEFINE USER ns_user ON NAMESPACE PASSWORD 'ns_pass' ROLES EDITOR;")
+	let root = root_conn(&url, scope).await;
+	root.query("DEFINE USER OVERWRITE ns_user ON NAMESPACE PASSWORD 'ns_pass' ROLES EDITOR;")
 		.await
 		.expect("define ns user")
 		.check()
 		.expect("check");
 
-	let cfg = make_cfg(&url, AuthLevel::Namespace, "ns_user", "ns_pass");
+	let cfg = make_cfg(&url, scope, AuthLevel::Namespace, "ns_user", "ns_pass");
 	let db = connect(&cfg).await.expect("namespace connect");
 	db.query("RETURN 1;").await.expect("query").check().expect("check");
 }
@@ -204,15 +227,19 @@ async fn connect_database_auth() {
 		return;
 	};
 
+	let scope = scope("connect_database_auth");
+	let scope = scope.as_str();
+	let _server = SERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
 	// Provision a database-scoped user via root.
-	let root = root_conn(&url).await;
-	root.query("DEFINE USER db_user ON DATABASE PASSWORD 'db_pass' ROLES EDITOR;")
+	let root = root_conn(&url, scope).await;
+	root.query("DEFINE USER OVERWRITE db_user ON DATABASE PASSWORD 'db_pass' ROLES EDITOR;")
 		.await
 		.expect("define db user")
 		.check()
 		.expect("check");
 
-	let cfg = make_cfg(&url, AuthLevel::Database, "db_user", "db_pass");
+	let cfg = make_cfg(&url, scope, AuthLevel::Database, "db_user", "db_pass");
 	let db = connect(&cfg).await.expect("database connect");
 	db.query("RETURN 1;").await.expect("query").check().expect("check");
 }
@@ -224,14 +251,18 @@ async fn connect_namespace_auth_wrong_password_fails() {
 		return;
 	};
 
-	let root = root_conn(&url).await;
-	root.query("DEFINE USER ns_wrong_user ON NAMESPACE PASSWORD 'correct' ROLES EDITOR;")
+	let scope = scope("connect_namespace_auth_wrong_password_fails");
+	let scope = scope.as_str();
+	let _server = SERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+	let root = root_conn(&url, scope).await;
+	root.query("DEFINE USER OVERWRITE ns_wrong_user ON NAMESPACE PASSWORD 'correct' ROLES EDITOR;")
 		.await
 		.expect("define user")
 		.check()
 		.expect("check");
 
-	let cfg = make_cfg(&url, AuthLevel::Namespace, "ns_wrong_user", "wrong");
+	let cfg = make_cfg(&url, scope, AuthLevel::Namespace, "ns_wrong_user", "wrong");
 	let err = connect(&cfg).await.expect_err("should fail with wrong password");
 	let msg = err.to_string().to_lowercase();
 	assert!(
@@ -247,14 +278,18 @@ async fn connect_database_auth_wrong_password_fails() {
 		return;
 	};
 
-	let root = root_conn(&url).await;
-	root.query("DEFINE USER db_wrong_user ON DATABASE PASSWORD 'correct' ROLES EDITOR;")
+	let scope = scope("connect_database_auth_wrong_password_fails");
+	let scope = scope.as_str();
+	let _server = SERVER_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+
+	let root = root_conn(&url, scope).await;
+	root.query("DEFINE USER OVERWRITE db_wrong_user ON DATABASE PASSWORD 'correct' ROLES EDITOR;")
 		.await
 		.expect("define user")
 		.check()
 		.expect("check");
 
-	let cfg = make_cfg(&url, AuthLevel::Database, "db_wrong_user", "wrong");
+	let cfg = make_cfg(&url, scope, AuthLevel::Database, "db_wrong_user", "wrong");
 	let err = connect(&cfg).await.expect_err("should fail with wrong password");
 	let msg = err.to_string().to_lowercase();
 	assert!(
