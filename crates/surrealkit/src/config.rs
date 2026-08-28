@@ -170,7 +170,8 @@ impl DbCfg {
 	/// `.env` file → default.
 	///
 	/// Errors if a removed `DATABASE_*` variable is set without its `SURREALDB_*`
-	/// replacement; see [`reject_orphaned_legacy_env`].
+	/// replacement — ignoring it would silently fall back to the defaults and
+	/// connect to the wrong database.
 	pub fn from_env(dotenv: Option<&DotEnv>, overrides: &DbOverrides) -> Result<Self> {
 		reject_orphaned_legacy_env(dotenv)?;
 		let host = resolve(&overrides.host, &["SURREALDB_HOST"], dotenv, "http://localhost:8000");

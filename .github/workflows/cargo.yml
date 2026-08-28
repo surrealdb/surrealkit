@@ -37,6 +37,12 @@ jobs:
             - name: Lint (library only)
               run: cargo clippy -p surrealkit --lib --no-default-features --features kv-mem --locked -- -D warnings
 
+            # Broken intra-doc links render as plain text on docs.rs, so fail on them.
+            - name: Docs
+              run: cargo doc --workspace --no-deps --all-features --locked
+              env:
+                  RUSTDOCFLAGS: -D warnings
+
             - name: Format
               run: cargo fmt --all --check
 

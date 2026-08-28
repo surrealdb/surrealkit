@@ -1,8 +1,8 @@
 //! `surrealkit typegen` — introspect a live database and emit a structured
 //! schema document.
 //!
-//! JSON is the initial output format. The data model in [`types`] is designed
-//! so additional emitters (e.g. TypeScript) can be added in [`emit`] without
+//! JSON is the initial output format. The data model ([`SchemaTypes`] and
+//! friends) is designed so additional emitters can be added without
 //! re-introspecting the database.
 
 mod emit;

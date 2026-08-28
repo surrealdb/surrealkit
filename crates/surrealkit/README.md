@@ -286,7 +286,7 @@ Rollout::abandon(db, "20260604__add_account").await?;
 
 Seeding is **idempotent**: each file is tracked in the `__seed` table by a content hash, so it runs only on first boot or when its `sql` changes. This makes it safe to call on every startup, so re-running a seed of fixed-id records no longer errors.
 
-[`seed`] runs `.surql` files from a `seed/` directory (lexicographic order), applying template variables:
+[`seed()`](fn@seed) runs `.surql` files from a `seed/` directory (lexicographic order), applying template variables:
 
 ```rust,no_run
 # use surrealkit::{seed, TemplateVars, Surreal};

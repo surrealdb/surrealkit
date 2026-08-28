@@ -55,7 +55,7 @@ pub struct SyncOpts {
 	pub typegen_ts_format: Option<String>,
 }
 
-/// A schema file embedded into the binary at compile time (via [`embed_schema!`])
+/// A schema file embedded into the binary at compile time (via [`embed_schema!`](crate::embed_schema))
 /// or constructed by hand for runtime sync.
 ///
 /// `path` is a **stable tracking key**, not a path that must exist on disk:
