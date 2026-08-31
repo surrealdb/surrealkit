@@ -8,6 +8,9 @@ use crate::constants::{
 	suites_dir, tests_dir,
 };
 
+/// Create the project directory tree and its starter files under `folder`.
+///
+/// Existing files are never overwritten, so this is safe to re-run.
 pub fn scaffold(folder: &str) -> Result<()> {
 	let schema_dir = schema_dir(folder);
 	let rollouts_dir = rollouts_dir(folder);
@@ -58,21 +61,27 @@ pub fn scaffold(folder: &str) -> Result<()> {
 			.context("Writing surrealkit.toml")?;
 	}
 
-	println!("Scaffolded project in {}\n", folder);
-	println!("  surrealkit.toml");
-	println!("  {}/", folder);
-	println!("  ├── schema/");
-	println!("  ├── rollouts/");
-	println!("  ├── snapshots/");
-	println!("  ├── tests/");
-	println!("  │   ├── suites/");
-	println!("  │   └── fixtures/");
-	println!("  ├── seed/");
-	println!("  │   └── seed.surql");
-	println!("  └── setup.surql");
+	log::info!("Scaffolded project in {}\n", folder);
+	log::info!("  surrealkit.toml");
+	log::info!("  {}/", folder);
+	log::info!("  ├── schema/");
+	log::info!("  ├── rollouts/");
+	log::info!("  ├── snapshots/");
+	log::info!("  ├── tests/");
+	log::info!("  │   ├── suites/");
+	log::info!("  │   └── fixtures/");
+	log::info!("  ├── seed/");
+	log::info!("  │   └── seed.surql");
+	log::info!("  └── setup.surql");
 	Ok(())
 }
 
+/// The SurrealQL defining SurrealKit's metadata tables (`__entity`, `__rollout`,
+/// `__seed`).
+///
+/// Executed on every `setup` and `sync`, after the project's own `setup.surql`,
+/// so additive changes here reach existing databases automatically. Every
+/// statement is `OVERWRITE`/idempotent for that reason.
 pub const DEFAULT_SETUP: &str = r#"DEFINE TABLE OVERWRITE __entity SCHEMAFULL
 	PERMISSIONS NONE;
 
@@ -163,6 +172,7 @@ DEFINE INDEX OVERWRITE by_seed_key ON __seed
 	UNIQUE;
 "#;
 
+/// Starter `tests/config.toml` written by [`scaffold`].
 pub const DEFAULT_TEST_CONFIG: &str = r#"[defaults]
 timeout_ms = 10000
 
@@ -170,6 +180,7 @@ timeout_ms = 10000
 kind = "root"
 "#;
 
+/// Starter `surrealkit.toml` written by [`scaffold`].
 pub const DEFAULT_PROJECT_CONFIG: &str = r#"# Template variables for use in .surql schema and seed files.
 # Values here have the lowest priority:
 #   --var KEY=VALUE  >  SURREALKIT_VAR_KEY env vars  >  this file
@@ -190,6 +201,7 @@ pub const DEFAULT_PROJECT_CONFIG: &str = r#"# Template variables for use in .sur
 # format     = "biome check --write"   # or "prettier --write", "eslint --fix"
 "#;
 
+/// Starter test suite written by [`scaffold`].
 pub const DEFAULT_TEST_SUITE: &str = r#"name = "smoke"
 tags = ["smoke"]
 

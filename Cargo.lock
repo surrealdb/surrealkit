@@ -4571,7 +4571,7 @@ dependencies = [
 
 [[package]]
 name = "surrealkit"
-version = "0.7.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "anyhow",
  "clap",
@@ -4579,6 +4579,7 @@ dependencies = [
  "indoc",
  "inquire",
  "insta",
+ "log",
  "regex",
  "reqwest 0.12.28",
  "rust_dotenv",
@@ -4599,7 +4600,7 @@ dependencies = [
 
 [[package]]
 name = "surrealkit-macros"
-version = "0.7.0"
+version = "1.0.0-beta.1"
 dependencies = [
  "proc-macro2",
  "quote",

@@ -14,6 +14,7 @@ use time::macros::format_description;
 
 use crate::constants::{catalog_snapshot_path, rollouts_dir};
 use crate::core::{exec_surql, sha256_hex};
+use crate::module::{Module, Partition};
 use crate::schema_state::{
 	CatalogDiff, CatalogEntity, CatalogSnapshot, EntityKey, EntityKind, FileDiff, SchemaFile,
 	build_catalog_snapshot, collect_schema_files, diff_catalog, diff_schema,
@@ -208,6 +209,14 @@ pub struct RolloutSpec {
 	/// rollouts.
 	#[serde(default)]
 	pub target_schema_hash: String,
+	/// The schema module this rollout belongs to. Defaults to the unnamed default
+	/// module, so manifests written before v1 load unchanged.
+	///
+	/// `skip_serializing_if` is not cosmetic: `manifest_checksum` is computed from
+	/// the serialized spec, so emitting this field for a default-module rollout
+	/// would change the checksum of every existing in-flight rollout.
+	#[serde(default = "default_module_name", skip_serializing_if = "is_default_module")]
+	pub module: String,
 	/// The migration strategy. See [`RolloutCompatibility`].
 	#[serde(default)]
 	pub compatibility: RolloutCompatibility,
@@ -217,6 +226,21 @@ pub struct RolloutSpec {
 	/// The steps to execute, grouped by [`RolloutPhase`].
 	#[serde(default)]
 	pub steps: Vec<RolloutStep>,
+}
+
+fn default_module_name() -> String {
+	Module::DEFAULT_NAME.to_string()
+}
+
+fn is_default_module(name: &String) -> bool {
+	name == Module::DEFAULT_NAME
+}
+
+impl RolloutSpec {
+	/// The validated schema module this rollout targets.
+	pub fn module(&self) -> Result<Module> {
+		Module::new(self.module.clone())
+	}
 }
 
 /// Reserved rename hint. Currently inert — carried for forward compatibility but
@@ -372,6 +396,7 @@ impl RolloutSpecBuilder {
 		let name = self.name.unwrap_or_else(|| self.id.clone());
 		RolloutSpec {
 			id: self.id,
+			module: default_module_name(),
 			name,
 			source_schema_hash: String::new(),
 			target_schema_hash: String::new(),
@@ -409,6 +434,7 @@ pub struct Rollout<'a> {
 	spec: RolloutSpec,
 	target_files: &'a [crate::sync::EmbeddedSchemaFile],
 	vars: TemplateVars,
+	folder: Option<String>,
 }
 
 impl<'a> Rollout<'a> {
@@ -422,7 +448,20 @@ impl<'a> Rollout<'a> {
 			spec,
 			target_files,
 			vars: TemplateVars::default(),
+			folder: None,
 		}
+	}
+
+	/// Opt into the filesystem-backed workflow, scaffolding `<folder>/setup.surql`
+	/// when it is missing.
+	///
+	/// Without this a rollout is purely in-database and writes nothing to disk.
+	/// Before v1 the folder defaulted to `./database` unconditionally, so running a
+	/// code-driven rollout from a library created `./database/setup.surql` in the
+	/// caller's working directory.
+	pub fn folder(mut self, folder: impl Into<String>) -> Self {
+		self.folder = Some(folder.into());
+		self
 	}
 
 	/// Set template variables applied to step SQL before execution.
@@ -440,19 +479,20 @@ impl<'a> Rollout<'a> {
 	/// if this rollout is already in a terminal state, or if a step fails (the
 	/// rollout is left in the `failed` state).
 	pub async fn start(&self, db: &Surreal<Any>) -> Result<()> {
-		run_start_with_spec(db, default_folder(), &self.spec, self.target_files, &self.vars).await
+		run_start_with_spec(db, self.folder.as_deref(), &self.spec, self.target_files, &self.vars)
+			.await
 	}
 
 	/// Run the `complete` (contract) phase, applying destructive changes and marking
 	/// the rollout completed.
 	pub async fn complete(&self, db: &Surreal<Any>) -> Result<()> {
-		run_complete_with_spec(db, default_folder(), &self.spec, &self.vars).await
+		run_complete_with_spec(db, self.folder.as_deref(), &self.spec, &self.vars).await
 	}
 
 	/// Run the `rollback` phase, undoing the `start` phase and marking the rollout
 	/// rolled back.
 	pub async fn rollback(&self, db: &Surreal<Any>) -> Result<()> {
-		run_rollback_with_spec(db, default_folder(), &self.spec, &self.vars).await
+		run_rollback_with_spec(db, self.folder.as_deref(), &self.spec, &self.vars).await
 	}
 
 	/// Fetch this rollout's current status, or `None` if it has never been started.
@@ -464,7 +504,7 @@ impl<'a> Rollout<'a> {
 	/// without running rollback SQL. See [`run_abandon_rollout`] for the full
 	/// semantics — this does not revert applied schema changes.
 	pub async fn abandon(db: &Surreal<Any>, rollout_id: &str) -> Result<()> {
-		run_abandon_rollout(db, rollout_id).await
+		run_abandon_rollout(db, &Module::default_module(), rollout_id).await
 	}
 }
 
@@ -492,10 +532,6 @@ pub struct RolloutStatusReport {
 	pub steps: Vec<RolloutStepStatus>,
 }
 
-fn default_folder() -> &'static str {
-	crate::constants::DEFAULT_ROOT_DIR
-}
-
 #[derive(Debug, Clone)]
 #[doc(hidden)]
 pub struct LoadedRolloutSpec {
@@ -513,7 +549,7 @@ pub struct ManagedEntityRecord {
 }
 
 #[doc(hidden)]
-pub async fn run_baseline(db: &Surreal<Any>, folder: &str) -> Result<()> {
+pub async fn run_baseline(db: &Surreal<Any>, folder: &str, module: &Module) -> Result<()> {
 	run_setup(db, folder).await?;
 	ensure_local_state_dirs(folder)?;
 	if rollout_rows_exist(db).await? {
@@ -524,12 +560,12 @@ pub async fn run_baseline(db: &Surreal<Any>, folder: &str) -> Result<()> {
 	let schema_snapshot = snapshot_from_files(&files);
 	let catalog_snapshot = build_catalog_snapshot(&files, false)?;
 
-	replace_managed_entities(db, &catalog_snapshot.entities, None, "active").await?;
-	replace_sync_hashes(db, &files).await?;
+	replace_managed_entities(db, module, &catalog_snapshot.entities, None, "active").await?;
+	replace_sync_hashes(db, module, &files).await?;
 	save_schema_snapshot(folder, &schema_snapshot)?;
 	save_catalog_snapshot(folder, &catalog_snapshot)?;
 
-	println!(
+	log::info!(
 		"Seeded managed entity baseline with {} schema file(s) and {} managed object(s).",
 		files.len(),
 		catalog_snapshot.entities.len()
@@ -569,20 +605,20 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 	let raw = toml::to_string_pretty(&spec).context("serializing rollout spec")?;
 
 	if opts.dry_run {
-		println!("Pending rollout plan:");
-		println!(
+		log::info!("Pending rollout plan:");
+		log::info!(
 			"  files: +{} ~{} -{}",
 			file_diff.added.len(),
 			file_diff.modified.len(),
 			file_diff.removed.len()
 		);
-		println!(
+		log::info!(
 			"  entities: +{} ~{} -{}",
 			catalog_diff.added.len(),
 			catalog_diff.modified.len(),
 			catalog_diff.removed.len()
 		);
-		println!("  would create: {}", path.display());
+		log::info!("  would create: {}", path.display());
 		return Ok(());
 	}
 
@@ -590,8 +626,8 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 	save_schema_snapshot(folder, &new_schema)?;
 	save_catalog_snapshot(folder, &new_catalog)?;
 
-	println!("Generated rollout manifest {}", path.display());
-	println!("Updated {}", catalog_snapshot_path(folder).display());
+	log::info!("Generated rollout manifest {}", path.display());
+	log::info!("Updated {}", catalog_snapshot_path(folder).display());
 	Ok(())
 }
 
@@ -610,7 +646,7 @@ pub async fn run_lint(folder: &str, opts: RolloutExecutionOpts) -> Result<()> {
 			current_hash
 		);
 	}
-	println!("Rollout {} is valid (checksum {}).", rollout.spec.id, rollout.checksum);
+	log::info!("Rollout {} is valid (checksum {}).", rollout.spec.id, rollout.checksum);
 	Ok(())
 }
 
@@ -668,7 +704,7 @@ pub async fn run_status(db: &Surreal<Any>, folder: &str, selector: Option<String
 	let rows: Vec<Value> =
 		raw_rows.into_iter().map(|v| Value::from_value(v).unwrap_or(Value::Null)).collect();
 	if rows.is_empty() {
-		println!("No rollout records found.");
+		log::info!("No rollout records found.");
 		return Ok(());
 	}
 
@@ -676,15 +712,15 @@ pub async fn run_status(db: &Surreal<Any>, folder: &str, selector: Option<String
 		let id = string_field(&row, "id").unwrap_or_else(|| "<unknown>".to_string());
 		let name = string_field(&row, "name").unwrap_or_else(|| "<unnamed>".to_string());
 		let status = string_field(&row, "status").unwrap_or_else(|| "<unknown>".to_string());
-		println!("{} [{}] {}", id, status, name);
+		log::info!("{} [{}] {}", id, status, name);
 		if let Some(started_at) = string_field(&row, "started_at") {
-			println!("  started_at: {}", started_at);
+			log::info!("  started_at: {}", started_at);
 		}
 		if let Some(completed_at) = string_field(&row, "completed_at") {
-			println!("  completed_at: {}", completed_at);
+			log::info!("  completed_at: {}", completed_at);
 		}
 		if let Some(last_error) = string_field(&row, "last_error") {
-			println!("  last_error: {}", last_error);
+			log::info!("  last_error: {}", last_error);
 		}
 
 		let steps = row.get("steps").and_then(|v| v.as_array()).cloned().unwrap_or_default();
@@ -693,9 +729,9 @@ pub async fn run_status(db: &Surreal<Any>, folder: &str, selector: Option<String
 			let phase = string_field(&step, "phase").unwrap_or_else(|| "?".to_string());
 			let kind = string_field(&step, "kind").unwrap_or_else(|| "?".to_string());
 			let status = string_field(&step, "status").unwrap_or_else(|| "?".to_string());
-			println!("  - {} [{}:{}] {}", step_id, phase, kind, status);
+			log::info!("  - {} [{}:{}] {}", step_id, phase, kind, status);
 			if let Some(err) = string_field(&step, "error") {
-				println!("    error: {}", err);
+				log::info!("    error: {}", err);
 			}
 		}
 	}
@@ -724,7 +760,7 @@ pub async fn run_start(
 		);
 	}
 	let target_catalog = build_catalog_snapshot(&files, false)?;
-	let source_entities = load_managed_entities(db).await?;
+	let source_entities = load_managed_entities(db, &rollout.spec.module()?).await?;
 	let source_catalog = CatalogSnapshot {
 		version: 2,
 		entities: source_entities.into_iter().map(|r| r.entity).collect(),
@@ -746,12 +782,18 @@ pub async fn run_start(
 /// Pass `&TemplateVars::default()` if no substitution is needed.
 pub(crate) async fn run_start_with_spec(
 	db: &Surreal<Any>,
-	folder: &str,
+	folder: Option<&str>,
 	spec: &RolloutSpec,
 	target_files: &[crate::sync::EmbeddedSchemaFile],
 	vars: &TemplateVars,
 ) -> Result<()> {
-	run_setup(db, folder).await?;
+	// `Some` selects the CLI's filesystem workflow, which scaffolds
+	// `<folder>/setup.surql` when missing. Code-driven rollouts pass `None` so
+	// nothing is written into the caller's working directory.
+	match folder {
+		Some(folder) => run_setup(db, folder).await?,
+		None => crate::setup::run_setup_embedded(db).await?,
+	}
 	validate_rollout_spec(spec)?;
 	let schema_files = embedded_to_schema_files(target_files);
 	if !spec.target_schema_hash.is_empty() {
@@ -766,7 +808,7 @@ pub(crate) async fn run_start_with_spec(
 		}
 	}
 	let target_catalog = build_catalog_snapshot(&schema_files, false)?;
-	let source_entities = load_managed_entities(db).await?;
+	let source_entities = load_managed_entities(db, &spec.module()?).await?;
 	let source_catalog = CatalogSnapshot {
 		version: 2,
 		entities: source_entities.into_iter().map(|r| r.entity).collect(),
@@ -782,7 +824,7 @@ async fn start_inner(
 	target_catalog: &CatalogSnapshot,
 	vars: &TemplateVars,
 ) -> Result<()> {
-	acquire_lock(db, "global").await?;
+	let lock = acquire_lock(db, &rollout.spec.module()?, "global").await?;
 	let result = async {
 		ensure_no_conflicting_active_rollout(db, &rollout.spec.id).await?;
 		let record = load_rollout_record(db, &rollout.spec.id).await?;
@@ -819,11 +861,11 @@ async fn start_inner(
 		}
 		set_rollout_status(db, &rollout.spec.id, RolloutStatus::ReadyToComplete, None, None)
 			.await?;
-		println!("Rollout {} is ready to complete.", rollout.spec.id);
+		log::info!("Rollout {} is ready to complete.", rollout.spec.id);
 		Ok(())
 	}
 	.await;
-	let release = release_lock(db, "global").await;
+	let release = release_lock(db, &lock).await;
 	match (result, release) {
 		(Err(err), _) => Err(err),
 		(Ok(_), Err(err)) => Err(err),
@@ -851,11 +893,17 @@ pub async fn run_complete(
 /// if no substitution is needed.
 pub(crate) async fn run_complete_with_spec(
 	db: &Surreal<Any>,
-	folder: &str,
+	folder: Option<&str>,
 	spec: &RolloutSpec,
 	vars: &TemplateVars,
 ) -> Result<()> {
-	run_setup(db, folder).await?;
+	// `Some` selects the CLI's filesystem workflow, which scaffolds
+	// `<folder>/setup.surql` when missing. Code-driven rollouts pass `None` so
+	// nothing is written into the caller's working directory.
+	match folder {
+		Some(folder) => run_setup(db, folder).await?,
+		None => crate::setup::run_setup_embedded(db).await?,
+	}
 	validate_rollout_spec(spec)?;
 	complete_inner(db, &make_loaded_spec(spec), vars).await
 }
@@ -865,7 +913,7 @@ async fn complete_inner(
 	rollout: &LoadedRolloutSpec,
 	vars: &TemplateVars,
 ) -> Result<()> {
-	acquire_lock(db, "global").await?;
+	let lock = acquire_lock(db, &rollout.spec.module()?, "global").await?;
 	let result = async {
 		let row = load_rollout_record(db, &rollout.spec.id)
 			.await?
@@ -892,7 +940,8 @@ async fn complete_inner(
 			return Err(err);
 		}
 		let target_entities = deserialize_entities_field(&row, "target_entities")?;
-		replace_managed_entities(db, &target_entities, None, "active").await?;
+		replace_managed_entities(db, &rollout.spec.module()?, &target_entities, None, "active")
+			.await?;
 		set_rollout_status(
 			db,
 			&rollout.spec.id,
@@ -901,11 +950,11 @@ async fn complete_inner(
 			Some(OffsetDateTime::now_utc().format(&Rfc3339)?),
 		)
 		.await?;
-		println!("Completed rollout {}.", rollout.spec.id);
+		log::info!("Completed rollout {}.", rollout.spec.id);
 		Ok(())
 	}
 	.await;
-	let release = release_lock(db, "global").await;
+	let release = release_lock(db, &lock).await;
 	match (result, release) {
 		(Err(err), _) => Err(err),
 		(Ok(_), Err(err)) => Err(err),
@@ -933,11 +982,17 @@ pub async fn run_rollback(
 /// if no substitution is needed.
 pub(crate) async fn run_rollback_with_spec(
 	db: &Surreal<Any>,
-	folder: &str,
+	folder: Option<&str>,
 	spec: &RolloutSpec,
 	vars: &TemplateVars,
 ) -> Result<()> {
-	run_setup(db, folder).await?;
+	// `Some` selects the CLI's filesystem workflow, which scaffolds
+	// `<folder>/setup.surql` when missing. Code-driven rollouts pass `None` so
+	// nothing is written into the caller's working directory.
+	match folder {
+		Some(folder) => run_setup(db, folder).await?,
+		None => crate::setup::run_setup_embedded(db).await?,
+	}
 	validate_rollout_spec(spec)?;
 	rollback_inner(db, &make_loaded_spec(spec), vars).await
 }
@@ -947,7 +1002,7 @@ async fn rollback_inner(
 	rollout: &LoadedRolloutSpec,
 	vars: &TemplateVars,
 ) -> Result<()> {
-	acquire_lock(db, "global").await?;
+	let lock = acquire_lock(db, &rollout.spec.module()?, "global").await?;
 	let result = async {
 		let row = load_rollout_record(db, &rollout.spec.id)
 			.await?
@@ -956,7 +1011,7 @@ async fn rollback_inner(
 		match string_field(&row, "status").as_deref() {
 			Some("completed") => bail!("rollout '{}' is already completed", rollout.spec.id),
 			Some("rolled_back") => {
-				println!("Rollout {} is already rolled back.", rollout.spec.id);
+				log::info!("Rollout {} is already rolled back.", rollout.spec.id);
 				return Ok(());
 			}
 			_ => {}
@@ -975,7 +1030,8 @@ async fn rollback_inner(
 			return Err(err);
 		}
 		let source_entities = deserialize_entities_field(&row, "source_entities")?;
-		replace_managed_entities(db, &source_entities, None, "active").await?;
+		replace_managed_entities(db, &rollout.spec.module()?, &source_entities, None, "active")
+			.await?;
 		set_rollout_status(
 			db,
 			&rollout.spec.id,
@@ -984,11 +1040,11 @@ async fn rollback_inner(
 			Some(OffsetDateTime::now_utc().format(&Rfc3339)?),
 		)
 		.await?;
-		println!("Rolled back rollout {}.", rollout.spec.id);
+		log::info!("Rolled back rollout {}.", rollout.spec.id);
 		Ok(())
 	}
 	.await;
-	let release = release_lock(db, "global").await;
+	let release = release_lock(db, &lock).await;
 	match (result, release) {
 		(Err(err), _) => Err(err),
 		(Ok(_), Err(err)) => Err(err),
@@ -1006,7 +1062,7 @@ pub async fn run_repair(db: &Surreal<Any>, folder: &str, opts: RolloutExecutionO
 }
 
 async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<()> {
-	acquire_lock(db, "global").await?;
+	let lock = acquire_lock(db, &rollout.spec.module()?, "global").await?;
 	let result = async {
 		let row = load_rollout_record(db, &rollout.spec.id)
 			.await?
@@ -1016,7 +1072,8 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 		match status.as_str() {
 			"running_complete" => {
 				let target_entities = deserialize_entities_field(&row, "target_entities")?;
-				replace_managed_entities(db, &target_entities, None, "active").await?;
+				replace_managed_entities(db, &rollout.spec.module()?, &target_entities, None, "active")
+					.await?;
 				set_rollout_status(
 					db,
 					&rollout.spec.id,
@@ -1025,14 +1082,15 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 					Some(OffsetDateTime::now_utc().format(&Rfc3339)?),
 				)
 				.await?;
-				println!(
+				log::info!(
 					"Repaired rollout {}: running_complete → completed.",
 					rollout.spec.id
 				);
 			}
 			"running_rollback" => {
 				let source_entities = deserialize_entities_field(&row, "source_entities")?;
-				replace_managed_entities(db, &source_entities, None, "active").await?;
+				replace_managed_entities(db, &rollout.spec.module()?, &source_entities, None, "active")
+					.await?;
 				set_rollout_status(
 					db,
 					&rollout.spec.id,
@@ -1041,7 +1099,7 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 					Some(OffsetDateTime::now_utc().format(&Rfc3339)?),
 				)
 				.await?;
-				println!(
+				log::info!(
 					"Repaired rollout {}: running_rollback → rolled_back.",
 					rollout.spec.id
 				);
@@ -1057,13 +1115,13 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 					None,
 				)
 				.await?;
-				println!(
+				log::info!(
 					"Repaired rollout {}: running_start → failed (re-run start or rollback).",
 					rollout.spec.id
 				);
 			}
 			"completed" | "rolled_back" => {
-				println!("Rollout {} is already in a terminal state ({}); nothing to repair.", rollout.spec.id, status);
+				log::info!("Rollout {} is already in a terminal state ({}); nothing to repair.", rollout.spec.id, status);
 			}
 			other => bail!(
 				"rollout '{}' is not in a repairable state (status={})",
@@ -1074,7 +1132,7 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 		Ok(())
 	}
 	.await;
-	let release = release_lock(db, "global").await;
+	let release = release_lock(db, &lock).await;
 	match (result, release) {
 		(Err(err), _) => Err(err),
 		(Ok(_), Err(err)) => Err(err),
@@ -1091,8 +1149,12 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 /// undo any schema changes the rollout already applied — reconcile those with a
 /// fresh sync or a new rollout afterwards. Already-terminal rollouts are a no-op.
 #[doc(hidden)]
-pub async fn run_abandon_rollout(db: &Surreal<Any>, rollout_id: &str) -> Result<()> {
-	acquire_lock(db, "global").await?;
+pub async fn run_abandon_rollout(
+	db: &Surreal<Any>,
+	module: &Module,
+	rollout_id: &str,
+) -> Result<()> {
+	let lock = acquire_lock(db, module, "global").await?;
 	let result = async {
 		let row = load_rollout_record(db, rollout_id)
 			.await?
@@ -1102,7 +1164,7 @@ pub async fn run_abandon_rollout(db: &Surreal<Any>, rollout_id: &str) -> Result<
 				bail!("rollout '{}' is already completed; nothing to abandon", rollout_id)
 			}
 			Some("rolled_back") => {
-				println!("Rollout {} is already rolled back.", rollout_id);
+				log::info!("Rollout {} is already rolled back.", rollout_id);
 				return Ok(());
 			}
 			_ => {}
@@ -1115,11 +1177,11 @@ pub async fn run_abandon_rollout(db: &Surreal<Any>, rollout_id: &str) -> Result<
 			Some(OffsetDateTime::now_utc().format(&Rfc3339)?),
 		)
 		.await?;
-		println!("Abandoned rollout {} (forced → rolled_back).", rollout_id);
+		log::info!("Abandoned rollout {} (forced → rolled_back).", rollout_id);
 		Ok(())
 	}
 	.await;
-	let release = release_lock(db, "global").await;
+	let release = release_lock(db, &lock).await;
 	match (result, release) {
 		(Err(err), _) => Err(err),
 		(Ok(_), Err(err)) => Err(err),
@@ -1140,8 +1202,14 @@ pub(crate) async fn load_active_rollout_id(db: &Surreal<Any>) -> Result<Option<S
 	Ok(row.and_then(|value| string_field(&value, "id")))
 }
 
-pub(crate) async fn load_managed_entities(db: &Surreal<Any>) -> Result<Vec<ManagedEntityRecord>> {
-	let mut resp = db.query("SELECT key, val FROM __entity WHERE ns = 'schema';").await?;
+pub(crate) async fn load_managed_entities(
+	db: &Surreal<Any>,
+	module: &Module,
+) -> Result<Vec<ManagedEntityRecord>> {
+	let mut resp = db
+		.query("SELECT key, val FROM __entity WHERE ns = $ns;")
+		.bind(("ns", module.partition(Partition::Schema)))
+		.await?;
 	let rows: Vec<Value> = resp.take(0)?;
 	let mut out = Vec::with_capacity(rows.len());
 	for row in rows {
@@ -1212,6 +1280,7 @@ fn entity_keys_payload(entities: &[EntityKey]) -> Vec<String> {
 
 pub(crate) async fn upsert_managed_entities(
 	db: &Surreal<Any>,
+	module: &Module,
 	entities: &[CatalogEntity],
 	active_rollout_id: Option<&str>,
 	state: &str,
@@ -1221,9 +1290,9 @@ pub(crate) async fn upsert_managed_entities(
 	}
 	db.query(
 		"FOR $e IN $entities { \
-		 	DELETE __entity WHERE ns = 'schema' AND key = $e.key; \
+		 	DELETE __entity WHERE ns = $ns AND key = $e.key; \
 		 	CREATE __entity CONTENT { \
-		 		ns: 'schema', \
+		 		ns: $ns, \
 		 		key: $e.key, \
 		 		val: { \
 		 			source_path: $e.source_path, \
@@ -1236,6 +1305,7 @@ pub(crate) async fn upsert_managed_entities(
 		 	}; \
 		 };",
 	)
+	.bind(("ns", module.partition(Partition::Schema)))
 	.bind(("entities", entities_payload(entities)))
 	.bind(("active_rollout_id", active_rollout_id.map(str::to_string)))
 	.bind(("state", state.to_string()))
@@ -1250,12 +1320,14 @@ fn entity_key_string(kind: &EntityKind, scope: Option<&str>, name: &str) -> Stri
 
 pub(crate) async fn delete_managed_entities(
 	db: &Surreal<Any>,
+	module: &Module,
 	entities: &[EntityKey],
 ) -> Result<()> {
 	if entities.is_empty() {
 		return Ok(());
 	}
-	db.query("DELETE __entity WHERE ns = 'schema' AND key INSIDE $keys;")
+	db.query("DELETE __entity WHERE ns = $ns AND key INSIDE $keys;")
+		.bind(("ns", module.partition(Partition::Schema)))
 		.bind(("keys", entity_keys_payload(entities)))
 		.await?
 		.check()?;
@@ -1264,15 +1336,18 @@ pub(crate) async fn delete_managed_entities(
 
 pub(crate) async fn replace_managed_entities(
 	db: &Surreal<Any>,
+	module: &Module,
 	entities: &[CatalogEntity],
 	active_rollout_id: Option<&str>,
 	state: &str,
 ) -> Result<()> {
+	// Scoped to `$ns`: unscoped, this wiped every module's catalog, not just
+	// the one being rolled out.
 	db.query(
-		"DELETE __entity WHERE ns = 'schema'; \
+		"DELETE __entity WHERE ns = $ns; \
 		 FOR $e IN $entities { \
 		 	CREATE __entity CONTENT { \
-		 		ns: 'schema', \
+		 		ns: $ns, \
 		 		key: $e.key, \
 		 		val: { \
 		 			source_path: $e.source_path, \
@@ -1285,6 +1360,7 @@ pub(crate) async fn replace_managed_entities(
 		 	}; \
 		 };",
 	)
+	.bind(("ns", module.partition(Partition::Schema)))
 	.bind(("entities", entities_payload(entities)))
 	.bind(("active_rollout_id", active_rollout_id.map(str::to_string)))
 	.bind(("state", state.to_string()))
@@ -1293,12 +1369,19 @@ pub(crate) async fn replace_managed_entities(
 	Ok(())
 }
 
-pub(crate) async fn replace_sync_hashes(db: &Surreal<Any>, files: &[SchemaFile]) -> Result<()> {
-	db.query("DELETE __entity WHERE ns = 'sync';").await?.check()?;
+pub(crate) async fn replace_sync_hashes(
+	db: &Surreal<Any>,
+	module: &Module,
+	files: &[SchemaFile],
+) -> Result<()> {
+	let ns = module.partition(Partition::Sync);
+	// Scoped to `$ns`: unscoped, this wiped every module's file hashes.
+	db.query("DELETE __entity WHERE ns = $ns;").bind(("ns", ns.clone())).await?.check()?;
 	for file in files {
 		db.query(
-			"CREATE __entity CONTENT { ns: 'sync', key: $path, val: { hash: $hash }, updated_at: time::now() };",
+			"CREATE __entity CONTENT { ns: $ns, key: $path, val: { hash: $hash }, updated_at: time::now() };",
 		)
+		.bind(("ns", ns.clone()))
 		.bind(("path", file.path.clone()))
 		.bind(("hash", file.hash.clone()))
 		.await?
@@ -1307,9 +1390,14 @@ pub(crate) async fn replace_sync_hashes(db: &Surreal<Any>, files: &[SchemaFile])
 	Ok(())
 }
 
-pub(crate) async fn delete_sync_hashes(db: &Surreal<Any>, paths: &[String]) -> Result<()> {
+pub(crate) async fn delete_sync_hashes(
+	db: &Surreal<Any>,
+	module: &Module,
+	paths: &[String],
+) -> Result<()> {
 	for path in paths {
-		db.query("DELETE __entity WHERE ns = 'sync' AND key = $path;")
+		db.query("DELETE __entity WHERE ns = $ns AND key = $path;")
+			.bind(("ns", module.partition(Partition::Sync)))
 			.bind(("path", path.clone()))
 			.await?
 			.check()?;
@@ -1358,6 +1446,7 @@ fn build_rollout_spec(
 
 	Ok(RolloutSpec {
 		id: rollout_id.to_string(),
+		module: default_module_name(),
 		name: name.to_string(),
 		source_schema_hash: hash_schema_snapshot(old_schema)?,
 		target_schema_hash: hash_schema_snapshot(new_schema)?,
@@ -1830,27 +1919,125 @@ fn step_checksum(step: &RolloutStep) -> Result<String> {
 	Ok(sha256_hex(&raw))
 }
 
-pub(crate) async fn acquire_lock(db: &Surreal<Any>, lock_key: &str) -> Result<()> {
-	let owner = std::env::var("SURREALKIT_OWNER").unwrap_or_else(|_| "surrealkit".to_string());
-	db.query(
-		"DELETE __entity WHERE ns = 'lock' AND key = $key; \
-		 CREATE __entity CONTENT { \
-		 	ns: 'lock', \
-		 	key: $key, \
-		 	val: { owner: $owner }, \
-		 	updated_at: time::now() \
-		 };",
-	)
-	.bind(("key", lock_key.to_string()))
-	.bind(("owner", owner))
-	.await?
-	.check()?;
-	Ok(())
+/// How long an acquired lock is honoured before another process may take it over.
+///
+/// A lock is only released explicitly, so without an expiry a crashed run would
+/// wedge the project permanently. 15 minutes is comfortably longer than any real
+/// sync or rollout phase.
+const LOCK_TTL_SECS: u64 = 900;
+
+/// Proof that this process holds a lock. Required to release it, so one process
+/// cannot release another's lock.
+#[derive(Debug, Clone)]
+pub(crate) struct LockToken {
+	/// The module-qualified `__entity.ns` partition this lock lives in.
+	ns: String,
+	key: String,
+	owner: String,
 }
 
-pub(crate) async fn release_lock(db: &Surreal<Any>, lock_key: &str) -> Result<()> {
-	db.query("DELETE __entity WHERE ns = 'lock' AND key = $key;")
+/// Identifies the holder in contention messages. The pid distinguishes concurrent
+/// runs that share a `SURREALKIT_OWNER` (e.g. two CI jobs).
+fn lock_owner_id() -> String {
+	let base = std::env::var("SURREALKIT_OWNER").unwrap_or_else(|_| "surrealkit".to_string());
+	format!("{base}/{}", std::process::id())
+}
+
+/// Take the named lock, or fail if another process holds it.
+///
+/// This is a real mutual exclusion: the `by_ns_key` unique index rejects a second
+/// holder. Expired locks -- and locks written before v1, which carry no
+/// `expires_at` -- are taken over in the same statement, so a crashed run does not
+/// need a manual cleanup.
+pub(crate) async fn acquire_lock(
+	db: &Surreal<Any>,
+	module: &Module,
+	lock_key: &str,
+) -> Result<LockToken> {
+	let owner = lock_owner_id();
+	let ns = module.partition(Partition::Lock);
+
+	// The conditional DELETE clears only an expired (or pre-v1) holder; the CREATE
+	// then violates `by_ns_key` if a live holder remains, aborting the transaction
+	// and leaving that holder untouched.
+	let sql = format!(
+		"BEGIN; \
+		 DELETE __entity WHERE ns = $ns AND key = $key \
+		 	AND (val.expires_at = NONE OR val.expires_at < time::now()); \
+		 CREATE __entity CONTENT {{ \
+		 	ns: $ns, \
+		 	key: $key, \
+		 	val: {{ owner: $owner, acquired_at: time::now(), expires_at: time::now() + {LOCK_TTL_SECS}s }}, \
+		 	updated_at: time::now() \
+		 }}; \
+		 COMMIT;"
+	);
+
+	let attempt = match db
+		.query(sql)
+		.bind(("ns", ns.clone()))
 		.bind(("key", lock_key.to_string()))
+		.bind(("owner", owner.clone()))
+		.await
+	{
+		Ok(resp) => resp.check(),
+		Err(err) => Err(err),
+	};
+
+	match attempt {
+		Ok(_) => Ok(LockToken {
+			ns,
+			key: lock_key.to_string(),
+			owner,
+		}),
+		Err(err) => {
+			// The transaction error is generic, so read the holder back to say who.
+			match describe_lock_holder(db, module, lock_key).await {
+				Ok(Some(holder)) => bail!(
+					"another surrealkit run holds the '{lock_key}' lock ({holder}).\n\
+					 Wait for it to finish, or if it crashed, clear the lock with:\n\
+					 \x20   DELETE __entity WHERE ns = 'lock' AND key = '{lock_key}';\n\
+					 It is taken over automatically {LOCK_TTL_SECS}s after it was acquired."
+				),
+				// No holder: the failure was something else (or we lost a benign race).
+				_ => Err(err).with_context(|| format!("acquiring the '{lock_key}' lock")),
+			}
+		}
+	}
+}
+
+/// Render the current holder of `lock_key` as `owner, held for Ns`, if any.
+async fn describe_lock_holder(
+	db: &Surreal<Any>,
+	module: &Module,
+	lock_key: &str,
+) -> Result<Option<String>> {
+	let mut resp = db
+		.query(
+			"SELECT val.owner AS owner, val.acquired_at AS acquired_at \
+			 FROM __entity WHERE ns = $ns AND key = $key LIMIT 1;",
+		)
+		.bind(("ns", module.partition(Partition::Lock)))
+		.bind(("key", lock_key.to_string()))
+		.await?;
+	let row: Option<serde_json::Value> = resp.take(0)?;
+	Ok(row.map(|r| {
+		let owner = r.get("owner").and_then(|v| v.as_str()).unwrap_or("unknown owner");
+		match r.get("acquired_at").and_then(|v| v.as_str()) {
+			Some(at) => format!("held by {owner} since {at}"),
+			None => format!("held by {owner}"),
+		}
+	}))
+}
+
+/// Release a lock this process holds. Releasing someone else's lock is a no-op:
+/// the owner check is what stops a slow run from clearing the lock a newer run
+/// legitimately took over.
+pub(crate) async fn release_lock(db: &Surreal<Any>, token: &LockToken) -> Result<()> {
+	db.query("DELETE __entity WHERE ns = $ns AND key = $key AND val.owner = $owner;")
+		.bind(("ns", token.ns.clone()))
+		.bind(("key", token.key.clone()))
+		.bind(("owner", token.owner.clone()))
 		.await?
 		.check()?;
 	Ok(())
@@ -2014,12 +2201,123 @@ mod tests {
 		db
 	}
 
+	#[tokio::test]
+	async fn lock_excludes_a_second_holder() {
+		// Before v1 `acquire_lock` did `DELETE` then `CREATE`, so it always
+		// "succeeded" and provided no mutual exclusion at all.
+		let db = connect_mem_db().await;
+
+		let first =
+			acquire_lock(&db, &Module::default_module(), "global").await.expect("first acquire");
+		let err = acquire_lock(&db, &Module::default_module(), "global")
+			.await
+			.expect_err("second acquire must fail");
+		let msg = format!("{err:#}");
+		assert!(msg.contains("holds the 'global' lock"), "unexpected error: {msg}");
+
+		// The original holder is intact.
+		let holder = describe_lock_holder(&db, &Module::default_module(), "global")
+			.await
+			.expect("describe")
+			.expect("holder");
+		assert!(holder.contains(&lock_owner_id()), "holder changed: {holder}");
+
+		release_lock(&db, &first).await.expect("release");
+		let second = acquire_lock(&db, &Module::default_module(), "global")
+			.await
+			.expect("acquire after release");
+		release_lock(&db, &second).await.expect("release second");
+	}
+
+	#[tokio::test]
+	async fn releasing_someone_elses_lock_is_a_no_op() {
+		let db = connect_mem_db().await;
+		let real = acquire_lock(&db, &Module::default_module(), "global").await.expect("acquire");
+
+		let forged = LockToken {
+			ns: Module::default_module().partition(Partition::Lock),
+			key: "global".to_string(),
+			owner: "someone-else/1".to_string(),
+		};
+		release_lock(&db, &forged).await.expect("release call itself succeeds");
+
+		// The genuine holder still holds it.
+		assert!(
+			describe_lock_holder(&db, &Module::default_module(), "global")
+				.await
+				.expect("describe")
+				.is_some(),
+			"forged release must not have cleared the lock"
+		);
+		assert!(
+			acquire_lock(&db, &Module::default_module(), "global").await.is_err(),
+			"lock must still be held"
+		);
+
+		release_lock(&db, &real).await.expect("real release");
+	}
+
+	#[tokio::test]
+	async fn expired_and_pre_v1_locks_are_taken_over() {
+		// Pre-v1 lock rows carry no `expires_at`. They must not wedge the project
+		// forever, so they are treated as expired.
+		let db = connect_mem_db().await;
+		db.query(
+			"CREATE __entity CONTENT { ns:'lock', key:'global', \
+			 val:{ owner:'crashed-0.7-run' }, updated_at: time::now() };",
+		)
+		.await
+		.expect("seed legacy lock")
+		.check()
+		.expect("seed legacy lock");
+
+		let token = acquire_lock(&db, &Module::default_module(), "global")
+			.await
+			.expect("must take over a pre-v1 lock");
+		let holder = describe_lock_holder(&db, &Module::default_module(), "global")
+			.await
+			.expect("describe")
+			.expect("holder");
+		assert!(holder.contains(&lock_owner_id()), "expected takeover, got: {holder}");
+		release_lock(&db, &token).await.expect("release");
+	}
+
+	#[tokio::test]
+	async fn distinct_modules_do_not_contend_for_the_same_lock_key() {
+		// Per-module locks are what let `--all` fan out without one module's sync
+		// blocking another's.
+		let db = connect_mem_db().await;
+		let core = Module::new("core").unwrap();
+		let billing = Module::new("billing").unwrap();
+
+		let a = acquire_lock(&db, &core, "global").await.expect("core");
+		let b = acquire_lock(&db, &billing, "global").await.expect("billing must not contend");
+
+		// But the same module still excludes itself.
+		assert!(acquire_lock(&db, &core, "global").await.is_err(), "core must still exclude");
+
+		release_lock(&db, &a).await.expect("release core");
+		release_lock(&db, &b).await.expect("release billing");
+	}
+
+	#[tokio::test]
+	async fn distinct_lock_keys_do_not_contend() {
+		let db = connect_mem_db().await;
+		let a = acquire_lock(&db, &Module::default_module(), "global").await.expect("a");
+		let b = acquire_lock(&db, &Module::default_module(), "other")
+			.await
+			.expect("distinct key must not contend");
+		release_lock(&db, &a).await.expect("release a");
+		release_lock(&db, &b).await.expect("release b");
+	}
+
 	fn sample_loaded_spec(id: &str) -> LoadedRolloutSpec {
 		LoadedRolloutSpec {
 			path: PathBuf::from(format!("database/rollouts/{id}.toml")),
 			checksum: "sum".to_string(),
 			spec: RolloutSpec {
 				id: id.to_string(),
+				module: default_module_name(),
 				name: "test".to_string(),
 				source_schema_hash: "src".to_string(),
 				target_schema_hash: "tgt".to_string(),
@@ -2238,20 +2536,22 @@ mod tests {
 		let entities: Vec<CatalogEntity> =
 			(0..25).map(|i| sample_entity(&format!("col_{i:02}"))).collect();
 
-		replace_managed_entities(&db, &entities, Some("r-1"), "active")
+		replace_managed_entities(&db, &Module::default_module(), &entities, Some("r-1"), "active")
 			.await
 			.expect("first batched replace");
 		assert_eq!(entity_row_count(&db).await, 25, "all entities land on first call");
 
 		// Re-running should still be idempotent — delete-all + recreate via the
 		// FOR loop should produce the same row count, not duplicates.
-		replace_managed_entities(&db, &entities, Some("r-1"), "active")
+		replace_managed_entities(&db, &Module::default_module(), &entities, Some("r-1"), "active")
 			.await
 			.expect("second batched replace");
 		assert_eq!(entity_row_count(&db).await, 25, "no duplicates on re-run");
 
 		// Empty replacement clears the schema namespace.
-		replace_managed_entities(&db, &[], None, "active").await.expect("empty replace");
+		replace_managed_entities(&db, &Module::default_module(), &[], None, "active")
+			.await
+			.expect("empty replace");
 		assert_eq!(entity_row_count(&db).await, 0, "empty entities clears ns=schema");
 	}
 

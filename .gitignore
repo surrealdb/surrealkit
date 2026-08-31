@@ -7,3 +7,7 @@ node_modules
 
 .env
 .claude/
+
+# `run_setup` scaffolds `<folder>/setup.surql` into the process cwd. A stray one
+# under crates/ is the leak that tests/library_api.rs guards against, not an asset.
+crates/*/database/

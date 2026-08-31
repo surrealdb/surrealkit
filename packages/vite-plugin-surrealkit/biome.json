@@ -3,8 +3,8 @@
 	"vcs": {
 		"enabled": true,
 		"clientKind": "git",
-		"useIgnoreFile": true,
-		"defaultBranch": "master"
+		"useIgnoreFile": false,
+		"defaultBranch": "main"
 	},
 	"files": {
 		"includes": ["src/**/*.ts"]

@@ -231,6 +231,15 @@ pub struct Operation {
 	pub source_path: String,
 }
 
+/// Create the on-disk directories a module needs (`schema/`, `rollouts/`,
+/// `snapshots/`).
+pub fn ensure_local_state_dirs_for(layout: &crate::constants::Layout) -> Result<()> {
+	for dir in [layout.schema_dir(), layout.rollouts_dir(), layout.state_dir()] {
+		fs::create_dir_all(&dir).with_context(|| format!("creating {}", dir.display()))?;
+	}
+	Ok(())
+}
+
 pub fn ensure_local_state_dirs(folder: &str) -> Result<()> {
 	let sd = schema_dir(folder);
 	let rd = rollouts_dir(folder);
@@ -242,8 +251,14 @@ pub fn ensure_local_state_dirs(folder: &str) -> Result<()> {
 }
 
 pub fn collect_schema_files(folder: &str) -> Result<Vec<SchemaFile>> {
-	let sd = schema_dir(folder);
-	let mut files: Vec<PathBuf> = WalkDir::new(&sd)
+	collect_schema_files_at(&schema_dir(folder))
+}
+
+/// Collect `.surql` files from an explicit directory, recursively and in sorted
+/// order. Used by module-aware callers, which resolve the directory through
+/// [`Layout`](crate::constants::Layout) rather than the project folder.
+pub fn collect_schema_files_at(sd: &std::path::Path) -> Result<Vec<SchemaFile>> {
+	let mut files: Vec<PathBuf> = WalkDir::new(sd)
 		.follow_links(true)
 		.into_iter()
 		.filter_map(|e| e.ok())
@@ -426,8 +441,8 @@ sync runs inside an already-selected namespace/database. Provision these out-of-
 				truncate_stmt(normalized)
 			);
 		};
-		entity.source_path = file.path.clone();
-		entity.file_hash = file.hash.clone();
+		entity.source_path.clone_from(&file.path);
+		entity.file_hash.clone_from(&file.hash);
 		entity.statement_hash = sha256_hex(normalize_statement(normalized).as_bytes());
 		entities.push(entity);
 	}
@@ -1252,7 +1267,7 @@ mod tests {
 			sql: stmt.to_string(),
 		};
 		let (entities, ops) = parse_schema_statements(&file, true)
-			.expect(&format!("allow_all_statements should not fail for: {stmt}"));
+			.unwrap_or_else(|e| panic!("allow_all_statements should not fail for {stmt}: {e:#}"));
 		assert!(entities.is_empty(), "no catalog entity expected for: {stmt}");
 		assert_eq!(ops.len(), 1, "expected one operation for: {stmt}");
 		assert_eq!(ops[0].source_path, "database/schema/root.surql");

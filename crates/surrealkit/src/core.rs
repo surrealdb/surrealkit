@@ -18,10 +18,15 @@ pub async fn exec_surql(db: &Surreal<Any>, sql: &str) -> anyhow::Result<()> {
 	Ok(())
 }
 
+/// Render a path for user-facing messages, lossily for non-UTF-8 paths.
 pub fn display(p: &Path) -> String {
 	p.to_string_lossy().into_owned()
 }
 
+/// Lowercase hex SHA-256 of `bytes`.
+///
+/// Used for the content hashes SurrealKit tracks per schema and seed file, so
+/// unchanged files are skipped on re-runs.
 pub fn sha256_hex(bytes: &[u8]) -> String {
 	let mut hasher = Sha256::new();
 	hasher.update(bytes);

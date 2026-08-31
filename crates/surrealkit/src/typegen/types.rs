@@ -68,7 +68,7 @@ pub struct FieldDef {
 	pub define: String,
 	pub r#type: FieldType,
 	/// `true` when the field's top-level type was `option<...>`. The inner type
-	/// is unwrapped into [`FieldDef::r#type`].
+	/// is unwrapped into the `type` field.
 	pub optional: bool,
 	/// `FLEXIBLE` keyword present.
 	pub flexible: bool,

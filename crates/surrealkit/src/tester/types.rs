@@ -308,6 +308,17 @@ pub struct FilterInput {
 	pub tags: Vec<String>,
 }
 
+impl FilterInput {
+	/// Build the suite/case/tag filter set from the CLI options.
+	pub fn from_opts(opts: &TestOpts) -> Self {
+		Self {
+			suite_pattern: opts.suite.clone(),
+			case_pattern: opts.case.clone(),
+			tags: opts.tags.clone(),
+		}
+	}
+}
+
 pub fn default_true() -> bool {
 	true
 }

@@ -19,11 +19,10 @@ use super::actors::{
 use super::api::execute_api_case;
 use super::assertions::{JsonAssertionContext, assert_json_value_with_context};
 use super::types::{
-	AssertionReport, CaseKind, CaseReport, FilterInput, GlobalTestConfig, JsonAssertionSpec,
-	LoadedSuite, PermissionAction, RunReport, SuiteReport, TestOpts,
+	AssertionReport, CaseKind, CaseReport, GlobalTestConfig, JsonAssertionSpec, LoadedSuite,
+	PermissionAction, RunReport, SuiteReport, TestOpts,
 };
 use crate::config::{AuthLevel, DbCfg};
-use crate::constants::DEFAULT_ROOT_DIR;
 use crate::core::create_surreal_client;
 use crate::seed;
 use crate::setup::run_setup;
@@ -177,8 +176,7 @@ impl RunnerContext {
 		let host = self.cfg.host().to_string();
 		let base_url =
 			self.base_url.as_ref().map(|url| format!("{}/api/{}/{}", url, namespace, database));
-		let actors =
-			self.prepare_suite(&suite, &host, &namespace, &database, DEFAULT_ROOT_DIR).await?;
+		let actors = self.prepare_suite(&suite, &host, &namespace, &database).await?;
 		let mut cases = Vec::new();
 
 		for case in &suite.spec.cases {
@@ -214,7 +212,7 @@ impl RunnerContext {
 		if !self.opts.keep_db
 			&& let Err(err) = cleanup_suite_db(&self.cfg, &host, &namespace, &database).await
 		{
-			eprintln!("warning: failed to clean up test db {}/{}: {:#}", namespace, database, err);
+			log::warn!("failed to clean up test db {}/{}: {:#}", namespace, database, err);
 		}
 
 		Ok(SuiteReport {
@@ -236,7 +234,6 @@ impl RunnerContext {
 		host: &str,
 		namespace: &str,
 		database: &str,
-		folder: &str,
 	) -> Result<HashMap<String, ActorSession>> {
 		let merged = merged_actor_specs(&self.global.actors, &suite.spec.actors);
 		let bootstrap_actors =
@@ -244,7 +241,7 @@ impl RunnerContext {
 		let root = require_actor(&bootstrap_actors, "root")?;
 
 		if !self.opts.no_setup {
-			run_setup(&root.db, folder).await?;
+			run_setup(&root.db, self.cfg.folder()).await?;
 		}
 		if !self.opts.no_sync {
 			sync::run_sync(
@@ -256,9 +253,11 @@ impl RunnerContext {
 					fail_fast: true,
 					prune: true,
 					allow_shared_prune: true,
+					allow_empty_prune: false,
 					allow_all_statements: false,
 					vars: self.vars.clone(),
 					folder: self.cfg.folder().to_owned(),
+					module: crate::module::Module::default_module(),
 					typegen_ts_out: None,
 					typegen_ts_format: None,
 				},
@@ -317,12 +316,10 @@ async fn copy_record(
 	root_db: &Surreal<Any>,
 	record_id: RecordId,
 ) -> Result<surrealdb_types::Object> {
-	let record = get_record(root_db, record_id.clone()).await?;
-	if record.is_none() {
+	let Some(mut content) = get_record(root_db, record_id.clone()).await? else {
 		bail!("Record {:?} cannot be copied", record_id);
-	}
+	};
 	let tmp_record_id = RecordId::new(record_id.table.clone(), RecordIdKey::rand());
-	let mut content = record.unwrap();
 	content.remove("id");
 	root_db
 		.query("CREATE $tmp_record_id CONTENT $content;")
@@ -571,16 +568,13 @@ async fn run_case(
 					return Err(error);
 				}
 
-				let mut report = evaluate_outcome(
+				let report = evaluate_outcome(
 					format!("action:{} (#{})", rule.action.label(), idx + 1),
 					result,
 					rule.allow,
 					rule.error_contains.as_deref(),
 					None,
 				)?;
-				if !report.passed {
-					report.message = format!("{}", report.message);
-				}
 				assertions.push(report);
 			}
 
@@ -709,6 +703,9 @@ async fn run_case(
 	}
 }
 
+// Each parameter is a distinct piece of the expectation being reported; bundling
+// them into a struct would only move the argument list to the call sites.
+#[expect(clippy::too_many_arguments)]
 fn report_sql_expect(
 	name: String,
 	kind: String,
@@ -962,15 +959,6 @@ fn slugify(input: &str) -> String {
 		"suite".to_string()
 	} else {
 		trimmed.to_string()
-	}
-}
-
-#[expect(dead_code)]
-pub fn build_filter_input(opts: &TestOpts) -> FilterInput {
-	FilterInput {
-		suite_pattern: opts.suite.clone(),
-		case_pattern: opts.case.clone(),
-		tags: opts.tags.clone(),
 	}
 }
 
