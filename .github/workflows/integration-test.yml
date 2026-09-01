@@ -95,18 +95,27 @@ jobs:
                   rm -rf database/tests
                   cp -r examples/testing database/tests
 
+                  # The runner uses an isolated namespace/database per suite and
+                  # cleans it afterward. Assert the implicit filesystem sync from
+                  # inside the existing live suite, before cleanup, rather than
+                  # inspecting an unrelated configured database after the run.
+                  printf '%s\n' \
+                      '' \
+                      '[[cases]]' \
+                      'name = "implicit_filesystem_sync_reached_live_database"' \
+                      'kind = "schema_metadata"' \
+                      'actor = "root"' \
+                      'sql = "INFO FOR DB;"' \
+                      'contains = ["integration_probe"]' \
+                      >> database/tests/suites/root_access_full_stack.toml
+
             - name: Run surrealkit tests
               shell: bash
               # Keep the default pre-test sync on the live server. The fixture
-              # applies its domain schema afterward; integration_probe only makes
-              # the filesystem source set explicit and non-empty.
+              # applies its domain schema afterward. The added live case proves
+              # integration_probe was applied by that implicit sync before the
+              # runner removes its isolated database.
               run: ./target/debug/surrealkit test --json-out database/tests/report.json
-
-            - name: Verify implicit filesystem sync reached the live database
-              shell: bash
-              run: |
-                  types="$(./target/debug/surrealkit typegen --stdout)"
-                  grep -q 'integration_probe' <<<"$types"
 
             # Exercises connect() for real against root, namespace and database
             # auth levels. These skip silently when the URL is unset.
