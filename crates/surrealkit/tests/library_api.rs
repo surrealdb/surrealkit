@@ -1,3 +1,11 @@
+// These tests mutate process-global state (the current working directory), so they
+// serialise on `FS_LOCK`. The guard is deliberately held across `.await` points:
+// releasing it early would let a concurrent test chdir out from under this one.
+#![expect(
+	clippy::await_holding_lock,
+	reason = "FS_LOCK serialises cwd-mutating tests; the guard must span the whole test body"
+)]
+
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -6,6 +14,7 @@ use surrealdb::engine::any::{Any, connect};
 use surrealdb::opt::Config;
 use surrealdb::opt::capabilities::Capabilities;
 use surrealkit::constants::DEFAULT_ROOT_DIR;
+use surrealkit::module::Module;
 // CLI-backing filesystem functions live behind their modules (doc-hidden); the
 // library happy-path uses the `Sync` builder and `Rollout` facade exported at the
 // crate root.
@@ -28,6 +37,10 @@ async fn mem_db() -> Surreal<Any> {
 }
 
 // Tests that change cwd must hold this lock to avoid races.
+//
+// Always taken with `unwrap_or_else(|e| e.into_inner())`: a panicking test poisons
+// the mutex, and a bare `unwrap()` would turn that single failure into a cascade of
+// `PoisonError`s across every other cwd test, hiding which one actually broke.
 static FS_LOCK: Mutex<()> = Mutex::new(());
 
 struct RestoreCwd(std::path::PathBuf);
@@ -47,7 +60,7 @@ fn enter_tempdir() -> (tempfile::TempDir, RestoreCwd) {
 
 #[tokio::test]
 async fn setup_initialises_metadata_tables() {
-	let _lock = FS_LOCK.lock().unwrap();
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (_tmp, _cwd) = enter_tempdir();
 	let db = mem_db().await;
 	run_setup(&db, DEFAULT_ROOT_DIR).await.expect("run_setup");
@@ -65,6 +78,51 @@ async fn setup_initialises_metadata_tables() {
 		.expect("__rollout must exist");
 }
 
+/// Captures everything the library logs during one call.
+///
+/// Library modules emit through the `log` facade rather than printing directly,
+/// so a consumer gets silence unless they install a logger. This asserts the
+/// records actually reach a logger, and by extension that nothing bypasses it.
+struct CapturingLogger {
+	records: Mutex<Vec<String>>,
+}
+
+impl log::Log for CapturingLogger {
+	fn enabled(&self, _: &log::Metadata<'_>) -> bool {
+		true
+	}
+	fn log(&self, record: &log::Record<'_>) {
+		if record.target().starts_with("surrealkit") {
+			self.records.lock().unwrap_or_else(|e| e.into_inner()).push(record.args().to_string());
+		}
+	}
+	fn flush(&self) {}
+}
+
+static CAPTURED: CapturingLogger = CapturingLogger {
+	records: Mutex::new(Vec::new()),
+};
+
+#[tokio::test]
+async fn library_progress_goes_through_the_log_facade() {
+	// If set_logger fails another test already installed one; either way the
+	// assertion below is about our records.
+	let _ = log::set_logger(&CAPTURED).map(|()| log::set_max_level(log::LevelFilter::Trace));
+
+	let db = mem_db().await;
+	static FILES: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/logged.surql",
+		sql: "DEFINE TABLE logged_thing SCHEMALESS;",
+	}];
+	Sync::embedded(FILES).run(&db).await.expect("sync");
+
+	let records = CAPTURED.records.lock().unwrap_or_else(|e| e.into_inner());
+	assert!(
+		records.iter().any(|r| r.contains("database/schema/logged.surql")),
+		"sync progress must be emitted through `log`, not printed directly: {records:?}"
+	);
+}
+
 #[tokio::test]
 async fn sync_embedded_applies_schema_and_tracks_file() {
 	let db = mem_db().await;
@@ -80,16 +138,6 @@ async fn sync_embedded_applies_schema_and_tracks_file() {
 	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
 	assert_eq!(rows.len(), 1);
 	assert_eq!(rows[0].get("key").and_then(|v| v.as_str()), Some("database/schema/person.surql"));
-}
-
-#[tokio::test]
-async fn sync_embedded_accepts_explicit_empty_source_set() {
-	let db = mem_db().await;
-
-	Sync::embedded(&[])
-		.run(&db)
-		.await
-		.expect("explicit empty embedded schema remains valid");
 }
 
 #[tokio::test]
@@ -143,6 +191,211 @@ async fn sync_embedded_prunes_removed_files() {
 }
 
 #[tokio::test]
+async fn sync_embedded_refuses_to_prune_everything_when_no_files_found() {
+	let db = mem_db().await;
+
+	static FILES: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/alpha.surql",
+		sql: "DEFINE TABLE alpha SCHEMALESS;",
+	}];
+	Sync::embedded(FILES).run(&db).await.expect("initial sync");
+
+	// An empty file set makes every managed entity look stale. That almost always
+	// means the schema folder is misconfigured, so it must be refused rather than
+	// silently dropping the whole schema.
+	let err = Sync::embedded(&[]).run(&db).await.expect_err("empty sync must be refused");
+	let msg = format!("{err:#}");
+	assert!(msg.contains("refusing to prune"), "unexpected error: {msg}");
+	assert!(msg.contains("--allow-empty-prune"), "error must name the override: {msg}");
+
+	// Nothing was removed.
+	let mut resp = db.query("SELECT key FROM __entity WHERE ns = 'sync';").await.expect("query");
+	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
+	assert_eq!(rows.len(), 1, "guard must not have pruned anything");
+
+	let mut resp = db.query("INFO FOR DB;").await.expect("info");
+	let info: Option<serde_json::Value> = resp.take(0).expect("take");
+	let tables = info.as_ref().and_then(|v| v.get("tables")).expect("tables");
+	assert!(tables.get("alpha").is_some(), "alpha table must still exist");
+}
+
+#[tokio::test]
+async fn sync_embedded_empty_prune_is_allowed_with_opt_in() {
+	let db = mem_db().await;
+
+	static FILES: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/alpha.surql",
+		sql: "DEFINE TABLE alpha SCHEMALESS;",
+	}];
+	Sync::embedded(FILES).run(&db).await.expect("initial sync");
+
+	Sync::embedded(&[])
+		.allow_empty_prune(true)
+		.run(&db)
+		.await
+		.expect("opt-in empty prune should succeed");
+
+	let mut resp = db.query("SELECT key FROM __entity WHERE ns = 'sync';").await.expect("query");
+	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
+	assert!(rows.is_empty(), "opt-in prune should have removed tracking");
+}
+
+#[tokio::test]
+async fn sync_embedded_empty_is_fine_when_nothing_is_managed() {
+	// The guard must only fire when there is something to lose.
+	let db = mem_db().await;
+	Sync::embedded(&[]).run(&db).await.expect("empty sync on empty db is a no-op");
+}
+
+/// Names of the tables currently defined in the database.
+async fn table_names(db: &Surreal<Any>) -> Vec<String> {
+	let mut resp = db.query("INFO FOR DB;").await.expect("info for db");
+	let info: Option<serde_json::Value> = resp.take(0).expect("take");
+	let mut names: Vec<String> = info
+		.as_ref()
+		.and_then(|v| v.get("tables"))
+		.and_then(|v| v.as_object())
+		.map(|m| m.keys().cloned().collect())
+		.unwrap_or_default();
+	names.sort();
+	names
+}
+
+#[tokio::test]
+async fn modules_do_not_prune_each_other() {
+	// The core multi-schema guarantee. Before v1 every sync treated *all* tracked
+	// entities as its own, so syncing module B against a database that module A had
+	// synced deleted A's tables outright.
+	let db = mem_db().await;
+
+	static CORE: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/core/account.surql",
+		sql: "DEFINE TABLE core_account SCHEMALESS;",
+	}];
+	static BILLING: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/billing/invoice.surql",
+		sql: "DEFINE TABLE billing_invoice SCHEMALESS;",
+	}];
+
+	Sync::embedded(CORE).module("core").expect("core").run(&db).await.expect("sync core");
+	Sync::embedded(BILLING)
+		.module("billing")
+		.expect("billing")
+		.run(&db)
+		.await
+		.expect("sync billing");
+
+	let tables = table_names(&db).await;
+	assert!(tables.contains(&"core_account".to_string()), "core survived billing: {tables:?}");
+	assert!(tables.contains(&"billing_invoice".to_string()), "billing applied: {tables:?}");
+
+	// Re-syncing core must not touch billing either.
+	Sync::embedded(CORE).module("core").expect("core").run(&db).await.expect("re-sync core");
+	let tables = table_names(&db).await;
+	assert!(tables.contains(&"billing_invoice".to_string()), "billing survived core: {tables:?}");
+}
+
+#[tokio::test]
+async fn a_module_prunes_only_its_own_entities() {
+	let db = mem_db().await;
+
+	static CORE: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/core/account.surql",
+		sql: "DEFINE TABLE core_account SCHEMALESS;",
+	}];
+	static BILLING_TWO: &[EmbeddedSchemaFile] = &[
+		EmbeddedSchemaFile {
+			path: "database/schema/billing/invoice.surql",
+			sql: "DEFINE TABLE billing_invoice SCHEMALESS;",
+		},
+		EmbeddedSchemaFile {
+			path: "database/schema/billing/plan.surql",
+			sql: "DEFINE TABLE billing_plan SCHEMALESS;",
+		},
+	];
+	static BILLING_ONE: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/billing/invoice.surql",
+		sql: "DEFINE TABLE billing_invoice SCHEMALESS;",
+	}];
+
+	Sync::embedded(CORE).module("core").expect("core").run(&db).await.expect("sync core");
+	Sync::embedded(BILLING_TWO)
+		.module("billing")
+		.expect("billing")
+		.run(&db)
+		.await
+		.expect("sync billing");
+
+	// Drop billing_plan from the billing module only.
+	Sync::embedded(BILLING_ONE)
+		.module("billing")
+		.expect("billing")
+		.run(&db)
+		.await
+		.expect("prune billing");
+
+	let tables = table_names(&db).await;
+	assert!(!tables.contains(&"billing_plan".to_string()), "billing_plan pruned: {tables:?}");
+	assert!(tables.contains(&"billing_invoice".to_string()), "billing_invoice kept: {tables:?}");
+	assert!(tables.contains(&"core_account".to_string()), "core untouched: {tables:?}");
+}
+
+#[tokio::test]
+async fn module_metadata_lands_in_its_own_partition() {
+	let db = mem_db().await;
+
+	static FILES: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/billing/invoice.surql",
+		sql: "DEFINE TABLE billing_invoice SCHEMALESS;",
+	}];
+	Sync::embedded(FILES).module("billing").expect("billing").run(&db).await.expect("sync");
+
+	let mut resp = db
+		.query("SELECT ns FROM __entity WHERE ns = 'sync@billing';")
+		.await
+		.expect("query billing partition");
+	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
+	assert_eq!(rows.len(), 1, "billing file hash must live in sync@billing");
+
+	// And nothing leaked into the default module's partition -- this is what makes
+	// a pre-v1 binary blind to named modules.
+	let mut resp =
+		db.query("SELECT ns FROM __entity WHERE ns = 'sync';").await.expect("query default");
+	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
+	assert!(rows.is_empty(), "named module must not write to the default partition");
+}
+
+#[tokio::test]
+async fn default_module_adopts_pre_v1_rows_without_pruning() {
+	// Upgrade path: a database written by 0.7 has its rows at ns='sync'/'schema'.
+	// The default module reads exactly those partitions, so an upgraded binary must
+	// see the schema as already in sync and issue no REMOVE.
+	let db = mem_db().await;
+
+	static FILES: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "database/schema/legacy.surql",
+		sql: "DEFINE TABLE legacy_thing SCHEMALESS;",
+	}];
+	// Sync with no module: writes the bare partitions, exactly as 0.7 did.
+	Sync::embedded(FILES).run(&db).await.expect("initial sync");
+
+	let mut resp = db.query("SELECT ns FROM __entity WHERE ns = 'sync';").await.expect("query");
+	let rows: Vec<serde_json::Value> = resp.take(0).expect("take");
+	assert_eq!(rows.len(), 1, "pre-v1 rows live in the bare partition");
+
+	// Re-running as the explicit default module is a no-op, not a re-apply+prune.
+	Sync::embedded(FILES)
+		.module("default")
+		.expect("default")
+		.run(&db)
+		.await
+		.expect("explicit default module");
+
+	let tables = table_names(&db).await;
+	assert!(tables.contains(&"legacy_thing".to_string()), "table must survive: {tables:?}");
+}
+
+#[tokio::test]
 async fn sync_embedded_self_heals_catalog_drift() {
 	// Catalog drift: an entity tracked in __entity is already missing from the
 	// live DB (e.g., a `run_sql REMOVE …` rollout step dropped it but didn't
@@ -171,9 +424,13 @@ async fn sync_embedded_self_heals_catalog_drift() {
 	// Drop the file entirely so the pruner is asked to remove BOTH the table
 	// (still present) AND the field (already gone). Pre-fix, the field prune
 	// errors and the table is never reached.
+	// An empty file set is just a convenient way to make every entity stale here.
+	// That trips the empty-prune guard, so opt out of it explicitly: this test is
+	// about prune mechanics, not about the guard.
 	static EMPTY: &[EmbeddedSchemaFile] = &[];
 	Sync::embedded(EMPTY)
 		.prune(true)
+		.allow_empty_prune(true)
 		.run(&db)
 		.await
 		.expect("pruning sync should self-heal drift, not error on missing field");
@@ -219,9 +476,10 @@ async fn sync_embedded_does_not_scaffold_files_on_disk() {
 	Sync::embedded(FILES).run(&db).await.expect("embedded sync");
 
 	// The `path` above is only a tracking key — nothing should hit the filesystem.
+	let leaked = walk_paths(tmp.path());
 	assert!(
 		!tmp.path().join("database").exists(),
-		"embedded sync must not create a `database/` directory on disk (found one in CWD)"
+		"embedded sync must not create a `database/` directory on disk; found: {leaked:?}"
 	);
 
 	// And the metadata tables must still have been set up in the DB.
@@ -233,7 +491,60 @@ async fn sync_embedded_does_not_scaffold_files_on_disk() {
 }
 
 #[tokio::test]
+async fn rollout_facade_does_not_scaffold_files_on_disk() {
+	// Regression: Rollout::{start,complete,rollback} hardcoded ./database and
+	// routed through run_setup, so a code-driven rollout created
+	// `./database/setup.surql` in the caller's working directory -- the same leak
+	// run_setup_embedded was introduced to avoid for Sync.
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (tmp, _restore) = enter_tempdir();
+
+	let db = mem_db().await;
+	let spec = add_table_spec("no_scaffold_rollout", "scaffold_probe");
+
+	let rollout = Rollout::new(spec, &[]);
+	rollout.start(&db).await.expect("start");
+	rollout.complete(&db).await.expect("complete");
+
+	let leaked: Vec<String> = walk_paths(tmp.path());
+	assert!(
+		!tmp.path().join("database").exists(),
+		"code-driven rollout must not create a `database/` directory on disk; found: {leaked:?}"
+	);
+
+	// The metadata tables were still initialised in the database.
+	db.query("SELECT * FROM __rollout LIMIT 1;")
+		.await
+		.expect("query __rollout")
+		.check()
+		.expect("__rollout must exist after a code-driven rollout");
+}
+
+#[tokio::test]
+async fn rollout_facade_folder_opts_into_scaffolding() {
+	// The CLI workflow still wants setup.surql on disk; `.folder()` opts in.
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (tmp, _restore) = enter_tempdir();
+
+	let db = mem_db().await;
+	let spec = add_table_spec("scaffold_rollout", "scaffold_probe_2");
+
+	Rollout::new(spec, &[]).folder("database").start(&db).await.expect("start with folder");
+
+	assert!(
+		tmp.path().join("database").join("setup.surql").exists(),
+		"`.folder()` must scaffold setup.surql"
+	);
+}
+
+#[tokio::test]
 async fn rollout_status_is_empty_when_no_rollouts_exist() {
+	// `run_status` is a CLI entry point: it calls run_setup, which scaffolds
+	// `<folder>/setup.surql` relative to the process cwd. Without the lock and a
+	// tempdir this test drops that file into whichever tempdir a concurrent cwd
+	// test is using, making *that* test fail instead of this one.
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (_tmp, _restore) = enter_tempdir();
 	let db = mem_db().await;
 	run_status(&db, DEFAULT_ROOT_DIR, None).await.expect("run_status on empty DB");
 }
@@ -251,7 +562,7 @@ async fn rollout_status_does_not_crash_after_completed_rollout() {
 	let db = mem_db().await;
 
 	write_schema_file(tmp.path(), "person.surql", "DEFINE TABLE person SCHEMALESS;");
-	run_baseline(&db, folder).await.expect("baseline");
+	run_baseline(&db, folder, &Module::default_module()).await.expect("baseline");
 
 	write_schema_file(tmp.path(), "account.surql", "DEFINE TABLE account SCHEMALESS;");
 	run_plan(
@@ -315,7 +626,7 @@ async fn rollout_full_lifecycle_via_cli_functions() {
 	let db = mem_db().await;
 
 	write_schema_file(tmp.path(), "person.surql", "DEFINE TABLE person SCHEMALESS;");
-	run_baseline(&db, folder).await.expect("baseline");
+	run_baseline(&db, folder, &Module::default_module()).await.expect("baseline");
 
 	// ns = 'schema' is the internal key used by the managed-entity tracker.
 	let mut resp = db.query("SELECT * FROM __entity WHERE ns = 'schema';").await.expect("query");
@@ -372,7 +683,7 @@ async fn rollout_rollback_after_start_via_cli_functions() {
 	let db = mem_db().await;
 
 	write_schema_file(tmp.path(), "order.surql", "DEFINE TABLE order SCHEMALESS;");
-	run_baseline(&db, folder).await.expect("baseline");
+	run_baseline(&db, folder, &Module::default_module()).await.expect("baseline");
 
 	write_schema_file(tmp.path(), "invoice.surql", "DEFINE TABLE invoice SCHEMALESS;");
 	run_plan(
@@ -676,7 +987,7 @@ async fn sync_embedded_with_undefined_var_returns_error() {
 
 #[tokio::test]
 async fn seed_with_vars_substitutes_in_seed_file() {
-	let _lock = FS_LOCK.lock().unwrap();
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (tmp, _cwd) = enter_tempdir();
 
 	let db = mem_db().await;
@@ -702,7 +1013,7 @@ async fn seed_with_vars_substitutes_in_seed_file() {
 
 #[tokio::test]
 async fn seed_with_undefined_var_returns_error() {
-	let _lock = FS_LOCK.lock().unwrap();
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (tmp, _cwd) = enter_tempdir();
 
 	let db = mem_db().await;
@@ -724,7 +1035,7 @@ async fn seed_with_undefined_var_returns_error() {
 #[tokio::test]
 async fn rollout_apply_files_step_substitutes_vars() {
 	// ApplyFiles reads from disk; rollout_run_sql_step_with_vars covers inline SQL.
-	let _lock = FS_LOCK.lock().unwrap();
+	let _lock = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 	let (tmp, _cwd) = enter_tempdir();
 
 	let db = mem_db().await;
@@ -813,4 +1124,22 @@ async fn rollout_run_sql_step_with_vars() {
 		Some("hello_from_var"),
 		"template variable should have been substituted in run_sql step"
 	);
+}
+
+/// List every path under `root`, relative, for diagnosing filesystem leaks.
+fn walk_paths(root: &Path) -> Vec<String> {
+	fn rec(dir: &Path, root: &Path, out: &mut Vec<String>) {
+		if let Ok(entries) = std::fs::read_dir(dir) {
+			for e in entries.flatten() {
+				let p = e.path();
+				out.push(p.strip_prefix(root).unwrap_or(&p).display().to_string());
+				if p.is_dir() {
+					rec(&p, root, out);
+				}
+			}
+		}
+	}
+	let mut out = Vec::new();
+	rec(root, root, &mut out);
+	out
 }

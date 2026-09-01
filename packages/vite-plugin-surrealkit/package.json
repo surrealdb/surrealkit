@@ -2,7 +2,7 @@
 	"name": "vite-plugin-surrealkit",
 	"version": "0.1.0",
 	"description": "Vite plugin to run SurrealKit schema sync during dev/build",
-	"license": "Unlicense",
+	"license": "Apache-2.0",
 	"type": "module",
 	"main": "./dist/index.cjs",
 	"module": "./dist/index.js",
@@ -15,7 +15,9 @@
 		}
 	},
 	"files": [
-		"dist"
+		"dist",
+		"README.md",
+		"LICENSE"
 	],
 	"sideEffects": false,
 	"engines": {
@@ -24,6 +26,8 @@
 	"scripts": {
 		"build": "tsup",
 		"clean": "rm -rf dist",
+		"format": "biome check --write .",
+		"lint": "biome ci .",
 		"typecheck": "tsc --noEmit"
 	},
 	"keywords": [
@@ -35,14 +39,26 @@
 		"vite": "^7.0.0 || ^8.0.0"
 	},
 	"dependencies": {
-		"@biomejs/biome": "^2.4.2",
 		"picomatch": "^4.0.3"
 	},
 	"devDependencies": {
+		"@biomejs/biome": "^2.4.2",
 		"@types/node": "^24.3.0",
 		"@types/picomatch": "^4.0.2",
 		"tsup": "^8.2.4",
 		"typescript": "^5.9.2",
 		"vite": "^7.0.0"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/surrealdb/surrealkit.git",
+		"directory": "packages/vite-plugin-surrealkit"
+	},
+	"homepage": "https://github.com/surrealdb/surrealkit/tree/main/packages/vite-plugin-surrealkit#readme",
+	"bugs": {
+		"url": "https://github.com/surrealdb/surrealkit/issues"
+	},
+	"publishConfig": {
+		"access": "public"
 	}
 }

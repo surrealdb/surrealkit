@@ -29,6 +29,16 @@ pub enum AuthLevel {
 }
 
 impl AuthLevel {
+	/// Parse an auth level from its CLI/config spelling, erroring with the accepted
+	/// values rather than returning `None`.
+	pub fn parse_str(s: &str) -> Result<Self> {
+		Self::parse(s).ok_or_else(|| {
+			anyhow::anyhow!(
+				"invalid auth level {s:?}: expected root, namespace/ns, database/db, or none"
+			)
+		})
+	}
+
 	fn parse(s: &str) -> Option<Self> {
 		match s.to_ascii_lowercase().as_str() {
 			"root" => Some(Self::Root),
@@ -58,7 +68,8 @@ pub(crate) fn is_embedded_endpoint(host: &str) -> bool {
 	EMBEDDED_SCHEMES.iter().any(|scheme| lower.starts_with(scheme))
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
+/// CLI-supplied connection overrides, each taking priority over the environment.
 pub struct DbOverrides {
 	pub host: Option<String>,
 	pub ns: Option<String>,
@@ -69,7 +80,11 @@ pub struct DbOverrides {
 	pub folder: Option<String>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
+/// A fully resolved database connection.
+///
+/// Built by [`DbCfg::from_env`], which layers CLI overrides over the process
+/// environment, then `.env`, then defaults.
 pub struct DbCfg {
 	host: String,
 	ns: String,
@@ -78,6 +93,82 @@ pub struct DbCfg {
 	pass: String,
 	pub auth_level: AuthLevel,
 	pub folder: String,
+}
+
+/// Shown in place of a password so `{:?}` cannot leak one.
+///
+/// [`DbCfg`] and [`DbOverrides`] hold resolved credentials and are reachable from
+/// other `Debug` types (`Target`, and the CLI's selection), so a derived `Debug`
+/// would print passwords into any log or panic message that formatted them.
+const REDACTED: &str = "<redacted>";
+
+impl std::fmt::Debug for DbCfg {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("DbCfg")
+			.field("host", &self.host)
+			.field("ns", &self.ns)
+			.field("db", &self.db)
+			.field("user", &self.user)
+			.field("pass", &REDACTED)
+			.field("auth_level", &self.auth_level)
+			.field("folder", &self.folder)
+			.finish()
+	}
+}
+
+impl std::fmt::Debug for DbOverrides {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		f.debug_struct("DbOverrides")
+			.field("host", &self.host)
+			.field("ns", &self.ns)
+			.field("db", &self.db)
+			.field("user", &self.user)
+			.field("pass", &self.pass.as_ref().map(|_| REDACTED))
+			.field("auth_level", &self.auth_level)
+			.field("folder", &self.folder)
+			.finish()
+	}
+}
+
+/// The `DATABASE_*` aliases accepted before v1, paired with their replacements.
+const LEGACY_ENV_ALIASES: &[(&str, &str)] = &[
+	("DATABASE_HOST", "SURREALDB_HOST"),
+	("DATABASE_NAME", "SURREALDB_NAME"),
+	("DATABASE_NAMESPACE", "SURREALDB_NAMESPACE"),
+	("DATABASE_USER", "SURREALDB_USER"),
+	("DATABASE_PASSWORD", "SURREALDB_PASSWORD"),
+	("DATABASE_AUTH_LEVEL", "SURREALDB_AUTH_LEVEL"),
+];
+
+/// Fail when a removed `DATABASE_*` variable is set without its replacement.
+///
+/// Silently ignoring it would be the worst outcome: an unrecognised
+/// `DATABASE_HOST` is not an error, it falls back to `http://localhost:8000`, so
+/// a deployment would quietly connect to the *wrong database* instead of failing.
+fn reject_orphaned_legacy_env(dotenv: Option<&DotEnv>) -> Result<()> {
+	let lookup = |key: &str| -> Option<String> {
+		env::var(key)
+			.ok()
+			.filter(|v| !v.is_empty())
+			.or_else(|| dotenv.and_then(|d| d.get_var(key.to_string())).filter(|v| !v.is_empty()))
+	};
+
+	let orphaned: Vec<String> = LEGACY_ENV_ALIASES
+		.iter()
+		.filter(|(legacy, modern)| lookup(legacy).is_some() && lookup(modern).is_none())
+		.map(|(legacy, modern)| format!("  {legacy} -> {modern}"))
+		.collect();
+
+	if !orphaned.is_empty() {
+		anyhow::bail!(
+			"the DATABASE_* environment variables were removed in SurrealKit 1.0, but \
+			 these are still set with no SURREALDB_* replacement:\n{}\n\
+			 Rename them. They are rejected rather than ignored because ignoring them \
+			 would silently fall back to the defaults and connect to the wrong database.",
+			orphaned.join("\n")
+		);
+	}
+	Ok(())
 }
 
 /// Resolve a config value with priority: CLI override → system env vars → .env file → default.
@@ -110,32 +201,28 @@ fn resolve(
 }
 
 impl DbCfg {
+	/// Resolve a connection with priority: CLI override → process environment →
+	/// `.env` file → default.
+	///
+	/// Errors if a removed `DATABASE_*` variable is set without its `SURREALDB_*`
+	/// replacement — ignoring it would silently fall back to the defaults and
+	/// connect to the wrong database.
 	pub fn from_env(dotenv: Option<&DotEnv>, overrides: &DbOverrides) -> Result<Self> {
-		let host = resolve(
-			&overrides.host,
-			&["SURREALDB_HOST", "DATABASE_HOST"],
-			dotenv,
-			"http://localhost:8000",
-		);
-		let db = resolve(&overrides.db, &["SURREALDB_NAME", "DATABASE_NAME"], dotenv, "test");
-		let ns =
-			resolve(&overrides.ns, &["SURREALDB_NAMESPACE", "DATABASE_NAMESPACE"], dotenv, "db");
-		let user = resolve(&overrides.user, &["SURREALDB_USER", "DATABASE_USER"], dotenv, "root");
-		let pass =
-			resolve(&overrides.pass, &["SURREALDB_PASSWORD", "DATABASE_PASSWORD"], dotenv, "root");
-		let auth_level_str = resolve(
-			&overrides.auth_level,
-			&["SURREALDB_AUTH_LEVEL", "DATABASE_AUTH_LEVEL"],
-			dotenv,
-			"root",
-		);
+		reject_orphaned_legacy_env(dotenv)?;
+		let host = resolve(&overrides.host, &["SURREALDB_HOST"], dotenv, "http://localhost:8000");
+		let db = resolve(&overrides.db, &["SURREALDB_NAME"], dotenv, "test");
+		let ns = resolve(&overrides.ns, &["SURREALDB_NAMESPACE"], dotenv, "db");
+		let user = resolve(&overrides.user, &["SURREALDB_USER"], dotenv, "root");
+		let pass = resolve(&overrides.pass, &["SURREALDB_PASSWORD"], dotenv, "root");
+		let auth_level_str =
+			resolve(&overrides.auth_level, &["SURREALDB_AUTH_LEVEL"], dotenv, "root");
 		let auth_level = AuthLevel::parse(&auth_level_str).ok_or_else(|| {
 			anyhow::anyhow!(
 				"invalid auth level {:?}: expected root, namespace/ns, or database/db",
 				auth_level_str
 			)
 		})?;
-		let folder = resolve(&None, &["SURREALDB_FOLDER"], dotenv, DEFAULT_ROOT_DIR);
+		let folder = resolve(&overrides.folder, &["SURREALDB_FOLDER"], dotenv, DEFAULT_ROOT_DIR);
 
 		Ok(Self {
 			host,
@@ -148,33 +235,119 @@ impl DbCfg {
 		})
 	}
 
+	/// A copy of this config with the supplied fields replaced. `None` inherits,
+	/// which is what lets a `[target.*]` section name only its `ns`/`db`.
+	pub fn overridden(
+		&self,
+		host: Option<String>,
+		ns: Option<String>,
+		db: Option<String>,
+		user: Option<String>,
+		pass: Option<String>,
+		auth_level: Option<AuthLevel>,
+	) -> Self {
+		Self {
+			host: host.unwrap_or_else(|| self.host.clone()),
+			ns: ns.unwrap_or_else(|| self.ns.clone()),
+			db: db.unwrap_or_else(|| self.db.clone()),
+			user: user.unwrap_or_else(|| self.user.clone()),
+			pass: pass.unwrap_or_else(|| self.pass.clone()),
+			auth_level: auth_level.unwrap_or_else(|| self.auth_level.clone()),
+			folder: self.folder.clone(),
+		}
+	}
+
+	/// The endpoint URL.
 	pub fn host(&self) -> &str {
 		&self.host
 	}
 
+	/// The namespace.
 	pub fn ns(&self) -> &str {
 		&self.ns
 	}
 
+	/// The database.
 	pub fn db(&self) -> &str {
 		&self.db
 	}
 
+	/// The username used to sign in.
 	pub fn user(&self) -> &str {
 		&self.user
 	}
 
+	/// The password used to sign in.
 	pub fn pass(&self) -> &str {
 		&self.pass
 	}
 
+	/// The authentication level used when connecting.
 	pub fn auth_level(&self) -> &AuthLevel {
 		&self.auth_level
 	}
 
+	/// The project folder holding schema, seeds and rollouts.
 	pub fn folder(&self) -> &str {
 		&self.folder
 	}
+}
+
+pub async fn connect(cfg: &DbCfg) -> Result<Surreal<Any>> {
+	let db = create_surreal_client(&cfg.host)
+		.await
+		.with_context(|| format!("Failed connecting to {}", cfg.host))?;
+
+	// Embedded engines have no users on a fresh datastore, so signing in would
+	// fail. Auto-detect them and skip auth (unless the user forced a level).
+	let auth_level = if is_embedded_endpoint(&cfg.host) {
+		AuthLevel::None
+	} else {
+		cfg.auth_level.clone()
+	};
+
+	match auth_level {
+		AuthLevel::None => {
+			db.use_ns(&cfg.ns)
+				.use_db(&cfg.db)
+				.await
+				.with_context(|| format!("use_ns/use_db failed for ns={} db={}", cfg.ns, cfg.db))?;
+		}
+		AuthLevel::Root => {
+			db.signin(Root {
+				username: cfg.user.clone(),
+				password: cfg.pass.clone(),
+			})
+			.await
+			.context("root signin failed")?;
+			db.use_ns(&cfg.ns)
+				.use_db(&cfg.db)
+				.await
+				.with_context(|| format!("use_ns/use_db failed for ns={} db={}", cfg.ns, cfg.db))?;
+		}
+		AuthLevel::Namespace => {
+			db.signin(Namespace {
+				namespace: cfg.ns.clone(),
+				username: cfg.user.clone(),
+				password: cfg.pass.clone(),
+			})
+			.await
+			.context("namespace signin failed")?;
+			db.use_db(&cfg.db).await.with_context(|| format!("use_db failed for db={}", cfg.db))?;
+		}
+		AuthLevel::Database => {
+			db.signin(Database {
+				namespace: cfg.ns.clone(),
+				database: cfg.db.clone(),
+				username: cfg.user.clone(),
+				password: cfg.pass.clone(),
+			})
+			.await
+			.context("database signin failed")?;
+		}
+	}
+
+	Ok(db)
 }
 
 #[cfg(test)]
@@ -209,6 +382,7 @@ mod tests {
 			unset_env("DATABASE_USER");
 			unset_env("DATABASE_PASSWORD");
 			unset_env("DATABASE_AUTH_LEVEL");
+			unset_env("SURREALDB_FOLDER");
 		}
 	}
 
@@ -307,7 +481,7 @@ mod tests {
 
 	#[test]
 	fn from_env_uses_defaults_with_no_overrides() {
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 		let cfg = DbCfg::from_env(None, &DbOverrides::default()).unwrap();
 		assert_eq!(cfg.host(), "http://localhost:8000");
@@ -319,7 +493,7 @@ mod tests {
 
 	#[test]
 	fn from_env_respects_all_overrides() {
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 		let overrides = DbOverrides {
 			host: Some("http://custom:9000".into()),
@@ -339,8 +513,72 @@ mod tests {
 	}
 
 	#[test]
+	fn debug_never_prints_the_password() {
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+		clear_db_env();
+		let overrides = DbOverrides {
+			pass: Some("hunter2".into()),
+			..Default::default()
+		};
+		let cfg = DbCfg::from_env(None, &overrides).unwrap();
+
+		let rendered = format!("{cfg:?}");
+		assert!(!rendered.contains("hunter2"), "DbCfg Debug leaked the password: {rendered}");
+		assert!(rendered.contains(REDACTED), "password should be shown redacted: {rendered}");
+
+		let rendered = format!("{overrides:?}");
+		assert!(!rendered.contains("hunter2"), "DbOverrides Debug leaked the password: {rendered}");
+
+		// A password that was never set must not look like one that was.
+		let empty = format!("{:?}", DbOverrides::default());
+		assert!(empty.contains("None"), "unset password should render as None: {empty}");
+	}
+
+	#[test]
+	fn folder_override_is_honoured() {
+		// Regression: `from_env` passed `&None` here instead of `overrides.folder`,
+		// so `--folder` was parsed, stored, and then silently discarded.
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+		clear_db_env();
+		let overrides = DbOverrides {
+			folder: Some("./custom-db".into()),
+			..Default::default()
+		};
+		let cfg = DbCfg::from_env(None, &overrides).unwrap();
+		assert_eq!(cfg.folder(), "./custom-db");
+	}
+
+	#[test]
+	fn folder_override_beats_env_var() {
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+		clear_db_env();
+		unsafe { set_env("SURREALDB_FOLDER", "./from-env") };
+		let overrides = DbOverrides {
+			folder: Some("./from-cli".into()),
+			..Default::default()
+		};
+		let cfg = DbCfg::from_env(None, &overrides).unwrap();
+		assert_eq!(cfg.folder(), "./from-cli");
+		clear_db_env();
+	}
+
+	#[test]
+	fn folder_falls_back_to_env_then_default() {
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+		clear_db_env();
+		unsafe { set_env("SURREALDB_FOLDER", "./from-env") };
+		assert_eq!(DbCfg::from_env(None, &DbOverrides::default()).unwrap().folder(), "./from-env");
+
+		clear_db_env();
+		assert_eq!(
+			DbCfg::from_env(None, &DbOverrides::default()).unwrap().folder(),
+			DEFAULT_ROOT_DIR
+		);
+	}
+
+	#[test]
 	fn from_env_defaults_to_root_auth_level() {
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 		let cfg = DbCfg::from_env(None, &DbOverrides::default()).unwrap();
 		assert_eq!(cfg.auth_level(), &AuthLevel::Root);
@@ -348,7 +586,7 @@ mod tests {
 
 	#[test]
 	fn from_env_parses_auth_level_override() {
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 
 		for (input, expected) in [
@@ -372,7 +610,7 @@ mod tests {
 
 	#[test]
 	fn from_env_reads_auth_level_from_env_var() {
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 		unsafe { set_env("SURREALDB_AUTH_LEVEL", "namespace") };
 		let cfg = DbCfg::from_env(None, &DbOverrides::default()).unwrap();
@@ -382,7 +620,7 @@ mod tests {
 
 	#[test]
 	fn from_env_rejects_unknown_auth_level() {
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 		let overrides = DbOverrides {
 			auth_level: Some("superadmin".into()),
@@ -393,8 +631,54 @@ mod tests {
 	}
 
 	#[test]
+	fn orphaned_legacy_env_var_is_rejected_not_ignored() {
+		// Ignoring it would silently fall back to http://localhost:8000 and connect
+		// to the wrong database, which is worse than failing.
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+		clear_db_env();
+		unsafe { set_env("DATABASE_HOST", "http://legacy:8000") };
+
+		let err = DbCfg::from_env(None, &DbOverrides::default()).unwrap_err().to_string();
+		assert!(err.contains("DATABASE_HOST"), "error should name the variable: {err}");
+		assert!(err.contains("SURREALDB_HOST"), "error should name the replacement: {err}");
+
+		clear_db_env();
+	}
+
+	#[test]
+	fn legacy_var_alongside_its_replacement_is_accepted_and_ignored() {
+		// Both set means the deployment has already migrated; the leftover is inert.
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+		clear_db_env();
+		unsafe {
+			set_env("DATABASE_HOST", "http://legacy:8000");
+			set_env("SURREALDB_HOST", "http://modern:8000");
+		}
+
+		let cfg = DbCfg::from_env(None, &DbOverrides::default()).unwrap();
+		assert_eq!(cfg.host(), "http://modern:8000");
+
+		clear_db_env();
+	}
+
+	#[test]
+	fn legacy_env_vars_no_longer_resolve_values() {
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+		clear_db_env();
+		// Set every legacy var *and* its replacement, so the guard passes and we can
+		// assert the legacy values are not the ones used.
+		unsafe {
+			set_env("DATABASE_NAMESPACE", "legacyns");
+			set_env("SURREALDB_NAMESPACE", "modernns");
+		}
+		let cfg = DbCfg::from_env(None, &DbOverrides::default()).unwrap();
+		assert_eq!(cfg.ns(), "modernns");
+		clear_db_env();
+	}
+
+	#[test]
 	fn from_env_reads_surrealdb_env_vars() {
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 		unsafe {
 			set_env("SURREALDB_HOST", "http://envhost:8000");
@@ -416,7 +700,7 @@ mod tests {
 
 	#[test]
 	fn cli_overrides_beat_env_vars() {
-		let _guard = ENV_LOCK.lock().unwrap();
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
 		clear_db_env();
 		unsafe { set_env("SURREALDB_HOST", "http://envhost:8000") };
 		let overrides = DbOverrides {
@@ -427,61 +711,4 @@ mod tests {
 		assert_eq!(cfg.host(), "http://clihost:9000");
 		clear_db_env();
 	}
-}
-
-pub async fn connect(cfg: &DbCfg) -> Result<Surreal<Any>> {
-	let db = create_surreal_client(&cfg.host)
-		.await
-		.with_context(|| format!("Failed connecting to {}", cfg.host))?;
-
-	// Embedded engines have no users on a fresh datastore, so signing in would
-	// fail. Auto-detect them and skip auth (unless the user forced a level).
-	let auth_level = if is_embedded_endpoint(&cfg.host) {
-		AuthLevel::None
-	} else {
-		cfg.auth_level.clone()
-	};
-
-	match auth_level {
-		AuthLevel::None => {
-			db.use_ns(&cfg.ns)
-				.use_db(&cfg.db)
-				.await
-				.with_context(|| format!("use_ns/use_db failed for ns={} db={}", cfg.ns, cfg.db))?;
-		}
-		AuthLevel::Root => {
-			db.signin(Root {
-				username: cfg.user.clone(),
-				password: cfg.pass.clone(),
-			})
-			.await
-			.context("root signin failed")?;
-			db.use_ns(&cfg.ns)
-				.use_db(&cfg.db)
-				.await
-				.with_context(|| format!("use_ns/use_db failed for ns={} db={}", cfg.ns, cfg.db))?;
-		}
-		AuthLevel::Namespace => {
-			db.signin(Namespace {
-				namespace: cfg.ns.clone(),
-				username: cfg.user.clone(),
-				password: cfg.pass.clone(),
-			})
-			.await
-			.context("namespace signin failed")?;
-			db.use_db(&cfg.db).await.with_context(|| format!("use_db failed for db={}", cfg.db))?;
-		}
-		AuthLevel::Database => {
-			db.signin(Database {
-				namespace: cfg.ns.clone(),
-				database: cfg.db.clone(),
-				username: cfg.user.clone(),
-				password: cfg.pass.clone(),
-			})
-			.await
-			.context("database signin failed")?;
-		}
-	}
-
-	Ok(db)
 }

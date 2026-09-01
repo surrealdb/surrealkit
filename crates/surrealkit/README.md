@@ -12,10 +12,54 @@ The library is useful when you want schema management to happen inside your proc
 
 ```toml
 [dependencies]
-surrealkit = "0.7"
+surrealkit = "1.0.0-beta.1"
 ```
 
 ---
+
+## Cargo features
+
+`default = ["kv-mem", "cli"]`.
+
+The `cli` feature builds the `surrealkit` binary and pulls in the dependencies
+only it needs — `clap`, `inquire`, `rustls` (and its `aws-lc-rs` backend) and
+`tempfile`. Library consumers can drop all of them:
+
+```toml
+[dependencies]
+surrealkit = { version = "1.0.0-beta.1", default-features = false, features = ["kv-mem"] }
+```
+
+Storage engines: `kv-mem` (default), `kv-surrealkv`, `kv-rocksdb`, and `embedded`
+for all three. Remote connections over HTTP need no feature.
+
+> You do not need these features to target an embedded engine from a library:
+> cargo unifies features across the dependency graph, so enabling e.g.
+> `surrealdb/kv-surrealkv` in your own crate is enough for SurrealKit's
+> `Surreal<Any>` to open `surrealkv://`.
+
+## Logging
+
+SurrealKit emits progress (files applied, entities pruned, seeds executed)
+through the [`log`](https://docs.rs/log) facade. Without a logger installed the
+library is silent, which is the right default for a dependency.
+
+To see progress, install any `log` implementation:
+
+```rust,ignore
+env_logger::init();
+Sync::embedded(SCHEMA).run(&db).await?;
+// INFO  applied database/schema/person.surql
+```
+
+Records are emitted under the `surrealkit` target, so you can filter them:
+
+```bash
+RUST_LOG=surrealkit=info cargo run
+```
+
+Errors are still returned as `Result`; logging is for progress, not for failure
+reporting.
 
 ## Concepts: sync vs rollout
 
@@ -52,7 +96,7 @@ SurrealKit works against an in-process SurrealDB such as `mem://`, `surrealkv://
 
 ```toml
 [dependencies]
-surrealkit = "0.7"
+surrealkit = "1.0.0-beta.1"
 surrealdb = { version = "3", features = ["kv-surrealkv"] }
 ```
 
@@ -242,7 +286,7 @@ Rollout::abandon(db, "20260604__add_account").await?;
 
 Seeding is **idempotent**: each file is tracked in the `__seed` table by a content hash, so it runs only on first boot or when its `sql` changes. This makes it safe to call on every startup, so re-running a seed of fixed-id records no longer errors.
 
-[`seed`] runs `.surql` files from a `seed/` directory (lexicographic order), applying template variables:
+[`seed()`](fn@seed) runs `.surql` files from a `seed/` directory (lexicographic order), applying template variables:
 
 ```rust,no_run
 # use surrealkit::{seed, TemplateVars, Surreal};

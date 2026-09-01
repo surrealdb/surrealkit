@@ -50,11 +50,15 @@ setup_sql = [
   "CREATE person:bob CONTENT { name: 'Bob' };"
 ]
 action_sql = "RELATE person:alice->follows->person:bob CONTENT { since: <datetime>'2024-01-01T00:00:00Z' };"
-verify_sql = "SELECT out, in, since FROM follows WHERE out = person:alice AND in = person:bob;"
+# `RELATE a->follows->b` stores the source in `in` and the destination in `out`,
+# so alice is `in` and bob is `out`. This query and its assertions had them the
+# other way round, matched zero rows, and passed only because a missing JSON path
+# used to be ignored (fixed in #78).
+verify_sql = "SELECT out, in, since FROM follows WHERE in = person:alice AND out = person:bob;"
 expect_success = true
 assertions = [
-  { path = "0.out", contains = "person:alice" },
-  { path = "0.in", contains = "person:bob" },
+  { path = "0.in", contains = "person:alice" },
+  { path = "0.out", contains = "person:bob" },
   { path = "0.since", contains = "2024-01-01" },
 ]
 

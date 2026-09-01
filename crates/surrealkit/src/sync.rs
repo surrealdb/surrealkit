@@ -9,14 +9,16 @@ use surrealdb::engine::any::Any;
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 
+use crate::constants::Layout;
 use crate::core::{exec_surql, sha256_hex};
+use crate::module::{Module, Partition};
 use crate::rollout::{
 	acquire_lock, delete_managed_entities, delete_sync_hashes, load_active_rollout_id,
 	load_managed_entities, release_lock, upsert_managed_entities,
 };
 use crate::schema_state::{
-	CatalogEntity, EntityKey, SchemaFile, build_catalog_snapshot, collect_schema_files,
-	ensure_local_state_dirs, ensure_overwrite, render_remove_sql,
+	CatalogEntity, EntityKey, SchemaFile, build_catalog_snapshot, collect_schema_files_at,
+	ensure_local_state_dirs_for, ensure_overwrite, render_remove_sql,
 };
 use crate::setup::{run_setup, run_setup_embedded};
 use crate::variables::TemplateVars;
@@ -30,6 +32,10 @@ pub struct SyncOpts {
 	pub fail_fast: bool,
 	pub prune: bool,
 	pub allow_shared_prune: bool,
+	/// Permit a prune that would remove *every* entity this sync manages because
+	/// no schema files were found. Off by default: an empty file set almost always
+	/// means a misconfigured folder, not an intentional teardown.
+	pub allow_empty_prune: bool,
 	/// Allow non-DEFINE statements (e.g. INSERT, UPDATE) in schema files.
 	/// When set, schema files are not parsed for catalog entity tracking;
 	/// they are applied as-is and only file-level hashes are tracked.
@@ -38,6 +44,9 @@ pub struct SyncOpts {
 	pub vars: TemplateVars,
 	/// Root folder for the database directory (default: `./database`).
 	pub folder: String,
+	/// The schema module this sync owns. Pruning is scoped to it, so a module
+	/// never removes another module's database objects.
+	pub module: Module,
 	/// When set (via `[typegen] typescript` in `surrealkit.toml`), regenerate
 	/// TypeScript types into this directory after applying schema changes.
 	pub typegen_ts_out: Option<std::path::PathBuf>,
@@ -46,7 +55,7 @@ pub struct SyncOpts {
 	pub typegen_ts_format: Option<String>,
 }
 
-/// A schema file embedded into the binary at compile time (via [`embed_schema!`])
+/// A schema file embedded into the binary at compile time (via [`embed_schema!`](crate::embed_schema))
 /// or constructed by hand for runtime sync.
 ///
 /// `path` is a **stable tracking key**, not a path that must exist on disk:
@@ -65,16 +74,24 @@ pub struct EmbeddedSchemaFile {
 
 #[doc(hidden)]
 pub async fn run_sync(db: &Surreal<Any>, opts: SyncOpts) -> Result<()> {
-	let files = collect_filesystem_schema_files(&opts.folder)?;
-	run_sync_with_filesystem_sources(db, opts, files).await
+	let layout = Layout::new(opts.folder.clone(), opts.module.clone());
+	let files = collect_filesystem_schema_files(
+		&layout.schema_dir(),
+		layout.module(),
+		opts.allow_empty_prune,
+	)?;
+	run_sync_with_filesystem_sources(db, opts, layout, files).await
 }
 
 /// Resolve and validate filesystem schema sources before a CLI caller connects.
-pub fn collect_filesystem_schema_files(folder: &str) -> Result<Vec<SchemaFile>> {
-	let files = collect_schema_files(folder)?;
-	if files.is_empty() {
-		let root = std::env::current_dir().context("resolving filesystem sync root")?;
-		let rendered = root.display().to_string();
+pub fn collect_filesystem_schema_files(
+	schema_dir: &std::path::Path,
+	module: &Module,
+	allow_empty_prune: bool,
+) -> Result<Vec<SchemaFile>> {
+	let files = collect_schema_files_at(schema_dir)?;
+	if files.is_empty() && !allow_empty_prune {
+		let rendered = schema_dir.display().to_string();
 		let bounded_root: String = rendered.chars().take(240).collect();
 		let suffix = if rendered.chars().count() > 240 {
 			"..."
@@ -82,10 +99,12 @@ pub fn collect_filesystem_schema_files(folder: &str) -> Result<Vec<SchemaFile>> 
 			""
 		};
 		bail!(
-			"refusing filesystem sync: resolved_root={}{} expected_marker={} source_count=0",
+			"refusing filesystem sync: schema_module={} resolved_schema_dir={}{} source_count=0; \
+			 check --folder / SURREALDB_FOLDER and module selection, or pass \
+			 --allow-empty-prune if the empty source set is intentional",
+			module.name(),
 			bounded_root,
-			suffix,
-			"surrealkit.toml"
+			suffix
 		);
 	}
 	Ok(files)
@@ -95,14 +114,15 @@ pub fn collect_filesystem_schema_files(folder: &str) -> Result<Vec<SchemaFile>> 
 pub async fn run_sync_with_filesystem_sources(
 	db: &Surreal<Any>,
 	opts: SyncOpts,
+	layout: Layout,
 	files: Vec<SchemaFile>,
 ) -> Result<()> {
-	run_setup(db, &opts.folder).await?;
-	ensure_local_state_dirs(&opts.folder)?;
+	run_setup(db, layout.folder()).await?;
+	ensure_local_state_dirs_for(&layout)?;
 
 	if opts.watch {
-		run_sync_with_files(db, &opts, &files, true).await?;
-		println!(
+		run_sync_with_files(db, &opts, &layout, &files, true).await?;
+		log::info!(
 			"Watch mode active ({}ms interval). Waiting for schema changes... (Ctrl+C to stop)",
 			opts.debounce_ms.max(250)
 		);
@@ -110,22 +130,22 @@ pub async fn run_sync_with_filesystem_sources(
 		loop {
 			tokio::select! {
 				_ = tokio::signal::ctrl_c() => {
-					println!("\nStopping schema watch.");
+					log::info!("\nStopping schema watch.");
 					break;
 				}
 				_ = tokio::time::sleep(Duration::from_millis(opts.debounce_ms.max(250))) => {
-					if let Err(err) = run_sync_once(db, &opts, true).await {
+					if let Err(err) = run_sync_once(db, &opts, &layout, true).await {
 						if opts.fail_fast {
 							return Err(err);
 						}
-						eprintln!("sync iteration error: {err:#}");
+						log::error!("sync iteration error: {err:#}");
 					}
 				}
 			}
 		}
 		Ok(())
 	} else {
-		run_sync_with_files(db, &opts, &files, false).await
+		run_sync_with_files(db, &opts, &layout, &files, false).await
 	}
 }
 
@@ -156,6 +176,8 @@ pub struct Sync<'a> {
 	prune: bool,
 	fail_fast: bool,
 	allow_shared_prune: bool,
+	allow_empty_prune: bool,
+	module: Module,
 	allow_all_statements: bool,
 	dry_run: bool,
 	vars: TemplateVars,
@@ -170,15 +192,41 @@ impl<'a> Sync<'a> {
 			prune: true,
 			fail_fast: true,
 			allow_shared_prune: false,
+			allow_empty_prune: false,
+			module: Module::default_module(),
 			allow_all_statements: false,
 			dry_run: false,
 			vars: TemplateVars::default(),
 		}
 	}
 
+	/// Apply this slice as a named schema module (default: the unnamed default
+	/// module).
+	///
+	/// Pruning is scoped to the module, so two modules can share one database
+	/// without removing each other's objects.
+	///
+	/// ```no_run
+	/// # use surrealkit::{Sync, EmbeddedSchemaFile, Surreal, engine::any::Any};
+	/// # async fn run(db: &Surreal<Any>, billing: &'static [EmbeddedSchemaFile]) -> anyhow::Result<()> {
+	/// Sync::embedded(billing).module("billing")?.run(db).await?;
+	/// # Ok(()) }
+	/// ```
+	pub fn module(mut self, name: impl Into<String>) -> anyhow::Result<Self> {
+		self.module = Module::new(name)?;
+		Ok(self)
+	}
+
 	/// Remove database objects no longer present in the schema slice (default: `true`).
 	pub fn prune(mut self, prune: bool) -> Self {
 		self.prune = prune;
+		self
+	}
+
+	/// Allow a prune that would remove every managed entity because no schema files
+	/// were found (default: `false`). See [`SyncOpts::allow_empty_prune`].
+	pub fn allow_empty_prune(mut self, allow: bool) -> Self {
+		self.allow_empty_prune = allow;
 		self
 	}
 
@@ -224,6 +272,8 @@ impl<'a> Sync<'a> {
 			fail_fast: self.fail_fast,
 			prune: self.prune,
 			allow_shared_prune: self.allow_shared_prune,
+			allow_empty_prune: self.allow_empty_prune,
+			module: self.module,
 			allow_all_statements: self.allow_all_statements,
 			vars: self.vars,
 			folder: String::new(),
@@ -258,26 +308,33 @@ async fn sync_embedded(
 			})
 		})
 		.collect::<anyhow::Result<Vec<_>>>()?;
-	run_sync_with_files(db, opts, &schema_files, false).await
+	let layout = Layout::new(opts.folder.clone(), opts.module.clone());
+	run_sync_with_files(db, opts, &layout, &schema_files, false).await
 }
 
-async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> Result<()> {
-	let files = collect_schema_files(&opts.folder)?;
-	run_sync_with_files(db, opts, &files, watch_mode).await
+async fn run_sync_once(
+	db: &Surreal<Any>,
+	opts: &SyncOpts,
+	layout: &Layout,
+	watch_mode: bool,
+) -> Result<()> {
+	let files = collect_schema_files_at(&layout.schema_dir())?;
+	run_sync_with_files(db, opts, layout, &files, watch_mode).await
 }
 
 async fn run_sync_with_files(
 	db: &Surreal<Any>,
 	opts: &SyncOpts,
+	layout: &Layout,
 	files: &[SchemaFile],
 	watch_mode: bool,
 ) -> Result<()> {
 	let desired_catalog = build_catalog_snapshot(files, opts.allow_all_statements)?;
-	let tracked = load_sync_hashes(db).await?;
-	let managed = load_managed_entities(db).await?;
+	let tracked = load_sync_hashes(db, layout.module()).await?;
+	let managed = load_managed_entities(db, layout.module()).await?;
 
 	if files.is_empty() && !watch_mode {
-		println!("No schema files found in {}/schema", opts.folder);
+		log::info!("No schema files found in {}", layout.schema_dir().display());
 	}
 
 	let file_paths: BTreeSet<String> = files.iter().map(|file| file.path.clone()).collect();
@@ -297,7 +354,7 @@ async fn run_sync_with_files(
 		changed_count += 1;
 		if opts.dry_run {
 			if !watch_mode {
-				println!("DRY RUN: would apply {}", file.path);
+				log::info!("DRY RUN: would apply {}", file.path);
 			}
 			synced_paths.insert(file.path.clone());
 			continue;
@@ -311,15 +368,15 @@ async fn run_sync_with_files(
 		match exec_surql(db, &sql).await {
 			Ok(_) => {
 				if !watch_mode {
-					println!("applied {}", file.path);
+					log::info!("applied {}", file.path);
 				}
-				store_sync_hash(db, &file.path, &file.hash).await?;
+				store_sync_hash(db, layout.module(), &file.path, &file.hash).await?;
 				synced_paths.insert(file.path.clone());
 			}
 			Err(err) => {
 				apply_errors += 1;
 				failed_paths.insert(file.path.clone());
-				eprintln!("error applying {}: {err:#}", file.path);
+				log::error!("error applying {}: {err:#}", file.path);
 				if opts.fail_fast {
 					return Err(err);
 				}
@@ -361,12 +418,29 @@ async fn run_sync_with_files(
 		if shared && !opts.allow_shared_prune {
 			bail!("database is marked shared; refusing stale prune without --allow-shared-prune");
 		}
+		// An empty file set makes every managed entity look stale, so an unguarded
+		// prune here drops the whole schema. In practice this means the folder is
+		// wrong (a mistyped --folder, or running from the wrong directory), not that
+		// the user meant to tear the database down.
+		if opts.prune && files.is_empty() && !opts.allow_empty_prune {
+			bail!(
+				"refusing to prune all {stale_count} managed entities: no schema files were found{}.\n\
+				 This usually means the schema folder is wrong rather than that the schema was deleted.\n\
+				 Check --folder / SURREALDB_FOLDER, or pass --allow-empty-prune if you really do want \
+				 to remove everything.",
+				if layout.folder().is_empty() {
+					String::new()
+				} else {
+					format!(" in {}", layout.schema_dir().display())
+				}
+			);
+		}
 	}
 
 	if !opts.dry_run {
-		upsert_managed_entities(db, &effective_entities, None, "active").await?;
+		upsert_managed_entities(db, layout.module(), &effective_entities, None, "active").await?;
 		if !removed_paths.is_empty() {
-			delete_sync_hashes(db, &removed_paths).await?;
+			delete_sync_hashes(db, layout.module(), &removed_paths).await?;
 		}
 	}
 
@@ -375,15 +449,15 @@ async fn run_sync_with_files(
 		let remove_sql = render_remove_sql(&stale_entities, true)?;
 		if opts.dry_run {
 			if !watch_mode {
-				println!("DRY RUN: would prune {} stale managed entities", remove_sql.len());
+				log::info!("DRY RUN: would prune {} stale managed entities", remove_sql.len());
 				for stmt in &remove_sql {
-					println!("  {}", stmt);
+					log::info!("  {}", stmt);
 				}
 			}
 		} else if shared {
-			acquire_lock(db, "global").await?;
-			let result = prune_managed_entities(db, &stale_entities).await;
-			let release = release_lock(db, "global").await;
+			let lock = acquire_lock(db, layout.module(), "global").await?;
+			let result = prune_managed_entities(db, layout.module(), &stale_entities).await;
+			let release = release_lock(db, &lock).await;
 			match (result, release) {
 				(Err(err), _) => return Err(err),
 				(Ok(_), Err(err)) => return Err(err),
@@ -391,7 +465,7 @@ async fn run_sync_with_files(
 			}
 			pruned_count = stale_count;
 		} else {
-			prune_managed_entities(db, &stale_entities).await?;
+			prune_managed_entities(db, layout.module(), &stale_entities).await?;
 			pruned_count = stale_count;
 		}
 	}
@@ -405,19 +479,19 @@ async fn run_sync_with_files(
 	if !pending_operations.is_empty() {
 		if opts.dry_run {
 			if !watch_mode {
-				println!("DRY RUN: would run {} operation(s)", pending_operations.len());
+				log::info!("DRY RUN: would run {} operation(s)", pending_operations.len());
 			}
 		} else {
 			for op in &pending_operations {
 				match exec_surql(db, &op.sql).await {
 					Ok(_) => {
 						if !watch_mode {
-							println!("ran operation from {}", op.source_path);
+							log::info!("ran operation from {}", op.source_path);
 						}
 					}
 					Err(err) => {
 						apply_errors += 1;
-						eprintln!("error running operation from {}: {err:#}", op.source_path);
+						log::error!("error running operation from {}: {err:#}", op.source_path);
 						if opts.fail_fast {
 							return Err(err);
 						}
@@ -447,10 +521,10 @@ async fn run_sync_with_files(
 					ts_dir,
 					opts.typegen_ts_format.as_deref(),
 				) {
-					Ok(path) => println!("typegen: wrote {}", path.display()),
-					Err(err) => eprintln!("typegen: failed to write types: {err:#}"),
+					Ok(path) => log::info!("typegen: wrote {}", path.display()),
+					Err(err) => log::error!("typegen: failed to write types: {err:#}"),
 				},
-				Err(err) => eprintln!("typegen: failed to introspect schema: {err:#}"),
+				Err(err) => log::error!("typegen: failed to introspect schema: {err:#}"),
 			}
 		}
 	}
@@ -458,14 +532,14 @@ async fn run_sync_with_files(
 	if watch_mode {
 		if has_changes {
 			if opts.dry_run {
-				println!(
+				log::info!(
 					"Change detected (dry-run): {} schema file(s), {} stale entity(ies), {} stale tracking file(s) would be reconciled.",
 					changed_count,
 					stale_count,
 					removed_paths.len()
 				);
 			} else {
-				println!(
+				log::info!(
 					"Change detected and pushed: {} schema file(s) synced, {} stale entity(ies) pruned, {} stale tracking file(s) removed.",
 					changed_count,
 					pruned_count,
@@ -475,14 +549,14 @@ async fn run_sync_with_files(
 			let _ = std::io::stdout().flush();
 		}
 	} else if changed_count == 0 && removed_paths.is_empty() && stale_count == 0 {
-		println!("schema already in sync");
+		log::info!("schema already in sync");
 	}
 
 	if apply_errors > 0 {
-		eprintln!("sync completed with {} apply error(s)", apply_errors);
+		log::error!("sync completed with {} apply error(s)", apply_errors);
 	}
 	if stale_count > 0 && !opts.prune {
-		println!(
+		log::info!(
 			"detected {} stale managed entities; rerun without --no-prune to remove",
 			stale_count
 		);
@@ -491,16 +565,23 @@ async fn run_sync_with_files(
 	Ok(())
 }
 
-async fn prune_managed_entities(db: &Surreal<Any>, stale_entities: &[EntityKey]) -> Result<()> {
+async fn prune_managed_entities(
+	db: &Surreal<Any>,
+	module: &Module,
+	stale_entities: &[EntityKey],
+) -> Result<()> {
 	let sql = render_remove_sql(stale_entities, true)?.join("\n");
 	if !sql.trim().is_empty() {
 		exec_surql(db, &sql).await?;
 	}
-	delete_managed_entities(db, stale_entities).await
+	delete_managed_entities(db, module, stale_entities).await
 }
 
-async fn load_sync_hashes(db: &Surreal<Any>) -> Result<BTreeMap<String, String>> {
-	let mut resp = db.query("SELECT key, val FROM __entity WHERE ns = 'sync';").await?;
+async fn load_sync_hashes(db: &Surreal<Any>, module: &Module) -> Result<BTreeMap<String, String>> {
+	let mut resp = db
+		.query("SELECT key, val FROM __entity WHERE ns = $ns;")
+		.bind(("ns", module.partition(Partition::Sync)))
+		.await?;
 	let rows: Vec<serde_json::Value> = resp.take(0)?;
 
 	let mut out = BTreeMap::new();
@@ -515,15 +596,16 @@ async fn load_sync_hashes(db: &Surreal<Any>) -> Result<BTreeMap<String, String>>
 	Ok(out)
 }
 
-async fn store_sync_hash(db: &Surreal<Any>, path: &str, hash: &str) -> Result<()> {
+async fn store_sync_hash(db: &Surreal<Any>, module: &Module, path: &str, hash: &str) -> Result<()> {
 	db.query(
-        "DELETE __entity WHERE ns = 'sync' AND key = $path; \
-		 CREATE __entity CONTENT { ns: 'sync', key: $path, val: { hash: $hash }, updated_at: time::now() };",
-    )
-    .bind(("path", path.to_string()))
-    .bind(("hash", hash.to_string()))
-    .await?
-    .check()?;
+		"DELETE __entity WHERE ns = $ns AND key = $path; \
+		 CREATE __entity CONTENT { ns: $ns, key: $path, val: { hash: $hash }, updated_at: time::now() };",
+	)
+	.bind(("ns", module.partition(Partition::Sync)))
+	.bind(("path", path.to_string()))
+	.bind(("hash", hash.to_string()))
+	.await?
+	.check()?;
 	Ok(())
 }
 
