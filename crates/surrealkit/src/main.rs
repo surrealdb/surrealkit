@@ -131,8 +131,8 @@ enum Commands {
 		no_prune: bool,
 		#[arg(long)]
 		allow_shared_prune: bool,
-		/// Allow a prune that removes every managed entity because no schema files
-		/// were found (normally refused: it usually means the folder is wrong).
+		/// Allow filesystem sync to connect with no schema files. Required before
+		/// an intentional prune of every managed entity.
 		#[arg(long)]
 		allow_empty_prune: bool,
 		/// Allow non-DEFINE statements in schema files (e.g. INSERT, UPDATE, CREATE).
@@ -524,7 +524,7 @@ async fn main() -> Result<()> {
 			if selection.pairs() == 0 {
 				bail!(
 					"refusing filesystem sync: the selected targets accept none of the selected \
-					 schema modules (source_count=0)"
+					 schema modules (applicable_pair_count=0)"
 				);
 			}
 			if watch && selection.pairs() > 1 {
@@ -568,7 +568,7 @@ async fn main() -> Result<()> {
 						println!("→ {} → {}", module.name(), target.name());
 					}
 					let (layout, files) =
-						filesystem_sources.get(module.name()).cloned().with_context(|| {
+						filesystem_sources.get(module.name()).with_context(|| {
 							format!(
 								"missing preflight sources for schema module {:?}",
 								module.name()

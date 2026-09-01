@@ -90,15 +90,23 @@ jobs:
               shell: bash
               run: |
                   ./target/debug/surrealkit init --yes
+                  printf '%s\n' 'DEFINE TABLE integration_probe SCHEMALESS;' \
+                      > database/schema/integration_probe.surql
                   rm -rf database/tests
                   cp -r examples/testing database/tests
 
             - name: Run surrealkit tests
               shell: bash
-              # This fixture owns and applies its complete schema from
-              # root_and_access_setup.surql; the bare scaffold intentionally has
-              # no filesystem schema sources to sync first.
-              run: ./target/debug/surrealkit test --no-sync --json-out database/tests/report.json
+              # Keep the default pre-test sync on the live server. The fixture
+              # applies its domain schema afterward; integration_probe only makes
+              # the filesystem source set explicit and non-empty.
+              run: ./target/debug/surrealkit test --json-out database/tests/report.json
+
+            - name: Verify implicit filesystem sync reached the live database
+              shell: bash
+              run: |
+                  types="$(./target/debug/surrealkit typegen --stdout)"
+                  grep -q 'integration_probe' <<<"$types"
 
             # Exercises connect() for real against root, namespace and database
             # auth levels. These skip silently when the URL is unset.

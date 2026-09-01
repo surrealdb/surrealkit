@@ -80,10 +80,11 @@ pub async fn run_sync(db: &Surreal<Any>, opts: SyncOpts) -> Result<()> {
 		layout.module(),
 		opts.allow_empty_prune,
 	)?;
-	run_sync_with_filesystem_sources(db, opts, layout, files).await
+	run_sync_with_filesystem_sources(db, opts, &layout, &files).await
 }
 
 /// Resolve and validate filesystem schema sources before a CLI caller connects.
+#[doc(hidden)]
 pub fn collect_filesystem_schema_files(
 	schema_dir: &std::path::Path,
 	module: &Module,
@@ -91,37 +92,30 @@ pub fn collect_filesystem_schema_files(
 ) -> Result<Vec<SchemaFile>> {
 	let files = collect_schema_files_at(schema_dir)?;
 	if files.is_empty() && !allow_empty_prune {
-		let rendered = schema_dir.display().to_string();
-		let bounded_root: String = rendered.chars().take(240).collect();
-		let suffix = if rendered.chars().count() > 240 {
-			"..."
-		} else {
-			""
-		};
 		bail!(
-			"refusing filesystem sync: schema_module={} resolved_schema_dir={}{} source_count=0; \
+			"refusing filesystem sync: schema_module={} resolved_schema_dir={} source_count=0; \
 			 check --folder / SURREALDB_FOLDER and module selection, or pass \
 			 --allow-empty-prune if the empty source set is intentional",
 			module.name(),
-			bounded_root,
-			suffix
+			schema_dir.display()
 		);
 	}
 	Ok(files)
 }
 
 /// Run a filesystem sync whose source set was validated before connection.
+#[doc(hidden)]
 pub async fn run_sync_with_filesystem_sources(
 	db: &Surreal<Any>,
 	opts: SyncOpts,
-	layout: Layout,
-	files: Vec<SchemaFile>,
+	layout: &Layout,
+	files: &[SchemaFile],
 ) -> Result<()> {
 	run_setup(db, layout.folder()).await?;
-	ensure_local_state_dirs_for(&layout)?;
+	ensure_local_state_dirs_for(layout)?;
 
 	if opts.watch {
-		run_sync_with_files(db, &opts, &layout, &files, true).await?;
+		run_sync_with_files(db, &opts, layout, files, true).await?;
 		log::info!(
 			"Watch mode active ({}ms interval). Waiting for schema changes... (Ctrl+C to stop)",
 			opts.debounce_ms.max(250)
@@ -134,7 +128,7 @@ pub async fn run_sync_with_filesystem_sources(
 					break;
 				}
 				_ = tokio::time::sleep(Duration::from_millis(opts.debounce_ms.max(250))) => {
-					if let Err(err) = run_sync_once(db, &opts, &layout, true).await {
+					if let Err(err) = run_sync_once(db, &opts, layout, true).await {
 						if opts.fail_fast {
 							return Err(err);
 						}
@@ -145,7 +139,7 @@ pub async fn run_sync_with_filesystem_sources(
 		}
 		Ok(())
 	} else {
-		run_sync_with_files(db, &opts, &layout, &files, false).await
+		run_sync_with_files(db, &opts, layout, files, false).await
 	}
 }
 
@@ -664,6 +658,12 @@ fn parse_bool(value: &str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
+	use std::fs;
+
+	use surrealdb::engine::any::connect;
+	use surrealdb::opt::Config;
+	use surrealdb::opt::capabilities::Capabilities;
+
 	use super::*;
 
 	#[test]
@@ -672,5 +672,46 @@ mod tests {
 		assert_eq!(parse_bool("Yes"), Some(true));
 		assert_eq!(parse_bool("0"), Some(false));
 		assert_eq!(parse_bool("unknown"), None);
+	}
+
+	#[tokio::test]
+	async fn watch_refresh_keeps_using_the_resolved_custom_layout() {
+		let temp = tempfile::TempDir::new().expect("tempdir");
+		let folder = temp.path().join("database");
+		let schema_dir = folder.join("custom/core");
+		fs::create_dir_all(&schema_dir).expect("custom schema dir");
+		let source = schema_dir.join("001_core.surql");
+		fs::write(&source, "DEFINE TABLE before_refresh SCHEMALESS;\n").expect("initial schema");
+
+		let module = Module::new("core").expect("module");
+		let folder = folder.to_string_lossy().into_owned();
+		let layout = Layout::with_schema_dir(&folder, module.clone(), &schema_dir);
+		let opts = SyncOpts {
+			folder,
+			module,
+			..SyncOpts::default()
+		};
+
+		let cfg = Config::new().capabilities(Capabilities::all());
+		let db = connect(("mem://", cfg)).await.expect("connect mem");
+		db.use_ns("watch_layout").use_db("watch_layout").await.expect("select namespace");
+		let files = collect_filesystem_schema_files(&schema_dir, layout.module(), false)
+			.expect("preflight custom path");
+		run_sync_with_filesystem_sources(&db, opts.clone(), &layout, &files)
+			.await
+			.expect("initial custom-path sync");
+
+		fs::write(
+			&source,
+			"DEFINE TABLE before_refresh SCHEMALESS;\n\
+			 DEFINE TABLE after_refresh SCHEMALESS;\n",
+		)
+		.expect("updated schema");
+		run_sync_once(&db, &opts, &layout, true).await.expect("watch refresh");
+
+		let mut response = db.query("INFO FOR DB;").await.expect("database info");
+		let info: Option<serde_json::Value> = response.take(0).expect("take database info");
+		let tables = info.as_ref().and_then(|value| value.get("tables")).expect("tables");
+		assert!(tables.get("after_refresh").is_some(), "refresh read the wrong layout: {tables}");
 	}
 }
