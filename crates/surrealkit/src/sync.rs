@@ -74,11 +74,48 @@ pub struct EmbeddedSchemaFile {
 
 #[doc(hidden)]
 pub async fn run_sync(db: &Surreal<Any>, opts: SyncOpts) -> Result<()> {
-	run_setup(db, &opts.folder).await?;
-	ensure_local_state_dirs_for(&Layout::new(opts.folder.clone(), opts.module.clone()))?;
+	let layout = Layout::new(opts.folder.clone(), opts.module.clone());
+	let files = collect_filesystem_schema_files(
+		&layout.schema_dir(),
+		layout.module(),
+		opts.allow_empty_prune,
+	)?;
+	run_sync_with_filesystem_sources(db, opts, &layout, &files).await
+}
+
+/// Resolve and validate filesystem schema sources before a CLI caller connects.
+#[doc(hidden)]
+pub fn collect_filesystem_schema_files(
+	schema_dir: &std::path::Path,
+	module: &Module,
+	allow_empty_prune: bool,
+) -> Result<Vec<SchemaFile>> {
+	let files = collect_schema_files_at(schema_dir)?;
+	if files.is_empty() && !allow_empty_prune {
+		bail!(
+			"refusing filesystem sync: schema_module={} resolved_schema_dir={} source_count=0; \
+			 check --folder / SURREALDB_FOLDER and module selection, or pass \
+			 --allow-empty-prune if the empty source set is intentional",
+			module.name(),
+			schema_dir.display()
+		);
+	}
+	Ok(files)
+}
+
+/// Run a filesystem sync whose source set was validated before connection.
+#[doc(hidden)]
+pub async fn run_sync_with_filesystem_sources(
+	db: &Surreal<Any>,
+	opts: SyncOpts,
+	layout: &Layout,
+	files: &[SchemaFile],
+) -> Result<()> {
+	run_setup(db, layout.folder()).await?;
+	ensure_local_state_dirs_for(layout)?;
 
 	if opts.watch {
-		run_sync_once(db, &opts, true).await?;
+		run_sync_with_files(db, &opts, layout, files, true).await?;
 		log::info!(
 			"Watch mode active ({}ms interval). Waiting for schema changes... (Ctrl+C to stop)",
 			opts.debounce_ms.max(250)
@@ -91,7 +128,7 @@ pub async fn run_sync(db: &Surreal<Any>, opts: SyncOpts) -> Result<()> {
 					break;
 				}
 				_ = tokio::time::sleep(Duration::from_millis(opts.debounce_ms.max(250))) => {
-					if let Err(err) = run_sync_once(db, &opts, true).await {
+					if let Err(err) = run_sync_once(db, &opts, layout, true).await {
 						if opts.fail_fast {
 							return Err(err);
 						}
@@ -102,7 +139,7 @@ pub async fn run_sync(db: &Surreal<Any>, opts: SyncOpts) -> Result<()> {
 		}
 		Ok(())
 	} else {
-		run_sync_once(db, &opts, false).await
+		run_sync_with_files(db, &opts, layout, files, false).await
 	}
 }
 
@@ -265,30 +302,33 @@ async fn sync_embedded(
 			})
 		})
 		.collect::<anyhow::Result<Vec<_>>>()?;
-	run_sync_with_files(db, opts, &schema_files, false).await
+	let layout = Layout::new(opts.folder.clone(), opts.module.clone());
+	run_sync_with_files(db, opts, &layout, &schema_files, false).await
 }
 
-async fn run_sync_once(db: &Surreal<Any>, opts: &SyncOpts, watch_mode: bool) -> Result<()> {
-	let layout = Layout::new(opts.folder.clone(), opts.module.clone());
+async fn run_sync_once(
+	db: &Surreal<Any>,
+	opts: &SyncOpts,
+	layout: &Layout,
+	watch_mode: bool,
+) -> Result<()> {
 	let files = collect_schema_files_at(&layout.schema_dir())?;
-	run_sync_with_files(db, opts, &files, watch_mode).await
+	run_sync_with_files(db, opts, layout, &files, watch_mode).await
 }
 
 async fn run_sync_with_files(
 	db: &Surreal<Any>,
 	opts: &SyncOpts,
+	layout: &Layout,
 	files: &[SchemaFile],
 	watch_mode: bool,
 ) -> Result<()> {
 	let desired_catalog = build_catalog_snapshot(files, opts.allow_all_statements)?;
-	let tracked = load_sync_hashes(db, &opts.module).await?;
-	let managed = load_managed_entities(db, &opts.module).await?;
+	let tracked = load_sync_hashes(db, layout.module()).await?;
+	let managed = load_managed_entities(db, layout.module()).await?;
 
 	if files.is_empty() && !watch_mode {
-		log::info!(
-			"No schema files found in {}",
-			Layout::new(opts.folder.clone(), opts.module.clone()).schema_dir().display()
-		);
+		log::info!("No schema files found in {}", layout.schema_dir().display());
 	}
 
 	let file_paths: BTreeSet<String> = files.iter().map(|file| file.path.clone()).collect();
@@ -324,7 +364,7 @@ async fn run_sync_with_files(
 				if !watch_mode {
 					log::info!("applied {}", file.path);
 				}
-				store_sync_hash(db, &opts.module, &file.path, &file.hash).await?;
+				store_sync_hash(db, layout.module(), &file.path, &file.hash).await?;
 				synced_paths.insert(file.path.clone());
 			}
 			Err(err) => {
@@ -382,19 +422,19 @@ async fn run_sync_with_files(
 				 This usually means the schema folder is wrong rather than that the schema was deleted.\n\
 				 Check --folder / SURREALDB_FOLDER, or pass --allow-empty-prune if you really do want \
 				 to remove everything.",
-				if opts.folder.is_empty() {
+				if layout.folder().is_empty() {
 					String::new()
 				} else {
-					format!(" in {}/schema", opts.folder)
+					format!(" in {}", layout.schema_dir().display())
 				}
 			);
 		}
 	}
 
 	if !opts.dry_run {
-		upsert_managed_entities(db, &opts.module, &effective_entities, None, "active").await?;
+		upsert_managed_entities(db, layout.module(), &effective_entities, None, "active").await?;
 		if !removed_paths.is_empty() {
-			delete_sync_hashes(db, &opts.module, &removed_paths).await?;
+			delete_sync_hashes(db, layout.module(), &removed_paths).await?;
 		}
 	}
 
@@ -409,8 +449,8 @@ async fn run_sync_with_files(
 				}
 			}
 		} else if shared {
-			let lock = acquire_lock(db, &opts.module, "global").await?;
-			let result = prune_managed_entities(db, &opts.module, &stale_entities).await;
+			let lock = acquire_lock(db, layout.module(), "global").await?;
+			let result = prune_managed_entities(db, layout.module(), &stale_entities).await;
 			let release = release_lock(db, &lock).await;
 			match (result, release) {
 				(Err(err), _) => return Err(err),
@@ -419,7 +459,7 @@ async fn run_sync_with_files(
 			}
 			pruned_count = stale_count;
 		} else {
-			prune_managed_entities(db, &opts.module, &stale_entities).await?;
+			prune_managed_entities(db, layout.module(), &stale_entities).await?;
 			pruned_count = stale_count;
 		}
 	}
@@ -618,6 +658,12 @@ fn parse_bool(value: &str) -> Option<bool> {
 
 #[cfg(test)]
 mod tests {
+	use std::fs;
+
+	use surrealdb::engine::any::connect;
+	use surrealdb::opt::Config;
+	use surrealdb::opt::capabilities::Capabilities;
+
 	use super::*;
 
 	#[test]
@@ -626,5 +672,46 @@ mod tests {
 		assert_eq!(parse_bool("Yes"), Some(true));
 		assert_eq!(parse_bool("0"), Some(false));
 		assert_eq!(parse_bool("unknown"), None);
+	}
+
+	#[tokio::test]
+	async fn watch_refresh_keeps_using_the_resolved_custom_layout() {
+		let temp = tempfile::TempDir::new().expect("tempdir");
+		let folder = temp.path().join("database");
+		let schema_dir = folder.join("custom/core");
+		fs::create_dir_all(&schema_dir).expect("custom schema dir");
+		let source = schema_dir.join("001_core.surql");
+		fs::write(&source, "DEFINE TABLE before_refresh SCHEMALESS;\n").expect("initial schema");
+
+		let module = Module::new("core").expect("module");
+		let folder = folder.to_string_lossy().into_owned();
+		let layout = Layout::with_schema_dir(&folder, module.clone(), &schema_dir);
+		let opts = SyncOpts {
+			folder,
+			module,
+			..SyncOpts::default()
+		};
+
+		let cfg = Config::new().capabilities(Capabilities::all());
+		let db = connect(("mem://", cfg)).await.expect("connect mem");
+		db.use_ns("watch_layout").use_db("watch_layout").await.expect("select namespace");
+		let files = collect_filesystem_schema_files(&schema_dir, layout.module(), false)
+			.expect("preflight custom path");
+		run_sync_with_filesystem_sources(&db, opts.clone(), &layout, &files)
+			.await
+			.expect("initial custom-path sync");
+
+		fs::write(
+			&source,
+			"DEFINE TABLE before_refresh SCHEMALESS;\n\
+			 DEFINE TABLE after_refresh SCHEMALESS;\n",
+		)
+		.expect("updated schema");
+		run_sync_once(&db, &opts, &layout, true).await.expect("watch refresh");
+
+		let mut response = db.query("INFO FOR DB;").await.expect("database info");
+		let info: Option<serde_json::Value> = response.take(0).expect("take database info");
+		let tables = info.as_ref().and_then(|value| value.get("tables")).expect("tables");
+		assert!(tables.get("after_refresh").is_some(), "refresh read the wrong layout: {tables}");
 	}
 }

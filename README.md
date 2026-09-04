@@ -283,6 +283,13 @@ make it collect the named module's files and claim ownership of them.
 
 Configure a custom location with `[schema.<name>] path` if you need one.
 
+Before opening any database connection, filesystem sync resolves every selected
+module and refuses if one has no `.surql` sources. This prevents a wrong working
+directory or `--folder` value from becoming setup or prune activity. Use
+`--allow-empty-prune` only when an empty source set is intentional; a selection
+where no module applies to any target remains an error rather than a successful
+no-op.
+
 ### Dependencies
 
 `depends_on` orders application, so a module is never applied before what it
@@ -594,6 +601,9 @@ The runner executes declarative TOML suites from `database/tests/suites/*.toml` 
 - HTTP API endpoint assertions (`api_request`)
 
 By default, each suite runs in an isolated ephemeral namespace/database and fails CI on any test failure.
+The runner performs filesystem sync first, so the same non-empty source preflight
+applies. Use `--no-sync` when the suite's fixtures intentionally own the complete
+schema instead.
 
 ### CLI Flags
 

@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::str::FromStr;
 use std::{fmt, fs};
 
@@ -258,14 +258,19 @@ pub fn collect_schema_files(folder: &str) -> Result<Vec<SchemaFile>> {
 /// order. Used by module-aware callers, which resolve the directory through
 /// [`Layout`](crate::constants::Layout) rather than the project folder.
 pub fn collect_schema_files_at(sd: &std::path::Path) -> Result<Vec<SchemaFile>> {
-	let mut files: Vec<PathBuf> = WalkDir::new(sd)
-		.follow_links(true)
-		.into_iter()
-		.filter_map(|e| e.ok())
-		.filter(|e| e.file_type().is_file())
-		.map(|e| e.into_path())
-		.filter(|p| p.extension().and_then(|s| s.to_str()) == Some("surql"))
-		.collect();
+	if !sd.exists() {
+		return Ok(Vec::new());
+	}
+
+	let mut files = Vec::new();
+	for entry in WalkDir::new(sd).follow_links(true) {
+		let entry = entry.with_context(|| format!("walking schema directory {}", sd.display()))?;
+		if entry.file_type().is_file()
+			&& entry.path().extension().and_then(|suffix| suffix.to_str()) == Some("surql")
+		{
+			files.push(entry.into_path());
+		}
+	}
 
 	files.sort();
 

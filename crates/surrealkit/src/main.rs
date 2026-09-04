@@ -2,6 +2,7 @@
 // CLI's output format. Library modules go through `log` (see CliLogger below).
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
+use std::collections::BTreeMap;
 use std::io::Write;
 use std::path::PathBuf;
 
@@ -130,8 +131,8 @@ enum Commands {
 		no_prune: bool,
 		#[arg(long)]
 		allow_shared_prune: bool,
-		/// Allow a prune that removes every managed entity because no schema files
-		/// were found (normally refused: it usually means the folder is wrong).
+		/// Allow filesystem sync to connect with no schema files. Required before
+		/// an intentional prune of every managed entity.
 		#[arg(long)]
 		allow_empty_prune: bool,
 		/// Allow non-DEFINE statements in schema files (e.g. INSERT, UPDATE, CREATE).
@@ -520,6 +521,12 @@ async fn main() -> Result<()> {
 			allow_all_statements,
 		} => {
 			let typegen_cfg = surrealkit::variables::load_typegen_config(None)?;
+			if selection.pairs() == 0 {
+				bail!(
+					"refusing filesystem sync: the selected targets accept none of the selected \
+					 schema modules (applicable_pair_count=0)"
+				);
+			}
 			if watch && selection.pairs() > 1 {
 				bail!(
 					"--watch needs a single schema module and target ({} selected); \
@@ -528,13 +535,45 @@ async fn main() -> Result<()> {
 				);
 			}
 
+			// Resolve every selected module before opening the first target. A wrong
+			// folder must not become a database connection, setup, catalog read, or
+			// prune simply because an earlier target happened to be valid.
+			let mut filesystem_sources = BTreeMap::new();
+			for target in selection.targets() {
+				for module in selection.modules_for(target) {
+					if let std::collections::btree_map::Entry::Vacant(entry) =
+						filesystem_sources.entry(module.name().to_string())
+					{
+						let layout = project.layout_for(&folder, &module);
+						let schema_dir = layout.schema_dir();
+						let files = sync::collect_filesystem_schema_files(
+							&schema_dir,
+							&module,
+							allow_empty_prune,
+						)?;
+						entry.insert((layout, files));
+					}
+				}
+			}
+
 			let mut results: Vec<PairResult> = Vec::new();
 			'targets: for target in selection.targets() {
+				let modules = selection.modules_for(target);
+				if modules.is_empty() {
+					continue;
+				}
 				let db = connect(target.cfg()).await?;
-				for module in selection.modules_for(target) {
+				for module in modules {
 					if selection.is_fan_out() {
 						println!("→ {} → {}", module.name(), target.name());
 					}
+					let (layout, files) =
+						filesystem_sources.get(module.name()).with_context(|| {
+							format!(
+								"missing preflight sources for schema module {:?}",
+								module.name()
+							)
+						})?;
 					let opts = SyncOpts {
 						watch,
 						debounce_ms,
@@ -550,7 +589,8 @@ async fn main() -> Result<()> {
 						typegen_ts_out: typegen_cfg.typescript.clone(),
 						typegen_ts_format: typegen_cfg.format.clone(),
 					};
-					let outcome = sync::run_sync(&db, opts).await;
+					let outcome =
+						sync::run_sync_with_filesystem_sources(&db, opts, layout, files).await;
 					let failed = outcome.is_err();
 					if let Err(err) = &outcome {
 						eprintln!("error: {} → {}: {err:#}", module.name(), target.name());

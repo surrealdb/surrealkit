@@ -2,10 +2,10 @@
 
 ## If you use the CLI: almost nothing to do
 
-Every 0.7 command still works, and with no new flags every command produces the
-same output against the same files and the same database metadata. Upgrading and
-running `surrealkit sync` on an existing project re-applies nothing and prunes
-nothing.
+Every 0.7 command still works against a valid project. With no new flags it
+produces the same database metadata, apart from the safety refusal for an empty
+filesystem source set described below. Upgrading and running `surrealkit sync`
+on an existing project re-applies nothing and prunes nothing.
 
 Three things do need attention.
 
@@ -46,13 +46,17 @@ always used `SURREALDB_FOLDER` or `./database`. It works now.
 
 If you have been passing `--folder ./db` while SurrealKit was really syncing
 `./database`, it will now sync `./db`. If that directory is empty, SurrealKit
-refuses rather than pruning your schema:
+refuses before opening a database connection:
 
 ```
-refusing to prune all 14 managed entities: no schema files were found in ./db/schema.
+refusing filesystem sync: schema_module=default resolved_schema_dir=./db/schema source_count=0; ...
 ```
 
-Either point `--folder` at the right directory, or drop the flag.
+Either point `--folder` at the right directory, drop the flag, or pass
+`--allow-empty-prune` when the empty source set is intentional. The preflight
+also applies to `--dry-run`, `--no-prune`, and the initial `--watch` sync because
+an empty filesystem selection otherwise cannot distinguish intentional absence
+from a wrong path.
 
 ## Opting into multiple schema modules
 
