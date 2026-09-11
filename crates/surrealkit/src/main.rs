@@ -758,8 +758,10 @@ async fn main() -> Result<()> {
 			RolloutCommands::Status {
 				rollout,
 			} => {
-				// Status is read-only, so it is the one rollout command that may
-				// safely fan out across every selected target.
+				// Status makes no rollout changes, so it is the one rollout command
+				// that may fan out across every selected target. It is not free of
+				// writes: like every other command it runs `setup` first, which
+				// scaffolds `<folder>/setup.surql` and applies the metadata DDL.
 				let fan_out = selection.targets().len() > 1;
 				for target in selection.targets() {
 					if fan_out {

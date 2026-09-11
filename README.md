@@ -435,8 +435,8 @@ undo for `ASSERT`, `PERMISSIONS` and `COMMENT`, and only a partial one for `TYPE
 under the new definition. Such a rollout is recorded as
 `reversibility: definition_only` and `rollout status` says so.
 
-Snapshots advance on `complete`, not on `plan` — a plan you abandon leaves them
-describing the state the database is actually in.
+`plan` writes the snapshots alongside the manifest, so commit the two together.
+Reverting a plan you decided not to run means reverting both.
 
 6. Start the rollout, let application cutover happen, then complete it:
 

@@ -7,7 +7,7 @@ produces the same database metadata, apart from the safety refusal for an empty
 filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
-Seven things do need attention.
+Six things do need attention.
 
 ### 1. Move `database/seed.surql`
 
@@ -94,6 +94,13 @@ Two things to know:
 If you worked around this by pinning your container's `WORKDIR` to `/`, you can
 drop that.
 
+**One new refusal comes with this.** `sync` now stops if none of the file keys it
+has tracked match any file it found on disk, because that combination means the
+key matcher is broken rather than that you deleted everything, and pruning on it
+would drop the live schema. The same refusal fires on a legitimate wholesale
+rewrite of your schema files, where every path really did change at once. Pass
+`--allow-empty-prune` for that case.
+
 ### 5. `rollout` subcommands take a rollout id again
 
 1.0.0-beta.1 added a global `-t/--target` whose argument id collided with the
@@ -114,7 +121,9 @@ Two deliberate behaviour changes came with the fix:
   partial failure into N databases in different phases. `rollout status` is
   read-only and does fan out.
 - `rollout plan` and `rollout lint` never connect, so they now refuse
-  `--target`/`--all` rather than silently ignoring them.
+  `--target`/`--all` rather than silently ignoring them. **This breaks uniform CI
+  wrappers** that pass `--target` to every subcommand: those two now exit
+  non-zero where they previously succeeded. Drop the flag for them.
 
 ### 6. A connect deadline, on by default
 
@@ -134,16 +143,6 @@ hours. Opt in with `--query-timeout-secs` / `SURREALDB_QUERY_TIMEOUT_SECS` when
 you want one. Independently of any timeout, `rollout start`/`complete` now log
 each step as it begins and every 15 seconds while it runs, so a slow step is
 distinguishable from a hang.
-
-### 7. `rollout plan` no longer advances the snapshots
-
-Snapshots described the new state as soon as you planned, before anything was
-applied. A plan that was then abandoned or rolled back left the snapshots
-claiming a state the database never reached, so the next `plan` produced an empty
-diff and the change was silently lost.
-
-`rollout complete` writes them now. Planning twice for the same change is refused
-with a pointer to the existing manifest.
 
 ## Opting into multiple schema modules
 

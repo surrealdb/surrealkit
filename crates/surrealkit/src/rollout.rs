@@ -695,15 +695,6 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 		&new_schema,
 	)?;
 
-	if let Some(existing) = existing_manifest_for(folder, &spec.target_schema_hash)? {
-		bail!(
-			"an un-completed rollout already targets this schema: {}\n\
-			 Run `surrealkit rollout start`/`complete` for it, or delete it, rather than \
-			 planning the same change twice.",
-			existing.display()
-		);
-	}
-
 	let raw = toml::to_string_pretty(&spec).context("serializing rollout spec")?;
 
 	if opts.dry_run {
@@ -725,43 +716,22 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 	}
 
 	fs::write(&path, raw).with_context(|| format!("writing rollout file {}", path.display()))?;
+	// Snapshots are written here, next to the manifest, because `plan` is the only
+	// command in the lifecycle that runs where the repository is. `complete` runs
+	// on the server, typically inside a container whose filesystem nobody commits,
+	// so writing them there would advance state the developer never sees and leave
+	// the next `plan` diffing from a stale snapshot.
+	//
+	// The cost is that abandoning a plan leaves the snapshots ahead of the
+	// database. Reverting the manifest and the snapshots together (they are all
+	// tracked files) is the fix, and is why they are written as a pair.
+	save_schema_snapshot(folder, &new_schema)?;
+	save_catalog_snapshot(folder, &new_catalog)?;
 
-	// Snapshots are NOT advanced here. They describe what the database has, and
-	// planning changes nothing: advancing them at plan time meant an abandoned or
-	// rolled-back plan left snapshots claiming the new state, so the next `plan`
-	// saw an empty diff and the change was silently lost. `complete` writes them.
 	log::info!("Generated rollout manifest {}", path.display());
-	log::info!(
-		"Snapshots stay at the current state until `surrealkit rollout complete {rollout_id}`."
-	);
+	log::info!("Updated {}", catalog_snapshot_path(folder).display());
+	log::info!("Commit the manifest and the snapshots together; reverting means reverting both.");
 	Ok(())
-}
-
-/// Refuse to plan a change an un-completed manifest already covers.
-///
-/// Snapshots only advance on `complete`, so planning twice for the same change
-/// would otherwise produce two manifests describing the same transition.
-fn existing_manifest_for(folder: &str, target_schema_hash: &str) -> Result<Option<PathBuf>> {
-	let dir = rollouts_dir(folder);
-	if !dir.is_dir() {
-		return Ok(None);
-	}
-	let mut entries: Vec<PathBuf> = fs::read_dir(&dir)
-		.with_context(|| format!("reading {}", dir.display()))?
-		.filter_map(|entry| entry.ok().map(|e| e.path()))
-		.filter(|p| p.extension().and_then(|e| e.to_str()) == Some("toml"))
-		.collect();
-	entries.sort();
-
-	for path in entries {
-		let Ok(loaded) = load_rollout_spec(path.clone()) else {
-			continue;
-		};
-		if loaded.spec.target_schema_hash == target_schema_hash {
-			return Ok(Some(path));
-		}
-	}
-	Ok(None)
 }
 
 #[doc(hidden)]
@@ -986,6 +956,14 @@ async fn start_inner(
 		// overwrites it. The previous definition of a modified entity lives
 		// nowhere on disk -- the catalog snapshot keeps only a hash -- so the live
 		// database is the only source for it.
+		//
+		// Capture exactly once, on the run that creates the record. `start` is
+		// idempotent and re-running it after an interrupted run is the documented
+		// recovery, but by then the expand phase may already have applied: a second
+		// capture would read back the *new* definitions and overwrite the originals,
+		// leaving rollback to "restore" what is already there. That failure is
+		// silent, which makes it worse than not capturing at all.
+		let already_captured = !load_restore_definitions(db, &rollout.spec.id).await?.is_empty();
 		let restorable: Vec<EntityKey> = rollout
 			.spec
 			.steps
@@ -998,7 +976,12 @@ async fn start_inner(
 			})
 			.flatten()
 			.collect();
-		if !restorable.is_empty() {
+		if already_captured {
+			log::debug!(
+				"rollback definitions for '{}' were captured by an earlier run; keeping them",
+				rollout.spec.id
+			);
+		} else if !restorable.is_empty() {
 			let captured = capture_definitions(db, &restorable).await?;
 			let missing: Vec<String> = restorable
 				.iter()
@@ -1140,15 +1123,6 @@ async fn complete_inner(
 			Some(OffsetDateTime::now_utc().format(&Rfc3339)?),
 		)
 		.await?;
-		// The change has landed, so this is the point at which the committed
-		// snapshots legitimately describe the database. Planning used to advance
-		// them, which lost any change that was planned and then abandoned.
-		if let Some(folder) = ctx.folder {
-			let files = collect_schema_files(folder)?;
-			save_schema_snapshot(folder, &snapshot_from_files(&files))?;
-			save_catalog_snapshot(folder, &build_catalog_snapshot(&files, false)?)?;
-			log::info!("Updated {}", catalog_snapshot_path(folder).display());
-		}
 		log::info!("Completed rollout {}.", rollout.spec.id);
 		Ok(())
 	}
@@ -1726,23 +1700,24 @@ fn validate_autoplan(diff: &CatalogDiff, allow_modified: bool) -> Result<()> {
 		);
 	}
 
-	// Renames cannot be detected without heuristics, so an add and a remove in the
-	// same scope stay refused -- but name the pairs, or this is an unexplained
-	// dead end. Keying on (kind, scope) alone also refused two *unrelated*
-	// top-level changes, since every table shares scope `None`; requiring a shared
-	// scope that is actually named keeps the rename guard without that false
-	// positive.
+	// An add and a remove of the same kind in the same scope cannot be told apart
+	// from a rename without heuristics, and a misread rename plans as a drop of the
+	// original, so this stays refused.
+	//
+	// It is deliberately NOT gated on --allow-modified. That flag is about changing
+	// an entity that stays in place; this is about one that may be disappearing.
+	// Tables, functions, params, analyzers and users all carry `scope: None`, so
+	// treating an unnamed scope as "not a collision" would switch the guard off for
+	// exactly the entity kinds whose removal destroys data.
 	let removed_by_scope: BTreeSet<(EntityKind, Option<String>)> =
 		diff.removed.iter().map(|entity| (entity.kind.clone(), entity.scope.clone())).collect();
 	let added_by_scope: BTreeSet<(EntityKind, Option<String>)> =
 		diff.added.iter().map(|entity| (entity.kind.clone(), entity.scope.clone())).collect();
 
-	let colliding: Vec<&(EntityKind, Option<String>)> = removed_by_scope
-		.intersection(&added_by_scope)
-		.filter(|(_, scope)| scope.is_some())
-		.collect();
+	let colliding: Vec<&(EntityKind, Option<String>)> =
+		removed_by_scope.intersection(&added_by_scope).collect();
 
-	if !colliding.is_empty() && !allow_modified {
+	if !colliding.is_empty() {
 		let detail = colliding
 			.iter()
 			.map(|(kind, scope)| {
@@ -1768,11 +1743,12 @@ fn validate_autoplan(diff: &CatalogDiff, allow_modified: bool) -> Result<()> {
 			.collect::<Vec<_>>()
 			.join("\n  - ");
 		bail!(
-			"rollout plan sees additions and removals in the same scope, which it cannot tell \
-			 apart from a rename:\n  - {detail}\n\n\
-			 A rename needs an explicit backfill, so it is not planned automatically. If these \
-			 really are unrelated, re-run with --allow-modified; otherwise author a manual \
-			 manifest with the backfill step."
+			"rollout plan sees additions and removals of the same kind in one scope, which it \
+			 cannot tell apart from a rename:\n  - {detail}\n\n\
+			 If that is a rename, planning it automatically would drop the original and its \
+			 data rather than move it, so author a manual manifest with an explicit backfill \
+			 between the add and the remove. If the changes are genuinely unrelated, splitting \
+			 them across two rollouts is the safest way to say so."
 		);
 	}
 
@@ -2694,6 +2670,58 @@ mod tests {
 
 		// With the opt-in, the same diff plans.
 		validate_autoplan(&diff, true).expect("--allow-modified should permit the change");
+	}
+
+	/// A table rename reaches the planner as "add people, remove person". Tables
+	/// carry `scope: None`, so a guard that only fires on a named scope switches
+	/// itself off for exactly the entity kinds whose removal destroys data: the
+	/// generated manifest would define an empty `people` and then REMOVE TABLE
+	/// `person` with its rows.
+	#[test]
+	fn plan_refuses_a_table_rename() {
+		let entity = |name: &str| CatalogEntity {
+			kind: EntityKind::Table,
+			scope: None,
+			name: name.to_string(),
+			source_path: "schema/person.surql".to_string(),
+			statement_hash: format!("h-{name}"),
+			file_hash: "f".to_string(),
+		};
+		let diff = CatalogDiff {
+			added: vec![entity("people")],
+			removed: vec![entity("person")],
+			modified: Vec::new(),
+		};
+
+		let err = validate_autoplan(&diff, false).expect_err("a table rename must be refused");
+		let message = err.to_string();
+		assert!(message.contains("person") && message.contains("people"), "got: {message}");
+
+		// --allow-modified is about changing an entity that stays in place. It must
+		// not wave through one that may be disappearing.
+		assert!(
+			validate_autoplan(&diff, true).is_err(),
+			"--allow-modified must not bypass the rename guard"
+		);
+	}
+
+	/// The same shape one scope down, which the guard has always caught.
+	#[test]
+	fn plan_refuses_a_field_rename() {
+		let field = |name: &str| CatalogEntity {
+			kind: EntityKind::Field,
+			scope: Some("person".to_string()),
+			name: name.to_string(),
+			source_path: "schema/person.surql".to_string(),
+			statement_hash: format!("h-{name}"),
+			file_hash: "f".to_string(),
+		};
+		let diff = CatalogDiff {
+			added: vec![field("full_name")],
+			removed: vec![field("name")],
+			modified: Vec::new(),
+		};
+		assert!(validate_autoplan(&diff, false).is_err(), "a field rename must be refused");
 	}
 
 	#[test]

@@ -384,9 +384,10 @@ pub fn load_schema_snapshot(folder: &str) -> Result<SchemaSnapshot> {
 		},
 	)?;
 	// Committed snapshots written before 1.0.0-beta.2 carry working-directory
-	// paths, which differ between a developer's checkout and CI. Normalise on
-	// load; the next `plan`/`baseline` writes the canonical form back, so the file
-	// self-heals with no spurious diff entries.
+	// paths, which differ between a developer's checkout and CI. Normalise on load
+	// so the diff is not polluted by the spelling; `plan` and `baseline` write the
+	// canonical form back, so the file itself is rewritten the next time either
+	// runs.
 	for entry in &mut snapshot.files {
 		entry.path = strip_folder_prefix(folder, &entry.path);
 	}
@@ -410,12 +411,18 @@ pub fn strip_folder_prefix(folder: &str, stored: &str) -> String {
 			return rest.to_string();
 		}
 	}
-	// An unrecognised prefix could still be a deeper working-directory path. The
-	// last folder segment is the most reliable anchor available.
-	if let Some(name) = Path::new(bare).file_name().and_then(|n| n.to_str())
-		&& let Some(index) = stored.find(&format!("{name}/"))
-	{
-		return stored[index + name.len() + 1..].to_string();
+	// An unrecognised prefix could still be a deeper working-directory path, so
+	// fall back to the folder's last segment as an anchor. Check the start of the
+	// key first (`database/schema/a.surql`), then the innermost embedded
+	// occurrence, since a path can legitimately repeat the folder name
+	// (`/srv/database/database/schema/a.surql`) and the last one is the root.
+	if let Some(name) = Path::new(bare).file_name().and_then(|n| n.to_str()) {
+		if let Some(rest) = stored.strip_prefix(&format!("{name}/")) {
+			return rest.to_string();
+		}
+		if let Some(index) = stored.rfind(&format!("/{name}/")) {
+			return stored[index + name.len() + 2..].to_string();
+		}
 	}
 	stored.to_string()
 }
@@ -752,7 +759,10 @@ pub fn canonicalise_keys<V: Clone>(
 			out.insert(key.clone(), value.clone());
 			continue;
 		}
-		match canonical.iter().find(|c| is_legacy_key_for(key, c)) {
+		// Longest match wins. With modules, `modules/billing/schema/a.surql` and
+		// `schema/a.surql` are both suffixes of a legacy absolute key, and picking
+		// whichever came first in iteration order would bind it to the wrong module.
+		match canonical.iter().filter(|c| is_legacy_key_for(key, c)).max_by_key(|c| c.len()) {
 			Some(target) => {
 				re_keyed.push((key.clone(), target.clone()));
 				out.insert(target.clone(), value.clone());
@@ -2257,6 +2267,13 @@ mod tests {
 		}
 		// Already canonical: left alone.
 		assert_eq!(strip_folder_prefix("database", "schema/a.surql"), "schema/a.surql");
+
+		// A path that repeats the folder name resolves to the innermost one, which
+		// is the project root, not the first ancestor that happens to share it.
+		assert_eq!(
+			strip_folder_prefix("database", "/srv/database/database/schema/a.surql"),
+			"schema/a.surql"
+		);
 	}
 
 	/// The manifest-portability bug: a rollout planned from a repo root could not

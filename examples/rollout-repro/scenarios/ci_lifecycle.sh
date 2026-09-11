@@ -20,6 +20,16 @@ kit rollout plan --name add_invoice
 ID="$(manifest_id)"
 ok "planned $ID"
 
+# `plan` is the only command in the lifecycle that runs where the repository is,
+# so it is where the snapshots are written. If that ever moves to `complete` the
+# server writes them onto a container filesystem nobody commits, and the
+# developer's next plan diffs from stale state.
+grep -q '003_invoice' "$SURREALDB_FOLDER/snapshots/schema_snapshot.json" \
+    || fail "plan did not write the schema snapshot"
+grep -q '"schema/003_invoice.surql"' "$SURREALDB_FOLDER/snapshots/schema_snapshot.json" \
+    || fail "snapshot keys are not folder-relative"
+ok "plan wrote folder-relative snapshots alongside the manifest"
+
 kit rollout lint "$ID"
 ok "lint"
 
@@ -35,15 +45,3 @@ ok "complete"
 
 sql 'INFO FOR DB;' | grep -q 'invoice' || fail "the rollout did not reach the database"
 ok "invoice table is live"
-
-# Snapshots advance on complete, not on plan: a plan that is never completed must
-# not leave the snapshot claiming the new state.
-grep -q '003_invoice' "$SURREALDB_FOLDER/snapshots/schema_snapshot.json" \
-    || fail "complete did not advance the schema snapshot"
-ok "snapshots advanced on complete"
-
-# And the keys in it are folder-relative, so the file is identical in any
-# environment.
-grep -q '"schema/003_invoice.surql"' "$SURREALDB_FOLDER/snapshots/schema_snapshot.json" \
-    || fail "snapshot keys are not folder-relative"
-ok "snapshot keys are folder-relative"
