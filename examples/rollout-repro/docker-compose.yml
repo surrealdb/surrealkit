@@ -1,0 +1,71 @@
+# Reproduction harness for the rollout pipeline issues.
+#
+# `kit-root` and `kit-workdir` are the SAME image against the SAME mount and the
+# SAME database. The only difference is `working_dir`. That isolation is the
+# point: it attributes the key divergence to path handling alone, with no
+# host-versus-container confound.
+
+name: surrealkit-rollout-repro
+
+services:
+    surrealdb:
+        image: surrealdb/surrealdb:v3.2.4
+        command: start --user root --pass secret memory
+        healthcheck:
+            test:
+                [
+                    "CMD",
+                    "/surreal",
+                    "is-ready",
+                    "--endpoint",
+                    "http://127.0.0.1:8000",
+                ]
+            interval: 2s
+            timeout: 3s
+            retries: 30
+        # Deliberately not published to the host: every scenario talks to it over
+        # the compose network, and a fixed host port is the one thing guaranteed
+        # to collide with whatever else the developer is already running.
+
+    # Accepts the TCP connection and never answers, so the WebSocket handshake
+    # never completes. This is the shape of the reported hang: a peer that is
+    # reachable but wedged (a database restarting behind a proxy, a mid-deploy
+    # app swap). Through 1.0.0-beta.1 nothing between the CLI and the database
+    # had a deadline, so this blocked until CI killed the job.
+    blackhole:
+        image: alpine/socat:1.8.0.0
+        command: ["TCP-LISTEN:8000,fork,reuseaddr", "SYSTEM:'sleep 3600'"]
+
+    # Working directory `/`, which is what the shipped image happens to give you.
+    # Legacy key stripping accidentally works here.
+    kit-root: &kit
+        build:
+            context: ../..
+            dockerfile: examples/rollout-repro/Dockerfile.harness
+            args:
+                SOURCE: ${HARNESS_SOURCE:-worktree}
+        image: surrealkit-repro:${HARNESS_SOURCE:-worktree}
+        working_dir: /
+        depends_on:
+            surrealdb:
+                condition: service_healthy
+        environment:
+            SURREALDB_FOLDER: /database
+            SURREALDB_HOST: ws://surrealdb:8000
+            SURREALDB_NAMESPACE: repro_ns
+            SURREALDB_NAME: repro_db
+            SURREALDB_USER: root
+            SURREALDB_PASSWORD: secret
+        volumes:
+            - ./project/database:/database
+            - ./scenarios:/scenarios:ro
+
+    # Working directory `/work`: a compose `working_dir`, a `docker run -w`, or
+    # any base image with a WORKDIR. Identical in every other respect.
+    kit-workdir:
+        <<: *kit
+        working_dir: /work
+        volumes:
+            - ./project/database:/database
+            - ./scenarios:/scenarios:ro
+            - ./project:/work

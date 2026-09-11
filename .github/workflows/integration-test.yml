@@ -1,22 +1,21 @@
 name: Integration Test
 
+# The path filters used to cover only the tester and config.rs, so no change to
+# rollout.rs, main.rs, schema_state.rs or sync.rs ever ran this workflow. That is
+# the structural reason a rollout CLI regression shipped in 1.0.0-beta.1: the
+# rollout id was parsed as a --target name and every rollout subcommand failed
+# before connecting, with nothing in CI to catch it.
 on:
     push:
-        paths:
+        paths: &integration_paths
             - "Cargo.toml"
             - "examples/testing/**"
-            - "crates/surrealkit/src/tester/**"
-            - "crates/surrealkit/src/config.rs"
-            - "crates/surrealkit/tests/auth_levels.rs"
+            - "examples/rollout-repro/**"
+            - "crates/surrealkit/src/**"
+            - "crates/surrealkit/tests/**"
             - ".github/workflows/integration-test.yml"
     pull_request:
-        paths:
-            - "Cargo.toml"
-            - "examples/testing/**"
-            - "crates/surrealkit/src/tester/**"
-            - "crates/surrealkit/src/config.rs"
-            - "crates/surrealkit/tests/auth_levels.rs"
-            - ".github/workflows/integration-test.yml"
+        paths: *integration_paths
     workflow_dispatch:
 
 permissions:
@@ -41,7 +40,7 @@ jobs:
 
         services:
             surrealdb:
-                image: surrealdb/surrealdb:v3.2.0
+                image: surrealdb/surrealdb:v3.2.4
                 command: start --user root --pass secret memory
                 ports:
                     - 8000:8000
@@ -139,3 +138,83 @@ jobs:
                   name: integration-test-report
                   path: database/tests/report.json
                   if-no-files-found: warn
+
+    # End-to-end rollout coverage. Nothing exercised the rollout lifecycle against
+    # a live server before, and nothing exercised the CLI surface at all, which is
+    # how the 1.0.0-beta.1 arg-id regression and the resume bug fixed in #79 both
+    # shipped untested.
+    rollout_e2e:
+        name: Rollout lifecycle (SurrealDB ${{ matrix.surrealdb }})
+        runs-on: ubuntu-22.04
+        timeout-minutes: 20
+        strategy:
+            fail-fast: false
+            matrix:
+                # The two versions users are actually on.
+                surrealdb: ["v3.2.0", "v3.2.4"]
+        env:
+            SURREALDB_HOST: ws://127.0.0.1:8000
+            SURREALDB_NAME: rollout_db
+            SURREALDB_NAMESPACE: rollout_ns
+            SURREALDB_USER: root
+            SURREALDB_PASSWORD: secret
+        services:
+            surrealdb:
+                image: surrealdb/surrealdb:${{ matrix.surrealdb }}
+                command: start --user root --pass secret memory
+                ports:
+                    - 8000:8000
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+              with:
+                  toolchain: 1.94.0
+
+            - name: Build surrealkit (debug)
+              env:
+                  CARGO_INCREMENTAL: 0
+                  RUSTFLAGS: "-C debuginfo=0"
+              run: |
+                cargo build \
+                    --manifest-path crates/surrealkit/Cargo.toml \
+                    --bin surrealkit \
+                    --no-default-features \
+                    --features cli \
+                    --locked
+
+            - name: Wait for SurrealDB
+              run: |
+                set -euo pipefail
+                for _ in $(seq 1 30); do
+                    if curl -sS -o /dev/null -X POST http://127.0.0.1:8000/signin \
+                        -H 'Content-Type: application/json' \
+                        -d '{"user":"root","pass":"secret"}'; then
+                        exit 0
+                    fi
+                    sleep 1
+                done
+                echo "SurrealDB never became ready"; exit 1
+
+            - name: Happy path — baseline, plan, lint, start, status, complete
+              run: examples/rollout-repro/scenarios/ci_lifecycle.sh
+
+            - name: Modified entity — plan refuses, --allow-modified plans, rollback restores
+              run: examples/rollout-repro/scenarios/ci_modified_entity.sh
+
+            - name: Resume — start, kill, start again (regression for #79)
+              run: examples/rollout-repro/scenarios/ci_resume.sh
+
+            - name: Container path keys — working_dir is not /
+              run: examples/rollout-repro/scenarios/ci_container_keys.sh
+
+            # The upgrade path for a project that was synced from both a local
+            # checkout and a container, so `__entity` holds two spellings of every
+            # file. If the suffix match fails here every tracked key looks removed
+            # and the prune drops the live schema, so this is the one migration
+            # test that must never be allowed to rot.
+            - name: Key migration — two legacy spellings collapse without pruning
+              run: examples/rollout-repro/scenarios/ci_key_migration.sh
+
