@@ -3,7 +3,7 @@ members = ['crates/surrealkit', 'crates/surrealkit-macros']
 resolver = '2'
 
 [workspace.package]
-version = '1.0.0-beta.1'
+version = '1.0.0-beta.2'
 edition = '2024'
 rust-version = '1.85'
 authors = ['Chiru Boggavarapu <chiru@foretag.co>', 'Tobie Morgan Hitchcock <tobie@surrealdb.com>']
@@ -12,7 +12,7 @@ homepage = 'https://github.com/surrealdb/surrealkit'
 license = 'Apache-2.0'
 
 [workspace.dependencies]
-surrealkit-macros = { path = 'crates/surrealkit-macros', version = '1.0.0-beta.1' }
+surrealkit-macros = { path = 'crates/surrealkit-macros', version = '1.0.0-beta.2' }
 surrealdb = { version = '3.2.4', features = ['protocol-http', 'jwks'] }
 surrealdb-types = { version = '3.2.4' }
 anyhow = '1'
