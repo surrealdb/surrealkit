@@ -118,8 +118,9 @@ Two deliberate behaviour changes came with the fix:
   `--target` to those before, **check which database they were really hitting.**
   Selecting more than one target is refused: a rollout is a locked, resumable,
   per-database state machine, and fanning one id across N databases turns a
-  partial failure into N databases in different phases. `rollout status` is
-  read-only and does fan out.
+  partial failure into N databases in different phases. `rollout status` makes no
+  rollout changes and does fan out, though like every command it runs `setup`
+  first, which applies the metadata DDL.
 - `rollout plan` and `rollout lint` never connect, so they now refuse
   `--target`/`--all` rather than silently ignoring them. **This breaks uniform CI
   wrappers** that pass `--target` to every subcommand: those two now exit

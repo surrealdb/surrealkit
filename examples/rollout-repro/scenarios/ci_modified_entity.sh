@@ -73,3 +73,39 @@ kit rollout rollback "$ID"
 sql 'INFO FOR TABLE person;' | grep -q '>= 0' \
     || fail "rollback after a resume did not restore the original ASSERT"
 ok "rollback after a resume still restores the original"
+
+# An empty capture must survive a resume too.
+#
+# `rollout baseline` records catalog metadata without applying anything, so a
+# database baselined but never synced has no live definition to capture. start
+# stores an empty map and says so. If the gate keyed on that map being non-empty
+# rather than on this being the opening run, the resume would re-capture, find
+# the definitions the expand phase just wrote, and replace the warning with them.
+# Rollback would then report success having changed nothing, which is the failure
+# the gate exists to prevent, minus the warning that would have caught it.
+new_workspace modified_drift
+kit rollout baseline
+sed_i 's/ASSERT \$value >= 0;/ASSERT \$value >= 18;/' "$SURREALDB_FOLDER/schema/001_person.surql"
+kit rollout plan --name tighten_drift --allow-modified
+ID="$(manifest_id)"
+
+out="$(kit rollout start "$ID" 2>&1)"
+grep -q 'no live definition found' <<<"$out" || fail "start should warn that it captured nothing: $out"
+ok "start warned that there was nothing to capture"
+
+sql "UPDATE __rollout SET status = 'running_start' WHERE record::id(id) = '$ID';" >/dev/null
+kit rollout start "$ID" >/dev/null
+
+captured="$(sql "SELECT restore_definitions FROM __rollout WHERE record::id(id) = '$ID';" \
+    | jq -r '.[0].result[0].restore_definitions | length')"
+[ "$captured" = "0" ] \
+    || fail "resume replaced the empty capture with post-change definitions ($captured entries)"
+ok "resume left the empty capture alone"
+
+# And the rollback says so rather than reporting a success it did not achieve.
+if kit rollout rollback "$ID" >/tmp/drift_rollback.log 2>&1; then
+    fail "rollback reported success with nothing to restore"
+fi
+grep -q 'no captured definition' /tmp/drift_rollback.log \
+    || fail "rollback failed for the wrong reason: $(cat /tmp/drift_rollback.log)"
+ok "rollback failed loudly instead of silently doing nothing"

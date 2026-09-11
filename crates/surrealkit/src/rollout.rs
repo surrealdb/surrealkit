@@ -940,6 +940,8 @@ async fn start_inner(
 			}
 			_ => {}
 		}
+		// Whether this is the run that opens the rollout, as opposed to a resume.
+		let first_run = record.is_none();
 		if let Some(ref row) = record {
 			verify_rollout_record_matches(row, rollout)?;
 		} else {
@@ -957,13 +959,18 @@ async fn start_inner(
 		// nowhere on disk -- the catalog snapshot keeps only a hash -- so the live
 		// database is the only source for it.
 		//
-		// Capture exactly once, on the run that creates the record. `start` is
+		// Capture exactly once, on the run that opens the rollout. `start` is
 		// idempotent and re-running it after an interrupted run is the documented
 		// recovery, but by then the expand phase may already have applied: a second
 		// capture would read back the *new* definitions and overwrite the originals,
-		// leaving rollback to "restore" what is already there. That failure is
-		// silent, which makes it worse than not capturing at all.
-		let already_captured = !load_restore_definitions(db, &rollout.spec.id).await?.is_empty();
+		// leaving rollback to "restore" what is already there and report success.
+		//
+		// Keyed on the record being absent rather than on the stored map being
+		// empty, because an empty map is a real outcome: when the live database has
+		// drifted from the catalog there is nothing to capture, `start` says so, and
+		// a resume must not quietly replace that warning with the post-change
+		// definitions. Empty means "we looked and found nothing", not "we have not
+		// looked yet".
 		let restorable: Vec<EntityKey> = rollout
 			.spec
 			.steps
@@ -976,9 +983,10 @@ async fn start_inner(
 			})
 			.flatten()
 			.collect();
-		if already_captured {
+		if !first_run {
 			log::debug!(
-				"rollback definitions for '{}' were captured by an earlier run; keeping them",
+				"rollout '{}' is resuming; keeping the rollback definitions the opening run \
+				 captured",
 				rollout.spec.id
 			);
 		} else if !restorable.is_empty() {
