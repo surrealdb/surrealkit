@@ -103,6 +103,8 @@ fn make_cfg(url: &str, scope: &str, auth_level: AuthLevel, user: &str, pass: &st
 				.into(),
 			),
 			folder: None,
+			connect_timeout_secs: None,
+			query_timeout_secs: None,
 		},
 	)
 	.expect("DbCfg::from_env")

@@ -67,6 +67,10 @@ pub struct TargetConfig {
 	pub auth_level: Option<String>,
 	/// Restrict which schema modules apply to this target. `None` means all.
 	pub schemas: Option<Vec<String>>,
+	/// Per-target connect/sign-in deadline in seconds. `0` waits indefinitely.
+	pub connect_timeout_secs: Option<u64>,
+	/// Per-target rollout step deadline in seconds. `0` waits indefinitely.
+	pub query_timeout_secs: Option<u64>,
 	/// The target `typegen` introspects when several are selected.
 	#[serde(default)]
 	pub primary: bool,
@@ -328,14 +332,16 @@ impl Target {
 		};
 		Ok(Self {
 			name: name.to_string(),
-			cfg: base.overridden(
-				tc.host.clone(),
-				tc.ns.clone(),
-				tc.db.clone(),
-				tc.user.clone(),
-				pass,
-				auth_level,
-			),
+			cfg: base
+				.overridden(
+					tc.host.clone(),
+					tc.ns.clone(),
+					tc.db.clone(),
+					tc.user.clone(),
+					pass,
+					auth_level,
+				)
+				.with_timeouts(tc.connect_timeout_secs, tc.query_timeout_secs),
 			schemas: tc.schemas.clone(),
 		})
 	}

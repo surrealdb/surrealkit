@@ -17,8 +17,8 @@ use crate::rollout::{
 	load_managed_entities, release_lock, upsert_managed_entities,
 };
 use crate::schema_state::{
-	CatalogEntity, EntityKey, SchemaFile, build_catalog_snapshot, collect_schema_files_at,
-	ensure_local_state_dirs_for, ensure_overwrite, render_remove_sql,
+	CatalogEntity, EntityKey, SchemaFile, build_catalog_snapshot, canonicalise_keys,
+	collect_schema_files_at, ensure_local_state_dirs_for, ensure_overwrite, render_remove_sql,
 };
 use crate::setup::{run_setup, run_setup_embedded};
 use crate::variables::TemplateVars;
@@ -76,6 +76,7 @@ pub struct EmbeddedSchemaFile {
 pub async fn run_sync(db: &Surreal<Any>, opts: SyncOpts) -> Result<()> {
 	let layout = Layout::new(opts.folder.clone(), opts.module.clone());
 	let files = collect_filesystem_schema_files(
+		layout.folder(),
 		&layout.schema_dir(),
 		layout.module(),
 		opts.allow_empty_prune,
@@ -86,11 +87,12 @@ pub async fn run_sync(db: &Surreal<Any>, opts: SyncOpts) -> Result<()> {
 /// Resolve and validate filesystem schema sources before a CLI caller connects.
 #[doc(hidden)]
 pub fn collect_filesystem_schema_files(
+	root: &str,
 	schema_dir: &std::path::Path,
 	module: &Module,
 	allow_empty_prune: bool,
 ) -> Result<Vec<SchemaFile>> {
-	let files = collect_schema_files_at(schema_dir)?;
+	let files = collect_schema_files_at(root, schema_dir)?;
 	if files.is_empty() && !allow_empty_prune {
 		bail!(
 			"refusing filesystem sync: schema_module={} resolved_schema_dir={} source_count=0; \
@@ -312,7 +314,7 @@ async fn run_sync_once(
 	layout: &Layout,
 	watch_mode: bool,
 ) -> Result<()> {
-	let files = collect_schema_files_at(&layout.schema_dir())?;
+	let files = collect_schema_files_at(layout.folder(), &layout.schema_dir())?;
 	run_sync_with_files(db, opts, layout, &files, watch_mode).await
 }
 
@@ -324,8 +326,8 @@ async fn run_sync_with_files(
 	watch_mode: bool,
 ) -> Result<()> {
 	let desired_catalog = build_catalog_snapshot(files, opts.allow_all_statements)?;
-	let tracked = load_sync_hashes(db, layout.module()).await?;
-	let managed = load_managed_entities(db, layout.module()).await?;
+	let tracked = migrate_legacy_sync_keys(db, layout, files, opts.dry_run).await?;
+	let managed = load_managed_entities(db, layout.module(), Some(layout.folder())).await?;
 
 	if files.is_empty() && !watch_mode {
 		log::info!("No schema files found in {}", layout.schema_dir().display());
@@ -416,6 +418,28 @@ async fn run_sync_with_files(
 		// prune here drops the whole schema. In practice this means the folder is
 		// wrong (a mistyped --folder, or running from the wrong directory), not that
 		// the user meant to tear the database down.
+		// The key migration above rewrites legacy spellings onto the canonical
+		// ones. If it matched nothing while files exist and the store was not
+		// empty, the match is broken and every tracked key looks removed — which
+		// would prune the whole schema. Refuse rather than act on that.
+		if opts.prune
+			&& !files.is_empty()
+			&& !tracked.is_empty()
+			&& tracked.keys().all(|key| !files.iter().any(|f| &f.path == key))
+			&& !opts.allow_empty_prune
+		{
+			bail!(
+				"refusing to prune: none of the {} tracked file key(s) match the {} schema \
+				 file(s) found in {}.\n\
+				 That usually means the project folder moved or the tracking keys were \
+				 written by a different layout, not that every file was deleted.\n\
+				 Check --folder / SURREALDB_FOLDER, or pass --allow-empty-prune to proceed \
+				 anyway.",
+				tracked.len(),
+				files.len(),
+				layout.schema_dir().display()
+			);
+		}
 		if opts.prune && files.is_empty() && !opts.allow_empty_prune {
 			bail!(
 				"refusing to prune all {stale_count} managed entities: no schema files were found{}.\n\
@@ -571,6 +595,46 @@ async fn prune_managed_entities(
 	delete_managed_entities(db, module, stale_entities).await
 }
 
+/// Load tracked file hashes, rewriting any pre-1.0.0-beta.2 keys to the
+/// folder-relative form first.
+///
+/// Keys used to be working-directory-relative, so the same project tracked under
+/// `database/schema/a.surql` locally and `/database/schema/a.surql` in a
+/// container. Left alone, every file would look new *and* every old key would
+/// look removed, which is a schema-wide prune. Match legacy keys by path suffix,
+/// migrate them in place, and say how many moved.
+async fn migrate_legacy_sync_keys(
+	db: &Surreal<Any>,
+	layout: &Layout,
+	files: &[SchemaFile],
+	dry_run: bool,
+) -> Result<BTreeMap<String, String>> {
+	let stored = load_sync_hashes(db, layout.module()).await?;
+	let canonical: Vec<String> = files.iter().map(|f| f.path.clone()).collect();
+	let (migrated, re_keyed) = canonicalise_keys(&stored, &canonical);
+
+	if re_keyed.is_empty() {
+		return Ok(migrated);
+	}
+
+	// A matcher that finds nothing while the store is non-empty means the matcher
+	// is broken, not that every file was deleted. Guarded at the prune site.
+	log::info!(
+		"re-keyed {} tracked file(s) to folder-relative paths (e.g. {} -> {})",
+		re_keyed.len(),
+		re_keyed[0].0,
+		re_keyed[0].1
+	);
+	if !dry_run {
+		for (legacy, target) in &re_keyed {
+			let hash = migrated.get(target).cloned().unwrap_or_default();
+			delete_sync_hashes(db, layout.module(), std::slice::from_ref(legacy)).await?;
+			store_sync_hash(db, layout.module(), target, &hash).await?;
+		}
+	}
+	Ok(migrated)
+}
+
 async fn load_sync_hashes(db: &Surreal<Any>, module: &Module) -> Result<BTreeMap<String, String>> {
 	let mut resp = db
 		.query("SELECT key, val FROM __entity WHERE ns = $ns;")
@@ -695,8 +759,9 @@ mod tests {
 		let cfg = Config::new().capabilities(Capabilities::all());
 		let db = connect(("mem://", cfg)).await.expect("connect mem");
 		db.use_ns("watch_layout").use_db("watch_layout").await.expect("select namespace");
-		let files = collect_filesystem_schema_files(&schema_dir, layout.module(), false)
-			.expect("preflight custom path");
+		let files =
+			collect_filesystem_schema_files(layout.folder(), &schema_dir, layout.module(), false)
+				.expect("preflight custom path");
 		run_sync_with_filesystem_sources(&db, opts.clone(), &layout, &files)
 			.await
 			.expect("initial custom-path sync");

@@ -251,13 +251,16 @@ pub fn ensure_local_state_dirs(folder: &str) -> Result<()> {
 }
 
 pub fn collect_schema_files(folder: &str) -> Result<Vec<SchemaFile>> {
-	collect_schema_files_at(&schema_dir(folder))
+	collect_schema_files_at(folder, &schema_dir(folder))
 }
 
 /// Collect `.surql` files from an explicit directory, recursively and in sorted
 /// order. Used by module-aware callers, which resolve the directory through
 /// [`Layout`](crate::constants::Layout) rather than the project folder.
-pub fn collect_schema_files_at(sd: &std::path::Path) -> Result<Vec<SchemaFile>> {
+///
+/// `root` is the project folder. Tracking keys are relative to it, so the same
+/// file yields the same key no matter where the process runs from.
+pub fn collect_schema_files_at(root: &str, sd: &std::path::Path) -> Result<Vec<SchemaFile>> {
 	if !sd.exists() {
 		return Ok(Vec::new());
 	}
@@ -278,7 +281,7 @@ pub fn collect_schema_files_at(sd: &std::path::Path) -> Result<Vec<SchemaFile>> 
 	for path in files {
 		let sql = fs::read_to_string(&path).with_context(|| format!("reading {:?}", path))?;
 		let hash = sha256_hex(sql.as_bytes());
-		let path_str = normalize_path(&path)?;
+		let path_str = folder_relative_key(root, &path)?;
 		out.push(SchemaFile {
 			path: path_str,
 			sql,
@@ -309,14 +312,112 @@ pub fn hash_schema_snapshot(snapshot: &SchemaSnapshot) -> Result<String> {
 	Ok(sha256_hex(&canonical))
 }
 
+/// The hashes a pre-1.0.0-beta.2 manifest could carry for this same content.
+///
+/// `hash_schema_snapshot` includes each file's path, and paths used to be
+/// working-directory-relative. A manifest planned from a repo root recorded
+/// `database/schema/a.surql`; the same schema in a container recorded
+/// `/database/schema/a.surql`. Both hash differently from the folder-relative
+/// `schema/a.surql` used now, so `start`/`lint` would reject a perfectly valid
+/// manifest. Re-derive the legacy spellings from the configured folder and accept
+/// them, with a warning, until 1.1.0.
+pub fn legacy_schema_hashes(snapshot: &SchemaSnapshot, folder: &str) -> Result<Vec<String>> {
+	let trimmed = folder.trim_end_matches('/');
+	let bare = trimmed.strip_prefix("./").unwrap_or(trimmed);
+
+	let mut out = Vec::new();
+	for prefix in [bare, trimmed] {
+		if prefix.is_empty() {
+			continue;
+		}
+		let mut legacy = SchemaSnapshot {
+			version: snapshot.version,
+			files: snapshot
+				.files
+				.iter()
+				.map(|f| SchemaSnapshotEntry {
+					path: format!("{prefix}/{}", f.path),
+					hash: f.hash.clone(),
+				})
+				.collect(),
+		};
+		legacy.files.sort();
+		let hash = hash_schema_snapshot(&legacy)?;
+		if !out.contains(&hash) {
+			out.push(hash);
+		}
+	}
+	Ok(out)
+}
+
+/// Verify a manifest's recorded schema hash against the current files.
+///
+/// Accepts the canonical hash, or a pre-1.0.0-beta.2 path-dependent one with a
+/// warning naming the manifest.
+pub fn verify_schema_hash(
+	snapshot: &SchemaSnapshot,
+	folder: &str,
+	recorded: &str,
+	rollout_id: &str,
+) -> Result<()> {
+	let current = hash_schema_snapshot(snapshot)?;
+	if current == recorded {
+		return Ok(());
+	}
+	if legacy_schema_hashes(snapshot, folder)?.iter().any(|h| h == recorded) {
+		log::warn!(
+			"rollout '{rollout_id}' carries a pre-1.0.0-beta.2 schema hash, which depended on \
+			 the working directory. Accepting it for now -- re-run `surrealkit rollout plan` to \
+			 regenerate the manifest. This fallback is removed in 1.1.0."
+		);
+		return Ok(());
+	}
+	bail!("target schema hash mismatch for '{rollout_id}': manifest={recorded}, current={current}");
+}
+
 pub fn load_schema_snapshot(folder: &str) -> Result<SchemaSnapshot> {
-	load_json_or_default(
+	let mut snapshot: SchemaSnapshot = load_json_or_default(
 		schema_snapshot_path(folder),
 		SchemaSnapshot {
 			version: 1,
 			files: Vec::new(),
 		},
-	)
+	)?;
+	// Committed snapshots written before 1.0.0-beta.2 carry working-directory
+	// paths, which differ between a developer's checkout and CI. Normalise on
+	// load; the next `plan`/`baseline` writes the canonical form back, so the file
+	// self-heals with no spurious diff entries.
+	for entry in &mut snapshot.files {
+		entry.path = strip_folder_prefix(folder, &entry.path);
+	}
+	snapshot.files.sort();
+	Ok(snapshot)
+}
+
+/// Drop a legacy folder prefix from a stored key, leaving it folder-relative.
+///
+/// Handles every spelling `normalize_path` used to produce: `database/schema/x`,
+/// `./database/schema/x`, `/database/schema/x`, and any deeper
+/// working-directory-relative prefix.
+pub fn strip_folder_prefix(folder: &str, stored: &str) -> String {
+	let trimmed = folder.trim_end_matches('/');
+	let bare = trimmed.strip_prefix("./").unwrap_or(trimmed);
+	for prefix in [trimmed, bare] {
+		if prefix.is_empty() {
+			continue;
+		}
+		if let Some(rest) = stored.strip_prefix(prefix).and_then(|r| r.strip_prefix('/')) {
+			return rest.to_string();
+		}
+	}
+	// An unrecognised prefix could still be a deeper working-directory path. The
+	// last folder segment is the most reliable anchor available.
+	if let Some(name) = Path::new(bare).file_name().and_then(|n| n.to_str())
+		&& let Some(index) = stored.find(&format!("{name}/"))
+	{
+		return stored[index + name.len() + 1..].to_string();
+	}
+	stored.to_string()
 }
 
 pub fn save_schema_snapshot(folder: &str, snapshot: &SchemaSnapshot) -> Result<()> {
@@ -324,14 +425,24 @@ pub fn save_schema_snapshot(folder: &str, snapshot: &SchemaSnapshot) -> Result<(
 }
 
 pub fn load_catalog_snapshot(folder: &str) -> Result<CatalogSnapshot> {
-	load_json_or_default(
+	let mut snapshot: CatalogSnapshot = load_json_or_default(
 		catalog_snapshot_path(folder),
 		CatalogSnapshot {
 			version: 2,
 			entities: Vec::new(),
 			operations: Vec::new(),
 		},
-	)
+	)?;
+	// `source_path` is informational for the diff (entities key on kind/scope/name),
+	// but it is written straight back out, so normalising here keeps the committed
+	// file from churning between a checkout and a container.
+	for entity in &mut snapshot.entities {
+		entity.source_path = strip_folder_prefix(folder, &entity.source_path);
+	}
+	for op in &mut snapshot.operations {
+		op.source_path = strip_folder_prefix(folder, &op.source_path);
+	}
+	Ok(snapshot)
 }
 
 pub fn save_catalog_snapshot(folder: &str, snapshot: &CatalogSnapshot) -> Result<()> {
@@ -581,10 +692,78 @@ fn removal_sort_key(entity: &EntityKey) -> (usize, Option<String>, String, Strin
 	(weight, entity.scope.clone(), entity.kind.to_string(), entity.name.clone())
 }
 
-fn normalize_path(path: &Path) -> Result<String> {
-	let cwd = std::env::current_dir().context("resolving current directory")?;
-	let rel = path.strip_prefix(&cwd).or_else(|_| path.strip_prefix(".")).unwrap_or(path);
-	Ok(rel.to_string_lossy().replace('\\', "/"))
+/// The stable tracking key for a file inside the project folder: its path
+/// relative to `root`, forward-slashed.
+///
+/// Through 1.0.0-beta.1 this stripped the process **working directory** instead,
+/// so the same file was keyed `database/schema/a.surql` from a repo root but
+/// `/database/schema/a.surql` inside a container whose `WORKDIR` was not `/`.
+/// Every consumer of these keys — the `__entity` sync hashes, `__seed`, the
+/// committed snapshots, and a manifest's `target_schema_hash` — then disagreed
+/// across environments. Keying on `root` removes the working directory from the
+/// equation entirely.
+pub fn folder_relative_key(root: &str, path: &Path) -> Result<String> {
+	let root_path = Path::new(root);
+	if let Ok(rel) = path.strip_prefix(root_path) {
+		return Ok(slashed(rel));
+	}
+	// The walked path and the configured root can be spelled differently (`./db`
+	// vs `db`, relative vs absolute). Canonicalising both settles it; if either
+	// side cannot be canonicalised, fall back to the path as given.
+	if let (Ok(abs_root), Ok(abs_path)) = (root_path.canonicalize(), path.canonicalize())
+		&& let Ok(rel) = abs_path.strip_prefix(&abs_root)
+	{
+		return Ok(slashed(rel));
+	}
+	Ok(slashed(path))
+}
+
+fn slashed(path: &Path) -> String {
+	path.to_string_lossy().replace('\\', "/")
+}
+
+/// Whether `stored` is a pre-1.0.0-beta.2 spelling of the folder-relative key
+/// `canonical`.
+///
+/// Legacy keys were the canonical key behind some prefix — `database/`,
+/// `./database/`, `/database/`, or any working-directory-relative path. Matching
+/// on a trailing path-segment boundary covers all of them without the code
+/// needing to know the historical folder or working directory.
+pub fn is_legacy_key_for(stored: &str, canonical: &str) -> bool {
+	if stored == canonical {
+		return true;
+	}
+	stored.strip_suffix(canonical).is_some_and(|prefix| prefix.ends_with('/'))
+}
+
+/// Rewrite a map of stored keys onto canonical ones, reporting what moved.
+///
+/// Returns `(canonicalised, re_keyed)` where `re_keyed` pairs each legacy key
+/// with the canonical key it matched, so the caller can migrate the store and
+/// say how many rows it touched.
+pub fn canonicalise_keys<V: Clone>(
+	stored: &BTreeMap<String, V>,
+	canonical: &[String],
+) -> (BTreeMap<String, V>, Vec<(String, String)>) {
+	let mut out = BTreeMap::new();
+	let mut re_keyed = Vec::new();
+	for (key, value) in stored {
+		if canonical.iter().any(|c| c == key) {
+			out.insert(key.clone(), value.clone());
+			continue;
+		}
+		match canonical.iter().find(|c| is_legacy_key_for(key, c)) {
+			Some(target) => {
+				re_keyed.push((key.clone(), target.clone()));
+				out.insert(target.clone(), value.clone());
+			}
+			// No match: a genuinely removed file. Keep it so prune still sees it.
+			None => {
+				out.insert(key.clone(), value.clone());
+			}
+		}
+	}
+	(out, re_keyed)
 }
 
 fn load_json_or_default<T>(path: impl AsRef<std::path::Path>, default: T) -> Result<T>
@@ -880,6 +1059,8 @@ fn truncate_stmt(stmt: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+	use std::path::PathBuf;
+
 	use test_case::test_case;
 
 	use super::*;
@@ -1996,5 +2177,127 @@ mod tests {
 
 		let diff = diff_catalog(&old, &new);
 		assert_eq!(diff.modified.len(), 1, "modifier change should be a modification");
+	}
+
+	// --- Folder-relative tracking keys (BUG: cwd-relative keys diverged between a
+	// local checkout and a container, re-keying every tracked file).
+
+	#[test]
+	fn keys_are_relative_to_the_folder_not_the_working_directory() {
+		for folder in ["./database", "database", "/srv/database"] {
+			let path = PathBuf::from(folder).join("schema").join("user.surql");
+			assert_eq!(
+				folder_relative_key(folder, &path).expect("key"),
+				"schema/user.surql",
+				"folder {folder:?} produced a non-canonical key"
+			);
+		}
+	}
+
+	#[test]
+	fn module_keys_keep_their_module_path() {
+		let path = PathBuf::from("database/modules/billing/schema/001.surql");
+		assert_eq!(
+			folder_relative_key("database", &path).expect("key"),
+			"modules/billing/schema/001.surql"
+		);
+	}
+
+	#[test]
+	fn every_legacy_spelling_maps_onto_one_canonical_key() {
+		let canonical = "schema/user.surql";
+		for stored in [
+			"schema/user.surql",
+			"database/schema/user.surql",
+			"./database/schema/user.surql",
+			"/database/schema/user.surql",
+			"/home/runner/work/app/database/schema/user.surql",
+		] {
+			assert!(is_legacy_key_for(stored, canonical), "{stored:?} should match {canonical:?}");
+		}
+	}
+
+	#[test]
+	fn a_genuinely_different_file_is_not_treated_as_a_legacy_key() {
+		assert!(!is_legacy_key_for("schema/other.surql", "schema/user.surql"));
+		// A suffix that is not on a path-segment boundary must not match, or
+		// `admin_user.surql` would be mistaken for `user.surql`.
+		assert!(!is_legacy_key_for("schema/admin_user.surql", "schema/user.surql"));
+	}
+
+	#[test]
+	fn canonicalise_keys_migrates_legacy_and_keeps_genuinely_removed_files() {
+		let mut stored = BTreeMap::new();
+		stored.insert("/database/schema/user.surql".to_string(), "hash-a".to_string());
+		stored.insert("database/schema/post.surql".to_string(), "hash-b".to_string());
+		stored.insert("schema/deleted.surql".to_string(), "hash-c".to_string());
+
+		let canonical = ["schema/user.surql".to_string(), "schema/post.surql".to_string()];
+		let (migrated, re_keyed) = canonicalise_keys(&stored, &canonical);
+
+		assert_eq!(migrated.get("schema/user.surql"), Some(&"hash-a".to_string()));
+		assert_eq!(migrated.get("schema/post.surql"), Some(&"hash-b".to_string()));
+		// A file that really was deleted must survive as a stale key so prune sees it.
+		assert_eq!(migrated.get("schema/deleted.surql"), Some(&"hash-c".to_string()));
+		assert_eq!(re_keyed.len(), 2, "both legacy spellings should be re-keyed");
+	}
+
+	#[test]
+	fn strip_folder_prefix_handles_every_folder_spelling() {
+		for folder in ["database", "./database", "/database"] {
+			for stored in
+				["database/schema/a.surql", "./database/schema/a.surql", "/database/schema/a.surql"]
+			{
+				assert_eq!(
+					strip_folder_prefix(folder, stored),
+					"schema/a.surql",
+					"folder={folder:?} stored={stored:?}"
+				);
+			}
+		}
+		// Already canonical: left alone.
+		assert_eq!(strip_folder_prefix("database", "schema/a.surql"), "schema/a.surql");
+	}
+
+	/// The manifest-portability bug: a rollout planned from a repo root could not
+	/// be started in a container, because the hash covered the paths.
+	#[test]
+	fn the_schema_hash_no_longer_depends_on_where_the_command_ran() {
+		let files = |root: &str| {
+			vec![SchemaFile {
+				path: folder_relative_key(root, &PathBuf::from(root).join("schema/a.surql"))
+					.expect("key"),
+				sql: "DEFINE TABLE a SCHEMAFULL;".to_string(),
+				hash: "content-hash".to_string(),
+			}]
+		};
+
+		let local = hash_schema_snapshot(&snapshot_from_files(&files("./database"))).expect("hash");
+		let container =
+			hash_schema_snapshot(&snapshot_from_files(&files("/database"))).expect("hash");
+		assert_eq!(local, container, "the same schema must hash identically in any environment");
+	}
+
+	#[test]
+	fn a_pre_beta2_manifest_hash_is_accepted_with_a_warning() {
+		let snapshot = snapshot_from_files(&[SchemaFile {
+			path: "schema/a.surql".to_string(),
+			sql: "DEFINE TABLE a SCHEMAFULL;".to_string(),
+			hash: "content-hash".to_string(),
+		}]);
+
+		let legacy = legacy_schema_hashes(&snapshot, "./database").expect("legacy hashes");
+		assert!(!legacy.is_empty(), "expected at least one legacy spelling");
+
+		// Every legacy spelling the old code could have recorded must still verify.
+		for recorded in &legacy {
+			verify_schema_hash(&snapshot, "./database", recorded, "20260101000000__demo")
+				.expect("a pre-beta2 manifest must still start");
+		}
+
+		// A genuinely different schema must still be rejected.
+		let err = verify_schema_hash(&snapshot, "./database", "deadbeef", "20260101000000__demo")
+			.expect_err("a real mismatch must fail");
+		assert!(err.to_string().contains("target schema hash mismatch"), "got: {err}");
 	}
 }

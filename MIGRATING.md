@@ -7,7 +7,7 @@ produces the same database metadata, apart from the safety refusal for an empty
 filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
-Three things do need attention.
+Seven things do need attention.
 
 ### 1. Move `database/seed.surql`
 
@@ -57,6 +57,93 @@ Either point `--folder` at the right directory, drop the flag, or pass
 also applies to `--dry-run`, `--no-prune`, and the initial `--watch` sync because
 an empty filesystem selection otherwise cannot distinguish intentional absence
 from a wrong path.
+
+### 4. Tracked paths are now relative to the project folder
+
+Before 1.0.0-beta.2, SurrealKit keyed tracked schema and seed files by their path
+**relative to the process working directory**. The same file therefore had a
+different key depending on where you ran the command — `database/schema/001.surql`
+from your repo root, but `/database/schema/001.surql` inside a container whose
+`WORKDIR` was not `/`.
+
+That single detail caused four separate symptoms: `sync` saw every file as new,
+prunes were unsafe, committed snapshots churned in git between a developer
+checkout and CI, and a rollout planned locally failed `rollout start` in a
+container with `target schema hash mismatch` for byte-identical SQL.
+
+Keys are now relative to the project folder — `schema/001.surql`,
+`seed/000_init.surql`, `modules/billing/schema/001.surql` — and are identical in
+every environment.
+
+**You do not need to do anything.** The first `surrealkit sync` after upgrading
+matches your existing keys by path suffix and rewrites them in place, logging
+`re-keyed N tracked file(s)`. `surrealkit seed` does the same for `__seed`.
+Snapshot files are rewritten on the next `rollout plan` or `rollout baseline`.
+
+Two things to know:
+
+- **Run `sync` before `seed` once**, on each database, from a checkout where
+  every tracked file still exists. Re-keying matches against the files present on
+  disk; a file deleted in the same change as the upgrade is treated as removed
+  (which it is) and pruned normally.
+- **Rollout manifests generated before the upgrade carry an old
+  `target_schema_hash`.** They still start, with a warning naming the manifest.
+  Re-run `surrealkit rollout plan` to regenerate any manifest you have not yet
+  executed. The compatibility fallback is removed in 1.1.0.
+
+If you worked around this by pinning your container's `WORKDIR` to `/`, you can
+drop that.
+
+### 5. `rollout` subcommands take a rollout id again
+
+1.0.0-beta.1 added a global `-t/--target` whose argument id collided with the
+positional on `rollout start`, `complete`, `rollback`, `status`, `lint` and
+`repair`. The rollout id was parsed as a database target name, so every one of
+those commands failed with `unknown target "<rollout-id>"` before connecting, and
+`--target` was rejected outright on them. **Rollout execution was unusable on
+1.0.0-beta.1.** Upgrade.
+
+Two deliberate behaviour changes came with the fix:
+
+- `--target` now actually selects the database for `baseline`, `start`,
+  `complete`, `rollback` and `repair`, instead of being accepted and ignored while
+  the command ran against the ambient `SURREALDB_*` connection. If you passed
+  `--target` to those before, **check which database they were really hitting.**
+  Selecting more than one target is refused: a rollout is a locked, resumable,
+  per-database state machine, and fanning one id across N databases turns a
+  partial failure into N databases in different phases. `rollout status` is
+  read-only and does fan out.
+- `rollout plan` and `rollout lint` never connect, so they now refuse
+  `--target`/`--all` rather than silently ignoring them.
+
+### 6. A connect deadline, on by default
+
+Nothing between the CLI and the database had a timeout. An endpoint that accepted
+the connection and never completed the handshake — a database restarting behind a
+proxy, a mid-deploy app swap — blocked forever, which in a deploy pipeline looks
+like a rollout that hangs until CI kills the job and leaves `__rollout` in an
+intermediate state.
+
+Connect and sign-in now have a 30-second budget. Tune it with
+`--connect-timeout-secs`, `SURREALDB_CONNECT_TIMEOUT_SECS`, or
+`connect_timeout_secs` in a `[target.*]` section; `0` restores the old
+wait-forever behaviour.
+
+Step SQL is **not** bounded by default, because a legitimate index build can take
+hours. Opt in with `--query-timeout-secs` / `SURREALDB_QUERY_TIMEOUT_SECS` when
+you want one. Independently of any timeout, `rollout start`/`complete` now log
+each step as it begins and every 15 seconds while it runs, so a slow step is
+distinguishable from a hang.
+
+### 7. `rollout plan` no longer advances the snapshots
+
+Snapshots described the new state as soon as you planned, before anything was
+applied. A plan that was then abandoned or rolled back left the snapshots
+claiming a state the database never reached, so the next `plan` produced an empty
+diff and the change was silently lost.
+
+`rollout complete` writes them now. Planning twice for the same change is refused
+with a pointer to the existing manifest.
 
 ## Opting into multiple schema modules
 

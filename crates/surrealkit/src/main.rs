@@ -85,6 +85,16 @@ pub struct Cli {
 	#[arg(long, global = true)]
 	folder: Option<String>,
 
+	/// Seconds to wait for the database connection and sign-in (default: 30).
+	/// `0` waits indefinitely, which was the behaviour through 1.0.0-beta.1.
+	#[arg(long, global = true, value_name = "SECS")]
+	connect_timeout_secs: Option<u64>,
+
+	/// Seconds to wait for a single rollout step's SQL. Unset waits
+	/// indefinitely, because a legitimate index build can take hours.
+	#[arg(long, global = true, value_name = "SECS")]
+	query_timeout_secs: Option<u64>,
+
 	/// Set a template variable (repeatable): --var KEY=VALUE
 	#[arg(long = "var", global = true, value_name = "KEY=VALUE")]
 	var: Vec<String>,
@@ -195,6 +205,13 @@ enum Commands {
 	},
 }
 
+/// Rollout subcommands.
+///
+/// The rollout-id positionals are named `rollout`, not `target`: clap derives an
+/// arg id from the field name, and a positional named `target` collides with the
+/// global `-t/--target`. That collision silently ate the rollout id in
+/// 1.0.0-beta.1 (`unknown target "<rollout-id>"`) and hid `--target` from these
+/// subcommands entirely. `no_subcommand_shadows_a_global_arg_id` pins it.
 #[derive(Subcommand, Debug)]
 enum RolloutCommands {
 	Baseline,
@@ -203,27 +220,39 @@ enum RolloutCommands {
 		name: Option<String>,
 		#[arg(long)]
 		dry_run: bool,
+		/// Plan changes to entities that already exist (e.g. tightening an
+		/// ASSERT), not just additions and removals. Rollback restores the
+		/// previous definition, which reverses the schema but not any data
+		/// effect the change had.
+		#[arg(long)]
+		allow_modified: bool,
 	},
 	Start {
-		target: String,
+		#[arg(value_name = "ROLLOUT_ID")]
+		rollout: String,
 	},
 	Complete {
-		target: String,
+		#[arg(value_name = "ROLLOUT_ID")]
+		rollout: String,
 	},
 	Rollback {
-		target: String,
+		#[arg(value_name = "ROLLOUT_ID")]
+		rollout: String,
 	},
 	Status {
-		target: Option<String>,
+		#[arg(value_name = "ROLLOUT_ID")]
+		rollout: Option<String>,
 	},
 	Lint {
-		target: String,
+		#[arg(value_name = "ROLLOUT_ID")]
+		rollout: String,
 	},
 	/// Heal a rollout stuck in an intermediate state without re-running SQL
 	/// steps. Useful when `complete` was killed mid-flight (issue #55) and
 	/// `__rollout.status` is still `running_complete` / `running_rollback`.
 	Repair {
-		target: String,
+		#[arg(value_name = "ROLLOUT_ID")]
+		rollout: String,
 	},
 }
 
@@ -352,6 +381,37 @@ impl Selection {
 			),
 		}
 	}
+
+	/// The single selected target, for commands that must not fan out.
+	///
+	/// Rollout execution is a locked, resumable state machine with one
+	/// `__rollout` record per database. Fanning one rollout id across N targets
+	/// would turn a partial failure into N databases sitting in different phases,
+	/// so these commands refuse rather than loop.
+	fn single_target(&self) -> Result<&Target> {
+		match self.targets.as_slice() {
+			[one] => Ok(one),
+			other => bail!(
+				"this command operates on one database target at a time ({} selected); \
+				 pass --target <NAME>",
+				other.len()
+			),
+		}
+	}
+}
+
+/// Refuse `--target`/`--all` on a command that never opens a database connection.
+///
+/// These commands read only the filesystem, so accepting the flag and ignoring it
+/// reads as "applied to that target" when nothing of the sort happened.
+fn refuse_target_selection(command: &str, used: bool) -> Result<()> {
+	if used {
+		bail!(
+			"{command} reads only the filesystem and never connects, so --target/--all \
+			 has no effect; drop the flag"
+		);
+	}
+	Ok(())
 }
 
 /// The outcome of applying one module to one target.
@@ -473,6 +533,8 @@ async fn main() -> Result<()> {
 		pass: args.pass,
 		auth_level: args.auth_level,
 		folder: args.folder,
+		connect_timeout_secs: args.connect_timeout_secs,
+		query_timeout_secs: args.query_timeout_secs,
 	};
 
 	let raw_vars: Vec<(String, String)> =
@@ -486,6 +548,9 @@ async fn main() -> Result<()> {
 	let project = ProjectConfig::load(None)?;
 	let selection =
 		Selection::resolve(&project, &cfg, &args.schema, &args.target, args.all, args.no_deps)?;
+	// Read before `args.command` is moved. Offline commands use it to refuse a
+	// target selection rather than accept one and silently ignore it.
+	let target_selection_used = !args.target.is_empty() || args.all;
 
 	match args.command {
 		Commands::Init {
@@ -547,6 +612,7 @@ async fn main() -> Result<()> {
 						let layout = project.layout_for(&folder, &module);
 						let schema_dir = layout.schema_dir();
 						let files = sync::collect_filesystem_schema_files(
+							layout.folder(),
 							&schema_dir,
 							&module,
 							allow_empty_prune,
@@ -622,90 +688,104 @@ async fn main() -> Result<()> {
 			command,
 		} => match command {
 			RolloutCommands::Baseline => {
-				let db = connect(&cfg).await?;
+				let db = connect(selection.single_target()?.cfg()).await?;
 				rollout::run_baseline(&db, &folder, selection.single_module()?).await?;
 			}
 			RolloutCommands::Plan {
 				name,
 				dry_run,
+				allow_modified,
 			} => {
+				refuse_target_selection("rollout plan", target_selection_used)?;
 				rollout::run_plan(
 					&folder,
 					RolloutPlanOpts {
 						name,
 						dry_run,
+						allow_modified,
 					},
 				)
 				.await?;
 			}
 			RolloutCommands::Start {
-				target,
+				rollout,
 			} => {
-				let db = connect(&cfg).await?;
+				let target = selection.single_target()?;
+				let db = connect(target.cfg()).await?;
 				rollout::run_start(
 					&db,
 					&folder,
 					RolloutExecutionOpts {
-						selector: Some(target),
+						selector: Some(rollout),
+						query_timeout: target.cfg().query_timeout,
 					},
 					&template_vars,
 				)
 				.await?;
 			}
 			RolloutCommands::Complete {
-				target,
+				rollout,
 			} => {
-				let db = connect(&cfg).await?;
+				let target = selection.single_target()?;
+				let db = connect(target.cfg()).await?;
 				rollout::run_complete(
 					&db,
 					&folder,
 					RolloutExecutionOpts {
-						selector: Some(target),
+						selector: Some(rollout),
+						query_timeout: target.cfg().query_timeout,
 					},
 					&template_vars,
 				)
 				.await?;
 			}
 			RolloutCommands::Rollback {
-				target,
+				rollout,
 			} => {
-				let db = connect(&cfg).await?;
+				let target = selection.single_target()?;
+				let db = connect(target.cfg()).await?;
 				rollout::run_rollback(
 					&db,
 					&folder,
 					RolloutExecutionOpts {
-						selector: Some(target),
+						selector: Some(rollout),
+						query_timeout: target.cfg().query_timeout,
 					},
 					&template_vars,
 				)
 				.await?;
 			}
 			RolloutCommands::Status {
-				target,
+				rollout,
 			} => {
-				let db = connect(&cfg).await?;
-				rollout::run_status(&db, &folder, target).await?;
+				// Status is read-only, so it is the one rollout command that may
+				// safely fan out across every selected target.
+				let fan_out = selection.targets().len() > 1;
+				for target in selection.targets() {
+					if fan_out {
+						log::info!("=== target {} ===", target.name());
+					}
+					let db = connect(target.cfg()).await?;
+					rollout::run_status(&db, &folder, rollout.clone()).await?;
+				}
 			}
 			RolloutCommands::Lint {
-				target,
+				rollout,
 			} => {
-				rollout::run_lint(
-					&folder,
-					RolloutExecutionOpts {
-						selector: Some(target),
-					},
-				)
-				.await?;
+				refuse_target_selection("rollout lint", target_selection_used)?;
+				rollout::run_lint(&folder, RolloutExecutionOpts::new(Some(rollout))).await?;
 			}
 			RolloutCommands::Repair {
-				target,
+				rollout,
 			} => {
-				let db = connect(&cfg).await?;
+				let target = selection.single_target()?;
+				let db = connect(target.cfg()).await?;
 				rollout::run_repair(
 					&db,
 					&folder,
 					RolloutExecutionOpts {
-						selector: Some(target),
+						selector: Some(rollout),
+						query_timeout: target.cfg().query_timeout,
 					},
 				)
 				.await?;
@@ -949,5 +1029,55 @@ mod selection_tests {
 	fn single_module_errors_when_several_are_selected() {
 		let sel = resolve("[schema.a]\n[schema.b]\n", &[], &[], false, false);
 		assert!(sel.single_module().is_err(), "commands that cannot fan out must refuse");
+	}
+
+	#[test]
+	fn single_target_errors_when_several_are_selected() {
+		let sel = resolve("[target.a]\n[target.b]\n", &[], &[], true, false);
+		assert!(sel.single_target().is_err(), "rollout commands must not fan out across targets");
+	}
+
+	/// A subcommand arg whose clap id matches a global arg's id is silently
+	/// swallowed: clap skips propagating the global into that subcommand, and the
+	/// subcommand's value is hoisted back into the parent under the shared id.
+	///
+	/// That is how 1.0.0-beta.1 shipped with every rollout id being parsed as a
+	/// `--target` name, which made `rollout start/complete/rollback/status/lint/
+	/// repair` fail with `unknown target "<rollout-id>"` before ever connecting.
+	///
+	/// `Command::debug_assert()` does not catch this — its duplicate-id check is
+	/// scoped within a single `Command`, and cross-level shadowing is exactly the
+	/// case it skips. So walk the tree explicitly.
+	#[test]
+	fn no_subcommand_shadows_a_global_arg_id() {
+		use clap::CommandFactory;
+
+		let root = Cli::command();
+		let globals: Vec<String> = root
+			.get_arguments()
+			.filter(|a| a.is_global_set())
+			.map(|a| a.get_id().to_string())
+			.collect();
+		assert!(!globals.is_empty(), "expected at least one global arg to guard");
+
+		fn walk(cmd: &clap::Command, globals: &[String], path: &str, bad: &mut Vec<String>) {
+			for sub in cmd.get_subcommands() {
+				let here = format!("{path} {}", sub.get_name());
+				for arg in sub.get_arguments() {
+					let id = arg.get_id().to_string();
+					if globals.contains(&id) {
+						bad.push(format!("`{}` redefines global arg id `{id}`", here.trim()));
+					}
+				}
+				walk(sub, globals, &here, bad);
+			}
+		}
+
+		let mut bad = Vec::new();
+		walk(&root, &globals, "", &mut bad);
+		assert!(bad.is_empty(), "argument id shadowing:\n  {}", bad.join("\n  "));
+
+		// Cheap extra: catches same-level duplicates, which this walk does not.
+		Cli::command().debug_assert();
 	}
 }

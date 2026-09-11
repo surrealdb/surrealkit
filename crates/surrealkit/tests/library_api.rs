@@ -570,6 +570,7 @@ async fn rollout_status_does_not_crash_after_completed_rollout() {
 		RolloutPlanOpts {
 			name: Some("add_account_status_test".to_string()),
 			dry_run: false,
+			allow_modified: false,
 		},
 	)
 	.await
@@ -580,9 +581,7 @@ async fn rollout_status_does_not_crash_after_completed_rollout() {
 	run_start(
 		&db,
 		folder,
-		RolloutExecutionOpts {
-			selector: Some(rollout_id.clone()),
-		},
+		RolloutExecutionOpts::new(Some(rollout_id.clone())),
 		&TemplateVars::default(),
 	)
 	.await
@@ -591,9 +590,7 @@ async fn rollout_status_does_not_crash_after_completed_rollout() {
 	run_complete(
 		&db,
 		folder,
-		RolloutExecutionOpts {
-			selector: Some(rollout_id.clone()),
-		},
+		RolloutExecutionOpts::new(Some(rollout_id.clone())),
 		&TemplateVars::default(),
 	)
 	.await
@@ -639,6 +636,7 @@ async fn rollout_full_lifecycle_via_cli_functions() {
 		RolloutPlanOpts {
 			name: Some("add_account".to_string()),
 			dry_run: false,
+			allow_modified: false,
 		},
 	)
 	.await
@@ -649,9 +647,7 @@ async fn rollout_full_lifecycle_via_cli_functions() {
 	run_start(
 		&db,
 		folder,
-		RolloutExecutionOpts {
-			selector: Some(rollout_id.clone()),
-		},
+		RolloutExecutionOpts::new(Some(rollout_id.clone())),
 		&TemplateVars::default(),
 	)
 	.await
@@ -662,9 +658,7 @@ async fn rollout_full_lifecycle_via_cli_functions() {
 	run_complete(
 		&db,
 		folder,
-		RolloutExecutionOpts {
-			selector: Some(rollout_id.clone()),
-		},
+		RolloutExecutionOpts::new(Some(rollout_id.clone())),
 		&TemplateVars::default(),
 	)
 	.await
@@ -691,6 +685,7 @@ async fn rollout_rollback_after_start_via_cli_functions() {
 		RolloutPlanOpts {
 			name: Some("add_invoice".to_string()),
 			dry_run: false,
+			allow_modified: false,
 		},
 	)
 	.await
@@ -701,9 +696,7 @@ async fn rollout_rollback_after_start_via_cli_functions() {
 	run_start(
 		&db,
 		folder,
-		RolloutExecutionOpts {
-			selector: Some(rollout_id.clone()),
-		},
+		RolloutExecutionOpts::new(Some(rollout_id.clone())),
 		&TemplateVars::default(),
 	)
 	.await
@@ -712,9 +705,7 @@ async fn rollout_rollback_after_start_via_cli_functions() {
 	run_rollback(
 		&db,
 		folder,
-		RolloutExecutionOpts {
-			selector: Some(rollout_id.clone()),
-		},
+		RolloutExecutionOpts::new(Some(rollout_id.clone())),
 		&TemplateVars::default(),
 	)
 	.await

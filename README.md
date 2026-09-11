@@ -134,6 +134,8 @@ Embedded engines are single-process, so run the CLI while your application is st
 > than ignoring it — ignoring it would silently fall back to the defaults and
 > connect to the wrong database.
 - `SURREALDB_FOLDER` — root folder for schema, rollouts, snapshots, seed, and tests (default: `./database`)
+- `SURREALDB_CONNECT_TIMEOUT_SECS` — deadline for connect and sign-in (default: `30`; `0` waits indefinitely)
+- `SURREALDB_QUERY_TIMEOUT_SECS` — deadline for a single rollout step's SQL (unset waits indefinitely)
 
 These can be set as system environment variables or in a `.env` file.
 
@@ -417,6 +419,25 @@ surrealkit rollout baseline
 surrealkit rollout plan --name add_customer_indexes
 ```
 
+`plan` handles additions and removals on its own. A change to an entity that
+already exists — tightening an `ASSERT`, adjusting `PERMISSIONS` — needs
+`--allow-modified`:
+
+```sh
+surrealkit rollout plan --name tighten_age_assert --allow-modified
+```
+
+The opt-in is about rollback, not about applying the change: applying it is just
+`DEFINE ... OVERWRITE`. Undoing it means restoring the previous definition, which
+`start` captures from the live database before the expand phase. That is a clean
+undo for `ASSERT`, `PERMISSIONS` and `COMMENT`, and only a partial one for `TYPE`,
+`VALUE` or `DEFAULT` changes, since it reverses the schema but not data written
+under the new definition. Such a rollout is recorded as
+`reversibility: definition_only` and `rollout status` says so.
+
+Snapshots advance on `complete`, not on `plan` — a plan you abandon leaves them
+describing the state the database is actually in.
+
 6. Start the rollout, let application cutover happen, then complete it:
 
 ```sh
@@ -463,6 +484,13 @@ surrealkit sync --allow-all-statements
 `surrealkit sync` is the local/dev reconciliation path. `surrealkit rollout ...` is the shared/prod migration path.
 
 ### Recovering a stuck rollout
+
+Connect and sign-in are bounded by `--connect-timeout-secs` (30s by default), so
+an endpoint that accepts the connection and never responds fails with a message
+naming it rather than blocking. Step SQL is not bounded by default — a legitimate
+index build can take hours — but every step logs when it starts and every 15
+seconds while it runs, so a slow step is distinguishable from a stuck one. Bound
+it explicitly with `--query-timeout-secs` when you want to.
 
 If `surrealkit rollout complete` (or `rollback`) is killed mid-flight, the
 `__rollout` row can be left in an intermediate state — `running_complete`,

@@ -8,6 +8,7 @@ use surrealdb::engine::any::Any;
 
 use crate::constants::seed_dir;
 use crate::core::{display, exec_surql, sha256_hex};
+use crate::schema_state::{canonicalise_keys, folder_relative_key};
 use crate::variables::TemplateVars;
 
 /// Lazily provisions the `__seed` tracking table. Run as part of the first write
@@ -120,7 +121,7 @@ impl<'a> Seed<'a> {
 						display(&dir)
 					);
 				}
-				run_dir(db, &dir, &vars, force).await
+				run_dir(db, Some(folder.as_str()), &dir, &vars, force).await
 			}
 		}
 	}
@@ -135,9 +136,13 @@ pub async fn seed(db: &Surreal<Any>, folder: &str, vars: &TemplateVars) -> Resul
 	Seed::from_dir(folder).vars(vars.clone()).run(db).await
 }
 
+/// Seed from an arbitrary directory, with no project folder to key against.
+///
+/// Keys stay path-as-given here: the caller named a directory rather than a
+/// project, so there is no folder root to make them relative to.
 #[doc(hidden)]
 pub async fn seed_from_dir(db: &Surreal<Any>, dir: &Path, vars: &TemplateVars) -> Result<()> {
-	run_dir(db, dir, vars, false).await
+	run_dir(db, None, dir, vars, false).await
 }
 
 /// Counters for a single seed run.
@@ -182,7 +187,13 @@ async fn apply_seed(
 
 /// Run all `.surql` files directly inside `dir` (single level, lexicographic),
 /// with `__seed` hash tracking.
-async fn run_dir(db: &Surreal<Any>, dir: &Path, vars: &TemplateVars, force: bool) -> Result<()> {
+async fn run_dir(
+	db: &Surreal<Any>,
+	root: Option<&str>,
+	dir: &Path,
+	vars: &TemplateVars,
+	force: bool,
+) -> Result<()> {
 	let mut files: Vec<PathBuf> = fs::read_dir(dir)
 		.with_context(|| format!("reading directory {}", display(dir)))?
 		.filter_map(|entry| {
@@ -199,16 +210,49 @@ async fn run_dir(db: &Surreal<Any>, dir: &Path, vars: &TemplateVars, force: bool
 
 	log::info!("Seeding from {} ({} files found)", display(dir), files.len());
 
-	let tracked = load_seed_hashes(db).await?;
+	// Seed keys are folder-relative (`seed/000_init.surql`). They used to be the
+	// path exactly as constructed from the folder string -- `./database/seed/x.surql`
+	// locally, `/database/seed/x.surql` in a container -- so every environment
+	// switch re-ran every seed. A non-idempotent seed re-running is data
+	// corruption, so legacy keys are matched by suffix and migrated in place.
+	let keys: Vec<String> = files
+		.iter()
+		.map(|path| match root {
+			Some(root) => folder_relative_key(root, path),
+			None => Ok(display(path)),
+		})
+		.collect::<Result<_>>()?;
+
+	let stored = load_seed_hashes(db).await?;
+	let (tracked, re_keyed) = canonicalise_keys(&stored, &keys);
+	if !re_keyed.is_empty() {
+		log::info!(
+			"re-keyed {} tracked seed file(s) to folder-relative paths (e.g. {} -> {})",
+			re_keyed.len(),
+			re_keyed[0].0,
+			re_keyed[0].1
+		);
+		for (legacy, target) in &re_keyed {
+			let hash = tracked.get(target).cloned().unwrap_or_default();
+			store_seed_hash(db, target, &hash).await?;
+			delete_seed_hash(db, legacy).await?;
+		}
+	}
+
 	let mut stats = SeedStats::default();
 
-	for path in &files {
+	for (path, key) in files.iter().zip(&keys) {
 		let raw = fs::read_to_string(path).with_context(|| format!("reading {}", display(path)))?;
-		let key = display(path);
-		apply_seed(db, &key, &raw, &tracked, force, vars, &mut stats).await?;
+		apply_seed(db, key, &raw, &tracked, force, vars, &mut stats).await?;
 	}
 
 	stats.report();
+	Ok(())
+}
+
+/// Remove a `__seed` row by key. Used to retire a migrated legacy key.
+async fn delete_seed_hash(db: &Surreal<Any>, key: &str) -> Result<()> {
+	db.query("DELETE __seed WHERE key = $key;").bind(("key", key.to_string())).await?.check()?;
 	Ok(())
 }
 
