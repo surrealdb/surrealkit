@@ -97,7 +97,9 @@ Two things to know:
   reconstruct the old key spelling from the folder it was configured with, so a
   manifest carrying another machine's paths failed with `target schema hash
   mismatch`, and an `apply_files` step recording an absolute path could not find
-  its files. Both are fixed in beta.3.
+  its files. Both are fixed in beta.3, for the CLI and for the `Rollout` builder
+  alike; on beta.2 the library path compared hashes directly and had no fallback
+  at all.
 
 If you worked around this by pinning your container's `WORKDIR` to `/`, you can
 drop that.
@@ -313,6 +315,13 @@ module follows the ones it depends on.
 | `schema_state::collect_schema_files_at(dir)` | `collect_schema_files_at(root, dir)` |
 | `sync::collect_filesystem_schema_files(dir, ..)` | gains a leading `root` |
 | `rollout::load_managed_entities(db, module)` | gains a trailing `folder: Option<&str>` |
+| `schema_state::verify_schema_hash(..)` | gains a trailing `legacy_prefixes: &[String]` (beta.3) |
+| `schema_state::legacy_schema_hashes(..)` | gains a trailing `legacy_prefixes: &[String]` (beta.3) |
+
+Those last two are internal plumbing for the pre-1.0.0-beta.2 manifest fallback
+and are now `#[doc(hidden)]`. They were added in beta.2 and the fallback goes in
+1.1.0, so neither is intended to be called directly. Pass the prefixes from
+`schema_state::canonicalise_recorded_path` if you do.
 
 `SchemaFile.path` changes meaning rather than shape. It was the file's path
 relative to the process working directory and is now relative to the project
