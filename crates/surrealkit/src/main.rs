@@ -11,20 +11,16 @@ use clap::{Parser, Subcommand};
 use rust_dotenv::dotenv::DotEnv;
 use surrealkit::config::{DbCfg, DbOverrides, connect};
 use surrealkit::core::exec_surql;
-use surrealkit::module::Module;
-use surrealkit::project::{ProjectConfig, Target};
+use surrealkit::progress::CaptureLogger;
+use surrealkit::project::ProjectConfig;
 use surrealkit::rollout::{self, RolloutExecutionOpts, RolloutPlanOpts};
+use surrealkit::selection::Selection;
 use surrealkit::setup::run_setup;
 use surrealkit::sync::{self, SyncOpts};
+use surrealkit::templates::{self, InitOpts};
 use surrealkit::tester::{TestOpts, run_test};
 use surrealkit::typegen::{TypegenOpts, run_typegen};
 use surrealkit::variables::{TemplateVars, build_vars, parse_var_flag};
-
-use crate::templates::InitOpts;
-
-// `init` templates are a CLI-only concern, so the module lives in the binary
-// rather than the public library surface.
-mod templates;
 
 #[derive(Parser, Debug)]
 #[command(version, about = "SurrealKit CLI")]
@@ -191,6 +187,10 @@ enum Commands {
 		#[arg(long)]
 		keep_db: bool,
 	},
+	/// Serve SurrealKit's capabilities to an AI agent over the Model Context
+	/// Protocol, on stdio. The MCP host launches this; you rarely run it by hand.
+	#[cfg(feature = "mcp")]
+	Mcp,
 	/// Introspect the database and generate a typed schema document (JSON).
 	Typegen {
 		/// Output path (default: `{folder}/types/schema.json`).
@@ -254,150 +254,6 @@ enum RolloutCommands {
 		#[arg(value_name = "ROLLOUT_ID")]
 		rollout: String,
 	},
-}
-
-/// The (schema module x database target) matrix one invocation operates on.
-///
-/// With no `[schema.*]`/`[target.*]` sections and no selection flags this is a
-/// single pair -- the default module against the ambient connection -- which is
-/// exactly the pre-1.0 behaviour.
-#[derive(Debug)]
-struct Selection {
-	targets: Vec<Target>,
-	/// Modules in dependency order. Applies to every target, then filtered by the
-	/// target's own `schemas` list.
-	modules: Vec<Module>,
-}
-
-impl Selection {
-	fn resolve(
-		project: &ProjectConfig,
-		base: &DbCfg,
-		schemas: &[String],
-		targets: &[String],
-		all: bool,
-		no_deps: bool,
-	) -> Result<Self> {
-		// Modules: explicit --schema, else every declared module, else the default.
-		let declared: Vec<String> = project.schema.keys().cloned().collect();
-		let declared_list = if declared.is_empty() {
-			"(none)".to_string()
-		} else {
-			declared.join(", ")
-		};
-		let wanted: Vec<String> = if !schemas.is_empty() {
-			for name in schemas {
-				if !project.schema.contains_key(name) && name != Module::DEFAULT_NAME {
-					bail!("unknown schema module {name:?}; declared modules are: {declared_list}");
-				}
-			}
-			schemas.to_vec()
-		} else if all || !declared.is_empty() {
-			declared
-		} else {
-			vec![Module::DEFAULT_NAME.to_string()]
-		};
-
-		// `--schema billing` pulls in `core` by default, like `cargo build -p`, so a
-		// module is never applied before what it depends on. --no-deps opts out.
-		let ordered = if no_deps {
-			let mut only = wanted;
-			only.sort();
-			only
-		} else {
-			project.module_order(&wanted)?
-		};
-		let modules = ordered
-			.into_iter()
-			.map(Module::new)
-			.collect::<Result<Vec<_>>>()
-			.context("resolving selected schema modules")?;
-
-		// Targets: explicit --target, else --all, else primary, else the ambient one.
-		let resolved = if !targets.is_empty() {
-			targets
-				.iter()
-				.map(|name| {
-					let tc = project.target.get(name).ok_or_else(|| {
-						anyhow::anyhow!(
-							"unknown target {name:?}; declared targets are: {}",
-							if project.target.is_empty() {
-								"(none)".to_string()
-							} else {
-								project.target.keys().cloned().collect::<Vec<_>>().join(", ")
-							}
-						)
-					})?;
-					Target::resolve(name, tc, base)
-				})
-				.collect::<Result<Vec<_>>>()?
-		} else if all && !project.target.is_empty() {
-			project
-				.target
-				.iter()
-				.map(|(n, tc)| Target::resolve(n, tc, base))
-				.collect::<Result<Vec<_>>>()?
-		} else if let Some((n, tc)) = project.target.iter().find(|(_, t)| t.primary).or_else(|| {
-			// A single declared target is unambiguous without `primary`.
-			(project.target.len() == 1).then(|| project.target.iter().next()).flatten()
-		}) {
-			vec![Target::resolve(n, tc, base)?]
-		} else {
-			vec![Target::implicit(base.clone())]
-		};
-
-		Ok(Self {
-			targets: resolved,
-			modules,
-		})
-	}
-
-	fn targets(&self) -> &[Target] {
-		&self.targets
-	}
-
-	/// The selected modules that `target` accepts, honouring its `schemas` list.
-	fn modules_for(&self, target: &Target) -> Vec<Module> {
-		self.modules.iter().filter(|m| target.allows(m.name())).cloned().collect()
-	}
-
-	fn pairs(&self) -> usize {
-		self.targets.iter().map(|t| self.modules_for(t).len()).sum()
-	}
-
-	/// True when output should be grouped and summarised per pair.
-	fn is_fan_out(&self) -> bool {
-		self.pairs() > 1
-	}
-
-	/// The single selected module, for commands that cannot fan out.
-	fn single_module(&self) -> Result<&Module> {
-		match self.modules.as_slice() {
-			[one] => Ok(one),
-			other => bail!(
-				"this command operates on one schema module at a time ({} selected); \
-				 pass --schema <NAME>",
-				other.len()
-			),
-		}
-	}
-
-	/// The single selected target, for commands that must not fan out.
-	///
-	/// Rollout execution is a locked, resumable state machine with one
-	/// `__rollout` record per database. Fanning one rollout id across N targets
-	/// would turn a partial failure into N databases sitting in different phases,
-	/// so these commands refuse rather than loop.
-	fn single_target(&self) -> Result<&Target> {
-		match self.targets.as_slice() {
-			[one] => Ok(one),
-			other => bail!(
-				"this command operates on one database target at a time ({} selected); \
-				 pass --target <NAME>",
-				other.len()
-			),
-		}
-	}
 }
 
 /// Warn that `--target`/`--all` does nothing on a command that never connects.
@@ -494,18 +350,68 @@ impl log::Log for CliLogger {
 	}
 }
 
-/// Install the CLI logger. `-v/--verbose` raises the level to `debug`.
+/// Serve MCP over stdio.
+///
+/// Installs a logger that writes to **stderr**, never stdout: on this transport
+/// stdout carries JSON-RPC framing and nothing else. Progress the CLI would have
+/// printed is captured per tool call and returned in the result instead.
+#[cfg(feature = "mcp")]
+async fn run_mcp(args: &Cli) -> Result<()> {
+	use surrealkit::mcp::{ServerConfig, SurrealKitMcp, serve_stdio};
+	use surrealkit::progress::StderrLogger;
+
+	let level = if args.verbose {
+		log::LevelFilter::Debug
+	} else {
+		log::LevelFilter::Info
+	};
+	let _ = CaptureLogger::install(Box::new(StderrLogger), level, args.verbose);
+
+	let overrides = DbOverrides {
+		host: args.host.clone(),
+		ns: args.ns.clone(),
+		db: args.db.clone(),
+		user: args.user.clone(),
+		pass: args.pass.clone(),
+		auth_level: args.auth_level.clone(),
+		folder: args.folder.clone(),
+		query_timeout_secs: args.query_timeout_secs,
+		connect_timeout_secs: args.connect_timeout_secs,
+	};
+	let vars: Vec<(String, String)> =
+		args.var.iter().map(|s| parse_var_flag(s)).collect::<Result<_>>()?;
+
+	// The project root is captured once, here. Nothing afterwards reads or changes
+	// the process working directory: `set_current_dir` is process-global, so under
+	// concurrent tool calls it would be a data race.
+	let root = std::env::current_dir().context("resolving the project root")?;
+	let config = ServerConfig::new(root, overrides, vars)?;
+	log::info!("surrealkit mcp: serving {} over stdio", config.root.display());
+
+	serve_stdio(SurrealKitMcp::new(config)).await
+}
+
+/// Install the process logger. `-v/--verbose` raises the level to `debug`.
+///
+/// `CliLogger` is not installed directly: it becomes the *fallback* of
+/// [`CaptureLogger`], which routes to a task-local buffer when one is active. No
+/// CLI code path ever activates one, so console output is unchanged, but it means
+/// the MCP server can collect the same progress as data without a second,
+/// impossible, call to `log::set_logger`.
 fn init_logging(verbose: bool) {
 	let level = if verbose {
 		log::LevelFilter::Debug
 	} else {
 		log::LevelFilter::Info
 	};
-	let logger = Box::leak(Box::new(CliLogger {
-		level,
-	}));
 	// Only fails if a logger is already installed, which cannot happen here.
-	let _ = log::set_logger(logger).map(|()| log::set_max_level(level));
+	let _ = CaptureLogger::install(
+		Box::new(CliLogger {
+			level,
+		}),
+		level,
+		verbose,
+	);
 }
 
 /// Load `.env` / `.env.local` from the current working directory when present.
@@ -527,6 +433,18 @@ async fn main() -> Result<()> {
 	let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
 	let args = Cli::parse();
+
+	// The MCP server is dispatched before anything else, and deliberately so.
+	// `init_logging` installs a logger that writes `log::info!` to **stdout**,
+	// which on the stdio transport is the JSON-RPC channel: every progress line
+	// would corrupt the protocol. The eager `Selection::resolve` below is just as
+	// wrong for a server, since an unset `pass_env` on some unrelated target would
+	// kill it at startup instead of being reported through a tool result.
+	#[cfg(feature = "mcp")]
+	if matches!(args.command, Commands::Mcp) {
+		return run_mcp(&args).await;
+	}
+
 	init_logging(args.verbose);
 	let env = load_env();
 	let overrides = DbOverrides {
@@ -854,6 +772,8 @@ async fn main() -> Result<()> {
 			)
 			.await?;
 		}
+		#[cfg(feature = "mcp")]
+		Commands::Mcp => unreachable!("dispatched before logging is installed"),
 		Commands::Typegen {
 			out,
 			stdout,
@@ -889,159 +809,8 @@ async fn main() -> Result<()> {
 }
 
 #[cfg(test)]
-mod selection_tests {
-	use surrealkit::config::DbOverrides;
-
+mod cli_tests {
 	use super::*;
-
-	fn base() -> DbCfg {
-		DbCfg::from_env(None, &DbOverrides::default()).expect("base cfg")
-	}
-
-	fn project(raw: &str) -> ProjectConfig {
-		ProjectConfig::parse(raw).expect("parse config")
-	}
-
-	fn resolve(
-		raw: &str,
-		schemas: &[&str],
-		targets: &[&str],
-		all: bool,
-		no_deps: bool,
-	) -> Selection {
-		let schemas: Vec<String> = schemas.iter().map(|s| s.to_string()).collect();
-		let targets: Vec<String> = targets.iter().map(|s| s.to_string()).collect();
-		Selection::resolve(&project(raw), &base(), &schemas, &targets, all, no_deps)
-			.expect("resolve selection")
-	}
-
-	#[test]
-	fn no_config_and_no_flags_is_one_default_pair() {
-		// The pre-1.0 case: exactly today's behaviour, and not fan-out formatted.
-		let sel = resolve("", &[], &[], false, false);
-		assert_eq!(sel.pairs(), 1);
-		assert!(!sel.is_fan_out());
-		assert!(sel.modules_for(&sel.targets()[0])[0].is_default());
-		assert_eq!(sel.targets()[0].name(), "default");
-	}
-
-	#[test]
-	fn declared_modules_are_all_selected_by_default() {
-		let sel = resolve("[schema.core]\n[schema.billing]\n", &[], &[], false, false);
-		assert_eq!(sel.pairs(), 2, "both modules against the ambient target");
-	}
-
-	#[test]
-	fn selecting_a_module_pulls_in_its_dependencies_in_order() {
-		let sel = resolve(
-			"[schema.core]\n[schema.billing]\ndepends_on = [\"core\"]\n",
-			&["billing"],
-			&[],
-			false,
-			false,
-		);
-		let names: Vec<String> =
-			sel.modules_for(&sel.targets()[0]).iter().map(|m| m.name().to_string()).collect();
-		assert_eq!(names, vec!["core", "billing"], "dependency must be applied first");
-	}
-
-	#[test]
-	fn no_deps_selects_only_what_was_asked_for() {
-		let sel = resolve(
-			"[schema.core]\n[schema.billing]\ndepends_on = [\"core\"]\n",
-			&["billing"],
-			&[],
-			false,
-			true,
-		);
-		assert_eq!(sel.modules_for(&sel.targets()[0]).len(), 1);
-		assert_eq!(sel.modules_for(&sel.targets()[0])[0].name(), "billing");
-	}
-
-	#[test]
-	fn all_expands_to_the_full_matrix() {
-		let sel = resolve(
-			"[schema.core]\n[schema.billing]\n[target.acme]\n[target.globex]\n",
-			&[],
-			&[],
-			true,
-			false,
-		);
-		assert_eq!(sel.pairs(), 4, "2 modules x 2 targets");
-		assert!(sel.is_fan_out());
-	}
-
-	#[test]
-	fn a_targets_schema_list_filters_the_matrix() {
-		let sel = resolve(
-			"[schema.core]\n[schema.billing]\n\
-			 [target.acme]\n[target.warehouse]\nschemas = [\"core\"]\n",
-			&[],
-			&[],
-			true,
-			false,
-		);
-		// acme takes both; warehouse only core.
-		assert_eq!(sel.pairs(), 3);
-	}
-
-	#[test]
-	fn a_single_declared_target_is_used_without_being_marked_primary() {
-		let sel = resolve("[target.only]\nns = \"x\"\n", &[], &[], false, false);
-		assert_eq!(sel.targets().len(), 1);
-		assert_eq!(sel.targets()[0].name(), "only");
-		assert_eq!(sel.targets()[0].cfg().ns(), "x");
-	}
-
-	#[test]
-	fn primary_is_chosen_when_several_targets_exist() {
-		let sel = resolve("[target.a]\n[target.b]\nprimary = true\n", &[], &[], false, false);
-		assert_eq!(sel.targets().len(), 1);
-		assert_eq!(sel.targets()[0].name(), "b");
-	}
-
-	#[test]
-	fn unknown_module_is_rejected_and_lists_the_declared_ones() {
-		let err = Selection::resolve(
-			&project("[schema.core]\n"),
-			&base(),
-			&["ghost".to_string()],
-			&[],
-			false,
-			false,
-		)
-		.unwrap_err()
-		.to_string();
-		assert!(err.contains("ghost"), "got: {err}");
-		assert!(err.contains("core"), "should list declared modules: {err}");
-	}
-
-	#[test]
-	fn unknown_target_is_rejected_and_lists_the_declared_ones() {
-		let err = Selection::resolve(
-			&project("[target.acme]\n"),
-			&base(),
-			&[],
-			&["ghost".to_string()],
-			false,
-			false,
-		)
-		.unwrap_err()
-		.to_string();
-		assert!(err.contains("ghost") && err.contains("acme"), "got: {err}");
-	}
-
-	#[test]
-	fn single_module_errors_when_several_are_selected() {
-		let sel = resolve("[schema.a]\n[schema.b]\n", &[], &[], false, false);
-		assert!(sel.single_module().is_err(), "commands that cannot fan out must refuse");
-	}
-
-	#[test]
-	fn single_target_errors_when_several_are_selected() {
-		let sel = resolve("[target.a]\n[target.b]\n", &[], &[], true, false);
-		assert!(sel.single_target().is_err(), "rollout commands must not fan out across targets");
-	}
 
 	/// A subcommand arg whose clap id matches a global arg's id is silently
 	/// swallowed: clap skips propagating the global into that subcommand, and the
