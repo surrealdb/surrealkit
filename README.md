@@ -401,9 +401,14 @@ layout, so nothing is written down twice:
 # The SurrealDB release you deploy to. Turns on the version checks (a function
 # or syntax the release lacks or removed). Unset means the latest release.
 surrealdb_version = "3.2"
-# Where `surrealkit generate` writes the typed client.
+# Where `surrealkit generate` writes the typed client, relative to the
+# directory holding surrealkit.toml. (`--out` on the command line is relative
+# to the working directory, like any path typed at a shell.)
 out = "src/lib/db.generated.ts"
 # Extra directories to skip; target/, node_modules/ and .git/ always are.
+# Each entry is a directory NAME, matched against every path component -- not
+# a glob. `dist` and `dist/**` are the same pattern; `src/generated/**` and
+# `*.gen.ts` match nothing.
 ignore = ["dist/**"]
 strict = false
 warnings_as_errors = false          # a CI gate
@@ -415,9 +420,18 @@ E1002 = "allow"
 
 `generate` refuses to overwrite a good registry when an embedded query has an
 error, and `watch` regenerates only after a clean check, so the generated types
-never lag behind a broken save. Inline suppressions are
+never lag behind a broken save. A watch re-reads `surrealkit.toml` before every
+run, so editing the target version or the lint levels re-targets the next one;
+`[analyze] out` is the exception, read once when the watch starts, because the
+path the watcher keeps out of its own input set has to stay fixed for the life
+of the process. Inline suppressions are
 `-- surrealql-analyzer: allow(E1001) reason="…"`; the full code catalog is at
 <https://surrealguard.dev/docs/diagnostics>.
+
+None of these commands contacts a database, and none needs the environment one
+would: a project whose `[target.*]` reads its password from a variable that is
+not set still checks. That is what lets a pull-request job run `surrealkit
+check --json` with no credentials at all.
 
 ## Vite Plugin
 

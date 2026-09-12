@@ -26,10 +26,12 @@ rust_dotenv = '0.1.2'
 sha2 = '0.10'
 surrealdb = { workspace = true }
 surrealdb-types = { workspace = true }
-# Static analysis of the project's SurrealQL (`check`, `generate`, `watch`).
-# A git dependency until the library-only analyzer is released; switch to
-# `version = "0.6"` then. The analyzer is a library: SurrealKit is its CLI.
-surrealql-analyzer = { git = "https://github.com/surrealdb/analyzer", branch = "analyzer-library" }
+# Static analysis of the project's SurrealQL (`check`, `generate`, `watch`),
+# behind the `analyze` feature. A git dependency until the library-only
+# analyzer is released; switch to `version = "0.6"` then -- `cargo publish`
+# refuses a git dependency, so this crate cannot be released before that swap.
+# The analyzer is a library: SurrealKit is its CLI.
+surrealql-analyzer = { git = "https://github.com/surrealdb/analyzer", branch = "analyzer-library", optional = true }
 time = { version = '0.3', features = ['macros', 'formatting'] }
 tokio = { version = '1.47', features = ['macros', 'rt-multi-thread', 'signal', 'time'] }
 walkdir = { workspace = true }
@@ -53,9 +55,15 @@ indoc = "2"
 default = ['kv-mem', 'cli']
 # The `surrealkit` binary. On by default so `cargo install surrealkit` works, but
 # `default-features = false` drops clap, inquire, rustls (and its aws-lc-rs
-# backend) and tempfile from a library consumer's dependency tree -- none of them
-# are used by the library itself.
-cli = ['dep:clap', 'dep:inquire', 'dep:rustls', 'dep:tempfile']
+# backend), tempfile and the analyzer from a library consumer's dependency tree
+# -- none of them are used by the library itself.
+cli = ['dep:clap', 'dep:inquire', 'dep:rustls', 'dep:tempfile', 'analyze']
+# Static analysis of a project's SurrealQL: `surrealkit check`/`generate`/`watch`
+# and the `surrealkit::analyzer` re-export. Implied by `cli`, and separable from
+# it so a library consumer can drive the analyzer without pulling in clap -- or
+# read `[analyze]` out of a `surrealkit.toml` without pulling in the analyzer's
+# tree-sitter grammars and file watcher.
+analyze = ['dep:surrealql-analyzer']
 kv-mem = ['surrealdb/kv-mem']
 kv-surrealkv = ['surrealdb/kv-surrealkv']
 kv-rocksdb = ['surrealdb/kv-rocksdb']

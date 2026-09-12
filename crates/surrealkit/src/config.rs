@@ -258,6 +258,18 @@ fn resolve(
 }
 
 impl DbCfg {
+	/// Just the database folder, resolved exactly as [`DbCfg::from_env`]
+	/// resolves it: `--folder` → `SURREALDB_FOLDER` → `.env` → `./database`.
+	///
+	/// The commands that only read the filesystem — `check`, `generate`,
+	/// `watch` — need the folder and nothing else, and must not be held up by
+	/// the rest of a connection they never open. A `[target.*]` whose
+	/// `pass_env` secret is not exported, or a stale `DATABASE_*` variable,
+	/// would otherwise fail a static analysis that contacts no database.
+	pub fn resolve_folder(dotenv: Option<&DotEnv>, overrides: &DbOverrides) -> String {
+		resolve(&overrides.folder, &["SURREALDB_FOLDER"], dotenv, DEFAULT_ROOT_DIR)
+	}
+
 	/// Resolve a connection with priority: CLI override → process environment →
 	/// `.env` file → default.
 	///
@@ -279,7 +291,7 @@ impl DbCfg {
 				auth_level_str
 			)
 		})?;
-		let folder = resolve(&overrides.folder, &["SURREALDB_FOLDER"], dotenv, DEFAULT_ROOT_DIR);
+		let folder = Self::resolve_folder(dotenv, overrides);
 		let connect_timeout = resolve_timeout(
 			overrides.connect_timeout_secs,
 			"SURREALDB_CONNECT_TIMEOUT_SECS",

@@ -20,10 +20,18 @@ fn write_project(root: &Path, query: &str, config: &str) {
 		.expect("host source");
 }
 
+/// Run the CLI against `root` with a *clean* environment.
+///
+/// `env_clear` is the point of this helper. These commands read
+/// `SURREALDB_FOLDER` and reject a leftover `DATABASE_*` variable, so a
+/// developer with either one exported would watch every test in this file
+/// fail for a reason that has nothing to do with the analyzer. The binary is
+/// invoked by absolute path and spawns nothing, so it needs no `PATH`.
 fn surrealkit(root: &Path, args: &[&str]) -> std::process::Output {
 	Command::new(env!("CARGO_BIN_EXE_surrealkit"))
 		.current_dir(root)
 		.args(args)
+		.env_clear()
 		.env("NO_COLOR", "1")
 		.output()
 		.expect("run surrealkit")
@@ -95,4 +103,99 @@ fn a_configured_target_version_turns_on_the_version_checks() {
 		.filter_map(|d| d["code"].as_str())
 		.collect();
 	assert!(codes.contains(&"E8002"), "MTREE is removed on a 3.x target: {codes:?}");
+}
+
+#[test]
+fn check_needs_none_of_the_environment_a_database_command_would() {
+	// A declared target whose password lives in an unset environment variable
+	// used to fail the whole invocation before dispatch -- so a CI job that
+	// only runs `surrealkit check --json` could not run without production
+	// credentials it never uses.
+	let dir = TempDir::new().expect("tempdir");
+	write_project(
+		dir.path(),
+		"SELECT name FROM person",
+		"[target.prod]\nns = \"app\"\ndb = \"prod\"\npass_env = \"PROD_DB_PASSWORD\"\n",
+	);
+
+	let output = surrealkit(dir.path(), &["check", "--json"]);
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	assert!(output.status.success(), "a clean project checks clean: {stderr}");
+	let json: serde_json::Value =
+		serde_json::from_slice(&output.stdout).expect("stdout is the JSON document");
+	assert_eq!(json["summary"]["errors"], 0, "{json}");
+	assert!(!stderr.contains("PROD_DB_PASSWORD"), "the secret is never consulted: {stderr}");
+}
+
+#[test]
+fn a_configured_out_names_the_same_file_from_every_directory() {
+	// `[analyze] out` is documented relative to the project root. Resolving it
+	// against the working directory instead wrote the registry somewhere else
+	// -- or, more often, failed outright.
+	let dir = TempDir::new().expect("tempdir");
+	write_project(
+		dir.path(),
+		"SELECT name FROM person",
+		"[analyze]\nout = \"src/db.generated.ts\"\n",
+	);
+	let nested = dir.path().join("src/nested");
+	fs::create_dir_all(&nested).expect("nested dir");
+
+	let output = surrealkit(&nested, &["generate"]);
+	assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+	let written = fs::read_to_string(dir.path().join("src/db.generated.ts")).expect("registry");
+	assert!(written.contains("SELECT name FROM person"), "{written}");
+	assert!(
+		!nested.join("src/db.generated.ts").exists(),
+		"the registry must not land under the working directory"
+	);
+}
+
+#[test]
+fn an_undeclared_schema_module_is_an_error_rather_than_a_whole_project_run() {
+	// `--schema` was accepted and then thrown away, so `--schema typo` quietly
+	// analyzed everything. It now picks the schema directories the analysis
+	// treats as schema, and a name that is not declared says so.
+	//
+	// What it does *not* do is hide another module's definitions: the analyzer
+	// walks the whole project root, and a `DEFINE` in a file classified as a
+	// query still reaches the catalog. Narrowing selects which directories are
+	// schema (and so are analyzed first), not which files are read.
+	let dir = TempDir::new().expect("tempdir");
+	write_project(dir.path(), "SELECT name FROM person", "[schema.core]\n[schema.billing]\n");
+	for module in ["core", "billing"] {
+		fs::create_dir_all(dir.path().join(format!("database/modules/{module}/schema")))
+			.expect("module schema dir");
+	}
+
+	let core_only = surrealkit(dir.path(), &["check", "--schema", "core"]);
+	assert!(
+		core_only.status.success(),
+		"a declared module is analyzed: {}",
+		String::from_utf8_lossy(&core_only.stderr)
+	);
+
+	let unknown = surrealkit(dir.path(), &["check", "--schema", "nope"]);
+	let stderr = String::from_utf8_lossy(&unknown.stderr);
+	assert!(!unknown.status.success(), "an undeclared module is an error");
+	assert!(stderr.contains("unknown schema module"), "{stderr}");
+	assert!(stderr.contains("billing"), "the error names what is declared: {stderr}");
+}
+
+#[test]
+fn a_schema_folder_outside_the_project_root_is_named_rather_than_silently_empty() {
+	// The analyzer walks the project root and matches its globs against paths
+	// under it, so a `--folder` pointing outside contributes no schema at all.
+	// Reporting every table as undefined is the worst possible answer.
+	let dir = TempDir::new().expect("tempdir");
+	write_project(dir.path(), "SELECT name FROM person", "");
+
+	let output = surrealkit(dir.path(), &["check", "--folder", "../elsewhere"]);
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	assert!(!output.status.success(), "an unreachable schema directory is an error");
+	assert!(stderr.contains("outside the project root"), "{stderr}");
+	assert!(
+		!String::from_utf8_lossy(&output.stdout).contains("E1001"),
+		"it must not report the schema's tables as undefined instead"
+	);
 }
