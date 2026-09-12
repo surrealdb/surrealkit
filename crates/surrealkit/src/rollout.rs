@@ -19,10 +19,10 @@ use crate::core::{exec_surql, sha256_hex};
 use crate::module::{Module, Partition};
 use crate::schema_state::{
 	CatalogDiff, CatalogEntity, CatalogSnapshot, EntityKey, EntityKind, FileDiff, SchemaFile,
-	build_catalog_snapshot, collect_schema_files, diff_catalog, diff_schema,
-	ensure_local_state_dirs, ensure_overwrite, hash_schema_snapshot, load_catalog_snapshot,
-	load_schema_snapshot, render_remove_sql, save_catalog_snapshot, save_schema_snapshot,
-	snapshot_from_files, strip_folder_prefix, verify_schema_hash,
+	build_catalog_snapshot, canonicalise_recorded_path, collect_schema_files, diff_catalog,
+	diff_schema, ensure_local_state_dirs, ensure_overwrite, hash_schema_snapshot,
+	load_catalog_snapshot, load_schema_snapshot, render_remove_sql, save_catalog_snapshot,
+	save_schema_snapshot, snapshot_from_files, strip_folder_prefix, verify_schema_hash,
 };
 use crate::setup::run_setup;
 use crate::variables::TemplateVars;
@@ -734,17 +734,56 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 	Ok(())
 }
 
+/// Rewrite a loaded manifest's recorded file paths onto this project's canonical
+/// keys, returning the legacy prefixes they carried.
+///
+/// Doing it once, here, is what lets hash verification and file resolution share
+/// a single answer. Resolving each path independently at execution time meant
+/// stripping leading segments until something happened to exist, which for a
+/// module file could land on the same-named file in the default module and apply
+/// the wrong DDL.
+///
+/// A path that matches nothing is left as recorded, so the step still fails with
+/// the path the manifest actually named.
+fn canonicalise_manifest_paths(spec: &mut RolloutSpec, files: &[SchemaFile]) -> Vec<String> {
+	let canonical: Vec<String> = files.iter().map(|file| file.path.clone()).collect();
+	let mut prefixes: Vec<String> = Vec::new();
+
+	for step in &mut spec.steps {
+		if let RolloutAction::ApplyFiles {
+			files,
+		} = &mut step.action
+		{
+			for recorded in files.iter_mut() {
+				let Some((key, prefix)) = canonicalise_recorded_path(recorded, &canonical) else {
+					continue;
+				};
+				if !prefix.is_empty() && !prefixes.contains(&prefix) {
+					prefixes.push(prefix);
+				} else if prefix.is_empty() && !prefixes.iter().any(|p| p.is_empty()) {
+					// The filesystem root is a prefix like any other.
+					prefixes.push(String::new());
+				}
+				*recorded = key;
+			}
+		}
+	}
+	prefixes
+}
+
 #[doc(hidden)]
 pub async fn run_lint(folder: &str, opts: RolloutExecutionOpts) -> Result<()> {
 	ensure_local_state_dirs(folder)?;
-	let rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
+	let mut rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
 	validate_rollout_spec(&rollout.spec)?;
 	let files = collect_schema_files(folder)?;
+	let legacy_prefixes = canonicalise_manifest_paths(&mut rollout.spec, &files);
 	verify_schema_hash(
 		&snapshot_from_files(&files),
 		folder,
 		&rollout.spec.target_schema_hash,
 		&rollout.spec.id,
+		&legacy_prefixes,
 	)?;
 	log::info!("Rollout {} is valid (checksum {}).", rollout.spec.id, rollout.checksum);
 	Ok(())
@@ -853,14 +892,16 @@ pub async fn run_start(
 ) -> Result<()> {
 	run_setup(db, folder).await?;
 	ensure_local_state_dirs(folder)?;
-	let rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
+	let mut rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
 	validate_rollout_spec(&rollout.spec)?;
 	let files = collect_schema_files(folder)?;
+	let legacy_prefixes = canonicalise_manifest_paths(&mut rollout.spec, &files);
 	verify_schema_hash(
 		&snapshot_from_files(&files),
 		folder,
 		&rollout.spec.target_schema_hash,
 		&rollout.spec.id,
+		&legacy_prefixes,
 	)?;
 	let target_catalog = build_catalog_snapshot(&files, false)?;
 	let source_entities = load_managed_entities(db, &rollout.spec.module()?, Some(folder)).await?;
@@ -900,16 +941,25 @@ pub(crate) async fn run_start_with_spec(
 	}
 	validate_rollout_spec(spec)?;
 	let schema_files = embedded_to_schema_files(target_files);
+
+	// Owned so the recorded paths can be canonicalised the way the CLI does. The
+	// caller's spec is left untouched.
+	let mut spec = spec.clone();
+	let legacy_prefixes = canonicalise_manifest_paths(&mut spec, &schema_files);
+	let spec = &spec;
+
 	if !spec.target_schema_hash.is_empty() {
-		let hash = hash_schema_snapshot(&snapshot_from_files(&schema_files))?;
-		if hash != spec.target_schema_hash {
-			bail!(
-				"target schema hash mismatch for '{}': spec={}, files={}",
-				spec.id,
-				spec.target_schema_hash,
-				hash
-			);
-		}
+		// Same verification the CLI performs, including the pre-1.0.0-beta.2
+		// fallback. An embedded caller shipping a manifest that CI planned has the
+		// same foreign-prefix problem, and had no way through it while this path
+		// compared hashes directly.
+		verify_schema_hash(
+			&snapshot_from_files(&schema_files),
+			folder.unwrap_or(crate::constants::DEFAULT_ROOT_DIR),
+			&spec.target_schema_hash,
+			&spec.id,
+			&legacy_prefixes,
+		)?;
 	}
 	let target_catalog = build_catalog_snapshot(&schema_files, false)?;
 	let source_entities = load_managed_entities(db, &spec.module()?, folder).await?;
@@ -1061,8 +1111,11 @@ pub async fn run_complete(
 	vars: &TemplateVars,
 ) -> Result<()> {
 	run_setup(db, folder).await?;
-	let rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
+	let mut rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
 	validate_rollout_spec(&rollout.spec)?;
+	// Same rewrite as `start`: a manifest planned elsewhere records foreign paths,
+	// and `complete` / `rollback` execute steps too.
+	canonicalise_manifest_paths(&mut rollout.spec, &collect_schema_files(folder)?);
 	let ctx = StepContext::new(vars, Some(folder), opts.query_timeout);
 	complete_inner(db, &rollout, &ctx).await
 }
@@ -1152,8 +1205,11 @@ pub async fn run_rollback(
 	vars: &TemplateVars,
 ) -> Result<()> {
 	run_setup(db, folder).await?;
-	let rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
+	let mut rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
 	validate_rollout_spec(&rollout.spec)?;
+	// Same rewrite as `start`: a manifest planned elsewhere records foreign paths,
+	// and `complete` / `rollback` execute steps too.
+	canonicalise_manifest_paths(&mut rollout.spec, &collect_schema_files(folder)?);
 	let ctx = StepContext::new(vars, Some(folder), opts.query_timeout);
 	rollback_inner(db, &rollout, &ctx).await
 }
@@ -1972,51 +2028,32 @@ async fn with_heartbeat<T>(step_id: &str, future: impl Future<Output = T>) -> T 
 	}
 }
 
-/// Resolve an `apply_files` step's recorded path.
+/// Resolve an `apply_files` step's path against the project folder.
 ///
-/// Recorded paths were cwd-relative before 1.0.0-beta.2, so a manifest planned
-/// from a repo root (`database/schema/a.surql`) could not find its files in a
-/// container whose folder is `/database`. Try the folder-relative spelling first,
-/// then the legacy folder-prefixed one, then the path exactly as recorded.
+/// Paths are canonicalised when the manifest is loaded, so this is a plain join.
+/// It deliberately does not search: a path that did not canonicalise is one this
+/// project has no file for, and guessing at it risks applying a different file's
+/// DDL under the name of the one that is missing.
 fn resolve_step_file(folder: Option<&str>, recorded: &str) -> Result<PathBuf> {
-	let mut tried = Vec::new();
 	if let Some(folder) = folder {
-		let root = Path::new(folder);
-		let direct = root.join(recorded);
-		if direct.is_file() {
-			return Ok(direct);
+		let joined = Path::new(folder).join(recorded);
+		if joined.is_file() {
+			return Ok(joined);
 		}
-		tried.push(direct);
-
-		// Legacy `<folder-name>/schema/...`. Only drop the leading segment when it
-		// really is the folder's name: dropping it unconditionally turns
-		// `schema/user.surql` into a probe for `<folder>/user.surql`, and a stray
-		// top-level file there would be applied instead of the step failing.
-		let folder_name = Path::new(folder.trim_end_matches('/'))
-			.file_name()
-			.and_then(|n| n.to_str())
-			.unwrap_or_default();
-		if let Some((head, rest)) = recorded.split_once('/')
-			&& !folder_name.is_empty()
-			&& head == folder_name
-		{
-			let stripped = root.join(rest);
-			if stripped.is_file() {
-				return Ok(stripped);
-			}
-			tried.push(stripped);
-		}
+		bail!(
+			"apply_files step references {recorded:?}, which was not found at {}. If this \
+			 manifest was planned against a different schema, re-run `surrealkit rollout plan`.",
+			joined.display()
+		);
 	}
 
 	let as_recorded = PathBuf::from(recorded);
 	if as_recorded.is_file() {
 		return Ok(as_recorded);
 	}
-	tried.push(as_recorded);
-
 	bail!(
-		"apply_files step references {recorded:?}, which was not found. Tried: {}",
-		tried.iter().map(|p| format!("{}", p.display())).collect::<Vec<_>>().join(", ")
+		"apply_files step references {recorded:?}, which was not found. Code-driven rollouts \
+		 read no files; use `RolloutAction::ApplySchema` with inline SQL instead."
 	)
 }
 
@@ -2933,6 +2970,10 @@ mod tests {
 		release_lock(&db, &b).await.expect("release b");
 	}
 
+	fn sample_spec(id: &str) -> RolloutSpec {
+		sample_loaded_spec(id).spec
+	}
+
 	fn sample_loaded_spec(id: &str) -> LoadedRolloutSpec {
 		LoadedRolloutSpec {
 			path: PathBuf::from(format!("database/rollouts/{id}.toml")),
@@ -3267,5 +3308,116 @@ mod tests {
 
 		let err = repair_inner(&db, &loaded).await.expect_err("planned is not repairable");
 		assert!(err.to_string().contains("not in a repairable state"), "got: {err}",);
+	}
+
+	/// A manifest planned elsewhere records foreign paths. They have to be mapped
+	/// onto this project's canonical keys before anything executes.
+	#[test]
+	fn manifest_paths_are_canonicalised_against_the_project() {
+		let files = vec![
+			SchemaFile {
+				path: "schema/014-sku.surql".to_string(),
+				sql: String::new(),
+				hash: "a".to_string(),
+			},
+			SchemaFile {
+				path: "modules/billing/schema/plan.surql".to_string(),
+				sql: String::new(),
+				hash: "b".to_string(),
+			},
+		];
+		let mut spec = sample_spec("20260911194216__sku_on_hand");
+		spec.steps = vec![RolloutStep::apply_files(
+			"apply_expand_schema",
+			RolloutPhase::Start,
+			vec![
+				"/database/schema/014-sku.surql".to_string(),
+				"/database/modules/billing/schema/plan.surql".to_string(),
+			],
+		)];
+
+		let prefixes = canonicalise_manifest_paths(&mut spec, &files);
+		assert_eq!(prefixes, vec!["/database".to_string()]);
+
+		let RolloutAction::ApplyFiles {
+			files: rewritten,
+		} = &spec.steps[0].action
+		else {
+			panic!("expected an apply_files step");
+		};
+		assert_eq!(
+			rewritten,
+			&vec![
+				"schema/014-sku.surql".to_string(),
+				"modules/billing/schema/plan.surql".to_string(),
+			],
+			"each path must land on its own canonical key"
+		);
+	}
+
+	/// The decoy the old stripping loop walked into: a module file and a
+	/// default-module file sharing a name. Stripping leading segments until
+	/// something existed resolved `modules/billing/schema/x.surql` onto
+	/// `schema/x.surql` and applied the wrong DDL.
+	#[test]
+	fn a_module_path_does_not_collapse_onto_the_default_module() {
+		let files = vec![
+			SchemaFile {
+				path: "schema/x.surql".to_string(),
+				sql: String::new(),
+				hash: "a".to_string(),
+			},
+			SchemaFile {
+				path: "modules/billing/schema/x.surql".to_string(),
+				sql: String::new(),
+				hash: "b".to_string(),
+			},
+		];
+		let mut spec = sample_spec("20260911194216__module");
+		spec.steps = vec![RolloutStep::apply_files(
+			"apply_expand_schema",
+			RolloutPhase::Start,
+			vec!["/database/modules/billing/schema/x.surql".to_string()],
+		)];
+
+		canonicalise_manifest_paths(&mut spec, &files);
+		let RolloutAction::ApplyFiles {
+			files: rewritten,
+		} = &spec.steps[0].action
+		else {
+			panic!("expected an apply_files step");
+		};
+		assert_eq!(
+			rewritten,
+			&vec!["modules/billing/schema/x.surql".to_string()],
+			"the longest canonical match wins, so the module file stays the module file"
+		);
+	}
+
+	/// A path this project has no file for is left as recorded, so the step fails
+	/// naming what the manifest actually asked for.
+	#[test]
+	fn an_unmatched_path_is_left_alone() {
+		let files = vec![SchemaFile {
+			path: "schema/a.surql".to_string(),
+			sql: String::new(),
+			hash: "a".to_string(),
+		}];
+		let mut spec = sample_spec("20260911194216__missing");
+		spec.steps = vec![RolloutStep::apply_files(
+			"apply_expand_schema",
+			RolloutPhase::Start,
+			vec!["/database/schema/gone.surql".to_string()],
+		)];
+
+		let prefixes = canonicalise_manifest_paths(&mut spec, &files);
+		assert!(prefixes.is_empty(), "nothing matched, so no prefix was recovered");
+		let RolloutAction::ApplyFiles {
+			files: rewritten,
+		} = &spec.steps[0].action
+		else {
+			panic!("expected an apply_files step");
+		};
+		assert_eq!(rewritten, &vec!["/database/schema/gone.surql".to_string()]);
 	}
 }
