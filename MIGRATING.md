@@ -91,6 +91,14 @@ Two things to know:
   Re-run `surrealkit rollout plan` to regenerate any manifest you have not yet
   executed. The compatibility fallback is removed in 1.1.0.
 
+  This needs **1.0.0-beta.3 or later** if the manifest was planned somewhere
+  other than where you are running it, which is the normal case when CI or a
+  container does the planning. On 1.0.0-beta.2 the fallback could only
+  reconstruct the old key spelling from the folder it was configured with, so a
+  manifest carrying another machine's paths failed with `target schema hash
+  mismatch`, and an `apply_files` step recording an absolute path could not find
+  its files. Both are fixed in beta.3.
+
 If you worked around this by pinning your container's `WORKDIR` to `/`, you can
 drop that.
 
