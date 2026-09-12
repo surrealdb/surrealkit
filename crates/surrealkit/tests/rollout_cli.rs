@@ -140,10 +140,12 @@ fn rollout_execution_refuses_multiple_targets() {
 	);
 }
 
-/// `plan` and `lint` read only the filesystem. Accepting `--target` and ignoring
-/// it reads as "applied to that target" when nothing of the sort happened.
+/// `plan` and `lint` read only the filesystem, so a target selection cannot mean
+/// anything to them. They say so rather than either failing (which breaks CI
+/// wrappers that pass the same flags everywhere) or staying silent (which reads
+/// as "applied to that target").
 #[test]
-fn offline_rollout_subcommands_refuse_a_target_selection() {
+fn offline_rollout_subcommands_warn_about_a_target_selection() {
 	let temp = TempDir::new().expect("tempdir");
 	let root = temp.path();
 	write_project(root, "[target.prod]\ndb = \"prod\"\n");
@@ -155,8 +157,12 @@ fn offline_rollout_subcommands_refuse_a_target_selection() {
 		let output = run(root, &args);
 		let text = combined(&output);
 		assert!(
-			text.contains("has no effect"),
-			"expected {args:?} to refuse the target selection, got: {text}"
+			text.contains("has no effect here and was ignored"),
+			"expected {args:?} to warn about the target selection, got: {text}"
+		);
+		assert!(
+			!text.contains("error:"),
+			"the warning must not become a hard failure for {args:?}: {text}"
 		);
 	}
 }

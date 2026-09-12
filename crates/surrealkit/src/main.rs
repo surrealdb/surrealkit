@@ -400,18 +400,22 @@ impl Selection {
 	}
 }
 
-/// Refuse `--target`/`--all` on a command that never opens a database connection.
+/// Warn that `--target`/`--all` does nothing on a command that never connects.
 ///
-/// These commands read only the filesystem, so accepting the flag and ignoring it
-/// reads as "applied to that target" when nothing of the sort happened.
-fn refuse_target_selection(command: &str, used: bool) -> Result<()> {
+/// These commands read only the filesystem, so silently accepting the flag reads
+/// as "applied to that target" when nothing of the sort happened. A hard error
+/// was the first attempt, but it breaks CI wrappers that pass the same flags to
+/// every subcommand, and clap still advertises the globals in their `--help`
+/// because they really are accepted. Warning says the true thing without
+/// inventing a failure: there is no wrong-database hazard here, since there is no
+/// database.
+fn warn_unused_target_selection(command: &str, used: bool) {
 	if used {
-		bail!(
-			"{command} reads only the filesystem and never connects, so --target/--all \
-			 has no effect; drop the flag"
+		log::warn!(
+			"{command} reads only the filesystem and never connects, so --target/--all has \
+			 no effect here and was ignored"
 		);
 	}
-	Ok(())
 }
 
 /// The outcome of applying one module to one target.
@@ -696,7 +700,7 @@ async fn main() -> Result<()> {
 				dry_run,
 				allow_modified,
 			} => {
-				refuse_target_selection("rollout plan", target_selection_used)?;
+				warn_unused_target_selection("rollout plan", target_selection_used);
 				rollout::run_plan(
 					&folder,
 					RolloutPlanOpts {
@@ -774,7 +778,7 @@ async fn main() -> Result<()> {
 			RolloutCommands::Lint {
 				rollout,
 			} => {
-				refuse_target_selection("rollout lint", target_selection_used)?;
+				warn_unused_target_selection("rollout lint", target_selection_used);
 				rollout::run_lint(&folder, RolloutExecutionOpts::new(Some(rollout))).await?;
 			}
 			RolloutCommands::Repair {

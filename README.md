@@ -317,6 +317,20 @@ db = "analytics"
 schemas = ["core", "analytics"]
 ```
 
+It may also override the connection deadlines, which is useful when one target
+is across a slower link than the rest:
+
+```toml
+[target.warehouse]
+connect_timeout_secs = 60   # default 30; 0 waits indefinitely
+query_timeout_secs = 900    # default unset, meaning no deadline on step SQL
+```
+
+Full key list for `[target.<name>]`: `host`, `ns`, `db`, `user`, `pass_env`,
+`auth_level`, `schemas`, `primary`, `connect_timeout_secs`,
+`query_timeout_secs`. Precedence for the timeouts is CLI flag, then environment
+variable, then this section, then the default.
+
 ### Fan-out semantics
 
 Targets are applied one at a time. Modules within a target stop at the first

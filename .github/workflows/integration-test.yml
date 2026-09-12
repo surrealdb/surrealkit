@@ -218,3 +218,19 @@ jobs:
             - name: Key migration — two legacy spellings collapse without pruning
               run: examples/rollout-repro/scenarios/ci_key_migration.sh
 
+    # The before/after harness. Separate from rollout_e2e because it builds two
+    # images, one of them the published 1.0.0-beta.1 from crates.io, and takes
+    # correspondingly longer. It asserts in both directions: beta.1 must still
+    # reproduce every bug and the working tree must not, so it cannot decay into a
+    # test that only ever passes. Without this it was documentation, not coverage.
+    rollout_repro_harness:
+        name: Reproduction harness (before/after)
+        runs-on: ubuntu-22.04
+        timeout-minutes: 45
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+            - name: Run the harness
+              run: examples/rollout-repro/run.sh
+

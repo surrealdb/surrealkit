@@ -121,10 +121,10 @@ Two deliberate behaviour changes came with the fix:
   partial failure into N databases in different phases. `rollout status` makes no
   rollout changes and does fan out, though like every command it runs `setup`
   first, which applies the metadata DDL.
-- `rollout plan` and `rollout lint` never connect, so they now refuse
-  `--target`/`--all` rather than silently ignoring them. **This breaks uniform CI
-  wrappers** that pass `--target` to every subcommand: those two now exit
-  non-zero where they previously succeeded. Drop the flag for them.
+- `rollout plan` and `rollout lint` never connect, so `--target`/`--all` cannot
+  mean anything to them. They now log a warning saying the flag was ignored,
+  rather than accepting it silently. They still exit zero, so a CI wrapper that
+  passes the same flags to every subcommand keeps working.
 
 ### 6. A connect deadline, on by default
 
@@ -300,6 +300,19 @@ module follows the ones it depends on.
 | `rollout::run_baseline(db, folder)` | `run_baseline(db, folder, &module)` |
 | `rollout::run_abandon_rollout(db, id)` | `run_abandon_rollout(db, &module, id)` |
 | `SyncOpts { .. }` | gains `module` and `allow_empty_prune` |
+| `DbOverrides { .. }` | gains `connect_timeout_secs` and `query_timeout_secs` |
+| `DbCfg { .. }` | gains `connect_timeout` and `query_timeout` |
+| `schema_state::collect_schema_files_at(dir)` | `collect_schema_files_at(root, dir)` |
+| `sync::collect_filesystem_schema_files(dir, ..)` | gains a leading `root` |
+| `rollout::load_managed_entities(db, module)` | gains a trailing `folder: Option<&str>` |
+
+`SchemaFile.path` changes meaning rather than shape. It was the file's path
+relative to the process working directory and is now relative to the project
+folder, so a value that read `database/schema/user.surql` now reads
+`schema/user.surql`. If you construct `EmbeddedSchemaFile` or `EmbeddedSeedFile`
+by hand rather than through `embed_schema!` / `embed_seed!`, use the same
+convention or your entries will not match what the CLI tracks for the same files.
+The macros were updated to emit it, so regenerating is enough.
 
 ## If you use the Vite plugin
 

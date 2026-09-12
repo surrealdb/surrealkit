@@ -31,9 +31,33 @@ fn resolve_dir(input: TokenStream, default: &str, macro_name: &str) -> (String, 
 	(rel_dir, abs_dir)
 }
 
+/// The tracking key prefix for an embedded directory.
+///
+/// Keys must match the ones the CLI writes, or an app booting with
+/// `embed_seed!` and a developer running `surrealkit seed` track the same file
+/// under two names, each migration deleting the other's row, and the seed re-runs
+/// on every alternation.
+///
+/// The CLI keys relative to the project folder: `<folder>/schema/a.surql` is
+/// tracked as `schema/a.surql`, and `<folder>/modules/billing/schema/a.surql` as
+/// `modules/billing/schema/a.surql`. The macro argument is folder-prefixed
+/// (`database/schema`), so dropping its first segment lands on the same key.
+///
+/// A single-segment argument has no folder to drop and is used as-is.
+fn tracking_prefix(rel_dir: &str) -> String {
+	let normalised = rel_dir.replace('\\', "/");
+	let trimmed = normalised.trim_matches('/');
+	match trimmed.split_once('/') {
+		Some((_folder, rest)) => rest.to_string(),
+		None => trimmed.to_string(),
+	}
+}
+
 /// Collect, sorted, the `(rel_display, abs_str)` of every `.surql` file under
-/// `abs_dir`. `rel_display` is the stable tracking key (`<rel_dir>/<relpath>`).
+/// `abs_dir`. `rel_display` is the stable tracking key, relative to the project
+/// folder so that it matches what the CLI writes for the same file.
 fn collect_surql(rel_dir: &str, abs_dir: &PathBuf) -> Vec<(String, String)> {
+	let prefix = tracking_prefix(rel_dir);
 	let mut file_paths: Vec<PathBuf> = WalkDir::new(abs_dir)
 		.follow_links(true)
 		.into_iter()
@@ -50,7 +74,11 @@ fn collect_surql(rel_dir: &str, abs_dir: &PathBuf) -> Vec<(String, String)> {
 			let abs_str = abs_path.to_str().expect("non-UTF8 path in surql dir").to_string();
 			let rel = abs_path.strip_prefix(abs_dir).expect("path not under surql dir");
 			let rel_str = rel.to_str().expect("non-UTF8 relative path in surql dir");
-			let rel_display = format!("{rel_dir}/{rel_str}").replace('\\', "/");
+			let rel_display = if prefix.is_empty() {
+				rel_str.replace('\\', "/")
+			} else {
+				format!("{prefix}/{rel_str}").replace('\\', "/")
+			};
 			(rel_display, abs_str)
 		})
 		.collect()
@@ -346,4 +374,26 @@ pub fn embed_seed(input: TokenStream) -> TokenStream {
 	};
 
 	expanded.into()
+}
+
+#[cfg(test)]
+mod tests {
+	use super::tracking_prefix;
+
+	#[test]
+	fn tracking_prefix_drops_the_project_folder() {
+		// What the CLI writes for the same files.
+		assert_eq!(tracking_prefix("database/schema"), "schema");
+		assert_eq!(tracking_prefix("database/seed"), "seed");
+		assert_eq!(tracking_prefix("database/modules/billing/schema"), "modules/billing/schema");
+	}
+
+	#[test]
+	fn tracking_prefix_tolerates_other_spellings() {
+		assert_eq!(tracking_prefix("db/schema"), "schema");
+		assert_eq!(tracking_prefix("/database/schema/"), "schema");
+		assert_eq!(tracking_prefix("database\\schema"), "schema");
+		// Nothing to drop: used as-is rather than emptied.
+		assert_eq!(tracking_prefix("schema"), "schema");
+	}
 }
