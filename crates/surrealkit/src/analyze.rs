@@ -1,0 +1,655 @@
+//! `surrealkit check` / `generate` / `watch` — static analysis of the
+//! project's SurrealQL through the `surrealql-analyzer` library.
+//!
+//! No database is involved. The analyzer reads the schema files SurrealKit
+//! already manages (every module's `schema/` directory), the other `.surql`
+//! files under the project, and the SurrealQL embedded in host files
+//! (`db.query("…")` in `.ts`/`.svelte`/…), and reports contract violations
+//! before anything reaches an instance. `generate` emits the typed
+//! TypeScript client for those embedded queries.
+//!
+//! The analyzer needs no config file of its own: [`workspace_config`] builds
+//! its `WorkspaceConfig` from the project layout plus the `[analyze]`
+//! section of `surrealkit.toml`, so the schema directories are never written
+//! down twice.
+//!
+//! ```toml
+//! [analyze]
+//! # The SurrealDB release you deploy to. Enables the version checks
+//! # (functions and syntax the release lacks or removed). Unset = latest.
+//! surrealdb_version = "3.2"
+//! # Where `surrealkit generate` writes the typed client.
+//! out = "src/lib/db.generated.ts"
+//! # Extra directories to skip (target/, node_modules/ and .git/ always are).
+//! ignore = ["dist/**"]
+//! warnings_as_errors = false
+//! [analyze.lints]
+//! "7xxx" = "warn"
+//! E1002 = "allow"
+//! ```
+//!
+//! There is deliberately no `strict` key: the analyzer parses one but no check
+//! reads it yet, and a key that silently does nothing is worse than a key that
+//! does not exist. `deny_unknown_fields` makes adding it later additive.
+//!
+//! Everything past [`AnalyzeConfig`] needs the analyzer itself, and so lives
+//! behind the `analyze` feature (on by default, and implied by `cli`). The
+//! config type stays unconditional: it is plain serde, and
+//! [`ProjectConfig`](crate::project::ProjectConfig) carries an `[analyze]`
+//! section whether or not this build can act on it.
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use serde::Deserialize;
+
+/// The `[analyze]` section of `surrealkit.toml`.
+///
+/// Every key is optional; an absent section analyzes the project's schema
+/// modules against the latest SurrealDB release with the analyzer's default
+/// lint levels.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnalyzeConfig {
+	/// Directories excluded from analysis, beyond the always-excluded
+	/// `target/`, `node_modules/` and `.git/`.
+	///
+	/// Each entry is a **directory name**, matched against every component of
+	/// a path — not a glob. `dist` and `dist/**` are the same pattern, and
+	/// both skip every directory named `dist` anywhere in the tree. A
+	/// path-shaped entry (`src/generated/**`) or a wildcard (`*.gen.ts`)
+	/// matches nothing.
+	#[serde(default)]
+	pub ignore: Vec<String>,
+	/// The SurrealDB release to analyze for (`"3"`, `"3.2"`, `"3.2.3"`).
+	/// Selects the version-gated checks: a function the release lacks, syntax
+	/// it lacks, syntax it removed. Unset means the latest release, under
+	/// which no version-gated finding fires.
+	pub surrealdb_version: Option<String>,
+	/// Report every warning as an error (a CI gate).
+	#[serde(default)]
+	pub warnings_as_errors: bool,
+	/// Require a written reason on every inline `-- surrealql-analyzer: allow(…)`
+	/// suppression.
+	#[serde(default)]
+	pub require_suppression_reasons: bool,
+	/// Per-code lint levels: `"allow"` | `"warn"` | `"deny"`, keyed by code
+	/// (`E1002`, `7002`), family wildcard (`"7xxx"`), or named lint.
+	#[serde(default)]
+	pub lints: BTreeMap<String, String>,
+	/// Where `surrealkit generate` writes the typed client when `--out` is not
+	/// given. Relative to the project root — the directory holding
+	/// `surrealkit.toml` — so it names the same file from every working
+	/// directory. Defaults to `surrealql-analyzer.generated.ts` at the root.
+	pub out: Option<PathBuf>,
+}
+
+#[cfg(feature = "analyze")]
+pub use analyzing::*;
+
+#[cfg(feature = "analyze")]
+mod analyzing {
+	use std::path::{Component, Path, PathBuf};
+
+	use anyhow::{Context, Result, bail};
+	use surrealql_analyzer::Project;
+	use surrealql_analyzer::workspace::config::WorkspaceConfig;
+
+	use crate::module::Module;
+	use crate::project::{CONFIG_FILE_NAME, ProjectConfig};
+
+	/// The directory analysis is rooted at: the one holding `surrealkit.toml`
+	/// when there is one above the working directory, else the working directory.
+	///
+	/// Every discovered path and every glob is relative to this, so a project
+	/// analyzes the same way from any subdirectory.
+	pub fn project_root() -> Result<PathBuf> {
+		let cwd = std::env::current_dir().context("reading the working directory")?;
+		Ok(ProjectConfig::discover(&cwd)
+			.and_then(|config| config.parent().map(Path::to_path_buf))
+			.unwrap_or(cwd))
+	}
+
+	/// The `surrealkit.toml` a watch should treat as an input, when the project
+	/// has one — an edit to it changes what is analyzed and how it is graded.
+	pub fn config_path() -> Result<Option<PathBuf>> {
+		let root = project_root()?;
+		let path = root.join(CONFIG_FILE_NAME);
+		Ok(path.is_file().then_some(path))
+	}
+
+	/// `[analyze] out` as an absolute path.
+	///
+	/// The key is documented relative to the project root, and a value written
+	/// in a config file has to mean the same file wherever the command runs
+	/// from. `--out` is the opposite: it is typed at a shell, so it stays
+	/// relative to the working directory like every other path a shell hands
+	/// over.
+	pub fn configured_out(project: &ProjectConfig) -> Result<Option<PathBuf>> {
+		let Some(out) = project.analyze.out.as_ref() else {
+			return Ok(None);
+		};
+		if out.is_absolute() {
+			return Ok(Some(out.clone()));
+		}
+		Ok(Some(project_root()?.join(out)))
+	}
+
+	/// The schema modules whose directories an analysis treats as schema,
+	/// given the names from `--schema`.
+	///
+	/// Empty means every declared module — or the default module, in the
+	/// pre-1.0 layout — which is the rule the database commands follow. A
+	/// named module pulls in what it depends on, as `--schema` does everywhere
+	/// else, unless `no_deps` says otherwise.
+	///
+	/// This chooses which directories count as *schema*, not which files are
+	/// read: see [`workspace_config`].
+	pub fn selected_modules(
+		project: &ProjectConfig,
+		selected: &[String],
+		no_deps: bool,
+	) -> Result<Vec<Module>> {
+		let declared: Vec<String> = project.schema.keys().cloned().collect();
+		let wanted: Vec<String> = if selected.is_empty() {
+			if declared.is_empty() {
+				vec![Module::DEFAULT_NAME.to_string()]
+			} else {
+				declared
+			}
+		} else {
+			for name in selected {
+				if !project.schema.contains_key(name) && name != Module::DEFAULT_NAME {
+					bail!(
+						"unknown schema module {name:?}; declared modules are: {}",
+						if declared.is_empty() {
+							"(none)".to_string()
+						} else {
+							declared.join(", ")
+						}
+					);
+				}
+			}
+			if no_deps {
+				let mut only = selected.to_vec();
+				only.sort();
+				only
+			} else {
+				project.module_order(selected)?
+			}
+		};
+		wanted
+			.into_iter()
+			.map(Module::new)
+			.collect::<Result<_>>()
+			.context("resolving schema modules for analysis")
+	}
+
+	/// The analyzer's configuration for this project: the schema globs come from
+	/// the module layout, everything else from `[analyze]`.
+	///
+	/// Built as the analyzer's own TOML and parsed by it, so lint levels, family
+	/// wildcards and version strings are read by exactly one parser.
+	///
+	/// The globs decide which of the discovered files are read *as schema*, and
+	/// so are analyzed before the queries that reference them. They do not
+	/// scope the analysis: the analyzer walks the whole project root, the
+	/// catalog it builds is global, and a `DEFINE` in a file that matched no
+	/// schema glob still reaches it.
+	pub fn workspace_config(
+		project: &ProjectConfig,
+		folder: &str,
+		root: &Path,
+		modules: &[Module],
+	) -> Result<WorkspaceConfig> {
+		let mut schema_globs = Vec::new();
+		let mut schema_prefixes = Vec::new();
+		for module in modules {
+			let dir = project.layout_for(folder, module).schema_dir();
+			let prefix = glob_prefix(root, &dir, module.name())?;
+			// An empty prefix means the root itself, where `/**/*.surql` would
+			// match nothing.
+			let base = if prefix.is_empty() {
+				String::new()
+			} else {
+				format!("{prefix}/")
+			};
+			schema_globs.push(format!("{base}**/*.surql"));
+			schema_globs.push(format!("{base}**/*.surrealql"));
+			schema_prefixes.push((module.name().to_string(), prefix));
+		}
+
+		let analyze = &project.analyze;
+		let builtin_count = BUILTIN_IGNORE.len();
+		let mut ignore: Vec<String> =
+			BUILTIN_IGNORE.iter().map(|pattern| (*pattern).to_string()).collect();
+		ignore.extend(analyze.ignore.iter().cloned());
+		reject_ignored_schema_dir(&ignore, builtin_count, &schema_prefixes)?;
+
+		let mut toml = String::new();
+		toml.push_str("[sources]\n");
+		toml.push_str(&format!("schema = {}\n", toml_array(&schema_globs)));
+		toml.push_str(&format!("ignore = {}\n", toml_array(&ignore)));
+		if let Some(version) = &analyze.surrealdb_version {
+			toml.push_str("\n[analysis]\n");
+			toml.push_str(&format!("surrealdb_version = {}\n", toml_string(version)));
+		}
+		toml.push_str("\n[diagnostics]\n");
+		toml.push_str(&format!("warnings_as_errors = {}\n", analyze.warnings_as_errors));
+		toml.push_str(&format!(
+			"require_suppression_reasons = {}\n",
+			analyze.require_suppression_reasons
+		));
+		toml.push_str("\n[lints]\n");
+		for (code, level) in &analyze.lints {
+			toml.push_str(&format!("{} = {}\n", toml_string(code), toml_string(level)));
+		}
+
+		let config = WorkspaceConfig::from_toml_str(&toml)
+			.map_err(|error| anyhow::anyhow!("[analyze] in {CONFIG_FILE_NAME}: {error}"))?;
+
+		// The analyzer reads an unparsable version as "unset", which means
+		// "the latest release" and fires no version-gated check at all. A
+		// typo would therefore turn off exactly the checks it was written to
+		// turn on, and say nothing.
+		if let Some(version) = &analyze.surrealdb_version
+			&& !version.trim().is_empty()
+			&& config.analysis.target_version().is_none()
+		{
+			bail!(
+				"[analyze] surrealdb_version = {version:?} in {CONFIG_FILE_NAME} is not a \
+				 release: write a major (\"3\"), a major and minor (\"3.2\"), or all three \
+				 (\"3.2.3\"). Remove the key to analyze against the latest release."
+			);
+		}
+
+		Ok(config)
+	}
+
+	/// The analyzer's view of this project: rooted at [`project_root`], configured
+	/// by [`workspace_config`], covering the modules `selected` names (empty is
+	/// all of them).
+	pub fn analyzer_project(
+		project: &ProjectConfig,
+		folder: &str,
+		selected: &[String],
+		no_deps: bool,
+	) -> Result<Project> {
+		let root = project_root()?;
+		let modules = selected_modules(project, selected, no_deps)?;
+		let config = workspace_config(project, folder, &root, &modules)?;
+		Ok(Project::new(root, config))
+	}
+
+	/// The schema directories an analysis treats as schema, relative to the
+	/// root — what the "no sources found" warning shows so the reader can see
+	/// where it looked.
+	pub fn schema_dirs(project: &ProjectConfig, folder: &str, modules: &[Module]) -> Vec<String> {
+		modules
+			.iter()
+			.map(|module| {
+				let dir = project.layout_for(folder, module).schema_dir();
+				dir.display().to_string()
+			})
+			.collect()
+	}
+
+	/// The directories every analysis skips, whatever `[analyze] ignore` says.
+	const BUILTIN_IGNORE: &[&str] = &["target/**", "node_modules/**", ".git/**"];
+
+	/// An ignore pattern that would swallow a schema directory, rejected.
+	///
+	/// `ignore` entries are directory names matched against every component of
+	/// a path, so `ignore = ["schema"]` — or `["database"]` — skips every
+	/// module's schema directory. The walk then finds no definitions, and the
+	/// run reports every table in the project as undefined: hundreds of
+	/// findings, none of them real, and nothing pointing at the one line that
+	/// caused it.
+	///
+	/// The built-in patterns are checked too, and a schema directory *can*
+	/// collide with one — a `[schema.x] path` under `target/`, or a database
+	/// folder inside `node_modules/`. Those get a different message, because
+	/// the fix is different: there is no line to delete, only a directory to
+	/// move. `builtin_count` is how many of `ignore`'s leading entries are
+	/// [`BUILTIN_IGNORE`].
+	fn reject_ignored_schema_dir(
+		ignore: &[String],
+		builtin_count: usize,
+		schema_prefixes: &[(String, String)],
+	) -> Result<()> {
+		for (index, pattern) in ignore.iter().enumerate() {
+			let name = pattern.strip_suffix("/**").unwrap_or(pattern);
+			for (module, prefix) in schema_prefixes {
+				if !prefix.split('/').any(|component| component == name) {
+					continue;
+				}
+				if index < builtin_count {
+					bail!(
+						"the built-in ignore `{pattern}` covers schema module {module:?}'s \
+						 directory `{prefix}`, so the analysis would find no definitions at \
+						 all. `target/`, `node_modules/` and `.git/` are always skipped; move \
+						 the database folder out of `{name}/`."
+					);
+				}
+				bail!(
+					"[analyze] ignore = [… {pattern:?} …] in {CONFIG_FILE_NAME} would skip the \
+					 schema directory of module {module:?} (`{prefix}`), leaving the analysis \
+					 with no definitions at all. Ignore entries are directory names matched \
+					 anywhere in the tree, so this one is broader than it looks."
+				);
+			}
+		}
+		Ok(())
+	}
+
+	/// `dir` as a forward-slash glob prefix relative to `root`, with `.` and
+	/// `..` resolved first so `./database/schema` matches the
+	/// `database/schema/x.surql` the analyzer discovers.
+	///
+	/// A directory outside `root` is an error because the analyzer's walk
+	/// never leaves `root`: files under such a directory are not discovered at
+	/// all, so no glob — however spelled — could bring them in. The
+	/// alternative to the error is an analysis running against an empty
+	/// schema, reporting every table in the project as undefined.
+	fn glob_prefix(root: &Path, dir: &Path, module: &str) -> Result<String> {
+		let absolute = if dir.is_absolute() {
+			dir.to_path_buf()
+		} else {
+			root.join(dir)
+		};
+		let normalized = normalize(&absolute);
+		let root = normalize(root);
+		// One message rather than a `with_context` wrapper: the module name is
+		// a detail of a sentence that has to be read whole, and anyhow would
+		// print the wrapper alone on the first line and bury the rest under
+		// "Caused by".
+		let relative = normalized.strip_prefix(&root).map_err(|_| {
+			anyhow::anyhow!(
+				"schema module {module:?}: the schema directory `{}` is outside the project \
+				 root `{}`; run from a directory that contains both, or keep the database \
+				 folder under the one holding {CONFIG_FILE_NAME}",
+				normalized.display(),
+				root.display()
+			)
+		})?;
+		// Normalization leaves only `Normal` components behind, so this filter
+		// drops nothing but the empty path — the directory *is* the root.
+		let parts: Vec<String> = relative
+			.components()
+			.filter_map(|component| match component {
+				Component::Normal(part) => Some(part.to_string_lossy().into_owned()),
+				_ => None,
+			})
+			.collect();
+		Ok(parts.join("/"))
+	}
+
+	/// `path` with `.` dropped and `..` folded into the component before it,
+	/// without touching the filesystem.
+	///
+	/// Lexical rather than [`Path::canonicalize`] because the directory need
+	/// not exist yet: a module whose `schema/` has not been created is a
+	/// normal state, not a reason to refuse the rest of the analysis. A `..`
+	/// with nothing to fold into is kept, so [`glob_prefix`]'s `strip_prefix`
+	/// still rejects a path that escapes the root.
+	fn normalize(path: &Path) -> PathBuf {
+		let mut out = PathBuf::new();
+		for component in path.components() {
+			match component {
+				Component::CurDir => {}
+				Component::ParentDir => {
+					if matches!(out.components().next_back(), Some(Component::Normal(_))) {
+						out.pop();
+					} else {
+						out.push("..");
+					}
+				}
+				other => out.push(other.as_os_str()),
+			}
+		}
+		out
+	}
+
+	/// `value` as a TOML basic string.
+	///
+	/// The `toml` crate's encoder rather than hand-rolled escaping: a value
+	/// carrying a control character (a tab, or a newline written `"a\nb"`) has
+	/// to come back out as an escape, or the document this builds is not the
+	/// document the analyzer parses, and the user gets a syntax error pointing
+	/// at a line of text they never wrote.
+	fn toml_string(value: &str) -> String {
+		toml::Value::String(value.to_string()).to_string()
+	}
+
+	fn toml_array(values: &[String]) -> String {
+		let quoted: Vec<String> = values.iter().map(|value| toml_string(value)).collect();
+		format!("[{}]", quoted.join(", "))
+	}
+
+	#[cfg(test)]
+	mod tests {
+		use super::*;
+
+		fn config(raw: &str) -> WorkspaceConfig {
+			config_for(raw, &[])
+		}
+
+		fn config_for(raw: &str, selected: &[&str]) -> WorkspaceConfig {
+			try_config_for(raw, selected, false).expect("analyzer config builds")
+		}
+
+		fn try_config_for(raw: &str, selected: &[&str], no_deps: bool) -> Result<WorkspaceConfig> {
+			let project = ProjectConfig::parse(raw).expect("config parses");
+			let selected: Vec<String> = selected.iter().map(|s| (*s).to_string()).collect();
+			let modules = selected_modules(&project, &selected, no_deps)?;
+			workspace_config(&project, "./database", Path::new("/proj"), &modules)
+		}
+
+		#[test]
+		fn the_default_module_schema_dir_becomes_the_schema_glob() {
+			let cfg = config("");
+			assert_eq!(
+				cfg.sources.schema,
+				vec!["database/schema/**/*.surql", "database/schema/**/*.surrealql"]
+			);
+			assert!(cfg.sources.ignore.contains(&"node_modules/**".to_string()));
+			assert_eq!(cfg.analysis.target_version(), None);
+		}
+
+		#[test]
+		fn every_declared_module_contributes_its_schema_dir() {
+			let cfg = config("[schema.core]\n[schema.billing]\npath = \"custom/billing\"\n");
+			assert!(
+				cfg.sources.schema.contains(&"database/modules/core/schema/**/*.surql".to_string())
+			);
+			// `[schema.x] path` is relative to the folder.
+			assert!(cfg.sources.schema.contains(&"database/custom/billing/**/*.surql".to_string()));
+		}
+
+		#[test]
+		fn a_selected_module_narrows_the_schema_globs() {
+			let cfg = config_for("[schema.core]\n[schema.billing]\n", &["core"]);
+			assert_eq!(
+				cfg.sources.schema,
+				vec![
+					"database/modules/core/schema/**/*.surql",
+					"database/modules/core/schema/**/*.surrealql"
+				],
+				"--schema core must leave billing's schema out"
+			);
+		}
+
+		#[test]
+		fn a_selected_module_pulls_in_what_it_depends_on() {
+			// Analyzing billing alone would report every core table it
+			// references as undefined.
+			let cfg = config_for(
+				"[schema.core]\n[schema.billing]\ndepends_on = [\"core\"]\n",
+				&["billing"],
+			);
+			assert!(
+				cfg.sources.schema.contains(&"database/modules/core/schema/**/*.surql".to_string())
+			);
+		}
+
+		#[test]
+		fn an_unknown_selected_module_names_the_declared_ones() {
+			let project = ProjectConfig::parse("[schema.core]\n").expect("config parses");
+			let error = selected_modules(&project, &["nope".to_string()], false)
+				.expect_err("an undeclared module is an error");
+			let message = format!("{error:#}");
+			assert!(message.contains("unknown schema module \"nope\""), "{message}");
+			assert!(message.contains("core"), "{message}");
+		}
+
+		#[test]
+		fn a_schema_directory_outside_the_root_is_an_error_not_a_silent_miss() {
+			// `--folder ../shared` puts the schema where the analyzer neither
+			// walks nor can express a glob for. It must say so, rather than
+			// analyze the project against an empty schema and report every
+			// table as undefined.
+			let project = ProjectConfig::parse("").expect("config parses");
+			let modules = selected_modules(&project, &[], false).expect("modules resolve");
+			let error = workspace_config(&project, "../shared", Path::new("/proj"), &modules)
+				.expect_err("a schema directory outside the root is an error");
+			let message = format!("{error:#}");
+			assert!(message.contains("outside the project root"), "{message}");
+			assert!(message.contains("/shared/schema"), "{message}");
+		}
+
+		#[test]
+		fn an_absolute_schema_directory_under_the_root_is_relative_to_it() {
+			let project = ProjectConfig::parse("").expect("config parses");
+			let modules = selected_modules(&project, &[], false).expect("modules resolve");
+			let cfg = workspace_config(&project, "/proj/database", Path::new("/proj"), &modules)
+				.expect("analyzer config builds");
+			assert_eq!(
+				cfg.sources.schema,
+				vec!["database/schema/**/*.surql", "database/schema/**/*.surrealql"]
+			);
+		}
+
+		#[test]
+		fn no_deps_leaves_a_dependency_out() {
+			let cfg = try_config_for(
+				"[schema.core]\n[schema.billing]\ndepends_on = [\"core\"]\n",
+				&["billing"],
+				true,
+			)
+			.expect("analyzer config builds");
+			assert!(
+				!cfg.sources
+					.schema
+					.contains(&"database/modules/core/schema/**/*.surql".to_string()),
+				"--no-deps must not pull core in: {:?}",
+				cfg.sources.schema
+			);
+		}
+
+		#[test]
+		fn an_ignore_pattern_that_would_swallow_a_schema_dir_is_rejected() {
+			// `ignore = ["schema"]` skips every module's schema directory, and
+			// the run then reports every table in the project as undefined --
+			// hundreds of findings with nothing pointing at the cause.
+			for pattern in ["schema", "schema/**", "database"] {
+				let raw = format!("[analyze]\nignore = [\"{pattern}\"]\n");
+				let error = try_config_for(&raw, &[], false)
+					.expect_err("an ignore that blanks the schema is an error");
+				let message = format!("{error:#}");
+				assert!(message.contains("schema directory"), "{pattern}: {message}");
+				assert!(message.contains(pattern), "{pattern}: {message}");
+			}
+			// A directory that is not on the schema path stays allowed.
+			try_config_for("[analyze]\nignore = [\"dist/**\"]\n", &[], false)
+				.expect("an unrelated ignore is fine");
+		}
+
+		#[test]
+		fn a_builtin_ignore_covering_a_schema_dir_says_so_in_its_own_words() {
+			// The built-ins are checked too -- a `[schema.x] path` under
+			// `target/` is skipped just as thoroughly -- but there is no config
+			// line to delete, so the message has to point at the directory.
+			let project = ProjectConfig::parse("[schema.core]\npath = \"target/schema\"\n")
+				.expect("config parses");
+			let modules = selected_modules(&project, &[], false).expect("modules resolve");
+			let error = workspace_config(&project, "./database", Path::new("/proj"), &modules)
+				.expect_err("a schema directory under target/ is an error");
+			let message = format!("{error:#}");
+			assert!(message.contains("built-in ignore `target/**`"), "{message}");
+			assert!(message.contains("\"core\""), "{message}");
+			assert!(
+				!message.contains("[analyze] ignore"),
+				"there is no config line to blame: {message}"
+			);
+		}
+
+		#[test]
+		fn a_malformed_surrealdb_version_is_rejected_rather_than_read_as_latest() {
+			// The analyzer treats an unparsable version as unset, which means
+			// "latest" and fires no version-gated check -- so a typo turns off
+			// exactly the checks the key was added to turn on.
+			for version in ["3.x", "latest", "v3.2.1.4", "three"] {
+				let raw = format!("[analyze]\nsurrealdb_version = \"{version}\"\n");
+				let error =
+					try_config_for(&raw, &[], false).expect_err("a malformed version is an error");
+				let message = format!("{error:#}");
+				assert!(message.contains("is not a release"), "{version}: {message}");
+			}
+			for version in ["3", "3.2", "3.2.3", "v3.2"] {
+				let raw = format!("[analyze]\nsurrealdb_version = \"{version}\"\n");
+				try_config_for(&raw, &[], false)
+					.unwrap_or_else(|error| panic!("{version} is a release: {error:#}"));
+			}
+		}
+
+		#[test]
+		fn there_is_no_strict_key_to_set() {
+			// The analyzer parses `[analysis] strict` but no check reads it, so
+			// accepting the key here would mean accepting a setting that does
+			// nothing. `deny_unknown_fields` makes adding it later additive.
+			assert!(ProjectConfig::parse("[analyze]\nstrict = true\n").is_err());
+		}
+
+		#[test]
+		fn a_value_with_a_control_character_survives_the_round_trip() {
+			// Hand-rolled escaping emitted a literal newline here, which made
+			// the generated document fail to parse and reported a line and
+			// column in text the user never wrote.
+			let cfg = config("[analyze]\nignore = [\"we\\nird\"]\n");
+			assert!(cfg.sources.ignore.contains(&"we\nird".to_string()));
+		}
+
+		#[test]
+		fn analyze_section_maps_onto_the_analyzer_config() {
+			let cfg = config(
+				"[analyze]\nsurrealdb_version = \"3.2\"\nwarnings_as_errors = true\nignore = [\"dist/**\"]\n[analyze.lints]\n\"7xxx\" = \"allow\"\nE1002 = \"warn\"\n",
+			);
+			assert!(cfg.diagnostics.warnings_as_errors);
+			assert_eq!(
+				cfg.analysis.target_version().map(|v| v.to_string()),
+				Some("3.2".to_string())
+			);
+			assert!(cfg.sources.ignore.contains(&"dist/**".to_string()));
+			// The lint table round-trips through the analyzer's own parser: the
+			// demoted 1002 comes back as a warning.
+			let finding = surrealql_analyzer::diagnostics::catalog::finding(
+				surrealql_analyzer::syntax::span::SourceSpan::new(
+					surrealql_analyzer::syntax::source::SourceId::new("t"),
+					surrealql_analyzer::syntax::span::ByteRange::new(0, 1).expect("ordered"),
+				),
+				1002,
+				"probe",
+			);
+			use surrealql_analyzer::diagnostics::Severity;
+			assert_eq!(
+				cfg.policy().resolve_severity(finding.code(), finding.severity()),
+				Some(Severity::Warning)
+			);
+		}
+
+		#[test]
+		fn an_unknown_analyze_key_is_rejected_like_every_other_section() {
+			assert!(ProjectConfig::parse("[analyze]\nstrictness = true\n").is_err());
+		}
+	}
+}

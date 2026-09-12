@@ -1,5 +1,6 @@
 #![doc = include_str!("../README.md")]
 
+pub mod analyze;
 pub mod config;
 pub mod constants;
 pub mod core;
@@ -16,7 +17,12 @@ pub mod typegen;
 pub mod variables;
 
 // Re-exported dependencies used in the public API surface.
+pub use analyze::AnalyzeConfig;
 pub use anyhow;
+// The analyzer SurrealKit's `check`/`generate`/`watch` drive, re-exported so a
+// consumer can name its types without pinning the git revision themselves.
+#[cfg(feature = "analyze")]
+pub use surrealql_analyzer as analyzer;
 // Connecting.
 pub use config::{AuthLevel, DbCfg, DbOverrides, connect};
 // Rollouts (the staged, reversible path).

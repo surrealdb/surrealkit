@@ -27,6 +27,20 @@ Prebuilt binaries are published for:
 - **macOS**: `aarch64-apple-darwin` (Apple Silicon), `x86_64-apple-darwin` (Intel)
 - **Windows**: `x86_64-pc-windows-msvc`
 
+Building from source needs a C compiler, and `cmake` for `aws-lc-sys`. That has
+always been true — `surrealdb-core` brings in `aws-lc-sys`, `blake3`, `lz4-sys`
+and `ring` — and [static analysis](#static-analysis), on by default, adds
+`tree-sitter` and its three grammars to the list (about 7.5 MiB of binary and
+100 seconds of compilation). To build the CLI without it:
+
+```sh
+cargo install surrealkit --no-default-features --features kv-mem,cli
+```
+
+That binary has no `check`, `generate` or `watch` subcommand; everything else is
+the same, and it still reads an `[analyze]` section without complaint. Prebuilt
+binaries and `cargo binstall` are unaffected — analysis is included in both.
+
 ### Docker
 
 Multi-arch (`linux/amd64`, `linux/arm64`) images are published to GitHub Container Registry on every release. The image is based on `gcr.io/distroless/cc-debian12:nonroot` - minimal (~25 MB), no shell, runs as uid 65532.
@@ -374,6 +388,78 @@ format = "biome check --write"
 
 With `typescript` set, `surrealkit sync` regenerates types after applying schema
 changes, so the generated types never drift from the database.
+
+## Static Analysis
+
+`surrealkit check`, `generate` and `watch` run the
+[SurrealQL Analyzer](https://github.com/surrealdb/analyzer) over the project —
+no database is contacted. The analyzer reads every module's `schema/` directory
+as the schema, every other `.surql` file as queries, and the SurrealQL embedded
+in host code (`db.query("SELECT …")` in `.ts`/`.svelte`/`.vue`/`.astro`), and
+reports contract violations before anything reaches an instance: unknown
+tables and fields, kind mismatches, bad graph traversals, comparisons that can
+never be true, clauses the engine accepts and then ignores.
+
+```bash
+surrealkit check                   # rustc-style findings on stderr; exit 1 on any error
+surrealkit check --json            # { summary, diagnostics[] } on stdout, for CI and tooling
+surrealkit generate --out src/lib/db.generated.ts   # typed client for the embedded queries
+surrealkit watch                   # check, then regenerate, on every save
+```
+
+Findings and the summary go to stderr, the way `rustc` and `tsc` report them,
+so `surrealkit check > log.txt` cannot be what hides an error. `--json` is the
+exception: it is the product of the run, and goes to stdout alone, so
+`surrealkit check --json | jq` reads one document and nothing else. In that
+document `source` is the file relative to the project root, and `range` is a
+pair of byte offsets into that file.
+
+The analysis always covers the whole project. `-s/--schema` picks which
+directories are read *as schema* — and so are analyzed before the queries that
+reference them — but every `.surql` and host file under the project root is
+read either way, and a finding is reported wherever it lands. `--target` and
+`--all` do not apply and are reported as ignored.
+
+Configure it in `surrealkit.toml`. The schema directories come from the module
+layout, so nothing is written down twice:
+
+```toml
+[analyze]
+# The SurrealDB release you deploy to. Turns on the version checks (a function
+# or syntax the release lacks or removed). Unset means the latest release.
+surrealdb_version = "3.2"
+# Where `surrealkit generate` writes the typed client, relative to the
+# directory holding surrealkit.toml. (`--out` on the command line is relative
+# to the working directory, like any path typed at a shell.)
+out = "src/lib/db.generated.ts"
+# Extra directories to skip; target/, node_modules/ and .git/ always are.
+# Each entry is a directory NAME, matched against every path component -- not
+# a glob. `dist` and `dist/**` are the same pattern; `src/generated/**` and
+# `*.gen.ts` match nothing, and a pattern that would swallow a module's schema
+# directory (`"schema"`, `"database"`) is rejected rather than silently
+# emptying the analysis.
+ignore = ["dist/**"]
+warnings_as_errors = false          # a CI gate
+
+[analyze.lints]                     # "allow" | "warn" | "deny", by code or family
+"7xxx" = "warn"
+E1002 = "allow"
+```
+
+`generate` refuses to overwrite a good registry when an embedded query has an
+error, and `watch` regenerates only after a clean check, so the generated types
+never lag behind a broken save. A watch re-reads `surrealkit.toml` before every
+run, so editing the target version or the lint levels re-targets the next one;
+`[analyze] out` is the exception, read once when the watch starts, because the
+path the watcher keeps out of its own input set has to stay fixed for the life
+of the process. Inline suppressions are
+`-- surrealql-analyzer: allow(E1001) reason="…"`; the full code catalog is at
+<https://surrealguard.dev/docs/diagnostics>.
+
+None of these commands contacts a database, and none needs the environment one
+would: a project whose `[target.*]` reads its password from a variable that is
+not set still checks. That is what lets a pull-request job run `surrealkit
+check --json` with no credentials at all.
 
 ## Vite Plugin
 

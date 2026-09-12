@@ -26,6 +26,12 @@ rust_dotenv = '0.1.2'
 sha2 = '0.10'
 surrealdb = { workspace = true }
 surrealdb-types = { workspace = true }
+# Static analysis of the project's SurrealQL (`check`, `generate`, `watch`),
+# behind the `analyze` feature. A git dependency until the library-only
+# analyzer is released; switch to `version = "0.6"` then -- `cargo publish`
+# refuses a git dependency, so this crate cannot be released before that swap.
+# The analyzer is a library: SurrealKit is its CLI.
+surrealql-analyzer = { git = "https://github.com/surrealdb/analyzer", branch = "analyzer-library", optional = true }
 time = { version = '0.3', features = ['macros', 'formatting'] }
 tokio = { version = '1.47', features = ['macros', 'rt-multi-thread', 'signal', 'time'] }
 walkdir = { workspace = true }
@@ -46,12 +52,24 @@ indoc = "2"
 # Cargo unifies features across the dependency graph, so enabling e.g.
 # `surrealdb/kv-surrealkv` in your own crate is enough for SurrealKit's
 # `Surreal<Any>` to open `surrealkv://`.
-default = ['kv-mem', 'cli']
+default = ['kv-mem', 'cli', 'analyze']
 # The `surrealkit` binary. On by default so `cargo install surrealkit` works, but
 # `default-features = false` drops clap, inquire, rustls (and its aws-lc-rs
 # backend) and tempfile from a library consumer's dependency tree -- none of them
 # are used by the library itself.
 cli = ['dep:clap', 'dep:inquire', 'dep:rustls', 'dep:tempfile']
+# Static analysis of a project's SurrealQL: the `check`/`generate`/`watch`
+# subcommands and the `surrealkit::analyzer` re-export. On by default, and
+# deliberately NOT implied by `cli`, so that turning it off is one flag rather
+# than a rebuild of the whole feature set:
+#
+#     cargo install surrealkit --no-default-features --features kv-mem,cli
+#
+# builds the CLI without the three subcommands and without the analyzer's
+# tree-sitter grammars (21 packages, all of which compile C). `[analyze]` in
+# surrealkit.toml still parses either way, so a slim build accepts a config file
+# written for a full one.
+analyze = ['dep:surrealql-analyzer']
 kv-mem = ['surrealdb/kv-mem']
 kv-surrealkv = ['surrealdb/kv-surrealkv']
 kv-rocksdb = ['surrealdb/kv-rocksdb']

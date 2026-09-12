@@ -12,6 +12,9 @@
 //! [typegen]
 //! typescript = "src/types"
 //!
+//! [analyze]
+//! surrealdb_version = "3.2"      # the release `surrealkit check` analyzes for
+//!
 //! [schema.core]
 //! # path defaults to <folder>/modules/core/schema
 //!
@@ -84,6 +87,11 @@ pub struct ProjectConfig {
 	pub variables: HashMap<String, String>,
 	#[serde(default)]
 	pub typegen: crate::variables::TypegenConfig,
+	/// `[analyze]` — how `surrealkit check`/`generate`/`watch` grade the
+	/// project's SurrealQL. The schema directories are never repeated here;
+	/// they come from the module layout.
+	#[serde(default)]
+	pub analyze: crate::analyze::AnalyzeConfig,
 	/// Declared schema modules, keyed by name.
 	#[serde(default)]
 	pub schema: BTreeMap<String, SchemaModuleConfig>,
