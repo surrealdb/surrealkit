@@ -328,8 +328,14 @@ query_timeout_secs = 900    # default unset, meaning no deadline on step SQL
 
 Full key list for `[target.<name>]`: `host`, `ns`, `db`, `user`, `pass_env`,
 `auth_level`, `schemas`, `primary`, `connect_timeout_secs`,
-`query_timeout_secs`. Precedence for the timeouts is CLI flag, then environment
-variable, then this section, then the default.
+`query_timeout_secs`.
+
+**A value set here wins over the equivalent CLI flag and environment variable.**
+That holds for every key, not just the timeouts: naming a target selects a
+described connection, so `--host` does not override a target's `host`, and
+`--connect-timeout-secs 5 --target warehouse` uses the target's
+`connect_timeout_secs` if it sets one. Omit the key to inherit, where the order
+is CLI flag, then environment variable, then `.env`, then the default.
 
 ### Fan-out semantics
 

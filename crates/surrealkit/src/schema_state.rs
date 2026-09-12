@@ -325,8 +325,14 @@ pub fn legacy_schema_hashes(snapshot: &SchemaSnapshot, folder: &str) -> Result<V
 	let trimmed = folder.trim_end_matches('/');
 	let bare = trimmed.strip_prefix("./").unwrap_or(trimmed);
 
+	// beta.1 stripped the *working directory*, not the folder, so a project at
+	// `/srv/app/database` run from `/srv/app` recorded `database/schema/a.surql`.
+	// Reconstructing only from the configured folder string would miss that and
+	// reject the very manifest this fallback exists to rescue.
+	let basename = Path::new(bare).file_name().and_then(|n| n.to_str()).unwrap_or(bare);
+
 	let mut out = Vec::new();
-	for prefix in [bare, trimmed] {
+	for prefix in [bare, trimmed, basename] {
 		if prefix.is_empty() {
 			continue;
 		}
@@ -397,31 +403,44 @@ pub fn load_schema_snapshot(folder: &str) -> Result<SchemaSnapshot> {
 
 /// Drop a legacy folder prefix from a stored key, leaving it folder-relative.
 ///
-/// Handles every spelling `normalize_path` used to produce: `database/schema/x`,
-/// `./database/schema/x`, `/database/schema/x`, and any deeper
-/// working-directory-relative prefix.
+/// Handles the spellings a pre-1.0.0-beta.2 build could produce:
+/// `database/schema/x`, `./database/schema/x` and `/database/schema/x`.
+///
+/// Deliberately conservative. It only strips a prefix that matches the configured
+/// folder, because it is applied to every snapshot entry on load and an
+/// over-eager match mangles keys that are already correct: a project whose folder
+/// is named `schema` would see `schema/a.surql` reduced to `a.surql`, and a
+/// basename search anywhere in the path would fire on an interior `schema/database/`
+/// directory. Both leave `run_plan` diffing a mangled old snapshot against a
+/// canonical new one, so every file reads as removed-plus-added.
 pub fn strip_folder_prefix(folder: &str, stored: &str) -> String {
 	let trimmed = folder.trim_end_matches('/');
 	let bare = trimmed.strip_prefix("./").unwrap_or(trimmed);
-	for prefix in [trimmed, bare] {
-		if prefix.is_empty() {
+	// A leading `./` is noise on either side and never part of a key.
+	let candidate = stored.strip_prefix("./").unwrap_or(stored);
+
+	// The folder and the stored key can disagree about absoluteness: a container
+	// with `SURREALDB_FOLDER=/database` writes `/database/...`, a checkout
+	// configured with `database` writes `database/...`, and the snapshot file is
+	// committed and read by both. Try the same folder spelled either way.
+	// Searching for the folder's name anywhere in the path is a different thing
+	// and is not safe, so it is not done.
+	let relative = bare.trim_start_matches('/');
+	let absolute = format!("/{relative}");
+
+	for prefix in [trimmed, bare, relative, absolute.as_str()] {
+		if prefix.is_empty() || prefix == "/" {
 			continue;
 		}
-		if let Some(rest) = stored.strip_prefix(prefix).and_then(|r| r.strip_prefix('/')) {
+		let Some(rest) = candidate.strip_prefix(prefix).and_then(|r| r.strip_prefix('/')) else {
+			continue;
+		};
+		// Every canonical key has a directory component: `schema/x.surql`,
+		// `seed/x.surql`, `modules/<name>/schema/x.surql`. A strip that leaves a
+		// bare filename has eaten one, which is what happens when the folder shares
+		// its name with the key's first segment (a project folder called `schema`).
+		if rest.contains('/') {
 			return rest.to_string();
-		}
-	}
-	// An unrecognised prefix could still be a deeper working-directory path, so
-	// fall back to the folder's last segment as an anchor. Check the start of the
-	// key first (`database/schema/a.surql`), then the innermost embedded
-	// occurrence, since a path can legitimately repeat the folder name
-	// (`/srv/database/database/schema/a.surql`) and the last one is the root.
-	if let Some(name) = Path::new(bare).file_name().and_then(|n| n.to_str()) {
-		if let Some(rest) = stored.strip_prefix(&format!("{name}/")) {
-			return rest.to_string();
-		}
-		if let Some(index) = stored.rfind(&format!("/{name}/")) {
-			return stored[index + name.len() + 2..].to_string();
 		}
 	}
 	stored.to_string()
@@ -754,15 +773,31 @@ pub fn canonicalise_keys<V: Clone>(
 ) -> (BTreeMap<String, V>, Vec<(String, String)>) {
 	let mut out = BTreeMap::new();
 	let mut re_keyed = Vec::new();
+
+	// Exact matches first, and they win. A database can hold both a canonical row
+	// and a legacy one for the same file, which is the mixed CLI/embedded state
+	// this migration exists for, and the canonical row carries the current hash.
+	// Resolving that by iteration order would let a stale legacy hash overwrite it
+	// whenever the folder name happened to sort after the canonical key.
 	for (key, value) in stored {
 		if canonical.iter().any(|c| c == key) {
 			out.insert(key.clone(), value.clone());
+		}
+	}
+
+	for (key, value) in stored {
+		if out.contains_key(key) {
 			continue;
 		}
 		// Longest match wins. With modules, `modules/billing/schema/a.surql` and
 		// `schema/a.surql` are both suffixes of a legacy absolute key, and picking
-		// whichever came first in iteration order would bind it to the wrong module.
+		// whichever came first would bind it to the wrong module.
 		match canonical.iter().filter(|c| is_legacy_key_for(key, c)).max_by_key(|c| c.len()) {
+			// Already carried by a canonical row: retire the legacy key without
+			// touching the live hash.
+			Some(target) if out.contains_key(target) => {
+				re_keyed.push((key.clone(), target.clone()));
+			}
 			Some(target) => {
 				re_keyed.push((key.clone(), target.clone()));
 				out.insert(target.clone(), value.clone());
@@ -2252,6 +2287,26 @@ mod tests {
 		assert_eq!(re_keyed.len(), 2, "both legacy spellings should be re-keyed");
 	}
 
+	/// Both rows for one file, with a folder name that sorts after the canonical
+	/// key. The canonical row holds the current hash and must survive.
+	#[test]
+	fn canonicalise_keys_prefers_the_canonical_row_over_a_legacy_one() {
+		let mut stored = BTreeMap::new();
+		stored.insert("schema/a.surql".to_string(), "current".to_string());
+		stored.insert("zzz/schema/a.surql".to_string(), "stale".to_string());
+
+		let canonical = ["schema/a.surql".to_string()];
+		let (migrated, re_keyed) = canonicalise_keys(&stored, &canonical);
+
+		assert_eq!(
+			migrated.get("schema/a.surql"),
+			Some(&"current".to_string()),
+			"a stale legacy hash must not overwrite the canonical row"
+		);
+		assert_eq!(migrated.len(), 1, "the legacy row must not survive as a separate key");
+		assert_eq!(re_keyed.len(), 1, "the legacy row still needs retiring");
+	}
+
 	#[test]
 	fn strip_folder_prefix_handles_every_folder_spelling() {
 		for folder in ["database", "./database", "/database"] {
@@ -2268,11 +2323,19 @@ mod tests {
 		// Already canonical: left alone.
 		assert_eq!(strip_folder_prefix("database", "schema/a.surql"), "schema/a.surql");
 
-		// A path that repeats the folder name resolves to the innermost one, which
-		// is the project root, not the first ancestor that happens to share it.
+		// A key that is already canonical must be left alone, even when the folder
+		// name collides with its first segment.
+		assert_eq!(strip_folder_prefix("schema", "schema/a.surql"), "schema/a.surql");
+		// And an interior directory sharing the folder's name is not a prefix.
 		assert_eq!(
-			strip_folder_prefix("database", "/srv/database/database/schema/a.surql"),
-			"schema/a.surql"
+			strip_folder_prefix("database", "schema/database/tables.surql"),
+			"schema/database/tables.surql"
+		);
+		// An unrecognised prefix is left intact rather than guessed at; the sync
+		// migration matches those on a path-segment boundary instead.
+		assert_eq!(
+			strip_folder_prefix("database", "/srv/app/database/schema/a.surql"),
+			"/srv/app/database/schema/a.surql"
 		);
 	}
 

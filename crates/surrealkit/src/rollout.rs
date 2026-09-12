@@ -940,37 +940,17 @@ async fn start_inner(
 			}
 			_ => {}
 		}
-		// Whether this is the run that opens the rollout, as opposed to a resume.
-		let first_run = record.is_none();
-		if let Some(ref row) = record {
-			verify_rollout_record_matches(row, rollout)?;
-		} else {
-			create_rollout_record(
-				db,
-				rollout,
-				&source_catalog.entities,
-				&target_catalog.entities,
-				RolloutStatus::Planned,
-			)
-			.await?;
-		}
-		// Capture what a rollback would restore *before* the expand phase
-		// overwrites it. The previous definition of a modified entity lives
-		// nowhere on disk -- the catalog snapshot keeps only a hash -- so the live
-		// database is the only source for it.
+		// Capture what a rollback would restore *before* anything else, including
+		// before the record exists. The previous definition of a modified entity
+		// lives nowhere on disk (the catalog snapshot keeps only a hash), so the
+		// live database is the only source for it.
 		//
-		// Capture exactly once, on the run that opens the rollout. `start` is
-		// idempotent and re-running it after an interrupted run is the documented
-		// recovery, but by then the expand phase may already have applied: a second
-		// capture would read back the *new* definitions and overwrite the originals,
-		// leaving rollback to "restore" what is already there and report success.
-		//
-		// Keyed on the record being absent rather than on the stored map being
-		// empty, because an empty map is a real outcome: when the live database has
-		// drifted from the catalog there is nothing to capture, `start` says so, and
-		// a resume must not quietly replace that warning with the post-change
-		// definitions. Empty means "we looked and found nothing", not "we have not
-		// looked yet".
+		// Ordering matters more than it looks. If the capture ran after
+		// `create_rollout_record` and then failed, the record would exist with no
+		// definitions, the operator's re-run would see a resume and skip the
+		// capture, and `rollout rollback` would be permanently unavailable for that
+		// rollout with no way to recover it. Capturing first means a failure here
+		// leaves no record at all, so re-running `start` is still a first run.
 		let restorable: Vec<EntityKey> = rollout
 			.spec
 			.steps
@@ -983,47 +963,68 @@ async fn start_inner(
 			})
 			.flatten()
 			.collect();
-		if !first_run {
-			log::debug!(
-				"rollout '{}' is resuming; keeping the rollback definitions the opening run \
-				 captured",
-				rollout.spec.id
-			);
-		} else if !restorable.is_empty() {
-			let captured = capture_definitions(db, &restorable).await?;
-			let missing: Vec<String> = restorable
-				.iter()
-				.map(|e| entity_key_string(&e.kind, e.scope.as_deref(), &e.name))
-				.filter(|key| !captured.contains_key(key))
-				.collect();
-			// Say this now, not at rollback time. A modified entity is one the
-			// snapshot says already existed, so finding it absent in the live
-			// database means real drift -- and that rollback cannot restore it.
-			if !missing.is_empty() {
-				log::warn!(
-					"no live definition found for {}, so `rollout rollback` will not be \
-					 able to restore {}. The catalog snapshot says they already existed, \
-					 so this database has drifted from it -- check that it is the one you \
-					 meant, and that the schema was ever applied here.",
-					missing.join(", "),
-					if missing.len() == 1 {
-						"it"
-					} else {
-						"them"
-					}
+
+		match record.as_ref() {
+			// A resume. The opening run already captured; re-reading now would pick
+			// up whatever the expand phase wrote and overwrite the originals.
+			Some(row) => {
+				verify_rollout_record_matches(row, rollout)?;
+				log::debug!(
+					"rollout '{}' is resuming; keeping the rollback definitions the opening \
+					 run captured",
+					rollout.spec.id
 				);
 			}
-			log::info!(
-				"captured {} definition(s) for rollback of {} modified entit{}",
-				captured.len(),
-				restorable.len(),
-				if restorable.len() == 1 {
-					"y"
+			None => {
+				let captured = if restorable.is_empty() {
+					BTreeMap::new()
 				} else {
-					"ies"
+					capture_definitions(db, &restorable).await?
+				};
+				let missing: Vec<String> = restorable
+					.iter()
+					.map(|e| entity_key_string(&e.kind, e.scope.as_deref(), &e.name))
+					.filter(|key| !captured.contains_key(key))
+					.collect();
+				// Say this now, not at rollback time. A modified entity is one the
+				// snapshot says already existed, so finding it absent in the live
+				// database means real drift, and that rollback cannot restore it.
+				if !missing.is_empty() {
+					log::warn!(
+						"no live definition found for {}, so `rollout rollback` will not be \
+						 able to restore {}. The catalog snapshot says they already existed, \
+						 so this database has drifted from it -- check that it is the one you \
+						 meant, and that the schema was ever applied here.",
+						missing.join(", "),
+						if missing.len() == 1 {
+							"it"
+						} else {
+							"them"
+						}
+					);
 				}
-			);
-			store_restore_definitions(db, &rollout.spec.id, &captured).await?;
+				if !restorable.is_empty() {
+					log::info!(
+						"captured {} definition(s) for rollback of {} modified entit{}",
+						captured.len(),
+						restorable.len(),
+						if restorable.len() == 1 {
+							"y"
+						} else {
+							"ies"
+						}
+					);
+				}
+				create_rollout_record(
+					db,
+					rollout,
+					&source_catalog.entities,
+					&target_catalog.entities,
+					RolloutStatus::Planned,
+					&captured,
+				)
+				.await?;
+			}
 		}
 
 		set_rollout_status(db, &rollout.spec.id, RolloutStatus::RunningStart, None, None).await?;
@@ -1987,8 +1988,18 @@ fn resolve_step_file(folder: Option<&str>, recorded: &str) -> Result<PathBuf> {
 		}
 		tried.push(direct);
 
-		// Legacy `<folder-name>/schema/...`: drop the leading folder segment.
-		if let Some((_, rest)) = recorded.split_once('/') {
+		// Legacy `<folder-name>/schema/...`. Only drop the leading segment when it
+		// really is the folder's name: dropping it unconditionally turns
+		// `schema/user.surql` into a probe for `<folder>/user.surql`, and a stray
+		// top-level file there would be applied instead of the step failing.
+		let folder_name = Path::new(folder.trim_end_matches('/'))
+			.file_name()
+			.and_then(|n| n.to_str())
+			.unwrap_or_default();
+		if let Some((head, rest)) = recorded.split_once('/')
+			&& !folder_name.is_empty()
+			&& head == folder_name
+		{
 			let stripped = root.join(rest);
 			if stripped.is_file() {
 				return Ok(stripped);
@@ -2090,24 +2101,6 @@ async fn load_restore_definitions(
 		return Ok(BTreeMap::new());
 	};
 	Ok(map.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect())
-}
-
-/// Persist the definitions a rollback would restore, before the expand phase
-/// overwrites them.
-pub(crate) async fn store_restore_definitions(
-	db: &Surreal<Any>,
-	rollout_id: &str,
-	definitions: &BTreeMap<String, String>,
-) -> Result<()> {
-	db.query(
-		"UPDATE __rollout SET restore_definitions = $definitions, updated_at = time::now() \
-		 WHERE record::id(id) = $id;",
-	)
-	.bind(("id", rollout_id.to_string()))
-	.bind(("definitions", serde_json::to_value(definitions)?))
-	.await?
-	.check()?;
-	Ok(())
 }
 
 async fn execute_step(
@@ -2253,6 +2246,7 @@ async fn create_rollout_record(
 	source_entities: &[CatalogEntity],
 	target_entities: &[CatalogEntity],
 	status: RolloutStatus,
+	restore_definitions: &BTreeMap<String, String>,
 ) -> Result<()> {
 	let started_at = OffsetDateTime::now_utc().format(&Rfc3339)?;
 	db.query(
@@ -2270,6 +2264,7 @@ async fn create_rollout_record(
 		 	started_at: <datetime> $started_at, \
 		 	updated_at: time::now(), \
 		 	reversibility: $reversibility, \
+		 	restore_definitions: $restore_definitions, \
 		 	last_error: NONE \
 		 };",
 	)
@@ -2284,6 +2279,7 @@ async fn create_rollout_record(
 	.bind(("target_entities", serde_json::to_value(target_entities)?))
 	.bind(("started_at", started_at))
 	.bind(("reversibility", reversibility(&rollout.spec).to_string()))
+	.bind(("restore_definitions", serde_json::to_value(restore_definitions)?))
 	.await?
 	.check()?;
 	Ok(())
@@ -2969,7 +2965,7 @@ mod tests {
 		let db = connect_mem_db().await;
 		let loaded = sample_loaded_spec("20260417181055__initial_schema");
 
-		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned)
+		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned, &BTreeMap::new())
 			.await
 			.expect("create_rollout_record should coerce started_at string to datetime");
 
@@ -2991,9 +2987,16 @@ mod tests {
 	async fn set_rollout_status_accepts_rfc3339_completed_at() {
 		let db = connect_mem_db().await;
 		let loaded = sample_loaded_spec("20260417181055__complete_path");
-		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::RunningComplete)
-			.await
-			.expect("seed rollout record");
+		create_rollout_record(
+			&db,
+			&loaded,
+			&[],
+			&[],
+			RolloutStatus::RunningComplete,
+			&BTreeMap::new(),
+		)
+		.await
+		.expect("seed rollout record");
 
 		let completed_at = OffsetDateTime::now_utc().format(&Rfc3339).expect("format rfc3339");
 		set_rollout_status(
@@ -3023,7 +3026,7 @@ mod tests {
 	async fn set_rollout_status_accepts_none_completed_at() {
 		let db = connect_mem_db().await;
 		let loaded = sample_loaded_spec("20260417181055__running_path");
-		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned)
+		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned, &BTreeMap::new())
 			.await
 			.expect("seed rollout record");
 
@@ -3047,7 +3050,7 @@ mod tests {
 	async fn load_rollout_record_finds_created_row() {
 		let db = connect_mem_db().await;
 		let loaded = sample_loaded_spec("20260417181055__lookup");
-		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned)
+		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned, &BTreeMap::new())
 			.await
 			.expect("seed rollout record");
 
@@ -3070,7 +3073,7 @@ mod tests {
 		let db = connect_mem_db().await;
 		let loaded = sample_loaded_spec("20260420101627__initial_schema");
 
-		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned)
+		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned, &BTreeMap::new())
 			.await
 			.expect("create rollout record");
 
@@ -3122,9 +3125,16 @@ mod tests {
 		let db = connect_mem_db().await;
 		let loaded = sample_loaded_spec("20260420101627__active_id_test");
 
-		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::RunningStart)
-			.await
-			.expect("create rollout record");
+		create_rollout_record(
+			&db,
+			&loaded,
+			&[],
+			&[],
+			RolloutStatus::RunningStart,
+			&BTreeMap::new(),
+		)
+		.await
+		.expect("create rollout record");
 
 		let active =
 			load_active_rollout_id(&db).await.expect("load_active_rollout_id must not fail");
@@ -3197,9 +3207,16 @@ mod tests {
 		let loaded = sample_loaded_spec("20260522000000__repair_complete_path");
 		let target_entities = vec![sample_entity("a"), sample_entity("b")];
 
-		create_rollout_record(&db, &loaded, &[], &target_entities, RolloutStatus::RunningComplete)
-			.await
-			.expect("seed rollout record");
+		create_rollout_record(
+			&db,
+			&loaded,
+			&[],
+			&target_entities,
+			RolloutStatus::RunningComplete,
+			&BTreeMap::new(),
+		)
+		.await
+		.expect("seed rollout record");
 
 		repair_inner(&db, &loaded).await.expect("repair_inner should succeed");
 
@@ -3226,6 +3243,7 @@ mod tests {
 			&source_entities,
 			&[sample_entity("new_a")],
 			RolloutStatus::RunningRollback,
+			&BTreeMap::new(),
 		)
 		.await
 		.expect("seed rollout record");
@@ -3243,7 +3261,7 @@ mod tests {
 	async fn repair_refuses_planned_rollout() {
 		let db = connect_mem_db().await;
 		let loaded = sample_loaded_spec("20260522000002__repair_planned_rejected");
-		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned)
+		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned, &BTreeMap::new())
 			.await
 			.expect("seed rollout record");
 

@@ -46,10 +46,49 @@ fn resolve_dir(input: TokenStream, default: &str, macro_name: &str) -> (String, 
 /// A single-segment argument has no folder to drop and is used as-is.
 fn tracking_prefix(rel_dir: &str) -> String {
 	let normalised = rel_dir.replace('\\', "/");
-	let trimmed = normalised.trim_matches('/');
-	match trimmed.split_once('/') {
-		Some((_folder, rest)) => rest.to_string(),
-		None => trimmed.to_string(),
+	// Drop the segments that carry no meaning for a tracking key: leading and
+	// trailing separators, and `.` / `..` hops. `./database/schema` is a natural
+	// spelling given the README documents the folder default as `./database`, and
+	// treating `.` as the folder would emit `database/schema`, which is exactly
+	// the divergence this function exists to prevent.
+	let segments: Vec<&str> = normalised
+		.split('/')
+		.filter(|segment| !segment.is_empty() && *segment != "." && *segment != "..")
+		.collect();
+
+	// The remaining first segment is the project folder. An absolute or nested
+	// argument keeps only the tail: what the CLI writes is relative to the folder,
+	// so everything above it has to go, not just one segment.
+	match segments.as_slice() {
+		[] => String::new(),
+		[only] => (*only).to_string(),
+		segments => segments[segments.len() - depth_below_folder(segments)..].join("/"),
+	}
+}
+
+/// How many trailing segments make up the key prefix.
+///
+/// The conventional layouts are `<folder>/schema`, `<folder>/seed` and
+/// `<folder>/modules/<name>/schema`, so the prefix is everything after the
+/// folder. For an absolute argument the folder is still the segment immediately
+/// before the first `modules`/`schema`/`seed`, and anything above it is machine
+/// specific and must not reach a tracking key.
+fn depth_below_folder(segments: &[&str]) -> usize {
+	const ROOTS: [&str; 3] = ["schema", "seed", "modules"];
+	match segments.iter().rposition(|segment| ROOTS.contains(segment)) {
+		// `modules/<name>/schema` keeps all three; `schema` keeps one.
+		Some(index) if segments[index] == "modules" => segments.len() - index,
+		Some(index) => {
+			// Walk back over a `modules/<name>` wrapper if there is one.
+			if index >= 2 && segments[index - 2] == "modules" {
+				segments.len() - (index - 2)
+			} else {
+				segments.len() - index
+			}
+		}
+		// Nothing recognisable: keep everything but the leading folder segment,
+		// which is the old behaviour and still beats emitting an absolute path.
+		None => segments.len().saturating_sub(1).max(1),
 	}
 }
 
@@ -395,5 +434,21 @@ mod tests {
 		assert_eq!(tracking_prefix("database\\schema"), "schema");
 		// Nothing to drop: used as-is rather than emptied.
 		assert_eq!(tracking_prefix("schema"), "schema");
+	}
+
+	/// `./database` is the spelling the README uses for the folder default, and a
+	/// relative hop is not a folder. Dropping the first segment blindly would emit
+	/// `database/schema`, which is the key the CLI stopped writing.
+	#[test]
+	fn tracking_prefix_ignores_relative_hops_and_absolute_roots() {
+		assert_eq!(tracking_prefix("./database/schema"), "schema");
+		assert_eq!(tracking_prefix("../database/schema"), "schema");
+		assert_eq!(tracking_prefix("./database/seed"), "seed");
+		assert_eq!(tracking_prefix("/srv/app/database/schema"), "schema");
+		assert_eq!(
+			tracking_prefix("/srv/app/database/modules/billing/schema"),
+			"modules/billing/schema"
+		);
+		assert_eq!(tracking_prefix("./database/modules/billing/schema"), "modules/billing/schema");
 	}
 }

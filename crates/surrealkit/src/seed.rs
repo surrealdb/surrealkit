@@ -103,7 +103,14 @@ impl<'a> Seed<'a> {
 		} = self;
 		match source {
 			SeedSource::Embedded(files) => {
-				let tracked = load_seed_hashes(db).await?;
+				// The embedded path needs the same key migration as the filesystem
+				// one. `embed_seed!` used to emit `<folder>/seed/x.surql` and now
+				// emits `seed/x.surql`, so an app that seeds only through the macro
+				// and never runs the CLI would otherwise find nothing under the new
+				// key and re-execute every seed file on the first boot after an
+				// upgrade.
+				let keys: Vec<String> = files.iter().map(|f| f.path.to_string()).collect();
+				let tracked = migrate_legacy_seed_keys(db, &keys).await?;
 				let mut stats = SeedStats::default();
 				for f in files {
 					apply_seed(db, f.path, f.sql, &tracked, force, &vars, &mut stats).await?;
@@ -223,21 +230,7 @@ async fn run_dir(
 		})
 		.collect::<Result<_>>()?;
 
-	let stored = load_seed_hashes(db).await?;
-	let (tracked, re_keyed) = canonicalise_keys(&stored, &keys);
-	if !re_keyed.is_empty() {
-		log::info!(
-			"re-keyed {} tracked seed file(s) to folder-relative paths (e.g. {} -> {})",
-			re_keyed.len(),
-			re_keyed[0].0,
-			re_keyed[0].1
-		);
-		for (legacy, target) in &re_keyed {
-			let hash = tracked.get(target).cloned().unwrap_or_default();
-			store_seed_hash(db, target, &hash).await?;
-			delete_seed_hash(db, legacy).await?;
-		}
-	}
+	let tracked = migrate_legacy_seed_keys(db, &keys).await?;
 
 	let mut stats = SeedStats::default();
 
@@ -248,6 +241,36 @@ async fn run_dir(
 
 	stats.report();
 	Ok(())
+}
+
+/// Load tracked seed hashes, rewriting any pre-1.0.0-beta.2 keys onto the
+/// folder-relative form first.
+///
+/// Shared by both seed sources on purpose. A migration that runs on only one of
+/// them is worse than none: the two would keep rewriting each other's rows, and
+/// every alternation re-runs the seed.
+async fn migrate_legacy_seed_keys(
+	db: &Surreal<Any>,
+	canonical: &[String],
+) -> Result<BTreeMap<String, String>> {
+	let stored = load_seed_hashes(db).await?;
+	let (tracked, re_keyed) = canonicalise_keys(&stored, canonical);
+	if re_keyed.is_empty() {
+		return Ok(tracked);
+	}
+
+	log::info!(
+		"re-keyed {} tracked seed file(s) to folder-relative paths (e.g. {} -> {})",
+		re_keyed.len(),
+		re_keyed[0].0,
+		re_keyed[0].1
+	);
+	for (legacy, target) in &re_keyed {
+		let hash = tracked.get(target).cloned().unwrap_or_default();
+		store_seed_hash(db, target, &hash).await?;
+		delete_seed_hash(db, legacy).await?;
+	}
+	Ok(tracked)
 }
 
 /// Remove a `__seed` row by key. Used to retire a migrated legacy key.

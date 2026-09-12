@@ -157,3 +157,33 @@ async fn a_legacy_embedded_key_migrates_once_and_settles() {
 
 	assert_eq!(tracked_seed_keys(&db).await, vec!["seed/000_init.surql".to_string()]);
 }
+
+/// An application that seeds only through `embed_seed!()` and never runs the CLI.
+///
+/// Upgrading changes the key the macro emits, so without a migration on the
+/// embedded path the app finds nothing under the new name and re-executes every
+/// seed file. For a `CREATE`-style seed that is duplicated rows, which is the
+/// case seed tracking exists to prevent. The stale row is never cleaned up
+/// either, so it stays wrong.
+#[tokio::test]
+async fn an_embedded_only_app_does_not_reseed_after_upgrading() {
+	let db = memory_db("interop_embedded_only").await;
+
+	// What a pre-1.0.0-beta.2 build of the same app left behind.
+	db.query("CREATE __seed CONTENT { key: 'database/seed/000_init.surql', hash: $hash };")
+		.bind(("hash", sha256_hex(SEED_SQL.as_bytes())))
+		.await
+		.expect("seed legacy tracking row");
+	db.query(SEED_SQL).await.expect("legacy seed effect");
+	assert_eq!(visit_count(&db).await, 1);
+
+	// The upgraded app boots. No CLI has ever run against this database.
+	Seed::embedded(EMBEDDED_SEEDS).run(&db).await.expect("embedded seed");
+	assert_eq!(
+		visit_count(&db).await,
+		1,
+		"the embedded path must recognise its own pre-upgrade key, not re-run the seed"
+	);
+
+	assert_eq!(tracked_seed_keys(&db).await, vec!["seed/000_init.surql".to_string()]);
+}
