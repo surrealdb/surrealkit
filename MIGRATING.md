@@ -323,3 +323,22 @@ The macros were updated to emit it, so regenerating is enough.
   will change.
 - New `schemas`, `targets` and `all` options map to `--schema`, `--target` and
   `--all`. The default watch globs now cover `database/modules/*/schema`.
+
+### 0.2.0 requires Vite 8
+
+`vite-plugin-surrealkit@0.2.0` narrows its peer range to `vite@^8` and raises
+its Node floor to `^20.19.0 || >=22.12.0`, matching Vite 8's own `engines`.
+Staying on Vite 7 means staying on `0.1.x`.
+
+**Do not run `0.1.x` on Vite 8.** It passed raw globs to Vite's file watcher.
+Vite builds that watcher with chokidar globbing disabled, so each glob was
+registered as a literal path that never exists — and on Vite 8 that suppresses
+change events for the real files beside it. The result is a dev server that
+runs the startup sync and then silently never syncs again. `0.2.0` registers
+the globs' base directories instead, and the behaviour is now covered by tests
+that boot a real dev server.
+
+Two smaller fixes ship with it: teardown moved from `httpServer`'s `close`
+event (always `null` in middleware mode, so nothing was ever cleaned up) to the
+`closeBundle` hook, and the plugin no longer imports anything from `vite` at
+runtime — only its types.

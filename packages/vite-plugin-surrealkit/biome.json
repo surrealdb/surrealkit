@@ -7,7 +7,7 @@
 		"defaultBranch": "main"
 	},
 	"files": {
-		"includes": ["src/**/*.ts"]
+		"includes": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts"]
 	},
 	"formatter": {
 		"enabled": true,

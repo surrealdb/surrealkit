@@ -386,11 +386,11 @@ npm install --save-dev vite-plugin-surrealkit
 
 ```ts
 // vite.config.ts
-import surrealkit from "vite-plugin-surrealkit";
+import { surrealkitPlugin } from "vite-plugin-surrealkit";
 
 export default defineConfig({
     plugins: [
-        surrealkit({
+        surrealkitPlugin({
             schemas: ["core", "billing"],   // optional: restrict modules
             reloadOnSync: true,
         }),
@@ -398,7 +398,8 @@ export default defineConfig({
 });
 ```
 
-See the [plugin README](packages/vite-plugin-surrealkit/README.md) for all options.
+Requires Vite 8. See the
+[plugin README](packages/vite-plugin-surrealkit/README.md) for all options.
 
 ## Team Workflow
 
