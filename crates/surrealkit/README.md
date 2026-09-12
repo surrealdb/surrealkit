@@ -33,6 +33,28 @@ surrealkit = { version = "1.0.0-beta.1", default-features = false, features = ["
 Storage engines: `kv-mem` (default), `kv-surrealkv`, `kv-rocksdb`, and `embedded`
 for all three. Remote connections over HTTP need no feature.
 
+The `templates` feature carries `surrealkit init`'s template engine (`cli` enables
+it). The `mcp` feature builds the Model Context Protocol server. `mcp` deliberately
+does **not** imply `cli`, so you can embed the server without pulling clap, inquire
+or rustls into your tree:
+
+```toml
+[dependencies]
+surrealkit = { version = "1.0.0-beta.1", default-features = false, features = ["mcp"] }
+```
+
+```rust,ignore
+use surrealkit::config::DbOverrides;
+use surrealkit::mcp::{ServerConfig, SurrealKitMcp, serve_stdio};
+use surrealkit::progress::{CaptureLogger, StderrLogger};
+
+// stdout is the JSON-RPC channel: install a logger that never writes there.
+let _ = CaptureLogger::install(Box::new(StderrLogger), log::LevelFilter::Info, false);
+
+let config = ServerConfig::new(std::env::current_dir()?, DbOverrides::default(), vec![])?;
+serve_stdio(SurrealKitMcp::new(config)).await?;
+```
+
 > You do not need these features to target an embedded engine from a library:
 > cargo unifies features across the dependency graph, so enabling e.g.
 > `surrealdb/kv-surrealkv` in your own crate is enough for SurrealKit's
@@ -60,6 +82,18 @@ RUST_LOG=surrealkit=info cargo run
 
 Errors are still returned as `Result`; logging is for progress, not for failure
 reporting.
+
+### Capturing progress
+
+[`progress::CaptureLogger`] routes records to a task-local buffer when one is
+active and to a fallback logger otherwise, which is how the MCP server returns the
+same progress lines the CLI prints without writing them to stdout. Because
+`log::set_logger` can only be called once per process, a consumer that wants both
+should install `CaptureLogger` with their own logger as the fallback.
+
+Note that task-locals are not inherited across `tokio::spawn`; library code that
+spawns wraps its futures in [`progress::propagate`] so captured output is not
+silently lost.
 
 ## Concepts: sync vs rollout
 

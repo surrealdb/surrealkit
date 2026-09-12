@@ -11,17 +11,28 @@ use std::{env, io};
 
 use anyhow::{Result, bail};
 use rust_dotenv::dotenv::DotEnv;
-pub use types::TestOpts;
+pub use types::{AssertionReport, CaseReport, RunReport, SuiteReport, TestOpts};
 
 use crate::config::{AuthLevel, DbCfg, DbOverrides};
 use crate::variables::TemplateVars;
 
-pub async fn run_test(
+/// Run the selected suites and return the structured report.
+///
+/// Performs no console output, and does **not** fail when test cases fail --
+/// inspect [`RunReport::cases_failed`] for that. Pre-flight problems (an
+/// unsupported auth level, an embedded endpoint, no suites matching the filters)
+/// are still `Err`, because they are configuration errors rather than results.
+///
+/// `opts.json_out` is still honoured: it is a file write, not console output.
+///
+/// This is the entry point for callers that need the results as data. The CLI
+/// uses [`run_test`], which is this plus rendering and a failure exit.
+pub async fn run_test_report(
 	dotenv: Option<&DotEnv>,
 	opts: TestOpts,
 	vars: TemplateVars,
 	overrides: &DbOverrides,
-) -> Result<()> {
+) -> Result<RunReport> {
 	let cfg = DbCfg::from_env(dotenv, overrides)?;
 	if matches!(cfg.auth_level(), AuthLevel::Database) {
 		bail!(
@@ -52,13 +63,34 @@ pub async fn run_test(
 	let ctx =
 		runner::RunnerContext::new(cfg, opts.clone(), loaded.global, base_url, timeout_ms, vars);
 	let report = ctx.run(suites).await?;
-
-	let stdout = io::stdout();
-	let mut out = stdout.lock();
-	report::print_human_report(&mut out, &report)?;
 	if let Some(path) = &opts.json_out {
 		report::write_json_report(path, &report)?;
 	}
+	Ok(report)
+}
+
+/// Render a [`RunReport`] in the CLI's human-readable form.
+///
+/// Split out so that callers owning a different output channel -- an MCP tool
+/// result, a CI annotation -- can render on their own terms. On the stdio MCP
+/// transport stdout is the JSON-RPC channel, so writing there is not an option.
+pub fn render_report<W: io::Write>(out: &mut W, report: &RunReport) -> Result<()> {
+	report::print_human_report(out, report)
+}
+
+/// Run the selected suites, print the human report to stdout, and fail when any
+/// case failed.
+///
+/// The CLI's entry point. Library callers that want the results as data should
+/// use [`run_test_report`] instead.
+pub async fn run_test(
+	dotenv: Option<&DotEnv>,
+	opts: TestOpts,
+	vars: TemplateVars,
+	overrides: &DbOverrides,
+) -> Result<()> {
+	let report = run_test_report(dotenv, opts, vars, overrides).await?;
+	render_report(&mut io::stdout().lock(), &report)?;
 	if report.cases_failed > 0 {
 		bail!("{} test cases failed", report.cases_failed);
 	}

@@ -460,6 +460,96 @@ None of these commands contacts a database, and none needs the environment one
 would: a project whose `[target.*]` reads its password from a variable that is
 not set still checks. That is what lets a pull-request job run `surrealkit
 check --json` with no credentials at all.
+## MCP Server
+
+`surrealkit mcp` serves every SurrealKit capability to an AI coding agent over the
+[Model Context Protocol](https://modelcontextprotocol.io), on stdio. Instead of
+shelling out and parsing human output, an agent gets typed tools, structured
+results, and the project's own files as MCP resources.
+
+Point your editor at the binary. The server operates on the project it is started
+in, so `cwd` matters:
+
+```json
+{
+    "mcpServers": {
+        "surrealkit": {
+            "command": "surrealkit",
+            "args": ["mcp"],
+            "cwd": "/path/to/your/project"
+        }
+    }
+}
+```
+
+That file is `.mcp.json` for Claude Code, `claude_desktop_config.json` for Claude
+Desktop, and `.cursor/mcp.json` for Cursor. Prebuilt binaries and the Docker image
+ship with the server enabled; from source, build with `--features mcp`.
+
+Connection details come from the server's own environment and flags: the same
+`SURREALDB_*` variables, `.env` file and `--host`/`--ns`/`--db` flags the CLI uses.
+Flags passed to the server become its defaults, and each tool call acts on exactly
+one database, named by `target` when a project declares more than one:
+
+```bash
+surrealkit --ns my_ns --db my_db mcp
+```
+
+### What it exposes
+
+**18 tools**, one per capability: `project_info`, `setup`, `sync`, `seed`, `apply`,
+`typegen`, `test`, `init`, the rollout family (`rollout_baseline`, `rollout_plan`,
+`rollout_lint`, `rollout_start`, `rollout_complete`, `rollout_rollback`,
+`rollout_repair`, `rollout_status`), and `check` / `generate` from
+[Static Analysis](#static-analysis) when the `analyze` feature is on. `check` is
+usually the first thing worth calling: it contacts no database and catches schema
+contract violations before anything reaches an instance.
+
+**Resources** under `surrealkit://` for the project config, schema and seed files,
+rollout manifests and test suites, so an agent can read the project without
+guessing at paths.
+
+**Prompts** for the workflows that need judgement rather than an API call:
+`author_rollout`, `diagnose_rollout`, `review_sync` and `write_test_suite`.
+
+### Safety
+
+Tools that can destroy data (`sync` when it would prune, `apply`, `seed --force`,
+`rollout_complete`, `rollout_rollback`, `rollout_baseline`) refuse to run until
+they are called again with `confirm: true`. The refusal names the destination and
+what would be removed, so the agent has something concrete to show you.
+
+Be clear about what that gate is, though: **`confirm` is a field the caller fills
+in, so it is not an authorization boundary.** It exists to make the blast radius
+impossible to miss and to give your editor's approval prompt something to render.
+The real boundaries are that prompt, the transport (stdio means the server runs as
+you, launched by your editor, with no network surface), and the permissions of the
+database user it signs in as.
+
+Three further guarantees are enforced by tests rather than convention:
+
+- **Credentials are never tool inputs.** Databases are addressed by *target name*
+  from `[target.<name>]`, so the reachable set is enumerated in source control and
+  each password comes from the server's environment via `pass_env`. No tool can
+  set a host, a namespace or a password. That is what keeps a destructive
+  confirmation meaningful, since the target cannot be swapped after you approve it.
+- **Paths cannot escape the project.** `apply`, the rollout selectors and every
+  resource URI are resolved against the project root and canonicalised, so a
+  symlink pointing outside is refused too.
+- **Secrets are redacted from resources.** Test suites are served with their inline
+  `password`/`token` actor fields blanked, and `.env` is not reachable at all.
+
+### Limitations
+
+`sync --watch` and `surrealkit watch` are not exposed: a watch loop never returns,
+so it cannot be a tool call. Run either in a terminal. `init --from <git-url>` is CLI-only, because fetching
+an arbitrary git URL should be something you typed rather than something a model
+chose.
+
+A streamable-HTTP transport is deliberately not shipped yet. In MCP's stateless
+HTTP mode there is no handshake requirement, so an unauthenticated port would let
+a single POST invoke `apply`, which runs arbitrary SurrealQL, against whatever
+the server can reach. It will land once its authentication story is designed.
 
 ## Vite Plugin
 
