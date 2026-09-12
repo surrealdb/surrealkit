@@ -267,8 +267,9 @@ enum AnalyzeCommands {
 		/// Output path for the generated module (see `generate --out`).
 		#[arg(long)]
 		out: Option<PathBuf>,
-		/// Only check; write nothing.
-		#[arg(long)]
+		/// Only check; write nothing. Rejects `--out`, which would name a file
+		/// this run is never going to write.
+		#[arg(long, conflicts_with = "out")]
 		check_only: bool,
 	},
 }
@@ -609,8 +610,17 @@ fn load_env() -> Option<DotEnv> {
 /// keep the working directory: that is where their `.env` has always been
 /// looked for, and which database to connect to is not a project-wide fact the
 /// way the folder to analyze is.
+///
+/// The two halves of the check are deliberately asymmetric, because the loader
+/// is: it searches upwards for `.env`, but decides whether to prefer
+/// `.env.local` by testing that name against the *working directory* only. So
+/// `.env` is looked for where the caller asks and `.env.local` where the
+/// loader will actually look for it. Testing both in `dir` would return `Some`
+/// for a root-level `.env.local` that the loader then fails to find, and
+/// rust_dotenv prints `Error: .env file not found` to stderr on an otherwise
+/// clean, exit-0 run.
 fn load_env_from(dir: &Path) -> Option<DotEnv> {
-	let has_env = dir.join(".env").exists() || dir.join(".env.local").exists();
+	let has_env = dir.join(".env").exists() || Path::new(".env.local").exists();
 	if has_env {
 		Some(DotEnv::new(""))
 	} else {
@@ -1022,12 +1032,16 @@ fn styles() -> surrealql_analyzer::Styles {
 	surrealql_analyzer::Styles::new(color)
 }
 
-/// `1 error` / `3 errors`.
-fn count(n: usize, singular: &str) -> String {
+/// `1 error` / `3 errors`, with the plural spelled out.
+///
+/// Taking the plural rather than appending an `s` because English does not:
+/// `generate` counts queries, and `0 querys` is the kind of detail that makes
+/// a tool look unfinished.
+fn count(n: usize, singular: &str, plural: &str) -> String {
 	if n == 1 {
 		format!("{n} {singular}")
 	} else {
-		format!("{n} {singular}s")
+		format!("{n} {plural}")
 	}
 }
 
@@ -1125,10 +1139,10 @@ fn run_check(
 	let warnings = summary.diagnostics.saturating_sub(summary.errors);
 	eprintln!(
 		"checked {} in {}ms: {}, {}",
-		count(summary.sources_checked, "source"),
+		count(summary.sources_checked, "source", "sources"),
 		started.elapsed().as_millis(),
-		count(summary.errors, "error"),
-		count(warnings, "warning"),
+		count(summary.errors, "error", "errors"),
+		count(warnings, "warning", "warnings"),
 	);
 	Ok(report.passed())
 }
@@ -1175,7 +1189,7 @@ fn run_generate(analyzer_project: &surrealql_analyzer::Project, out: Option<&Pat
 			println!(
 				"wrote {} ({})",
 				analyzer_project.display_relative(&report.path),
-				count(report.queries, "query")
+				count(report.queries, "query", "queries")
 			);
 			Ok(())
 		}
@@ -1321,6 +1335,32 @@ fn watch(
 
 const CONFIG_RELOAD_FAILED: &str =
 	"surrealkit.toml did not reload; keeping the previous configuration";
+
+#[cfg(test)]
+mod output_tests {
+	use super::*;
+
+	#[test]
+	fn counts_use_the_plural_they_are_given() {
+		// `generate` counts queries, and appending an `s` produced `0 querys`.
+		assert_eq!(count(0, "query", "queries"), "0 queries");
+		assert_eq!(count(1, "query", "queries"), "1 query");
+		assert_eq!(count(2, "query", "queries"), "2 queries");
+		assert_eq!(count(0, "error", "errors"), "0 errors");
+		assert_eq!(count(1, "source", "sources"), "1 source");
+	}
+
+	#[test]
+	fn check_only_rejects_an_output_path_it_would_never_write() {
+		use clap::Parser;
+		let error = Cli::try_parse_from(["surrealkit", "watch", "--check-only", "--out", "x.ts"])
+			.expect_err("--check-only writes nothing, so --out cannot mean anything");
+		assert_eq!(error.kind(), clap::error::ErrorKind::ArgumentConflict);
+		// Each alone is still fine.
+		Cli::try_parse_from(["surrealkit", "watch", "--check-only"]).expect("check-only alone");
+		Cli::try_parse_from(["surrealkit", "watch", "--out", "x.ts"]).expect("out alone");
+	}
+}
 
 #[cfg(test)]
 mod selection_tests {

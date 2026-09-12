@@ -220,10 +220,11 @@ mod analyzing {
 		}
 
 		let analyze = &project.analyze;
-		let mut ignore =
-			vec!["target/**".to_string(), "node_modules/**".to_string(), ".git/**".to_string()];
+		let builtin_count = BUILTIN_IGNORE.len();
+		let mut ignore: Vec<String> =
+			BUILTIN_IGNORE.iter().map(|pattern| (*pattern).to_string()).collect();
 		ignore.extend(analyze.ignore.iter().cloned());
-		reject_ignored_schema_dir(&analyze.ignore, &schema_prefixes)?;
+		reject_ignored_schema_dir(&ignore, builtin_count, &schema_prefixes)?;
 
 		let mut toml = String::new();
 		toml.push_str("[sources]\n");
@@ -293,6 +294,9 @@ mod analyzing {
 			.collect()
 	}
 
+	/// The directories every analysis skips, whatever `[analyze] ignore` says.
+	const BUILTIN_IGNORE: &[&str] = &["target/**", "node_modules/**", ".git/**"];
+
 	/// An ignore pattern that would swallow a schema directory, rejected.
 	///
 	/// `ignore` entries are directory names matched against every component of
@@ -301,22 +305,38 @@ mod analyzing {
 	/// run reports every table in the project as undefined: hundreds of
 	/// findings, none of them real, and nothing pointing at the one line that
 	/// caused it.
+	///
+	/// The built-in patterns are checked too, and a schema directory *can*
+	/// collide with one — a `[schema.x] path` under `target/`, or a database
+	/// folder inside `node_modules/`. Those get a different message, because
+	/// the fix is different: there is no line to delete, only a directory to
+	/// move. `builtin_count` is how many of `ignore`'s leading entries are
+	/// [`BUILTIN_IGNORE`].
 	fn reject_ignored_schema_dir(
 		ignore: &[String],
+		builtin_count: usize,
 		schema_prefixes: &[(String, String)],
 	) -> Result<()> {
-		for pattern in ignore {
+		for (index, pattern) in ignore.iter().enumerate() {
 			let name = pattern.strip_suffix("/**").unwrap_or(pattern);
 			for (module, prefix) in schema_prefixes {
-				if prefix.split('/').any(|component| component == name) {
+				if !prefix.split('/').any(|component| component == name) {
+					continue;
+				}
+				if index < builtin_count {
 					bail!(
-						"[analyze] ignore = [… {pattern:?} …] in {CONFIG_FILE_NAME} would skip \
-						 the schema directory of module {module:?} (`{prefix}`), leaving the \
-						 analysis with no definitions at all. Ignore entries are directory \
-						 names matched anywhere in the tree, so this one is broader than it \
-						 looks."
+						"the built-in ignore `{pattern}` covers schema module {module:?}'s \
+						 directory `{prefix}`, so the analysis would find no definitions at \
+						 all. `target/`, `node_modules/` and `.git/` are always skipped; move \
+						 the database folder out of `{name}/`."
 					);
 				}
+				bail!(
+					"[analyze] ignore = [… {pattern:?} …] in {CONFIG_FILE_NAME} would skip the \
+					 schema directory of module {module:?} (`{prefix}`), leaving the analysis \
+					 with no definitions at all. Ignore entries are directory names matched \
+					 anywhere in the tree, so this one is broader than it looks."
+				);
 			}
 		}
 		Ok(())
@@ -542,6 +562,25 @@ mod analyzing {
 			// A directory that is not on the schema path stays allowed.
 			try_config_for("[analyze]\nignore = [\"dist/**\"]\n", &[], false)
 				.expect("an unrelated ignore is fine");
+		}
+
+		#[test]
+		fn a_builtin_ignore_covering_a_schema_dir_says_so_in_its_own_words() {
+			// The built-ins are checked too -- a `[schema.x] path` under
+			// `target/` is skipped just as thoroughly -- but there is no config
+			// line to delete, so the message has to point at the directory.
+			let project = ProjectConfig::parse("[schema.core]\npath = \"target/schema\"\n")
+				.expect("config parses");
+			let modules = selected_modules(&project, &[], false).expect("modules resolve");
+			let error = workspace_config(&project, "./database", Path::new("/proj"), &modules)
+				.expect_err("a schema directory under target/ is an error");
+			let message = format!("{error:#}");
+			assert!(message.contains("built-in ignore `target/**`"), "{message}");
+			assert!(message.contains("\"core\""), "{message}");
+			assert!(
+				!message.contains("[analyze] ignore"),
+				"there is no config line to blame: {message}"
+			);
 		}
 
 		#[test]
