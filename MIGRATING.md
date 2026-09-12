@@ -7,7 +7,7 @@ produces the same database metadata, apart from the safety refusal for an empty
 filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
-Six things do need attention.
+Seven things do need attention.
 
 ### 1. Move `database/seed.surql`
 
@@ -144,6 +144,32 @@ hours. Opt in with `--query-timeout-secs` / `SURREALDB_QUERY_TIMEOUT_SECS` when
 you want one. Independently of any timeout, `rollout start`/`complete` now log
 each step as it begins and every 15 seconds while it runs, so a slow step is
 distinguishable from a hang.
+
+### 7. Static analysis ships in the default build
+
+`surrealkit check`, `generate` and `watch` are new, and the analyzer behind them
+is a default feature. Installing from source therefore compiles 18 more crates
+(21 counting the platform-specific file-watcher backends), four of which build C:
+`tree-sitter` and the three grammars it parses SurrealQL, TypeScript and Svelte
+with. That is about 100 seconds of extra compilation and roughly 7.5 MiB of extra
+binary — 13.9 MiB to 21.4 MiB on macOS/arm64.
+
+**A C toolchain was already required**, on 1.0.0-beta.2 and before: `surrealdb-core`
+pulls in `aws-lc-sys` (via `jsonwebtoken`), plus `blake3`, `lz4-sys` and `ring`,
+and `aws-lc-sys` needs `cmake` as well. So this changes how much C is compiled,
+not whether any is.
+
+Nothing to do if you install a prebuilt binary — the release artifacts and
+`cargo binstall surrealkit` are unaffected. If you install from source and would
+rather not build the analyzer, leave it out:
+
+```bash
+cargo install surrealkit --no-default-features --features kv-mem,cli
+```
+
+That binary has no `check`/`generate`/`watch` subcommands; everything else is
+unchanged, and an `[analyze]` section in `surrealkit.toml` still parses, so the
+same config file works with either build.
 
 ## Opting into multiple schema modules
 

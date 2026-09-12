@@ -52,17 +52,23 @@ indoc = "2"
 # Cargo unifies features across the dependency graph, so enabling e.g.
 # `surrealdb/kv-surrealkv` in your own crate is enough for SurrealKit's
 # `Surreal<Any>` to open `surrealkv://`.
-default = ['kv-mem', 'cli']
+default = ['kv-mem', 'cli', 'analyze']
 # The `surrealkit` binary. On by default so `cargo install surrealkit` works, but
 # `default-features = false` drops clap, inquire, rustls (and its aws-lc-rs
-# backend), tempfile and the analyzer from a library consumer's dependency tree
-# -- none of them are used by the library itself.
-cli = ['dep:clap', 'dep:inquire', 'dep:rustls', 'dep:tempfile', 'analyze']
-# Static analysis of a project's SurrealQL: `surrealkit check`/`generate`/`watch`
-# and the `surrealkit::analyzer` re-export. Implied by `cli`, and separable from
-# it so a library consumer can drive the analyzer without pulling in clap -- or
-# read `[analyze]` out of a `surrealkit.toml` without pulling in the analyzer's
-# tree-sitter grammars and file watcher.
+# backend) and tempfile from a library consumer's dependency tree -- none of them
+# are used by the library itself.
+cli = ['dep:clap', 'dep:inquire', 'dep:rustls', 'dep:tempfile']
+# Static analysis of a project's SurrealQL: the `check`/`generate`/`watch`
+# subcommands and the `surrealkit::analyzer` re-export. On by default, and
+# deliberately NOT implied by `cli`, so that turning it off is one flag rather
+# than a rebuild of the whole feature set:
+#
+#     cargo install surrealkit --no-default-features --features kv-mem,cli
+#
+# builds the CLI without the three subcommands and without the analyzer's
+# tree-sitter grammars (21 packages, all of which compile C). `[analyze]` in
+# surrealkit.toml still parses either way, so a slim build accepts a config file
+# written for a full one.
 analyze = ['dep:surrealql-analyzer']
 kv-mem = ['surrealdb/kv-mem']
 kv-surrealkv = ['surrealdb/kv-surrealkv']

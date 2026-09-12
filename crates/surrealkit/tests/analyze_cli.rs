@@ -1,5 +1,9 @@
 //! `surrealkit check` / `generate` against a project on disk: the CLI's exit
 //! codes and output contract, without a database.
+//!
+//! The whole file is `analyze`-gated: a build without that feature has no such
+//! subcommands to test.
+#![cfg(feature = "analyze")]
 
 use std::fs;
 use std::path::Path;

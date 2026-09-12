@@ -27,6 +27,20 @@ Prebuilt binaries are published for:
 - **macOS**: `aarch64-apple-darwin` (Apple Silicon), `x86_64-apple-darwin` (Intel)
 - **Windows**: `x86_64-pc-windows-msvc`
 
+Building from source needs a C compiler, and `cmake` for `aws-lc-sys`. That has
+always been true — `surrealdb-core` brings in `aws-lc-sys`, `blake3`, `lz4-sys`
+and `ring` — and [static analysis](#static-analysis), on by default, adds
+`tree-sitter` and its three grammars to the list (about 7.5 MiB of binary and
+100 seconds of compilation). To build the CLI without it:
+
+```sh
+cargo install surrealkit --no-default-features --features kv-mem,cli
+```
+
+That binary has no `check`, `generate` or `watch` subcommand; everything else is
+the same, and it still reads an `[analyze]` section without complaint. Prebuilt
+binaries and `cargo binstall` are unaffected — analysis is included in both.
+
 ### Docker
 
 Multi-arch (`linux/amd64`, `linux/arm64`) images are published to GitHub Container Registry on every release. The image is based on `gcr.io/distroless/cc-debian12:nonroot` - minimal (~25 MB), no shell, runs as uid 65532.
