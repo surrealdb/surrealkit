@@ -136,6 +136,13 @@ DEFINE FIELD OVERWRITE steps ON __rollout
 	TYPE any
 	DEFAULT [];
 
+DEFINE FIELD OVERWRITE restore_definitions ON __rollout
+	TYPE any
+	DEFAULT {};
+
+DEFINE FIELD OVERWRITE reversibility ON __rollout
+	TYPE option<string>;
+
 DEFINE FIELD OVERWRITE started_at ON __rollout
 	TYPE datetime
 	DEFAULT time::now();

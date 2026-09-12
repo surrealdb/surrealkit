@@ -1,6 +1,8 @@
 use std::env;
+use std::future::Future;
+use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use rust_dotenv::dotenv::DotEnv;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
@@ -8,6 +10,46 @@ use surrealdb::opt::auth::{Database, Namespace, Root};
 
 use crate::constants::DEFAULT_ROOT_DIR;
 use crate::core::create_surreal_client;
+
+/// Default deadline for connect + sign-in.
+///
+/// Nothing between the CLI and the database had a deadline through
+/// 1.0.0-beta.1, so an endpoint that accepted the socket but never completed the
+/// handshake -- a database restarting behind a load balancer, a wedged proxy --
+/// blocked forever. In a deploy pipeline that surfaces as a rollout that "hangs"
+/// until CI kills the job, leaving `__rollout` in an intermediate state.
+pub const DEFAULT_CONNECT_TIMEOUT_SECS: u64 = 30;
+
+/// `0` means "no deadline", which is the documented escape hatch.
+fn secs_to_timeout(secs: u64) -> Option<Duration> {
+	(secs > 0).then(|| Duration::from_secs(secs))
+}
+
+/// Resolve a timeout with the same CLI -> env -> `.env` -> default precedence as
+/// every other setting.
+fn resolve_timeout(
+	override_secs: Option<u64>,
+	env_key: &str,
+	dotenv: Option<&DotEnv>,
+	default_secs: Option<u64>,
+) -> Result<Option<Duration>> {
+	if let Some(secs) = override_secs {
+		return Ok(secs_to_timeout(secs));
+	}
+	let from_env = env::var(env_key)
+		.ok()
+		.filter(|v| !v.is_empty())
+		.or_else(|| dotenv.and_then(|d| d.get_var(env_key.to_string())).filter(|v| !v.is_empty()));
+	match from_env {
+		Some(raw) => {
+			let secs = raw.trim().parse::<u64>().with_context(|| {
+				format!("{env_key} must be a whole number of seconds, got {raw:?}")
+			})?;
+			Ok(secs_to_timeout(secs))
+		}
+		None => Ok(default_secs.and_then(secs_to_timeout)),
+	}
+}
 
 /// The SurrealDB authentication level to use when connecting.
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -78,6 +120,11 @@ pub struct DbOverrides {
 	pub pass: Option<String>,
 	pub auth_level: Option<String>,
 	pub folder: Option<String>,
+	/// Seconds to wait for the connection and sign-in to complete. `0` disables
+	/// the deadline.
+	pub connect_timeout_secs: Option<u64>,
+	/// Seconds to wait for a single rollout step's SQL. `0` disables the deadline.
+	pub query_timeout_secs: Option<u64>,
 }
 
 #[derive(Clone)]
@@ -93,6 +140,12 @@ pub struct DbCfg {
 	pass: String,
 	pub auth_level: AuthLevel,
 	pub folder: String,
+	/// How long to wait for connect + sign-in before giving up. `None` waits
+	/// forever, which is what every release through 1.0.0-beta.1 did.
+	pub connect_timeout: Option<Duration>,
+	/// How long to wait for a single rollout step's SQL. `None` waits forever,
+	/// which stays the default: a legitimate index build can take hours.
+	pub query_timeout: Option<Duration>,
 }
 
 /// Shown in place of a password so `{:?}` cannot leak one.
@@ -112,6 +165,8 @@ impl std::fmt::Debug for DbCfg {
 			.field("pass", &REDACTED)
 			.field("auth_level", &self.auth_level)
 			.field("folder", &self.folder)
+			.field("connect_timeout", &self.connect_timeout)
+			.field("query_timeout", &self.query_timeout)
 			.finish()
 	}
 }
@@ -126,6 +181,8 @@ impl std::fmt::Debug for DbOverrides {
 			.field("pass", &self.pass.as_ref().map(|_| REDACTED))
 			.field("auth_level", &self.auth_level)
 			.field("folder", &self.folder)
+			.field("connect_timeout_secs", &self.connect_timeout_secs)
+			.field("query_timeout_secs", &self.query_timeout_secs)
 			.finish()
 	}
 }
@@ -223,6 +280,18 @@ impl DbCfg {
 			)
 		})?;
 		let folder = resolve(&overrides.folder, &["SURREALDB_FOLDER"], dotenv, DEFAULT_ROOT_DIR);
+		let connect_timeout = resolve_timeout(
+			overrides.connect_timeout_secs,
+			"SURREALDB_CONNECT_TIMEOUT_SECS",
+			dotenv,
+			Some(DEFAULT_CONNECT_TIMEOUT_SECS),
+		)?;
+		let query_timeout = resolve_timeout(
+			overrides.query_timeout_secs,
+			"SURREALDB_QUERY_TIMEOUT_SECS",
+			dotenv,
+			None,
+		)?;
 
 		Ok(Self {
 			host,
@@ -232,6 +301,8 @@ impl DbCfg {
 			pass,
 			auth_level,
 			folder,
+			connect_timeout,
+			query_timeout,
 		})
 	}
 
@@ -254,7 +325,26 @@ impl DbCfg {
 			pass: pass.unwrap_or_else(|| self.pass.clone()),
 			auth_level: auth_level.unwrap_or_else(|| self.auth_level.clone()),
 			folder: self.folder.clone(),
+			connect_timeout: self.connect_timeout,
+			query_timeout: self.query_timeout,
 		}
+	}
+
+	/// A copy of this config with per-target timeout overrides applied. `None`
+	/// inherits, so a `[target.*]` section need only name what differs.
+	pub fn with_timeouts(
+		&self,
+		connect_timeout_secs: Option<u64>,
+		query_timeout_secs: Option<u64>,
+	) -> Self {
+		let mut out = self.clone();
+		if let Some(secs) = connect_timeout_secs {
+			out.connect_timeout = secs_to_timeout(secs);
+		}
+		if let Some(secs) = query_timeout_secs {
+			out.query_timeout = secs_to_timeout(secs);
+		}
+		out
 	}
 
 	/// The endpoint URL.
@@ -293,10 +383,40 @@ impl DbCfg {
 	}
 }
 
+/// Await `future`, failing with an actionable message if `budget` elapses first.
+///
+/// The deadline is enforced client-side on purpose. `surrealdb::opt::Config`'s
+/// timeout knobs are server-side for remote endpoints, so they do nothing for the
+/// failure that actually bites: a peer that accepts the TCP connection and then
+/// never answers.
+async fn with_deadline<T>(
+	budget: Option<Duration>,
+	what: &str,
+	endpoint: &str,
+	future: impl Future<Output = Result<T>>,
+) -> Result<T> {
+	match budget {
+		None => future.await,
+		Some(budget) => match tokio::time::timeout(budget, future).await {
+			Ok(result) => result,
+			Err(_) => bail!(
+				"{what} to {endpoint} timed out after {}s. The endpoint accepted the \
+				 connection but did not respond. Raise the budget with \
+				 --connect-timeout-secs / SURREALDB_CONNECT_TIMEOUT_SECS, or pass 0 to \
+				 wait indefinitely.",
+				budget.as_secs()
+			),
+		},
+	}
+}
+
 pub async fn connect(cfg: &DbCfg) -> Result<Surreal<Any>> {
-	let db = create_surreal_client(&cfg.host)
-		.await
-		.with_context(|| format!("Failed connecting to {}", cfg.host))?;
+	let db = with_deadline(cfg.connect_timeout, "connecting", &cfg.host, async {
+		create_surreal_client(&cfg.host)
+			.await
+			.with_context(|| format!("Failed connecting to {}", cfg.host))
+	})
+	.await?;
 
 	// Embedded engines have no users on a fresh datastore, so signing in would
 	// fail. Auto-detect them and skip auth (unless the user forced a level).
@@ -306,46 +426,50 @@ pub async fn connect(cfg: &DbCfg) -> Result<Surreal<Any>> {
 		cfg.auth_level.clone()
 	};
 
-	match auth_level {
-		AuthLevel::None => {
-			db.use_ns(&cfg.ns)
-				.use_db(&cfg.db)
+	with_deadline(cfg.connect_timeout, "signing in", &cfg.host, async {
+		match auth_level {
+			AuthLevel::None => {
+				db.use_ns(&cfg.ns).use_db(&cfg.db).await.with_context(|| {
+					format!("use_ns/use_db failed for ns={} db={}", cfg.ns, cfg.db)
+				})?;
+			}
+			AuthLevel::Root => {
+				db.signin(Root {
+					username: cfg.user.clone(),
+					password: cfg.pass.clone(),
+				})
 				.await
-				.with_context(|| format!("use_ns/use_db failed for ns={} db={}", cfg.ns, cfg.db))?;
-		}
-		AuthLevel::Root => {
-			db.signin(Root {
-				username: cfg.user.clone(),
-				password: cfg.pass.clone(),
-			})
-			.await
-			.context("root signin failed")?;
-			db.use_ns(&cfg.ns)
-				.use_db(&cfg.db)
+				.context("root signin failed")?;
+				db.use_ns(&cfg.ns).use_db(&cfg.db).await.with_context(|| {
+					format!("use_ns/use_db failed for ns={} db={}", cfg.ns, cfg.db)
+				})?;
+			}
+			AuthLevel::Namespace => {
+				db.signin(Namespace {
+					namespace: cfg.ns.clone(),
+					username: cfg.user.clone(),
+					password: cfg.pass.clone(),
+				})
 				.await
-				.with_context(|| format!("use_ns/use_db failed for ns={} db={}", cfg.ns, cfg.db))?;
+				.context("namespace signin failed")?;
+				db.use_db(&cfg.db)
+					.await
+					.with_context(|| format!("use_db failed for db={}", cfg.db))?;
+			}
+			AuthLevel::Database => {
+				db.signin(Database {
+					namespace: cfg.ns.clone(),
+					database: cfg.db.clone(),
+					username: cfg.user.clone(),
+					password: cfg.pass.clone(),
+				})
+				.await
+				.context("database signin failed")?;
+			}
 		}
-		AuthLevel::Namespace => {
-			db.signin(Namespace {
-				namespace: cfg.ns.clone(),
-				username: cfg.user.clone(),
-				password: cfg.pass.clone(),
-			})
-			.await
-			.context("namespace signin failed")?;
-			db.use_db(&cfg.db).await.with_context(|| format!("use_db failed for db={}", cfg.db))?;
-		}
-		AuthLevel::Database => {
-			db.signin(Database {
-				namespace: cfg.ns.clone(),
-				database: cfg.db.clone(),
-				username: cfg.user.clone(),
-				password: cfg.pass.clone(),
-			})
-			.await
-			.context("database signin failed")?;
-		}
-	}
+		Ok(())
+	})
+	.await?;
 
 	Ok(db)
 }
@@ -503,6 +627,8 @@ mod tests {
 			pass: Some("secret".into()),
 			auth_level: None,
 			folder: None,
+			connect_timeout_secs: None,
+			query_timeout_secs: None,
 		};
 		let cfg = DbCfg::from_env(None, &overrides).unwrap();
 		assert_eq!(cfg.host(), "http://custom:9000");
@@ -710,5 +836,76 @@ mod tests {
 		let cfg = DbCfg::from_env(None, &overrides).unwrap();
 		assert_eq!(cfg.host(), "http://clihost:9000");
 		clear_db_env();
+	}
+
+	#[test]
+	fn connect_timeout_defaults_to_thirty_seconds() {
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+		clear_db_env();
+		unsafe { unset_env("SURREALDB_CONNECT_TIMEOUT_SECS") };
+		let cfg = DbCfg::from_env(None, &DbOverrides::default()).expect("cfg");
+		assert_eq!(cfg.connect_timeout, Some(Duration::from_secs(DEFAULT_CONNECT_TIMEOUT_SECS)));
+		// A step budget must stay opt-in: a legitimate index build can take hours.
+		assert_eq!(cfg.query_timeout, None);
+	}
+
+	#[test]
+	fn connect_timeout_precedence_is_cli_then_env_then_default() {
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+		clear_db_env();
+		unsafe { set_env("SURREALDB_CONNECT_TIMEOUT_SECS", "7") };
+
+		let from_env = DbCfg::from_env(None, &DbOverrides::default()).expect("env cfg");
+		assert_eq!(from_env.connect_timeout, Some(Duration::from_secs(7)));
+
+		let overridden = DbCfg::from_env(
+			None,
+			&DbOverrides {
+				connect_timeout_secs: Some(3),
+				..Default::default()
+			},
+		)
+		.expect("cli cfg");
+		assert_eq!(overridden.connect_timeout, Some(Duration::from_secs(3)));
+
+		unsafe { unset_env("SURREALDB_CONNECT_TIMEOUT_SECS") };
+	}
+
+	#[test]
+	fn zero_disables_the_deadline() {
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+		clear_db_env();
+		let cfg = DbCfg::from_env(
+			None,
+			&DbOverrides {
+				connect_timeout_secs: Some(0),
+				..Default::default()
+			},
+		)
+		.expect("cfg");
+		assert_eq!(cfg.connect_timeout, None, "0 must mean wait indefinitely");
+	}
+
+	#[test]
+	fn a_non_numeric_timeout_is_rejected_rather_than_ignored() {
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+		clear_db_env();
+		unsafe { set_env("SURREALDB_CONNECT_TIMEOUT_SECS", "thirty") };
+		let err = DbCfg::from_env(None, &DbOverrides::default()).expect_err("must reject");
+		assert!(err.to_string().contains("whole number of seconds"), "got: {err}");
+		unsafe { unset_env("SURREALDB_CONNECT_TIMEOUT_SECS") };
+	}
+
+	#[test]
+	fn per_target_timeouts_override_the_ambient_ones() {
+		let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+		clear_db_env();
+		let base = DbCfg::from_env(None, &DbOverrides::default()).expect("cfg");
+		let target = base.with_timeouts(Some(5), Some(60));
+		assert_eq!(target.connect_timeout, Some(Duration::from_secs(5)));
+		assert_eq!(target.query_timeout, Some(Duration::from_secs(60)));
+		// Unspecified fields inherit.
+		let partial = base.with_timeouts(None, Some(60));
+		assert_eq!(partial.connect_timeout, base.connect_timeout);
 	}
 }

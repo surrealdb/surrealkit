@@ -1,0 +1,6 @@
+# A declared target, so `--target` has something real to resolve. In
+# 1.0.0-beta.1 every rollout subcommand that takes an id rejects this flag
+# outright, and swallows the rollout id into it when it is omitted.
+[target.prod]
+ns = "repro_ns"
+db = "repro_db"

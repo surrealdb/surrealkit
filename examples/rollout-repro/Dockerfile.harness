@@ -1,0 +1,48 @@
+# syntax=docker/dockerfile:1.7
+#
+# The harness image. Deliberately NOT the shipped runtime: that one is
+# `gcr.io/distroless/cc-debian12:nonroot`, which has no shell and so cannot run a
+# reproduction script. Everything up to the binary is identical to the repo
+# Dockerfile, so what is exercised is the same build.
+#
+# Build with `--build-arg SOURCE=crates-io` to get the published 1.0.0-beta.1
+# instead of the working tree — that is the `before` image the scenarios use to
+# prove each bug reproduces.
+
+ARG SOURCE=worktree
+
+FROM rust:1.94-slim-bookworm AS build-worktree
+WORKDIR /src
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY crates ./crates
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/src/target \
+    cargo build \
+        --manifest-path crates/surrealkit/Cargo.toml \
+        --locked \
+        --release \
+    && cp target/release/surrealkit /surrealkit
+
+FROM rust:1.94-slim-bookworm AS build-crates-io
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    cargo install surrealkit --version 1.0.0-beta.1 --locked --root /out \
+    && cp /out/bin/surrealkit /surrealkit
+
+FROM build-${SOURCE} AS build
+
+FROM debian:bookworm-slim
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends bash ca-certificates curl jq \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=build /surrealkit /usr/local/bin/surrealkit
+
+# The shipped image sets this, and leaves the working directory at `/`. That `/`
+# is load-bearing on 1.0.0-beta.1 and earlier: tracking keys were stripped of the
+# *working directory*, so `/database/schema/a.surql` only reduced to
+# `database/schema/a.surql` when the working directory happened to be `/`. Any
+# other working_dir produced absolute keys. The compose file runs two services
+# off this image that differ only in that setting.
+ENV SURREALDB_FOLDER=/database
+
+ENTRYPOINT []
+CMD ["bash"]

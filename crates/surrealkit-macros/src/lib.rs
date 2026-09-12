@@ -31,9 +31,72 @@ fn resolve_dir(input: TokenStream, default: &str, macro_name: &str) -> (String, 
 	(rel_dir, abs_dir)
 }
 
+/// The tracking key prefix for an embedded directory.
+///
+/// Keys must match the ones the CLI writes, or an app booting with
+/// `embed_seed!` and a developer running `surrealkit seed` track the same file
+/// under two names, each migration deleting the other's row, and the seed re-runs
+/// on every alternation.
+///
+/// The CLI keys relative to the project folder: `<folder>/schema/a.surql` is
+/// tracked as `schema/a.surql`, and `<folder>/modules/billing/schema/a.surql` as
+/// `modules/billing/schema/a.surql`. The macro argument is folder-prefixed
+/// (`database/schema`), so dropping its first segment lands on the same key.
+///
+/// A single-segment argument has no folder to drop and is used as-is.
+fn tracking_prefix(rel_dir: &str) -> String {
+	let normalised = rel_dir.replace('\\', "/");
+	// Drop the segments that carry no meaning for a tracking key: leading and
+	// trailing separators, and `.` / `..` hops. `./database/schema` is a natural
+	// spelling given the README documents the folder default as `./database`, and
+	// treating `.` as the folder would emit `database/schema`, which is exactly
+	// the divergence this function exists to prevent.
+	let segments: Vec<&str> = normalised
+		.split('/')
+		.filter(|segment| !segment.is_empty() && *segment != "." && *segment != "..")
+		.collect();
+
+	// The remaining first segment is the project folder. An absolute or nested
+	// argument keeps only the tail: what the CLI writes is relative to the folder,
+	// so everything above it has to go, not just one segment.
+	match segments.as_slice() {
+		[] => String::new(),
+		[only] => (*only).to_string(),
+		segments => segments[segments.len() - depth_below_folder(segments)..].join("/"),
+	}
+}
+
+/// How many trailing segments make up the key prefix.
+///
+/// The conventional layouts are `<folder>/schema`, `<folder>/seed` and
+/// `<folder>/modules/<name>/schema`, so the prefix is everything after the
+/// folder. For an absolute argument the folder is still the segment immediately
+/// before the first `modules`/`schema`/`seed`, and anything above it is machine
+/// specific and must not reach a tracking key.
+fn depth_below_folder(segments: &[&str]) -> usize {
+	const ROOTS: [&str; 3] = ["schema", "seed", "modules"];
+	match segments.iter().rposition(|segment| ROOTS.contains(segment)) {
+		// `modules/<name>/schema` keeps all three; `schema` keeps one.
+		Some(index) if segments[index] == "modules" => segments.len() - index,
+		Some(index) => {
+			// Walk back over a `modules/<name>` wrapper if there is one.
+			if index >= 2 && segments[index - 2] == "modules" {
+				segments.len() - (index - 2)
+			} else {
+				segments.len() - index
+			}
+		}
+		// Nothing recognisable: keep everything but the leading folder segment,
+		// which is the old behaviour and still beats emitting an absolute path.
+		None => segments.len().saturating_sub(1).max(1),
+	}
+}
+
 /// Collect, sorted, the `(rel_display, abs_str)` of every `.surql` file under
-/// `abs_dir`. `rel_display` is the stable tracking key (`<rel_dir>/<relpath>`).
+/// `abs_dir`. `rel_display` is the stable tracking key, relative to the project
+/// folder so that it matches what the CLI writes for the same file.
 fn collect_surql(rel_dir: &str, abs_dir: &PathBuf) -> Vec<(String, String)> {
+	let prefix = tracking_prefix(rel_dir);
 	let mut file_paths: Vec<PathBuf> = WalkDir::new(abs_dir)
 		.follow_links(true)
 		.into_iter()
@@ -50,7 +113,11 @@ fn collect_surql(rel_dir: &str, abs_dir: &PathBuf) -> Vec<(String, String)> {
 			let abs_str = abs_path.to_str().expect("non-UTF8 path in surql dir").to_string();
 			let rel = abs_path.strip_prefix(abs_dir).expect("path not under surql dir");
 			let rel_str = rel.to_str().expect("non-UTF8 relative path in surql dir");
-			let rel_display = format!("{rel_dir}/{rel_str}").replace('\\', "/");
+			let rel_display = if prefix.is_empty() {
+				rel_str.replace('\\', "/")
+			} else {
+				format!("{prefix}/{rel_str}").replace('\\', "/")
+			};
 			(rel_display, abs_str)
 		})
 		.collect()
@@ -346,4 +413,42 @@ pub fn embed_seed(input: TokenStream) -> TokenStream {
 	};
 
 	expanded.into()
+}
+
+#[cfg(test)]
+mod tests {
+	use super::tracking_prefix;
+
+	#[test]
+	fn tracking_prefix_drops_the_project_folder() {
+		// What the CLI writes for the same files.
+		assert_eq!(tracking_prefix("database/schema"), "schema");
+		assert_eq!(tracking_prefix("database/seed"), "seed");
+		assert_eq!(tracking_prefix("database/modules/billing/schema"), "modules/billing/schema");
+	}
+
+	#[test]
+	fn tracking_prefix_tolerates_other_spellings() {
+		assert_eq!(tracking_prefix("db/schema"), "schema");
+		assert_eq!(tracking_prefix("/database/schema/"), "schema");
+		assert_eq!(tracking_prefix("database\\schema"), "schema");
+		// Nothing to drop: used as-is rather than emptied.
+		assert_eq!(tracking_prefix("schema"), "schema");
+	}
+
+	/// `./database` is the spelling the README uses for the folder default, and a
+	/// relative hop is not a folder. Dropping the first segment blindly would emit
+	/// `database/schema`, which is the key the CLI stopped writing.
+	#[test]
+	fn tracking_prefix_ignores_relative_hops_and_absolute_roots() {
+		assert_eq!(tracking_prefix("./database/schema"), "schema");
+		assert_eq!(tracking_prefix("../database/schema"), "schema");
+		assert_eq!(tracking_prefix("./database/seed"), "seed");
+		assert_eq!(tracking_prefix("/srv/app/database/schema"), "schema");
+		assert_eq!(
+			tracking_prefix("/srv/app/database/modules/billing/schema"),
+			"modules/billing/schema"
+		);
+		assert_eq!(tracking_prefix("./database/modules/billing/schema"), "modules/billing/schema");
+	}
 }

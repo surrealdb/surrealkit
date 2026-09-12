@@ -1,6 +1,8 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::future::Future;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use serde::{Deserialize, Serialize};
@@ -20,7 +22,7 @@ use crate::schema_state::{
 	build_catalog_snapshot, collect_schema_files, diff_catalog, diff_schema,
 	ensure_local_state_dirs, ensure_overwrite, hash_schema_snapshot, load_catalog_snapshot,
 	load_schema_snapshot, render_remove_sql, save_catalog_snapshot, save_schema_snapshot,
-	snapshot_from_files,
+	snapshot_from_files, strip_folder_prefix, verify_schema_hash,
 };
 use crate::setup::run_setup;
 use crate::variables::TemplateVars;
@@ -30,12 +32,57 @@ use crate::variables::TemplateVars;
 pub struct RolloutPlanOpts {
 	pub name: Option<String>,
 	pub dry_run: bool,
+	/// Plan changes to entities that already exist, not just additions and
+	/// removals. Off by default: rollback restores the previous *definition*, so
+	/// the operator has to decide whether that is a real undo for this change.
+	pub allow_modified: bool,
 }
 
 #[derive(Debug, Clone)]
 #[doc(hidden)]
 pub struct RolloutExecutionOpts {
 	pub selector: Option<String>,
+	/// Deadline for a single step's SQL. `None` waits indefinitely, which stays
+	/// the default because a legitimate index build can take hours.
+	pub query_timeout: Option<Duration>,
+}
+
+impl RolloutExecutionOpts {
+	/// Select a rollout by id, with no step deadline.
+	pub fn new(selector: Option<String>) -> Self {
+		Self {
+			selector,
+			query_timeout: None,
+		}
+	}
+}
+
+/// Everything step execution needs beyond the database handle.
+///
+/// Bundled rather than passed as three more parameters because `folder` and
+/// `query_timeout` have to reach `execute_step` through the same three
+/// `start`/`complete`/`rollback` call chains that already thread `vars`.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct StepContext<'a> {
+	pub(crate) vars: &'a TemplateVars,
+	/// Project folder, for resolving an `apply_files` step's recorded paths.
+	/// `None` for the embedded/library path, which reads no files.
+	pub(crate) folder: Option<&'a str>,
+	pub(crate) query_timeout: Option<Duration>,
+}
+
+impl<'a> StepContext<'a> {
+	pub(crate) fn new(
+		vars: &'a TemplateVars,
+		folder: Option<&'a str>,
+		query_timeout: Option<Duration>,
+	) -> Self {
+		Self {
+			vars,
+			folder,
+			query_timeout,
+		}
+	}
 }
 
 /// Which phase of a rollout a step belongs to.
@@ -50,6 +97,17 @@ pub enum RolloutPhase {
 	Start,
 	Complete,
 	Rollback,
+}
+
+impl RolloutPhase {
+	/// The persisted spelling of this phase (e.g. `"start"`).
+	pub fn as_str(&self) -> &'static str {
+		match self {
+			Self::Start => "start",
+			Self::Complete => "complete",
+			Self::Rollback => "rollback",
+		}
+	}
 }
 
 /// The migration strategy for a rollout — how its `start` and `complete` phases
@@ -100,6 +158,22 @@ pub enum RolloutAction {
 	RemoveEntities {
 		entities: Vec<EntityKey>,
 	},
+	/// Re-apply the definitions these entities had before the rollout's expand
+	/// phase, undoing a modification.
+	///
+	/// The statement text is not in the manifest: a catalog snapshot records only
+	/// a `statement_hash`, never the SQL. `start` reads the live definitions with
+	/// `INFO FOR DB` / `INFO FOR TABLE` and stores them on the `__rollout` record,
+	/// so the text always describes the database this rollout actually ran
+	/// against.
+	///
+	/// This restores *definitions*, not data. Tightening an `ASSERT` and rolling
+	/// back leaves the loosened constraint, which is correct; narrowing a `TYPE`
+	/// and rolling back restores the wider type but not any value coerced on the
+	/// way in.
+	RestoreDefinitions {
+		entities: Vec<EntityKey>,
+	},
 }
 
 impl RolloutAction {
@@ -121,6 +195,9 @@ impl RolloutAction {
 			Self::RemoveEntities {
 				..
 			} => "remove_entities",
+			Self::RestoreDefinitions {
+				..
+			} => "restore_definitions",
 		}
 	}
 }
@@ -335,6 +412,21 @@ impl RolloutStep {
 			id: id.into(),
 			phase,
 			action: RolloutAction::RemoveEntities {
+				entities,
+			},
+		}
+	}
+
+	/// Restore the definitions these entities had before the expand phase.
+	pub fn restore_definitions(
+		id: impl Into<String>,
+		phase: RolloutPhase,
+		entities: Vec<EntityKey>,
+	) -> Self {
+		Self {
+			id: id.into(),
+			phase,
+			action: RolloutAction::RestoreDefinitions {
 				entities,
 			},
 		}
@@ -584,7 +676,7 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 	let file_diff = diff_schema(&old_schema, &new_schema);
 	let catalog_diff = diff_catalog(&old_catalog, &new_catalog);
 
-	validate_autoplan(&catalog_diff)?;
+	validate_autoplan(&catalog_diff, opts.allow_modified)?;
 
 	let name = opts.name.unwrap_or_else(|| "schema_rollout".to_string());
 	let slug = slugify(&name);
@@ -602,6 +694,7 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 		&old_schema,
 		&new_schema,
 	)?;
+
 	let raw = toml::to_string_pretty(&spec).context("serializing rollout spec")?;
 
 	if opts.dry_run {
@@ -623,11 +716,21 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 	}
 
 	fs::write(&path, raw).with_context(|| format!("writing rollout file {}", path.display()))?;
+	// Snapshots are written here, next to the manifest, because `plan` is the only
+	// command in the lifecycle that runs where the repository is. `complete` runs
+	// on the server, typically inside a container whose filesystem nobody commits,
+	// so writing them there would advance state the developer never sees and leave
+	// the next `plan` diffing from a stale snapshot.
+	//
+	// The cost is that abandoning a plan leaves the snapshots ahead of the
+	// database. Reverting the manifest and the snapshots together (they are all
+	// tracked files) is the fix, and is why they are written as a pair.
 	save_schema_snapshot(folder, &new_schema)?;
 	save_catalog_snapshot(folder, &new_catalog)?;
 
 	log::info!("Generated rollout manifest {}", path.display());
 	log::info!("Updated {}", catalog_snapshot_path(folder).display());
+	log::info!("Commit the manifest and the snapshots together; reverting means reverting both.");
 	Ok(())
 }
 
@@ -637,15 +740,12 @@ pub async fn run_lint(folder: &str, opts: RolloutExecutionOpts) -> Result<()> {
 	let rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
 	validate_rollout_spec(&rollout.spec)?;
 	let files = collect_schema_files(folder)?;
-	let current_hash = hash_schema_snapshot(&snapshot_from_files(&files))?;
-	if current_hash != rollout.spec.target_schema_hash {
-		bail!(
-			"target schema hash mismatch for '{}': manifest={}, current={}",
-			rollout.spec.id,
-			rollout.spec.target_schema_hash,
-			current_hash
-		);
-	}
+	verify_schema_hash(
+		&snapshot_from_files(&files),
+		folder,
+		&rollout.spec.target_schema_hash,
+		&rollout.spec.id,
+	)?;
 	log::info!("Rollout {} is valid (checksum {}).", rollout.spec.id, rollout.checksum);
 	Ok(())
 }
@@ -687,9 +787,9 @@ async fn load_rollout_status_report(
 #[doc(hidden)]
 pub async fn run_status(db: &Surreal<Any>, folder: &str, selector: Option<String>) -> Result<()> {
 	run_setup(db, folder).await?;
-	let mut query =
-		"SELECT id, name, status, started_at, completed_at, last_error, steps FROM __rollout"
-			.to_string();
+	let mut query = "SELECT id, name, status, started_at, completed_at, last_error, \
+	                 reversibility, steps FROM __rollout"
+		.to_string();
 	if selector.is_some() {
 		query.push_str(" WHERE record::id(id) = $id");
 	}
@@ -722,6 +822,12 @@ pub async fn run_status(db: &Surreal<Any>, folder: &str, selector: Option<String
 		if let Some(last_error) = string_field(&row, "last_error") {
 			log::info!("  last_error: {}", last_error);
 		}
+		if string_field(&row, "reversibility").as_deref() == Some("definition_only") {
+			log::info!(
+				"  reversibility: definition_only (rollback restores the previous \
+				 definitions, not data written under the new ones)"
+			);
+		}
 
 		let steps = row.get("steps").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 		for step in steps {
@@ -750,23 +856,21 @@ pub async fn run_start(
 	let rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
 	validate_rollout_spec(&rollout.spec)?;
 	let files = collect_schema_files(folder)?;
-	let target_hash = hash_schema_snapshot(&snapshot_from_files(&files))?;
-	if target_hash != rollout.spec.target_schema_hash {
-		bail!(
-			"target schema hash mismatch for '{}': manifest={}, current={}",
-			rollout.spec.id,
-			rollout.spec.target_schema_hash,
-			target_hash
-		);
-	}
+	verify_schema_hash(
+		&snapshot_from_files(&files),
+		folder,
+		&rollout.spec.target_schema_hash,
+		&rollout.spec.id,
+	)?;
 	let target_catalog = build_catalog_snapshot(&files, false)?;
-	let source_entities = load_managed_entities(db, &rollout.spec.module()?).await?;
+	let source_entities = load_managed_entities(db, &rollout.spec.module()?, Some(folder)).await?;
 	let source_catalog = CatalogSnapshot {
 		version: 2,
 		entities: source_entities.into_iter().map(|r| r.entity).collect(),
 		operations: Vec::new(),
 	};
-	start_inner(db, &rollout, &source_catalog, &target_catalog, vars).await
+	let ctx = StepContext::new(vars, Some(folder), opts.query_timeout);
+	start_inner(db, &rollout, &source_catalog, &target_catalog, &ctx).await
 }
 
 /// Runs the start phase of a rollout defined entirely in code.
@@ -808,13 +912,14 @@ pub(crate) async fn run_start_with_spec(
 		}
 	}
 	let target_catalog = build_catalog_snapshot(&schema_files, false)?;
-	let source_entities = load_managed_entities(db, &spec.module()?).await?;
+	let source_entities = load_managed_entities(db, &spec.module()?, folder).await?;
 	let source_catalog = CatalogSnapshot {
 		version: 2,
 		entities: source_entities.into_iter().map(|r| r.entity).collect(),
 		operations: Vec::new(),
 	};
-	start_inner(db, &make_loaded_spec(spec), &source_catalog, &target_catalog, vars).await
+	let ctx = StepContext::new(vars, folder, None);
+	start_inner(db, &make_loaded_spec(spec), &source_catalog, &target_catalog, &ctx).await
 }
 
 async fn start_inner(
@@ -822,7 +927,7 @@ async fn start_inner(
 	rollout: &LoadedRolloutSpec,
 	source_catalog: &CatalogSnapshot,
 	target_catalog: &CatalogSnapshot,
-	vars: &TemplateVars,
+	ctx: &StepContext<'_>,
 ) -> Result<()> {
 	let lock = acquire_lock(db, &rollout.spec.module()?, "global").await?;
 	let result = async {
@@ -835,20 +940,95 @@ async fn start_inner(
 			}
 			_ => {}
 		}
-		if let Some(ref row) = record {
-			verify_rollout_record_matches(row, rollout)?;
-		} else {
-			create_rollout_record(
-				db,
-				rollout,
-				&source_catalog.entities,
-				&target_catalog.entities,
-				RolloutStatus::Planned,
-			)
-			.await?;
+		// Capture what a rollback would restore *before* anything else, including
+		// before the record exists. The previous definition of a modified entity
+		// lives nowhere on disk (the catalog snapshot keeps only a hash), so the
+		// live database is the only source for it.
+		//
+		// Ordering matters more than it looks. If the capture ran after
+		// `create_rollout_record` and then failed, the record would exist with no
+		// definitions, the operator's re-run would see a resume and skip the
+		// capture, and `rollout rollback` would be permanently unavailable for that
+		// rollout with no way to recover it. Capturing first means a failure here
+		// leaves no record at all, so re-running `start` is still a first run.
+		let restorable: Vec<EntityKey> = rollout
+			.spec
+			.steps
+			.iter()
+			.filter_map(|step| match &step.action {
+				RolloutAction::RestoreDefinitions {
+					entities,
+				} => Some(entities.clone()),
+				_ => None,
+			})
+			.flatten()
+			.collect();
+
+		match record.as_ref() {
+			// A resume. The opening run already captured; re-reading now would pick
+			// up whatever the expand phase wrote and overwrite the originals.
+			Some(row) => {
+				verify_rollout_record_matches(row, rollout)?;
+				log::debug!(
+					"rollout '{}' is resuming; keeping the rollback definitions the opening \
+					 run captured",
+					rollout.spec.id
+				);
+			}
+			None => {
+				let captured = if restorable.is_empty() {
+					BTreeMap::new()
+				} else {
+					capture_definitions(db, &restorable).await?
+				};
+				let missing: Vec<String> = restorable
+					.iter()
+					.map(|e| entity_key_string(&e.kind, e.scope.as_deref(), &e.name))
+					.filter(|key| !captured.contains_key(key))
+					.collect();
+				// Say this now, not at rollback time. A modified entity is one the
+				// snapshot says already existed, so finding it absent in the live
+				// database means real drift, and that rollback cannot restore it.
+				if !missing.is_empty() {
+					log::warn!(
+						"no live definition found for {}, so `rollout rollback` will not be \
+						 able to restore {}. The catalog snapshot says they already existed, \
+						 so this database has drifted from it -- check that it is the one you \
+						 meant, and that the schema was ever applied here.",
+						missing.join(", "),
+						if missing.len() == 1 {
+							"it"
+						} else {
+							"them"
+						}
+					);
+				}
+				if !restorable.is_empty() {
+					log::info!(
+						"captured {} definition(s) for rollback of {} modified entit{}",
+						captured.len(),
+						restorable.len(),
+						if restorable.len() == 1 {
+							"y"
+						} else {
+							"ies"
+						}
+					);
+				}
+				create_rollout_record(
+					db,
+					rollout,
+					&source_catalog.entities,
+					&target_catalog.entities,
+					RolloutStatus::Planned,
+					&captured,
+				)
+				.await?;
+			}
 		}
+
 		set_rollout_status(db, &rollout.spec.id, RolloutStatus::RunningStart, None, None).await?;
-		if let Err(err) = execute_phase(db, rollout, RolloutPhase::Start, vars).await {
+		if let Err(err) = execute_phase(db, rollout, RolloutPhase::Start, ctx).await {
 			set_rollout_status(
 				db,
 				&rollout.spec.id,
@@ -883,7 +1063,8 @@ pub async fn run_complete(
 	run_setup(db, folder).await?;
 	let rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
 	validate_rollout_spec(&rollout.spec)?;
-	complete_inner(db, &rollout, vars).await
+	let ctx = StepContext::new(vars, Some(folder), opts.query_timeout);
+	complete_inner(db, &rollout, &ctx).await
 }
 
 /// Runs the complete phase of a rollout defined entirely in code.
@@ -905,13 +1086,14 @@ pub(crate) async fn run_complete_with_spec(
 		None => crate::setup::run_setup_embedded(db).await?,
 	}
 	validate_rollout_spec(spec)?;
-	complete_inner(db, &make_loaded_spec(spec), vars).await
+	let ctx = StepContext::new(vars, folder, None);
+	complete_inner(db, &make_loaded_spec(spec), &ctx).await
 }
 
 async fn complete_inner(
 	db: &Surreal<Any>,
 	rollout: &LoadedRolloutSpec,
-	vars: &TemplateVars,
+	ctx: &StepContext<'_>,
 ) -> Result<()> {
 	let lock = acquire_lock(db, &rollout.spec.module()?, "global").await?;
 	let result = async {
@@ -928,7 +1110,7 @@ async fn complete_inner(
 		}
 		set_rollout_status(db, &rollout.spec.id, RolloutStatus::RunningComplete, None, None)
 			.await?;
-		if let Err(err) = execute_phase(db, rollout, RolloutPhase::Complete, vars).await {
+		if let Err(err) = execute_phase(db, rollout, RolloutPhase::Complete, ctx).await {
 			set_rollout_status(
 				db,
 				&rollout.spec.id,
@@ -972,7 +1154,8 @@ pub async fn run_rollback(
 	run_setup(db, folder).await?;
 	let rollout = load_rollout_spec(resolve_rollout_path(folder, opts.selector.as_deref())?)?;
 	validate_rollout_spec(&rollout.spec)?;
-	rollback_inner(db, &rollout, vars).await
+	let ctx = StepContext::new(vars, Some(folder), opts.query_timeout);
+	rollback_inner(db, &rollout, &ctx).await
 }
 
 /// Runs the rollback phase of a rollout defined entirely in code.
@@ -994,13 +1177,14 @@ pub(crate) async fn run_rollback_with_spec(
 		None => crate::setup::run_setup_embedded(db).await?,
 	}
 	validate_rollout_spec(spec)?;
-	rollback_inner(db, &make_loaded_spec(spec), vars).await
+	let ctx = StepContext::new(vars, folder, None);
+	rollback_inner(db, &make_loaded_spec(spec), &ctx).await
 }
 
 async fn rollback_inner(
 	db: &Surreal<Any>,
 	rollout: &LoadedRolloutSpec,
-	vars: &TemplateVars,
+	ctx: &StepContext<'_>,
 ) -> Result<()> {
 	let lock = acquire_lock(db, &rollout.spec.module()?, "global").await?;
 	let result = async {
@@ -1018,7 +1202,7 @@ async fn rollback_inner(
 		}
 		set_rollout_status(db, &rollout.spec.id, RolloutStatus::RunningRollback, None, None)
 			.await?;
-		if let Err(err) = execute_phase(db, rollout, RolloutPhase::Rollback, vars).await {
+		if let Err(err) = execute_phase(db, rollout, RolloutPhase::Rollback, ctx).await {
 			set_rollout_status(
 				db,
 				&rollout.spec.id,
@@ -1205,6 +1389,7 @@ pub(crate) async fn load_active_rollout_id(db: &Surreal<Any>) -> Result<Option<S
 pub(crate) async fn load_managed_entities(
 	db: &Surreal<Any>,
 	module: &Module,
+	folder: Option<&str>,
 ) -> Result<Vec<ManagedEntityRecord>> {
 	let mut resp = db
 		.query("SELECT key, val FROM __entity WHERE ns = $ns;")
@@ -1229,8 +1414,14 @@ pub(crate) async fn load_managed_entities(
 		};
 		let name = parts[2].to_string();
 
-		let source_path =
-			val.get("source_path").and_then(|v| v.as_str()).unwrap_or_default().to_string();
+		// Written by an older release, `source_path` may still be
+		// working-directory-relative. Normalise so it compares against the
+		// folder-relative paths the catalog now produces.
+		let raw_source_path = val.get("source_path").and_then(|v| v.as_str()).unwrap_or_default();
+		let source_path = match folder {
+			Some(folder) => strip_folder_prefix(folder, raw_source_path),
+			None => raw_source_path.to_string(),
+		};
 		let statement_hash =
 			val.get("statement_hash").and_then(|v| v.as_str()).unwrap_or_default().to_string();
 		let file_hash =
@@ -1434,6 +1625,19 @@ fn build_rollout_spec(
 		));
 	}
 
+	// A modified entity cannot be undone by removing it -- it existed before. The
+	// rollback re-applies whatever definition `start` captured from the live
+	// database.
+	let modified_entities: Vec<EntityKey> =
+		catalog_diff.modified.iter().map(|change| change.new.key()).collect();
+	if !modified_entities.is_empty() {
+		steps.push(RolloutStep::restore_definitions(
+			"rollback_modified_schema",
+			RolloutPhase::Rollback,
+			modified_entities,
+		));
+	}
+
 	let removed_entities: Vec<EntityKey> =
 		catalog_diff.removed.iter().map(CatalogEntity::key).collect();
 	if !removed_entities.is_empty() {
@@ -1456,30 +1660,104 @@ fn build_rollout_spec(
 	})
 }
 
-fn validate_autoplan(diff: &CatalogDiff) -> Result<()> {
-	if !diff.modified.is_empty() {
+/// A human-readable, scope-qualified name for a catalog entity.
+///
+/// The refusal used to print `field:email`, which is ambiguous the moment two
+/// tables have an `email` field. Qualify it and name the file it came from.
+fn describe_entity(entity: &CatalogEntity) -> String {
+	let name = match &entity.scope {
+		Some(scope) => format!("{}:{}.{}", entity.kind, scope, entity.name),
+		None => format!("{}:{}", entity.kind, entity.name),
+	};
+	if entity.source_path.is_empty() {
+		name
+	} else {
+		format!("{name} ({})", entity.source_path)
+	}
+}
+
+fn validate_autoplan(diff: &CatalogDiff, allow_modified: bool) -> Result<()> {
+	if !diff.modified.is_empty() && !allow_modified {
 		let names = diff
 			.modified
 			.iter()
-			.map(|change| format!("{}:{}", change.old.kind, change.old.name))
+			.map(|change| describe_entity(&change.new))
 			.collect::<Vec<_>>()
-			.join(", ");
+			.join("\n  - ");
 		bail!(
-			"automatic rollout planning refuses modified managed entities: {}. \
-Author a manual rollout manifest for non-additive changes.",
+			"rollout plan found {} modified entit{} and will not plan {} automatically \
+			 without --allow-modified:\n  - {}\n\n\
+			 Applying the change is safe (it re-applies the file with DEFINE ... OVERWRITE). \
+			 The reason for the opt-in is rollback: undoing a modification means restoring \
+			 the previous definition, which reverses the schema but not any data effect it \
+			 had. That is a clean undo for ASSERT, PERMISSIONS and COMMENT changes, and only \
+			 a partial one for TYPE, VALUE or DEFAULT changes.\n\n\
+			 Re-run with --allow-modified once you are satisfied that is the right undo, or \
+			 author a manual manifest.",
+			diff.modified.len(),
+			if diff.modified.len() == 1 {
+				"y"
+			} else {
+				"ies"
+			},
+			if diff.modified.len() == 1 {
+				"it"
+			} else {
+				"them"
+			},
 			names
 		);
 	}
 
+	// An add and a remove of the same kind in the same scope cannot be told apart
+	// from a rename without heuristics, and a misread rename plans as a drop of the
+	// original, so this stays refused.
+	//
+	// It is deliberately NOT gated on --allow-modified. That flag is about changing
+	// an entity that stays in place; this is about one that may be disappearing.
+	// Tables, functions, params, analyzers and users all carry `scope: None`, so
+	// treating an unnamed scope as "not a collision" would switch the guard off for
+	// exactly the entity kinds whose removal destroys data.
 	let removed_by_scope: BTreeSet<(EntityKind, Option<String>)> =
 		diff.removed.iter().map(|entity| (entity.kind.clone(), entity.scope.clone())).collect();
 	let added_by_scope: BTreeSet<(EntityKind, Option<String>)> =
 		diff.added.iter().map(|entity| (entity.kind.clone(), entity.scope.clone())).collect();
 
-	if removed_by_scope.intersection(&added_by_scope).next().is_some() {
+	let colliding: Vec<&(EntityKind, Option<String>)> =
+		removed_by_scope.intersection(&added_by_scope).collect();
+
+	if !colliding.is_empty() {
+		let detail = colliding
+			.iter()
+			.map(|(kind, scope)| {
+				let scope_name = scope.as_deref().unwrap_or("<database>");
+				let added: Vec<&str> = diff
+					.added
+					.iter()
+					.filter(|e| &e.kind == kind && &e.scope == scope)
+					.map(|e| e.name.as_str())
+					.collect();
+				let removed: Vec<&str> = diff
+					.removed
+					.iter()
+					.filter(|e| &e.kind == kind && &e.scope == scope)
+					.map(|e| e.name.as_str())
+					.collect();
+				format!(
+					"{kind} on {scope_name}: added [{}], removed [{}]",
+					added.join(", "),
+					removed.join(", ")
+				)
+			})
+			.collect::<Vec<_>>()
+			.join("\n  - ");
 		bail!(
-			"automatic rollout planning detected add/remove changes in the same scope. \
-Author a manual rollout manifest with explicit renames/backfill steps."
+			"rollout plan sees additions and removals of the same kind in one scope, which it \
+			 cannot tell apart from a rename:\n  - {detail}\n\n\
+			 If that is a rename, planning it automatically would drop the original and its \
+			 data rather than move it, so author a manual manifest with an explicit backfill \
+			 between the add and the remove. If the changes are genuinely unrelated, splitting \
+			 them across two rollouts is the safest way to say so."
 		);
 	}
 
@@ -1603,26 +1881,70 @@ fn validate_rollout_spec(spec: &RolloutSpec) -> Result<()> {
 					bail!("remove_entities step '{}' requires entities", step.id);
 				}
 			}
+			RolloutAction::RestoreDefinitions {
+				entities,
+			} => {
+				if entities.is_empty() {
+					bail!("restore_definitions step '{}' requires entities", step.id);
+				}
+			}
 		}
 	}
 	Ok(())
 }
 
+/// How often to report that a long step is still running.
+///
+/// Without this a step that legitimately takes minutes -- an index build over a
+/// large table -- is indistinguishable from the unbounded hang that issue #55
+/// reported, because nothing is printed between steps.
+const STEP_HEARTBEAT: Duration = Duration::from_secs(15);
+
 async fn execute_phase(
 	db: &Surreal<Any>,
 	rollout: &LoadedRolloutSpec,
 	phase: RolloutPhase,
-	vars: &TemplateVars,
+	ctx: &StepContext<'_>,
 ) -> Result<()> {
-	for step in rollout.spec.steps.iter().filter(|step| step.phase == phase) {
+	let planned: Vec<&RolloutStep> =
+		rollout.spec.steps.iter().filter(|step| step.phase == phase).collect();
+	let total = planned.len();
+
+	for (index, step) in planned.into_iter().enumerate() {
 		if step_already_completed(db, &rollout.spec.id, &step.id).await? {
+			log::info!(
+				"step {}/{} '{}' ({}) already completed; skipping",
+				index + 1,
+				total,
+				step.id,
+				step.action.kind_str()
+			);
 			continue;
 		}
 
+		log::info!(
+			"step {}/{} '{}' ({}, phase {}) starting",
+			index + 1,
+			total,
+			step.id,
+			step.action.kind_str(),
+			phase.as_str()
+		);
 		record_step_start(db, &rollout.spec.id, step).await?;
-		let result = execute_step(db, step, vars).await;
+
+		let started = Instant::now();
+		let result = with_heartbeat(&step.id, execute_step(db, &rollout.spec.id, step, ctx)).await;
 		match result {
-			Ok(()) => record_step_complete(db, &rollout.spec.id, step).await?,
+			Ok(()) => {
+				log::info!(
+					"step {}/{} '{}' completed in {}ms",
+					index + 1,
+					total,
+					step.id,
+					started.elapsed().as_millis()
+				);
+				record_step_complete(db, &rollout.spec.id, step).await?
+			}
 			Err(err) => {
 				record_step_failure(db, &rollout.spec.id, step, &format!("{err:#}")).await?;
 				return Err(err);
@@ -1632,23 +1954,196 @@ async fn execute_phase(
 	Ok(())
 }
 
-async fn execute_step(db: &Surreal<Any>, step: &RolloutStep, vars: &TemplateVars) -> Result<()> {
+/// Run `future`, logging every [`STEP_HEARTBEAT`] that it is still going.
+async fn with_heartbeat<T>(step_id: &str, future: impl Future<Output = T>) -> T {
+	let started = Instant::now();
+	tokio::pin!(future);
+	let mut ticker = tokio::time::interval(STEP_HEARTBEAT);
+	ticker.tick().await; // the first tick completes immediately
+	loop {
+		tokio::select! {
+			out = &mut future => return out,
+			_ = ticker.tick() => log::info!(
+				"  step '{}' still running ({}s)",
+				step_id,
+				started.elapsed().as_secs()
+			),
+		}
+	}
+}
+
+/// Resolve an `apply_files` step's recorded path.
+///
+/// Recorded paths were cwd-relative before 1.0.0-beta.2, so a manifest planned
+/// from a repo root (`database/schema/a.surql`) could not find its files in a
+/// container whose folder is `/database`. Try the folder-relative spelling first,
+/// then the legacy folder-prefixed one, then the path exactly as recorded.
+fn resolve_step_file(folder: Option<&str>, recorded: &str) -> Result<PathBuf> {
+	let mut tried = Vec::new();
+	if let Some(folder) = folder {
+		let root = Path::new(folder);
+		let direct = root.join(recorded);
+		if direct.is_file() {
+			return Ok(direct);
+		}
+		tried.push(direct);
+
+		// Legacy `<folder-name>/schema/...`. Only drop the leading segment when it
+		// really is the folder's name: dropping it unconditionally turns
+		// `schema/user.surql` into a probe for `<folder>/user.surql`, and a stray
+		// top-level file there would be applied instead of the step failing.
+		let folder_name = Path::new(folder.trim_end_matches('/'))
+			.file_name()
+			.and_then(|n| n.to_str())
+			.unwrap_or_default();
+		if let Some((head, rest)) = recorded.split_once('/')
+			&& !folder_name.is_empty()
+			&& head == folder_name
+		{
+			let stripped = root.join(rest);
+			if stripped.is_file() {
+				return Ok(stripped);
+			}
+			tried.push(stripped);
+		}
+	}
+
+	let as_recorded = PathBuf::from(recorded);
+	if as_recorded.is_file() {
+		return Ok(as_recorded);
+	}
+	tried.push(as_recorded);
+
+	bail!(
+		"apply_files step references {recorded:?}, which was not found. Tried: {}",
+		tried.iter().map(|p| format!("{}", p.display())).collect::<Vec<_>>().join(", ")
+	)
+}
+
+/// Read the live `DEFINE` text for `entities` straight from the database.
+///
+/// A catalog snapshot stores only a `statement_hash`, so the previous definition
+/// of a modified entity exists nowhere on disk. `INFO FOR DB` and
+/// `INFO FOR TABLE` return `name -> "DEFINE ..."` maps verbatim, which makes the
+/// database itself the source of truth for what a rollback should restore.
+pub(crate) async fn capture_definitions(
+	db: &Surreal<Any>,
+	entities: &[EntityKey],
+) -> Result<BTreeMap<String, String>> {
+	if entities.is_empty() {
+		return Ok(BTreeMap::new());
+	}
+
+	let db_info = info_json(db, "INFO FOR DB;").await?;
+	// One `INFO FOR TABLE` per distinct scope, not per entity.
+	let scopes: BTreeSet<String> = entities.iter().filter_map(|e| e.scope.clone()).collect();
+	let mut table_info = BTreeMap::new();
+	for scope in scopes {
+		let info = info_json(db, &format!("INFO FOR TABLE `{scope}`;")).await?;
+		table_info.insert(scope, info);
+	}
+
+	let mut out = BTreeMap::new();
+	for entity in entities {
+		let section = match entity.kind {
+			EntityKind::Table => Some("tables"),
+			EntityKind::Function => Some("functions"),
+			EntityKind::Param => Some("params"),
+			EntityKind::Analyzer => Some("analyzers"),
+			EntityKind::Access => Some("accesses"),
+			EntityKind::User => Some("users"),
+			EntityKind::Field => Some("fields"),
+			EntityKind::Index => Some("indexes"),
+			EntityKind::Event => Some("events"),
+			_ => None,
+		};
+		let Some(section) = section else {
+			continue;
+		};
+		let source = match &entity.scope {
+			Some(scope) => table_info.get(scope),
+			None => Some(&db_info),
+		};
+		let definition = source
+			.and_then(|info| info.get(section))
+			.and_then(|m| m.get(&entity.name))
+			.and_then(|v| v.as_str());
+		if let Some(definition) = definition {
+			out.insert(
+				entity_key_string(&entity.kind, entity.scope.as_deref(), &entity.name),
+				definition.to_string(),
+			);
+		}
+	}
+	Ok(out)
+}
+
+async fn info_json(db: &Surreal<Any>, sql: &str) -> Result<Value> {
+	let mut response = db.query(sql).await?.check().with_context(|| sql.to_string())?;
+	let raw: surrealdb_types::Value = response.take(0)?;
+	Ok(Value::from_value(raw).unwrap_or(Value::Null))
+}
+
+/// Read back the definitions `start` captured for this rollout.
+async fn load_restore_definitions(
+	db: &Surreal<Any>,
+	rollout_id: &str,
+) -> Result<BTreeMap<String, String>> {
+	let mut resp = db
+		.query("SELECT restore_definitions FROM __rollout WHERE record::id(id) = $id LIMIT 1;")
+		.bind(("id", rollout_id.to_string()))
+		.await?;
+	let raw: Option<surrealdb_types::Value> = resp.take(0)?;
+	let Some(row) = raw.map(|v| Value::from_value(v).unwrap_or(Value::Null)) else {
+		return Ok(BTreeMap::new());
+	};
+	let Some(map) = row.get("restore_definitions").and_then(|v| v.as_object()) else {
+		return Ok(BTreeMap::new());
+	};
+	Ok(map.iter().filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string()))).collect())
+}
+
+async fn execute_step(
+	db: &Surreal<Any>,
+	rollout_id: &str,
+	step: &RolloutStep,
+	ctx: &StepContext<'_>,
+) -> Result<()> {
+	let vars = ctx.vars;
+	let run = async |sql: String| -> Result<()> {
+		match ctx.query_timeout {
+			None => exec_surql(db, &sql).await,
+			Some(budget) => match tokio::time::timeout(budget, exec_surql(db, &sql)).await {
+				Ok(result) => result,
+				Err(_) => bail!(
+					"step '{}' exceeded the {}s query budget. Raise it with \
+					 --query-timeout-secs / SURREALDB_QUERY_TIMEOUT_SECS, or pass 0 to \
+					 wait indefinitely.",
+					step.id,
+					budget.as_secs()
+				),
+			},
+		}
+	};
+
 	match &step.action {
 		RolloutAction::ApplySchema {
 			sql,
 		} => {
 			let substituted = vars.apply(sql)?;
-			exec_surql(db, &ensure_overwrite(&substituted)).await
+			run(ensure_overwrite(&substituted)).await
 		}
 		RolloutAction::ApplyFiles {
 			files,
 		} => {
 			for file in files {
-				let raw = fs::read_to_string(file).with_context(|| format!("reading {}", file))?;
-				let substituted = vars
-					.apply(&raw)
-					.with_context(|| format!("applying template variables in {}", file))?;
-				exec_surql(db, &ensure_overwrite(&substituted)).await?;
+				let path = resolve_step_file(ctx.folder, file)?;
+				let raw = fs::read_to_string(&path)
+					.with_context(|| format!("reading {}", path.display()))?;
+				let substituted = vars.apply(&raw).with_context(|| {
+					format!("applying template variables in {}", path.display())
+				})?;
+				run(ensure_overwrite(&substituted)).await?;
 			}
 			Ok(())
 		}
@@ -1656,7 +2151,7 @@ async fn execute_step(db: &Surreal<Any>, step: &RolloutStep, vars: &TemplateVars
 			sql,
 		} => {
 			let substituted = vars.apply(sql)?;
-			exec_surql(db, &substituted).await
+			run(substituted).await
 		}
 		RolloutAction::AssertSql {
 			sql,
@@ -1681,7 +2176,35 @@ async fn execute_step(db: &Surreal<Any>, step: &RolloutStep, vars: &TemplateVars
 			if sql.trim().is_empty() {
 				return Ok(());
 			}
-			exec_surql(db, &sql).await
+			run(sql).await
+		}
+		RolloutAction::RestoreDefinitions {
+			entities,
+		} => {
+			let captured = load_restore_definitions(db, rollout_id).await?;
+			let mut statements = Vec::new();
+			let mut missing = Vec::new();
+			for entity in entities {
+				let key = entity_key_string(&entity.kind, entity.scope.as_deref(), &entity.name);
+				match captured.get(&key) {
+					Some(definition) => statements.push(ensure_overwrite(definition)),
+					None => missing.push(key),
+				}
+			}
+			if !missing.is_empty() {
+				bail!(
+					"step '{}' has no captured definition for {}. `start` warns when an \
+					 entity has no live definition to capture; there is nothing to restore \
+					 for these. Recreate them by hand, or re-apply your schema files with \
+					 `surrealkit sync`.",
+					step.id,
+					missing.join(", ")
+				);
+			}
+			if statements.is_empty() {
+				return Ok(());
+			}
+			run(statements.join("\n")).await
 		}
 	}
 }
@@ -1723,6 +2246,7 @@ async fn create_rollout_record(
 	source_entities: &[CatalogEntity],
 	target_entities: &[CatalogEntity],
 	status: RolloutStatus,
+	restore_definitions: &BTreeMap<String, String>,
 ) -> Result<()> {
 	let started_at = OffsetDateTime::now_utc().format(&Rfc3339)?;
 	db.query(
@@ -1739,6 +2263,8 @@ async fn create_rollout_record(
 		 	target_entities: $target_entities, \
 		 	started_at: <datetime> $started_at, \
 		 	updated_at: time::now(), \
+		 	reversibility: $reversibility, \
+		 	restore_definitions: $restore_definitions, \
 		 	last_error: NONE \
 		 };",
 	)
@@ -1752,9 +2278,29 @@ async fn create_rollout_record(
 	.bind(("source_entities", serde_json::to_value(source_entities)?))
 	.bind(("target_entities", serde_json::to_value(target_entities)?))
 	.bind(("started_at", started_at))
+	.bind(("reversibility", reversibility(&rollout.spec).to_string()))
+	.bind(("restore_definitions", serde_json::to_value(restore_definitions)?))
 	.await?
 	.check()?;
 	Ok(())
+}
+
+/// How completely a rollback can undo this rollout.
+///
+/// `full` means every step is undone by removing what it added. `definition_only`
+/// means at least one step modified an entity that already existed, so rollback
+/// restores the previous *definition* but cannot undo a data effect it had --
+/// clean for ASSERT/PERMISSIONS/COMMENT, partial for TYPE/VALUE/DEFAULT.
+fn reversibility(spec: &RolloutSpec) -> &'static str {
+	let restores = spec
+		.steps
+		.iter()
+		.any(|step| matches!(step.action, RolloutAction::RestoreDefinitions { .. }));
+	if restores {
+		"definition_only"
+	} else {
+		"full"
+	}
 }
 
 async fn load_rollout_record(db: &Surreal<Any>, rollout_id: &str) -> Result<Option<Value>> {
@@ -1814,24 +2360,36 @@ async fn set_rollout_status(
 	Ok(())
 }
 
+/// Read just the step log, rather than the whole rollout record.
+///
+/// `SELECT *` also returns `source_entities` and `target_entities`, which are
+/// O(managed catalog). Step bookkeeping reads and writes the record three times
+/// per step, so on a large schema over a high-latency link that payload dominates
+/// the rollout and makes a working run look like the hang reported in issue #55.
+async fn load_rollout_steps(db: &Surreal<Any>, rollout_id: &str) -> Result<Option<Vec<Value>>> {
+	let mut resp = db
+		.query("SELECT steps FROM __rollout WHERE record::id(id) = $id LIMIT 1;")
+		.bind(("id", rollout_id.to_string()))
+		.await?;
+	let raw: Option<surrealdb_types::Value> = resp.take(0)?;
+	let Some(row) = raw.map(|v| Value::from_value(v).unwrap_or(Value::Null)) else {
+		return Ok(None);
+	};
+	Ok(Some(row.get("steps").and_then(|v| v.as_array()).cloned().unwrap_or_default()))
+}
+
 async fn step_already_completed(
 	db: &Surreal<Any>,
 	rollout_id: &str,
 	step_id: &str,
 ) -> Result<bool> {
-	let row = load_rollout_record(db, rollout_id).await?;
-	let Some(row) = row else {
+	let Some(steps) = load_rollout_steps(db, rollout_id).await? else {
 		return Ok(false);
 	};
-	let steps = row.get("steps").and_then(|v| v.as_array());
-	Ok(steps
-		.map(|arr| {
-			arr.iter().any(|s| {
-				s.get("step_id").and_then(|v| v.as_str()) == Some(step_id)
-					&& s.get("status").and_then(|v| v.as_str()) == Some("completed")
-			})
-		})
-		.unwrap_or(false))
+	Ok(steps.iter().any(|s| {
+		s.get("step_id").and_then(|v| v.as_str()) == Some(step_id)
+			&& s.get("status").and_then(|v| v.as_str()) == Some("completed")
+	}))
 }
 
 async fn record_step_start(db: &Surreal<Any>, rollout_id: &str, step: &RolloutStep) -> Result<()> {
@@ -1844,11 +2402,9 @@ async fn record_step_start(db: &Surreal<Any>, rollout_id: &str, step: &RolloutSt
 		"error": null
 	});
 	// Load, remove any existing entry for this step, append, write back
-	let row = load_rollout_record(db, rollout_id)
+	let mut steps = load_rollout_steps(db, rollout_id)
 		.await?
 		.ok_or_else(|| anyhow!("rollout '{}' not found", rollout_id))?;
-	let mut steps: Vec<Value> =
-		row.get("steps").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 	steps.retain(|s| s.get("step_id").and_then(|v| v.as_str()) != Some(&step.id));
 	steps.push(new_step);
 	db.query(
@@ -1887,11 +2443,9 @@ async fn update_step_status(
 	error: Option<&str>,
 ) -> Result<()> {
 	// Load, patch in Rust, write back — avoids complex inline array mutation
-	let row = load_rollout_record(db, rollout_id)
+	let mut steps = load_rollout_steps(db, rollout_id)
 		.await?
 		.ok_or_else(|| anyhow!("rollout '{}' not found", rollout_id))?;
-	let mut steps: Vec<Value> =
-		row.get("steps").and_then(|v| v.as_array()).cloned().unwrap_or_default();
 	for s in &mut steps {
 		if s.get("step_id").and_then(|v| v.as_str()) == Some(step_id)
 			&& let Some(obj) = s.as_object_mut()
@@ -2102,8 +2656,76 @@ mod tests {
 			}],
 		};
 
-		let err = validate_autoplan(&diff).expect_err("should reject modified entities");
-		assert!(err.to_string().contains("refuses modified"));
+		let err = validate_autoplan(&diff, false).expect_err("should reject modified entities");
+		let message = err.to_string();
+		assert!(
+			message.contains("--allow-modified"),
+			"the refusal must name the opt-in: {message}"
+		);
+		// The old message printed `field:name`, which is ambiguous across tables.
+		assert!(
+			message.contains("field:person.name"),
+			"the refusal must qualify the entity by table: {message}"
+		);
+		assert!(
+			message.contains("database/schema/person.surql"),
+			"the refusal must name the source file: {message}"
+		);
+
+		// With the opt-in, the same diff plans.
+		validate_autoplan(&diff, true).expect("--allow-modified should permit the change");
+	}
+
+	/// A table rename reaches the planner as "add people, remove person". Tables
+	/// carry `scope: None`, so a guard that only fires on a named scope switches
+	/// itself off for exactly the entity kinds whose removal destroys data: the
+	/// generated manifest would define an empty `people` and then REMOVE TABLE
+	/// `person` with its rows.
+	#[test]
+	fn plan_refuses_a_table_rename() {
+		let entity = |name: &str| CatalogEntity {
+			kind: EntityKind::Table,
+			scope: None,
+			name: name.to_string(),
+			source_path: "schema/person.surql".to_string(),
+			statement_hash: format!("h-{name}"),
+			file_hash: "f".to_string(),
+		};
+		let diff = CatalogDiff {
+			added: vec![entity("people")],
+			removed: vec![entity("person")],
+			modified: Vec::new(),
+		};
+
+		let err = validate_autoplan(&diff, false).expect_err("a table rename must be refused");
+		let message = err.to_string();
+		assert!(message.contains("person") && message.contains("people"), "got: {message}");
+
+		// --allow-modified is about changing an entity that stays in place. It must
+		// not wave through one that may be disappearing.
+		assert!(
+			validate_autoplan(&diff, true).is_err(),
+			"--allow-modified must not bypass the rename guard"
+		);
+	}
+
+	/// The same shape one scope down, which the guard has always caught.
+	#[test]
+	fn plan_refuses_a_field_rename() {
+		let field = |name: &str| CatalogEntity {
+			kind: EntityKind::Field,
+			scope: Some("person".to_string()),
+			name: name.to_string(),
+			source_path: "schema/person.surql".to_string(),
+			statement_hash: format!("h-{name}"),
+			file_hash: "f".to_string(),
+		};
+		let diff = CatalogDiff {
+			added: vec![field("full_name")],
+			removed: vec![field("name")],
+			modified: Vec::new(),
+		};
+		assert!(validate_autoplan(&diff, false).is_err(), "a field rename must be refused");
 	}
 
 	#[test]
@@ -2343,7 +2965,7 @@ mod tests {
 		let db = connect_mem_db().await;
 		let loaded = sample_loaded_spec("20260417181055__initial_schema");
 
-		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned)
+		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned, &BTreeMap::new())
 			.await
 			.expect("create_rollout_record should coerce started_at string to datetime");
 
@@ -2365,9 +2987,16 @@ mod tests {
 	async fn set_rollout_status_accepts_rfc3339_completed_at() {
 		let db = connect_mem_db().await;
 		let loaded = sample_loaded_spec("20260417181055__complete_path");
-		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::RunningComplete)
-			.await
-			.expect("seed rollout record");
+		create_rollout_record(
+			&db,
+			&loaded,
+			&[],
+			&[],
+			RolloutStatus::RunningComplete,
+			&BTreeMap::new(),
+		)
+		.await
+		.expect("seed rollout record");
 
 		let completed_at = OffsetDateTime::now_utc().format(&Rfc3339).expect("format rfc3339");
 		set_rollout_status(
@@ -2397,7 +3026,7 @@ mod tests {
 	async fn set_rollout_status_accepts_none_completed_at() {
 		let db = connect_mem_db().await;
 		let loaded = sample_loaded_spec("20260417181055__running_path");
-		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned)
+		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned, &BTreeMap::new())
 			.await
 			.expect("seed rollout record");
 
@@ -2421,7 +3050,7 @@ mod tests {
 	async fn load_rollout_record_finds_created_row() {
 		let db = connect_mem_db().await;
 		let loaded = sample_loaded_spec("20260417181055__lookup");
-		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned)
+		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned, &BTreeMap::new())
 			.await
 			.expect("seed rollout record");
 
@@ -2444,7 +3073,7 @@ mod tests {
 		let db = connect_mem_db().await;
 		let loaded = sample_loaded_spec("20260420101627__initial_schema");
 
-		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned)
+		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned, &BTreeMap::new())
 			.await
 			.expect("create rollout record");
 
@@ -2496,9 +3125,16 @@ mod tests {
 		let db = connect_mem_db().await;
 		let loaded = sample_loaded_spec("20260420101627__active_id_test");
 
-		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::RunningStart)
-			.await
-			.expect("create rollout record");
+		create_rollout_record(
+			&db,
+			&loaded,
+			&[],
+			&[],
+			RolloutStatus::RunningStart,
+			&BTreeMap::new(),
+		)
+		.await
+		.expect("create rollout record");
 
 		let active =
 			load_active_rollout_id(&db).await.expect("load_active_rollout_id must not fail");
@@ -2571,9 +3207,16 @@ mod tests {
 		let loaded = sample_loaded_spec("20260522000000__repair_complete_path");
 		let target_entities = vec![sample_entity("a"), sample_entity("b")];
 
-		create_rollout_record(&db, &loaded, &[], &target_entities, RolloutStatus::RunningComplete)
-			.await
-			.expect("seed rollout record");
+		create_rollout_record(
+			&db,
+			&loaded,
+			&[],
+			&target_entities,
+			RolloutStatus::RunningComplete,
+			&BTreeMap::new(),
+		)
+		.await
+		.expect("seed rollout record");
 
 		repair_inner(&db, &loaded).await.expect("repair_inner should succeed");
 
@@ -2600,6 +3243,7 @@ mod tests {
 			&source_entities,
 			&[sample_entity("new_a")],
 			RolloutStatus::RunningRollback,
+			&BTreeMap::new(),
 		)
 		.await
 		.expect("seed rollout record");
@@ -2617,7 +3261,7 @@ mod tests {
 	async fn repair_refuses_planned_rollout() {
 		let db = connect_mem_db().await;
 		let loaded = sample_loaded_spec("20260522000002__repair_planned_rejected");
-		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned)
+		create_rollout_record(&db, &loaded, &[], &[], RolloutStatus::Planned, &BTreeMap::new())
 			.await
 			.expect("seed rollout record");
 

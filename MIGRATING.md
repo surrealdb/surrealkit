@@ -7,7 +7,7 @@ produces the same database metadata, apart from the safety refusal for an empty
 filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
-Three things do need attention.
+Six things do need attention.
 
 ### 1. Move `database/seed.surql`
 
@@ -57,6 +57,93 @@ Either point `--folder` at the right directory, drop the flag, or pass
 also applies to `--dry-run`, `--no-prune`, and the initial `--watch` sync because
 an empty filesystem selection otherwise cannot distinguish intentional absence
 from a wrong path.
+
+### 4. Tracked paths are now relative to the project folder
+
+Before 1.0.0-beta.2, SurrealKit keyed tracked schema and seed files by their path
+**relative to the process working directory**. The same file therefore had a
+different key depending on where you ran the command — `database/schema/001.surql`
+from your repo root, but `/database/schema/001.surql` inside a container whose
+`WORKDIR` was not `/`.
+
+That single detail caused four separate symptoms: `sync` saw every file as new,
+prunes were unsafe, committed snapshots churned in git between a developer
+checkout and CI, and a rollout planned locally failed `rollout start` in a
+container with `target schema hash mismatch` for byte-identical SQL.
+
+Keys are now relative to the project folder — `schema/001.surql`,
+`seed/000_init.surql`, `modules/billing/schema/001.surql` — and are identical in
+every environment.
+
+**You do not need to do anything.** The first `surrealkit sync` after upgrading
+matches your existing keys by path suffix and rewrites them in place, logging
+`re-keyed N tracked file(s)`. `surrealkit seed` does the same for `__seed`.
+Snapshot files are rewritten on the next `rollout plan` or `rollout baseline`.
+
+Two things to know:
+
+- **Run `sync` before `seed` once**, on each database, from a checkout where
+  every tracked file still exists. Re-keying matches against the files present on
+  disk; a file deleted in the same change as the upgrade is treated as removed
+  (which it is) and pruned normally.
+- **Rollout manifests generated before the upgrade carry an old
+  `target_schema_hash`.** They still start, with a warning naming the manifest.
+  Re-run `surrealkit rollout plan` to regenerate any manifest you have not yet
+  executed. The compatibility fallback is removed in 1.1.0.
+
+If you worked around this by pinning your container's `WORKDIR` to `/`, you can
+drop that.
+
+**One new refusal comes with this.** `sync` now stops if none of the file keys it
+has tracked match any file it found on disk, because that combination means the
+key matcher is broken rather than that you deleted everything, and pruning on it
+would drop the live schema. The same refusal fires on a legitimate wholesale
+rewrite of your schema files, where every path really did change at once. Pass
+`--allow-empty-prune` for that case.
+
+### 5. `rollout` subcommands take a rollout id again
+
+1.0.0-beta.1 added a global `-t/--target` whose argument id collided with the
+positional on `rollout start`, `complete`, `rollback`, `status`, `lint` and
+`repair`. The rollout id was parsed as a database target name, so every one of
+those commands failed with `unknown target "<rollout-id>"` before connecting, and
+`--target` was rejected outright on them. **Rollout execution was unusable on
+1.0.0-beta.1.** Upgrade.
+
+Two deliberate behaviour changes came with the fix:
+
+- `--target` now actually selects the database for `baseline`, `start`,
+  `complete`, `rollback` and `repair`, instead of being accepted and ignored while
+  the command ran against the ambient `SURREALDB_*` connection. If you passed
+  `--target` to those before, **check which database they were really hitting.**
+  Selecting more than one target is refused: a rollout is a locked, resumable,
+  per-database state machine, and fanning one id across N databases turns a
+  partial failure into N databases in different phases. `rollout status` makes no
+  rollout changes and does fan out, though like every command it runs `setup`
+  first, which applies the metadata DDL.
+- `rollout plan` and `rollout lint` never connect, so `--target`/`--all` cannot
+  mean anything to them. They now log a warning saying the flag was ignored,
+  rather than accepting it silently. They still exit zero, so a CI wrapper that
+  passes the same flags to every subcommand keeps working.
+
+### 6. A connect deadline, on by default
+
+Nothing between the CLI and the database had a timeout. An endpoint that accepted
+the connection and never completed the handshake — a database restarting behind a
+proxy, a mid-deploy app swap — blocked forever, which in a deploy pipeline looks
+like a rollout that hangs until CI kills the job and leaves `__rollout` in an
+intermediate state.
+
+Connect and sign-in now have a 30-second budget. Tune it with
+`--connect-timeout-secs`, `SURREALDB_CONNECT_TIMEOUT_SECS`, or
+`connect_timeout_secs` in a `[target.*]` section; `0` restores the old
+wait-forever behaviour.
+
+Step SQL is **not** bounded by default, because a legitimate index build can take
+hours. Opt in with `--query-timeout-secs` / `SURREALDB_QUERY_TIMEOUT_SECS` when
+you want one. Independently of any timeout, `rollout start`/`complete` now log
+each step as it begins and every 15 seconds while it runs, so a slow step is
+distinguishable from a hang.
 
 ## Opting into multiple schema modules
 
@@ -213,6 +300,19 @@ module follows the ones it depends on.
 | `rollout::run_baseline(db, folder)` | `run_baseline(db, folder, &module)` |
 | `rollout::run_abandon_rollout(db, id)` | `run_abandon_rollout(db, &module, id)` |
 | `SyncOpts { .. }` | gains `module` and `allow_empty_prune` |
+| `DbOverrides { .. }` | gains `connect_timeout_secs` and `query_timeout_secs` |
+| `DbCfg { .. }` | gains `connect_timeout` and `query_timeout` |
+| `schema_state::collect_schema_files_at(dir)` | `collect_schema_files_at(root, dir)` |
+| `sync::collect_filesystem_schema_files(dir, ..)` | gains a leading `root` |
+| `rollout::load_managed_entities(db, module)` | gains a trailing `folder: Option<&str>` |
+
+`SchemaFile.path` changes meaning rather than shape. It was the file's path
+relative to the process working directory and is now relative to the project
+folder, so a value that read `database/schema/user.surql` now reads
+`schema/user.surql`. If you construct `EmbeddedSchemaFile` or `EmbeddedSeedFile`
+by hand rather than through `embed_schema!` / `embed_seed!`, use the same
+convention or your entries will not match what the CLI tracks for the same files.
+The macros were updated to emit it, so regenerating is enough.
 
 ## If you use the Vite plugin
 
