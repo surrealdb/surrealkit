@@ -7,15 +7,15 @@
 //! feature contributes a set of files that are copied into the scaffolded project.
 
 mod emit;
-mod manifest;
+pub mod manifest;
 mod select;
 mod source;
 
+use crate::scaffold;
 use anyhow::Result;
 use emit::EmitPlan;
 pub use select::InitOpts;
 use source::TemplateSource;
-use surrealkit::scaffold;
 
 /// Run `surrealkit init`: scaffold the base project and layer on the selected
 /// template features.
@@ -29,11 +29,11 @@ pub fn run_init(folder: &str, opts: InitOpts) -> Result<()> {
 	// 2. Load + validate the manifest.
 	let manifest = source::load_manifest(&template_source)?;
 	let title = manifest.display_name.as_deref().unwrap_or(&manifest.name);
-	println!("Using template: {title}");
+	log::info!("Using template: {title}");
 	if let Some(desc) = &manifest.description {
-		println!("  {desc}");
+		log::info!("  {desc}");
 	}
-	println!();
+	log::info!("");
 
 	// 3. Scaffold the base project tree (idempotent; skips existing files).
 	scaffold::scaffold(folder)?;
@@ -41,13 +41,13 @@ pub fn run_init(folder: &str, opts: InitOpts) -> Result<()> {
 	// 4. Resolve the dependency-closed feature set (interactive or from flags).
 	let feature_ids = select::resolve_features(&manifest, &opts)?;
 	if feature_ids.is_empty() {
-		println!("\nNo features selected — scaffolded a bare project.");
+		log::info!("\nNo features selected — scaffolded a bare project.");
 		return Ok(());
 	}
 
 	// 5. Build the full emit plan (detects conflicts) and write it.
 	let plan = EmitPlan::build(folder, &manifest, &feature_ids, &template_source)?;
-	println!("\nAdding features: {}", feature_ids.join(", "));
+	log::info!("\nAdding features: {}", feature_ids.join(", "));
 	plan.write(opts.force)?;
 
 	Ok(())

@@ -36,13 +36,18 @@ pub fn resolve_features(manifest: &TemplateManifest, opts: &InitOpts) -> Result<
 		return Ok(closed);
 	}
 
-	// 3. -y, or no TTY: take the defaults without prompting.
-	let interactive =
-		!opts.yes && std::io::stdin().is_terminal() && std::io::stdout().is_terminal();
+	// 3. -y, no TTY, or no interactive front end compiled in: take the defaults
+	//    without prompting. `inquire` ships with the `cli` feature only, so an
+	//    `mcp`-only build never prompts -- which is exactly what a server needs,
+	//    since a blocked prompt would hang the request forever.
+	let interactive = cfg!(feature = "cli")
+		&& !opts.yes
+		&& std::io::stdin().is_terminal()
+		&& std::io::stdout().is_terminal();
 
 	if !interactive {
 		if !opts.yes {
-			eprintln!(
+			log::warn!(
 				"note: not a TTY; enabling default features (use --feature/--minimal/-y to control)"
 			);
 		}
@@ -64,8 +69,8 @@ fn announce_auto_added(manifest: &TemplateManifest, requested: &[String], closed
 				.find(|f| requested.contains(&f.id) && f.requires.contains(id))
 				.map(|f| f.id.as_str());
 			match by {
-				Some(req) => println!("  + {id} (required by {req})"),
-				None => println!("  + {id} (dependency)"),
+				Some(req) => log::info!("  + {id} (required by {req})"),
+				None => log::info!("  + {id} (dependency)"),
 			}
 		}
 	}
@@ -76,6 +81,8 @@ fn announce_auto_added(manifest: &TemplateManifest, requested: &[String], closed
 ///
 /// Split out of the interactive prompt so it stays compiled (and testable) under
 /// `cfg(test)`, where `prompt_features` is replaced by a non-interactive stub.
+/// Only the `cli` feature has a prompt to label, so a server-only build skips it.
+#[cfg(any(feature = "cli", test))]
 fn feature_labels(manifest: &TemplateManifest) -> Vec<String> {
 	manifest
 		.features
@@ -87,7 +94,7 @@ fn feature_labels(manifest: &TemplateManifest) -> Vec<String> {
 		.collect()
 }
 
-#[cfg(not(test))]
+#[cfg(all(not(test), feature = "cli"))]
 fn prompt_features(manifest: &TemplateManifest) -> Result<Vec<String>> {
 	use inquire::MultiSelect;
 	use inquire::list_option::ListOption;
@@ -112,9 +119,10 @@ fn prompt_features(manifest: &TemplateManifest) -> Result<Vec<String>> {
 	Ok(closed)
 }
 
-// In tests there is no TTY; resolve_features never reaches the interactive path,
-// but provide a stub so the crate builds with `cfg(test)`.
-#[cfg(test)]
+// In tests there is no TTY, and without the `cli` feature there is no `inquire`.
+// `resolve_features` never reaches the interactive path in either case, but a stub
+// keeps the crate building.
+#[cfg(any(test, not(feature = "cli")))]
 fn prompt_features(manifest: &TemplateManifest) -> Result<Vec<String>> {
 	manifest.resolve_closure(&manifest.default_feature_ids())
 }
