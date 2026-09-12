@@ -375,6 +375,50 @@ format = "biome check --write"
 With `typescript` set, `surrealkit sync` regenerates types after applying schema
 changes, so the generated types never drift from the database.
 
+## Static Analysis
+
+`surrealkit check`, `generate` and `watch` run the
+[SurrealQL Analyzer](https://github.com/surrealdb/analyzer) over the project —
+no database is contacted. The analyzer reads every module's `schema/` directory
+as the schema, every other `.surql` file as queries, and the SurrealQL embedded
+in host code (`db.query("SELECT …")` in `.ts`/`.svelte`/`.vue`/`.astro`), and
+reports contract violations before anything reaches an instance: unknown
+tables and fields, kind mismatches, bad graph traversals, comparisons that can
+never be true, clauses the engine accepts and then ignores.
+
+```bash
+surrealkit check                   # rustc-style findings; exit 1 on any error
+surrealkit check --json            # { summary, diagnostics[] } for CI and tooling
+surrealkit generate --out src/lib/db.generated.ts   # typed client for the embedded queries
+surrealkit watch                   # check, then regenerate, on every save
+```
+
+Configure it in `surrealkit.toml`. The schema directories come from the module
+layout, so nothing is written down twice:
+
+```toml
+[analyze]
+# The SurrealDB release you deploy to. Turns on the version checks (a function
+# or syntax the release lacks or removed). Unset means the latest release.
+surrealdb_version = "3.2"
+# Where `surrealkit generate` writes the typed client.
+out = "src/lib/db.generated.ts"
+# Extra directories to skip; target/, node_modules/ and .git/ always are.
+ignore = ["dist/**"]
+strict = false
+warnings_as_errors = false          # a CI gate
+
+[analyze.lints]                     # "allow" | "warn" | "deny", by code or family
+"7xxx" = "warn"
+E1002 = "allow"
+```
+
+`generate` refuses to overwrite a good registry when an embedded query has an
+error, and `watch` regenerates only after a clean check, so the generated types
+never lag behind a broken save. Inline suppressions are
+`-- surrealql-analyzer: allow(E1001) reason="…"`; the full code catalog is at
+<https://surrealguard.dev/docs/diagnostics>.
+
 ## Vite Plugin
 
 [`vite-plugin-surrealkit`](packages/vite-plugin-surrealkit) runs `surrealkit sync`

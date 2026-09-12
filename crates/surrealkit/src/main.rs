@@ -3,8 +3,9 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use std::collections::BTreeMap;
-use std::io::Write;
-use std::path::PathBuf;
+use std::io::{IsTerminal, Write};
+use std::path::{Path, PathBuf};
+use std::time::Instant;
 
 use anyhow::{Context, Result, bail};
 use clap::{Parser, Subcommand};
@@ -190,6 +191,43 @@ enum Commands {
 		timeout_ms: Option<u64>,
 		#[arg(long)]
 		keep_db: bool,
+	},
+	/// Statically check the project's SurrealQL — schema files, query files and
+	/// the queries embedded in host code — against the schema. No database is
+	/// contacted. Exits non-zero when any finding survives as an error.
+	Check {
+		/// Emit one machine-readable JSON document (`{ summary, diagnostics[] }`)
+		/// instead of rustc-style text.
+		#[arg(long, conflicts_with = "watch")]
+		json: bool,
+		/// Re-check on every change to a `.surql` file, a host file, or
+		/// `surrealkit.toml`. Runs once first, then blocks until interrupted.
+		#[arg(long)]
+		watch: bool,
+	},
+	/// Generate the typed TypeScript client for the queries embedded in host
+	/// code (`db.query("SELECT …")`), from the schema alone. Refuses to
+	/// overwrite a good registry when an embedded query has an error.
+	Generate {
+		/// Output path (default: `[analyze] out` in surrealkit.toml, else
+		/// `surrealql-analyzer.generated.ts` at the project root).
+		#[arg(long)]
+		out: Option<PathBuf>,
+		/// Regenerate on every change. Runs once first, then blocks until
+		/// interrupted.
+		#[arg(long)]
+		watch: bool,
+	},
+	/// Check, then regenerate the typed client, on every change — the loop to
+	/// run beside a dev server. A run that fails the check leaves the
+	/// registry untouched.
+	Watch {
+		/// Output path for the generated module (see `generate --out`).
+		#[arg(long)]
+		out: Option<PathBuf>,
+		/// Only check; write nothing.
+		#[arg(long)]
+		check_only: bool,
 	},
 	/// Introspect the database and generate a typed schema document (JSON).
 	Typegen {
@@ -854,6 +892,38 @@ async fn main() -> Result<()> {
 			)
 			.await?;
 		}
+		Commands::Check {
+			json,
+			watch,
+		} => {
+			if watch {
+				run_watch(&folder, None, true)?;
+			} else {
+				let analyzer_project = surrealkit::analyze::analyzer_project(&project, &folder)?;
+				if !run_check(&analyzer_project, json)? {
+					bail!("check failed");
+				}
+			}
+		}
+		Commands::Generate {
+			out,
+			watch,
+		} => {
+			let out = out.or_else(|| project.analyze.out.clone());
+			if watch {
+				run_watch_generate_only(&folder, out)?;
+			} else {
+				let analyzer_project = surrealkit::analyze::analyzer_project(&project, &folder)?;
+				run_generate(&analyzer_project, out.as_deref())?;
+			}
+		}
+		Commands::Watch {
+			out,
+			check_only,
+		} => {
+			let out = out.or_else(|| project.analyze.out.clone());
+			run_watch(&folder, out, check_only)?;
+		}
 		Commands::Typegen {
 			out,
 			stdout,
@@ -887,6 +957,164 @@ async fn main() -> Result<()> {
 	let _ = std::io::stderr().flush();
 	std::process::exit(0);
 }
+
+/// Colour on when stdout is a terminal that has not opted out (`NO_COLOR`).
+fn styles() -> surrealql_analyzer::Styles {
+	let color = std::io::stdout().is_terminal() && std::env::var_os("NO_COLOR").is_none();
+	surrealql_analyzer::Styles::new(color)
+}
+
+/// `1 error` / `3 errors`.
+fn count(n: usize, singular: &str) -> String {
+	if n == 1 {
+		format!("{n} {singular}")
+	} else {
+		format!("{n} {singular}s")
+	}
+}
+
+/// One `check` over the project. Prints every surviving finding and the
+/// summary; returns whether the run is clean. `json` prints the analyzer's
+/// stable document instead of text.
+fn run_check(analyzer_project: &surrealql_analyzer::Project, json: bool) -> Result<bool> {
+	let started = Instant::now();
+	let report = surrealql_analyzer::check(analyzer_project)?;
+	if json {
+		println!("{}", report.to_json()?);
+		return Ok(report.passed());
+	}
+	for block in report.render(styles()) {
+		println!("{block}");
+	}
+	let summary = &report.summary;
+	let warnings = summary.diagnostics.saturating_sub(summary.errors);
+	println!(
+		"checked {} in {:?}: {}, {}",
+		count(summary.sources_checked, "source"),
+		started.elapsed(),
+		count(summary.errors, "error"),
+		count(warnings, "warning"),
+	);
+	Ok(report.passed())
+}
+
+/// One `generate` over the project. A blocked run prints the embedded
+/// queries' errors and fails; a clean run prints where the module went and
+/// any warnings.
+fn run_generate(analyzer_project: &surrealql_analyzer::Project, out: Option<&Path>) -> Result<()> {
+	use surrealql_analyzer::GenerateError;
+	match surrealql_analyzer::generate(analyzer_project, out) {
+		Ok(report) => {
+			for block in report.render_warnings(styles()) {
+				println!("{block}");
+			}
+			if let Some(block) = report.render_missing_client(styles()) {
+				println!("{block}");
+			}
+			println!(
+				"wrote {} ({})",
+				analyzer_project.display_relative(&report.path),
+				count(report.queries, "query")
+			);
+			Ok(())
+		}
+		Err(GenerateError::Blocked(blocked)) => {
+			for block in blocked.render(styles()) {
+				println!("{block}");
+			}
+			bail!("{blocked}");
+		}
+		Err(GenerateError::Io(error)) => Err(error.into()),
+	}
+}
+
+/// `generate --watch`: regenerate on every change, without the full check.
+fn run_watch_generate_only(folder: &str, out: Option<PathBuf>) -> Result<()> {
+	let exclude = out_for_exclusion(folder, out.as_deref())?;
+	watch(
+		folder,
+		move |analyzer_project| {
+			if let Err(error) = run_generate(analyzer_project, out.as_deref()) {
+				println!("{error}");
+			}
+		},
+		exclude,
+	)
+}
+
+/// `watch` / `check --watch`: check on every change, and regenerate when the
+/// check passes. `generate`'s own findings are the embedded-query subset of
+/// what `check` just printed, so they are not printed twice.
+fn run_watch(folder: &str, out: Option<PathBuf>, check_only: bool) -> Result<()> {
+	let exclude = if check_only {
+		None
+	} else {
+		out_for_exclusion(folder, out.as_deref())?
+	};
+	watch(
+		folder,
+		move |analyzer_project| match run_check(analyzer_project, false) {
+			Ok(true) if !check_only => {
+				if let Err(error) = run_generate(analyzer_project, out.as_deref()) {
+					println!("{error}");
+				}
+			}
+			Ok(_) => {}
+			Err(error) => println!("{error}"),
+		},
+		exclude,
+	)
+}
+
+/// The registry path a watch must not treat as an input, or it would
+/// re-trigger itself on every write.
+fn out_for_exclusion(folder: &str, out: Option<&Path>) -> Result<Option<PathBuf>> {
+	let project = ProjectConfig::load(None)?;
+	let analyzer_project = surrealkit::analyze::analyzer_project(&project, folder)?;
+	Ok(Some(analyzer_project.registry_path(out)))
+}
+
+/// The watch loop: re-read `surrealkit.toml` before every run (an edit
+/// re-targets the analysis on the next save; a half-typed file keeps the last
+/// good configuration), and hand each run to `run` with a header line.
+fn watch(
+	folder: &str,
+	mut run: impl FnMut(&surrealql_analyzer::Project),
+	exclude: Option<PathBuf>,
+) -> Result<()> {
+	let load = |folder: &str| -> Result<surrealql_analyzer::Project> {
+		let project = ProjectConfig::load(None)?;
+		surrealkit::analyze::analyzer_project(&project, folder)
+	};
+	// The loader and the runner are two closures the loop calls in turn, and
+	// both need the current project: the loader replaces it, the runner reads
+	// it. A `RefCell` lets each hold a shared borrow of the cell.
+	let current = std::cell::RefCell::new(load(folder)?);
+	let extra_inputs: Vec<PathBuf> = surrealkit::analyze::config_path()?.into_iter().collect();
+
+	println!("watching {} — Ctrl-C to stop", current.borrow().root().display());
+	surrealql_analyzer::watch_loop(
+		|| {
+			match load(folder) {
+				Ok(project) => *current.borrow_mut() = project,
+				Err(error) => println!("{CONFIG_RELOAD_FAILED}: {error}"),
+			}
+			current.borrow().clone()
+		},
+		&extra_inputs,
+		exclude.as_deref(),
+		|run_info| {
+			println!();
+			println!("run {} · {}", run_info.index, run_info.reason);
+			run(&current.borrow());
+			let _ = std::io::stdout().flush();
+		},
+	)
+	.map_err(|error| anyhow::anyhow!("watch: {error}"))
+}
+
+const CONFIG_RELOAD_FAILED: &str =
+	"surrealkit.toml did not reload; keeping the previous configuration";
 
 #[cfg(test)]
 mod selection_tests {

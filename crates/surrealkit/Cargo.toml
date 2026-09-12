@@ -26,6 +26,10 @@ rust_dotenv = '0.1.2'
 sha2 = '0.10'
 surrealdb = { workspace = true }
 surrealdb-types = { workspace = true }
+# Static analysis of the project's SurrealQL (`check`, `generate`, `watch`).
+# A git dependency until the library-only analyzer is released; switch to
+# `version = "0.6"` then. The analyzer is a library: SurrealKit is its CLI.
+surrealql-analyzer = { git = "https://github.com/surrealdb/analyzer", branch = "analyzer-library" }
 time = { version = '0.3', features = ['macros', 'formatting'] }
 tokio = { version = '1.47', features = ['macros', 'rt-multi-thread', 'signal', 'time'] }
 walkdir = { workspace = true }
