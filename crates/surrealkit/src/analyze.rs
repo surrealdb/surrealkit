@@ -22,12 +22,15 @@
 //! out = "src/lib/db.generated.ts"
 //! # Extra directories to skip (target/, node_modules/ and .git/ always are).
 //! ignore = ["dist/**"]
-//! strict = false
 //! warnings_as_errors = false
 //! [analyze.lints]
 //! "7xxx" = "warn"
 //! E1002 = "allow"
 //! ```
+//!
+//! There is deliberately no `strict` key: the analyzer parses one but no check
+//! reads it yet, and a key that silently does nothing is worse than a key that
+//! does not exist. `deny_unknown_fields` makes adding it later additive.
 //!
 //! Everything past [`AnalyzeConfig`] needs the analyzer itself, and so lives
 //! behind the `analyze` feature (on by default, and implied by `cli`). The
@@ -63,9 +66,6 @@ pub struct AnalyzeConfig {
 	/// it lacks, syntax it removed. Unset means the latest release, under
 	/// which no version-gated finding fires.
 	pub surrealdb_version: Option<String>,
-	/// Tighten otherwise-advisory checks.
-	#[serde(default)]
-	pub strict: bool,
 	/// Report every warning as an error (a CI gate).
 	#[serde(default)]
 	pub warnings_as_errors: bool,
@@ -135,14 +135,21 @@ mod analyzing {
 		Ok(Some(project_root()?.join(out)))
 	}
 
-	/// The schema modules an analysis covers, given the names from `--schema`.
+	/// The schema modules whose directories an analysis treats as schema,
+	/// given the names from `--schema`.
 	///
 	/// Empty means every declared module — or the default module, in the
 	/// pre-1.0 layout — which is the rule the database commands follow. A
-	/// named module pulls in what it depends on: analyzing `billing` without
-	/// the `core` tables it references would report every one of them as
-	/// undefined.
-	pub fn selected_modules(project: &ProjectConfig, selected: &[String]) -> Result<Vec<Module>> {
+	/// named module pulls in what it depends on, as `--schema` does everywhere
+	/// else, unless `no_deps` says otherwise.
+	///
+	/// This chooses which directories count as *schema*, not which files are
+	/// read: see [`workspace_config`].
+	pub fn selected_modules(
+		project: &ProjectConfig,
+		selected: &[String],
+		no_deps: bool,
+	) -> Result<Vec<Module>> {
 		let declared: Vec<String> = project.schema.keys().cloned().collect();
 		let wanted: Vec<String> = if selected.is_empty() {
 			if declared.is_empty() {
@@ -163,7 +170,13 @@ mod analyzing {
 					);
 				}
 			}
-			project.module_order(selected)?
+			if no_deps {
+				let mut only = selected.to_vec();
+				only.sort();
+				only
+			} else {
+				project.module_order(selected)?
+			}
 		};
 		wanted
 			.into_iter()
@@ -177,6 +190,12 @@ mod analyzing {
 	///
 	/// Built as the analyzer's own TOML and parsed by it, so lint levels, family
 	/// wildcards and version strings are read by exactly one parser.
+	///
+	/// The globs decide which of the discovered files are read *as schema*, and
+	/// so are analyzed before the queries that reference them. They do not
+	/// scope the analysis: the analyzer walks the whole project root, the
+	/// catalog it builds is global, and a `DEFINE` in a file that matched no
+	/// schema glob still reaches it.
 	pub fn workspace_config(
 		project: &ProjectConfig,
 		folder: &str,
@@ -184,6 +203,7 @@ mod analyzing {
 		modules: &[Module],
 	) -> Result<WorkspaceConfig> {
 		let mut schema_globs = Vec::new();
+		let mut schema_prefixes = Vec::new();
 		for module in modules {
 			let dir = project.layout_for(folder, module).schema_dir();
 			let prefix = glob_prefix(root, &dir, module.name())?;
@@ -196,20 +216,21 @@ mod analyzing {
 			};
 			schema_globs.push(format!("{base}**/*.surql"));
 			schema_globs.push(format!("{base}**/*.surrealql"));
+			schema_prefixes.push((module.name().to_string(), prefix));
 		}
 
 		let analyze = &project.analyze;
 		let mut ignore =
 			vec!["target/**".to_string(), "node_modules/**".to_string(), ".git/**".to_string()];
 		ignore.extend(analyze.ignore.iter().cloned());
+		reject_ignored_schema_dir(&analyze.ignore, &schema_prefixes)?;
 
 		let mut toml = String::new();
 		toml.push_str("[sources]\n");
 		toml.push_str(&format!("schema = {}\n", toml_array(&schema_globs)));
 		toml.push_str(&format!("ignore = {}\n", toml_array(&ignore)));
-		toml.push_str("\n[analysis]\n");
-		toml.push_str(&format!("strict = {}\n", analyze.strict));
 		if let Some(version) = &analyze.surrealdb_version {
+			toml.push_str("\n[analysis]\n");
 			toml.push_str(&format!("surrealdb_version = {}\n", toml_string(version)));
 		}
 		toml.push_str("\n[diagnostics]\n");
@@ -223,8 +244,25 @@ mod analyzing {
 			toml.push_str(&format!("{} = {}\n", toml_string(code), toml_string(level)));
 		}
 
-		WorkspaceConfig::from_toml_str(&toml)
-			.map_err(|error| anyhow::anyhow!("[analyze] in {CONFIG_FILE_NAME}: {error}"))
+		let config = WorkspaceConfig::from_toml_str(&toml)
+			.map_err(|error| anyhow::anyhow!("[analyze] in {CONFIG_FILE_NAME}: {error}"))?;
+
+		// The analyzer reads an unparsable version as "unset", which means
+		// "the latest release" and fires no version-gated check at all. A
+		// typo would therefore turn off exactly the checks it was written to
+		// turn on, and say nothing.
+		if let Some(version) = &analyze.surrealdb_version
+			&& !version.trim().is_empty()
+			&& config.analysis.target_version().is_none()
+		{
+			bail!(
+				"[analyze] surrealdb_version = {version:?} in {CONFIG_FILE_NAME} is not a \
+				 release: write a major (\"3\"), a major and minor (\"3.2\"), or all three \
+				 (\"3.2.3\"). Remove the key to analyze against the latest release."
+			);
+		}
+
+		Ok(config)
 	}
 
 	/// The analyzer's view of this project: rooted at [`project_root`], configured
@@ -234,22 +272,65 @@ mod analyzing {
 		project: &ProjectConfig,
 		folder: &str,
 		selected: &[String],
+		no_deps: bool,
 	) -> Result<Project> {
 		let root = project_root()?;
-		let modules = selected_modules(project, selected)?;
+		let modules = selected_modules(project, selected, no_deps)?;
 		let config = workspace_config(project, folder, &root, &modules)?;
 		Ok(Project::new(root, config))
+	}
+
+	/// The schema directories an analysis treats as schema, relative to the
+	/// root — what the "no sources found" warning shows so the reader can see
+	/// where it looked.
+	pub fn schema_dirs(project: &ProjectConfig, folder: &str, modules: &[Module]) -> Vec<String> {
+		modules
+			.iter()
+			.map(|module| {
+				let dir = project.layout_for(folder, module).schema_dir();
+				dir.display().to_string()
+			})
+			.collect()
+	}
+
+	/// An ignore pattern that would swallow a schema directory, rejected.
+	///
+	/// `ignore` entries are directory names matched against every component of
+	/// a path, so `ignore = ["schema"]` — or `["database"]` — skips every
+	/// module's schema directory. The walk then finds no definitions, and the
+	/// run reports every table in the project as undefined: hundreds of
+	/// findings, none of them real, and nothing pointing at the one line that
+	/// caused it.
+	fn reject_ignored_schema_dir(
+		ignore: &[String],
+		schema_prefixes: &[(String, String)],
+	) -> Result<()> {
+		for pattern in ignore {
+			let name = pattern.strip_suffix("/**").unwrap_or(pattern);
+			for (module, prefix) in schema_prefixes {
+				if prefix.split('/').any(|component| component == name) {
+					bail!(
+						"[analyze] ignore = [… {pattern:?} …] in {CONFIG_FILE_NAME} would skip \
+						 the schema directory of module {module:?} (`{prefix}`), leaving the \
+						 analysis with no definitions at all. Ignore entries are directory \
+						 names matched anywhere in the tree, so this one is broader than it \
+						 looks."
+					);
+				}
+			}
+		}
+		Ok(())
 	}
 
 	/// `dir` as a forward-slash glob prefix relative to `root`, with `.` and
 	/// `..` resolved first so `./database/schema` matches the
 	/// `database/schema/x.surql` the analyzer discovers.
 	///
-	/// The analyzer walks only `root` and matches its globs against paths
-	/// relative to it, so a directory outside `root` can be neither expressed
-	/// as a glob nor reached by the walk. Saying so is the point of the error:
-	/// the alternative is a glob that matches nothing, and an analysis that
-	/// reports every table in the project as undefined.
+	/// A directory outside `root` is an error because the analyzer's walk
+	/// never leaves `root`: files under such a directory are not discovered at
+	/// all, so no glob — however spelled — could bring them in. The
+	/// alternative to the error is an analysis running against an empty
+	/// schema, reporting every table in the project as undefined.
 	fn glob_prefix(root: &Path, dir: &Path, module: &str) -> Result<String> {
 		let absolute = if dir.is_absolute() {
 			dir.to_path_buf()
@@ -334,11 +415,14 @@ mod analyzing {
 		}
 
 		fn config_for(raw: &str, selected: &[&str]) -> WorkspaceConfig {
+			try_config_for(raw, selected, false).expect("analyzer config builds")
+		}
+
+		fn try_config_for(raw: &str, selected: &[&str], no_deps: bool) -> Result<WorkspaceConfig> {
 			let project = ProjectConfig::parse(raw).expect("config parses");
 			let selected: Vec<String> = selected.iter().map(|s| (*s).to_string()).collect();
-			let modules = selected_modules(&project, &selected).expect("modules resolve");
+			let modules = selected_modules(&project, &selected, no_deps)?;
 			workspace_config(&project, "./database", Path::new("/proj"), &modules)
-				.expect("analyzer config builds")
 		}
 
 		#[test]
@@ -391,7 +475,7 @@ mod analyzing {
 		#[test]
 		fn an_unknown_selected_module_names_the_declared_ones() {
 			let project = ProjectConfig::parse("[schema.core]\n").expect("config parses");
-			let error = selected_modules(&project, &["nope".to_string()])
+			let error = selected_modules(&project, &["nope".to_string()], false)
 				.expect_err("an undeclared module is an error");
 			let message = format!("{error:#}");
 			assert!(message.contains("unknown schema module \"nope\""), "{message}");
@@ -405,7 +489,7 @@ mod analyzing {
 			// analyze the project against an empty schema and report every
 			// table as undefined.
 			let project = ProjectConfig::parse("").expect("config parses");
-			let modules = selected_modules(&project, &[]).expect("modules resolve");
+			let modules = selected_modules(&project, &[], false).expect("modules resolve");
 			let error = workspace_config(&project, "../shared", Path::new("/proj"), &modules)
 				.expect_err("a schema directory outside the root is an error");
 			let message = format!("{error:#}");
@@ -416,13 +500,75 @@ mod analyzing {
 		#[test]
 		fn an_absolute_schema_directory_under_the_root_is_relative_to_it() {
 			let project = ProjectConfig::parse("").expect("config parses");
-			let modules = selected_modules(&project, &[]).expect("modules resolve");
+			let modules = selected_modules(&project, &[], false).expect("modules resolve");
 			let cfg = workspace_config(&project, "/proj/database", Path::new("/proj"), &modules)
 				.expect("analyzer config builds");
 			assert_eq!(
 				cfg.sources.schema,
 				vec!["database/schema/**/*.surql", "database/schema/**/*.surrealql"]
 			);
+		}
+
+		#[test]
+		fn no_deps_leaves_a_dependency_out() {
+			let cfg = try_config_for(
+				"[schema.core]\n[schema.billing]\ndepends_on = [\"core\"]\n",
+				&["billing"],
+				true,
+			)
+			.expect("analyzer config builds");
+			assert!(
+				!cfg.sources
+					.schema
+					.contains(&"database/modules/core/schema/**/*.surql".to_string()),
+				"--no-deps must not pull core in: {:?}",
+				cfg.sources.schema
+			);
+		}
+
+		#[test]
+		fn an_ignore_pattern_that_would_swallow_a_schema_dir_is_rejected() {
+			// `ignore = ["schema"]` skips every module's schema directory, and
+			// the run then reports every table in the project as undefined --
+			// hundreds of findings with nothing pointing at the cause.
+			for pattern in ["schema", "schema/**", "database"] {
+				let raw = format!("[analyze]\nignore = [\"{pattern}\"]\n");
+				let error = try_config_for(&raw, &[], false)
+					.expect_err("an ignore that blanks the schema is an error");
+				let message = format!("{error:#}");
+				assert!(message.contains("schema directory"), "{pattern}: {message}");
+				assert!(message.contains(pattern), "{pattern}: {message}");
+			}
+			// A directory that is not on the schema path stays allowed.
+			try_config_for("[analyze]\nignore = [\"dist/**\"]\n", &[], false)
+				.expect("an unrelated ignore is fine");
+		}
+
+		#[test]
+		fn a_malformed_surrealdb_version_is_rejected_rather_than_read_as_latest() {
+			// The analyzer treats an unparsable version as unset, which means
+			// "latest" and fires no version-gated check -- so a typo turns off
+			// exactly the checks the key was added to turn on.
+			for version in ["3.x", "latest", "v3.2.1.4", "three"] {
+				let raw = format!("[analyze]\nsurrealdb_version = \"{version}\"\n");
+				let error =
+					try_config_for(&raw, &[], false).expect_err("a malformed version is an error");
+				let message = format!("{error:#}");
+				assert!(message.contains("is not a release"), "{version}: {message}");
+			}
+			for version in ["3", "3.2", "3.2.3", "v3.2"] {
+				let raw = format!("[analyze]\nsurrealdb_version = \"{version}\"\n");
+				try_config_for(&raw, &[], false)
+					.unwrap_or_else(|error| panic!("{version} is a release: {error:#}"));
+			}
+		}
+
+		#[test]
+		fn there_is_no_strict_key_to_set() {
+			// The analyzer parses `[analysis] strict` but no check reads it, so
+			// accepting the key here would mean accepting a setting that does
+			// nothing. `deny_unknown_fields` makes adding it later additive.
+			assert!(ProjectConfig::parse("[analyze]\nstrict = true\n").is_err());
 		}
 
 		#[test]
@@ -437,9 +583,8 @@ mod analyzing {
 		#[test]
 		fn analyze_section_maps_onto_the_analyzer_config() {
 			let cfg = config(
-				"[analyze]\nsurrealdb_version = \"3.2\"\nstrict = true\nwarnings_as_errors = true\nignore = [\"dist/**\"]\n[analyze.lints]\n\"7xxx\" = \"allow\"\nE1002 = \"warn\"\n",
+				"[analyze]\nsurrealdb_version = \"3.2\"\nwarnings_as_errors = true\nignore = [\"dist/**\"]\n[analyze.lints]\n\"7xxx\" = \"allow\"\nE1002 = \"warn\"\n",
 			);
-			assert!(cfg.analysis.strict);
 			assert!(cfg.diagnostics.warnings_as_errors);
 			assert_eq!(
 				cfg.analysis.target_version().map(|v| v.to_string()),

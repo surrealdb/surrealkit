@@ -387,11 +387,24 @@ tables and fields, kind mismatches, bad graph traversals, comparisons that can
 never be true, clauses the engine accepts and then ignores.
 
 ```bash
-surrealkit check                   # rustc-style findings; exit 1 on any error
-surrealkit check --json            # { summary, diagnostics[] } for CI and tooling
+surrealkit check                   # rustc-style findings on stderr; exit 1 on any error
+surrealkit check --json            # { summary, diagnostics[] } on stdout, for CI and tooling
 surrealkit generate --out src/lib/db.generated.ts   # typed client for the embedded queries
 surrealkit watch                   # check, then regenerate, on every save
 ```
+
+Findings and the summary go to stderr, the way `rustc` and `tsc` report them,
+so `surrealkit check > log.txt` cannot be what hides an error. `--json` is the
+exception: it is the product of the run, and goes to stdout alone, so
+`surrealkit check --json | jq` reads one document and nothing else. In that
+document `source` is the file relative to the project root, and `range` is a
+pair of byte offsets into that file.
+
+The analysis always covers the whole project. `-s/--schema` picks which
+directories are read *as schema* — and so are analyzed before the queries that
+reference them — but every `.surql` and host file under the project root is
+read either way, and a finding is reported wherever it lands. `--target` and
+`--all` do not apply and are reported as ignored.
 
 Configure it in `surrealkit.toml`. The schema directories come from the module
 layout, so nothing is written down twice:
@@ -408,9 +421,10 @@ out = "src/lib/db.generated.ts"
 # Extra directories to skip; target/, node_modules/ and .git/ always are.
 # Each entry is a directory NAME, matched against every path component -- not
 # a glob. `dist` and `dist/**` are the same pattern; `src/generated/**` and
-# `*.gen.ts` match nothing.
+# `*.gen.ts` match nothing, and a pattern that would swallow a module's schema
+# directory (`"schema"`, `"database"`) is rejected rather than silently
+# emptying the analysis.
 ignore = ["dist/**"]
-strict = false
 warnings_as_errors = false          # a CI gate
 
 [analyze.lints]                     # "allow" | "warn" | "deny", by code or family

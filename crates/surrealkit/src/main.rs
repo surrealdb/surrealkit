@@ -228,6 +228,11 @@ enum AnalyzeCommands {
 	/// Statically check the project's SurrealQL — schema files, query files and
 	/// the queries embedded in host code — against the schema. No database is
 	/// contacted. Exits non-zero when any finding survives as an error.
+	///
+	/// Always covers the whole project: `-s/--schema` picks which directories
+	/// are read as schema (and so are analyzed first), but every `.surql` and
+	/// host file under the project root is read either way, and findings are
+	/// reported wherever they land.
 	Check {
 		/// Emit one machine-readable JSON document (`{ summary, diagnostics[] }`)
 		/// instead of rustc-style text.
@@ -266,6 +271,24 @@ enum AnalyzeCommands {
 		#[arg(long)]
 		check_only: bool,
 	},
+}
+
+impl AnalyzeCommands {
+	/// The name the command was spelled with, for messages about flags that do
+	/// not apply to it.
+	fn name(&self) -> &'static str {
+		match self {
+			Self::Check {
+				..
+			} => "check",
+			Self::Generate {
+				..
+			} => "generate",
+			Self::Watch {
+				..
+			} => "watch",
+		}
+	}
 }
 
 /// Rollout subcommands.
@@ -573,8 +596,21 @@ fn init_logging(verbose: bool) {
 
 /// Load `.env` / `.env.local` from the current working directory when present.
 fn load_env() -> Option<DotEnv> {
-	let has_env =
-		std::path::Path::new(".env").exists() || std::path::Path::new(".env.local").exists();
+	load_env_from(Path::new("."))
+}
+
+/// Load `.env` / `.env.local`, deciding on the one in `dir`.
+///
+/// The loader already walks up from the working directory to find the file; it
+/// is only this existence check that decides whether to consult it at all.
+/// Anchoring the check at the project root is what makes the analyze commands
+/// read the same `.env` — and so resolve `SURREALDB_FOLDER` to the same
+/// directory — from a subdirectory as from the root. The database commands
+/// keep the working directory: that is where their `.env` has always been
+/// looked for, and which database to connect to is not a project-wide fact the
+/// way the folder to analyze is.
+fn load_env_from(dir: &Path) -> Option<DotEnv> {
+	let has_env = dir.join(".env").exists() || dir.join(".env.local").exists();
 	if has_env {
 		Some(DotEnv::new(""))
 	} else {
@@ -618,9 +654,16 @@ async fn main() -> Result<()> {
 	// not be stopped by a password it never uses.
 	let command = match args.command {
 		Commands::Analyze(command) => {
+			warn_unused_target_selection(command.name(), !args.target.is_empty() || args.all);
+			// The analysis is rooted at the directory holding surrealkit.toml,
+			// so the `.env` that names the folder to analyze is the one beside
+			// it -- not whichever directory the command happened to be run in.
+			let env = surrealkit::analyze::project_root()
+				.ok()
+				.map_or_else(|| env.clone(), |root| load_env_from(&root));
 			let folder = DbCfg::resolve_folder(env.as_ref(), &overrides);
 			let project = ProjectConfig::load(None)?;
-			run_analyze(command, &project, &folder, &args.schema)?;
+			run_analyze(command, &project, &folder, &args.schema, args.no_deps)?;
 			let _ = std::io::stdout().flush();
 			let _ = std::io::stderr().flush();
 			std::process::exit(0);
@@ -998,24 +1041,33 @@ fn run_analyze(
 	project: &ProjectConfig,
 	folder: &str,
 	selected: &[String],
+	no_deps: bool,
 ) -> Result<()> {
+	// Built once and reused: discovery, the module resolution and the glob
+	// construction are the same work for every phase of one invocation, and a
+	// second build could disagree with the first if the config changed under it.
+	let analyzer_project =
+		surrealkit::analyze::analyzer_project(project, folder, selected, no_deps)?;
+	let modules = surrealkit::analyze::selected_modules(project, selected, no_deps)?;
+	let schema_dirs = surrealkit::analyze::schema_dirs(project, folder, &modules);
 	// `--out` is typed at a shell, so it is relative to the working directory;
 	// `[analyze] out` is written in the config file, so it is relative to the
 	// project root and names the same file from every directory.
 	let configured_out = || surrealkit::analyze::configured_out(project);
+	let target = AnalysisTarget {
+		folder,
+		selected,
+		no_deps,
+	};
 	match command {
 		AnalyzeCommands::Check {
 			json,
 			watch,
 		} => {
 			if watch {
-				run_watch(folder, selected, None, true)?;
-			} else {
-				let analyzer_project =
-					surrealkit::analyze::analyzer_project(project, folder, selected)?;
-				if !run_check(&analyzer_project, json)? {
-					bail!("check failed");
-				}
+				run_watch(analyzer_project, target, &schema_dirs, None, true)?;
+			} else if !run_check(&analyzer_project, json, &schema_dirs)? {
+				bail!("check failed");
 			}
 		}
 		AnalyzeCommands::Generate {
@@ -1027,10 +1079,8 @@ fn run_analyze(
 				None => configured_out()?,
 			};
 			if watch {
-				run_watch_generate_only(folder, selected, out)?;
+				run_watch_generate_only(analyzer_project, target, out)?;
 			} else {
-				let analyzer_project =
-					surrealkit::analyze::analyzer_project(project, folder, selected)?;
 				run_generate(&analyzer_project, out.as_deref())?;
 			}
 		}
@@ -1042,7 +1092,7 @@ fn run_analyze(
 				Some(out) => Some(out),
 				None => configured_out()?,
 			};
-			run_watch(folder, selected, out, check_only)?;
+			run_watch(analyzer_project, target, &schema_dirs, out, check_only)?;
 		}
 	}
 	Ok(())
@@ -1051,26 +1101,60 @@ fn run_analyze(
 /// One `check` over the project. Prints every surviving finding and the
 /// summary; returns whether the run is clean. `json` prints the analyzer's
 /// stable document instead of text.
-fn run_check(analyzer_project: &surrealql_analyzer::Project, json: bool) -> Result<bool> {
+///
+/// Findings and the summary go to **stderr**, as rustc's do: `check > out.txt`
+/// is a reasonable thing to type, and it must not be what hides the errors.
+/// `--json` is the exception — it is the machine-readable product of the run,
+/// so it goes to stdout, alone.
+fn run_check(
+	analyzer_project: &surrealql_analyzer::Project,
+	json: bool,
+	schema_dirs: &[String],
+) -> Result<bool> {
 	let started = Instant::now();
 	let report = surrealql_analyzer::check(analyzer_project)?;
+	warn_if_no_sources(analyzer_project, report.summary.sources_checked, schema_dirs);
 	if json {
 		println!("{}", report.to_json()?);
 		return Ok(report.passed());
 	}
 	for block in report.render(styles()) {
-		println!("{block}");
+		eprintln!("{block}");
 	}
 	let summary = &report.summary;
 	let warnings = summary.diagnostics.saturating_sub(summary.errors);
-	println!(
-		"checked {} in {:?}: {}, {}",
+	eprintln!(
+		"checked {} in {}ms: {}, {}",
 		count(summary.sources_checked, "source"),
-		started.elapsed(),
+		started.elapsed().as_millis(),
 		count(summary.errors, "error"),
 		count(warnings, "warning"),
 	);
 	Ok(report.passed())
+}
+
+/// A run that read nothing is almost always a misconfiguration — the wrong
+/// `--folder`, or an `[analyze] ignore` broader than it looks — and it exits
+/// 0, which in CI reads as "checked, all clear". Say so; do not fail, because
+/// a project that genuinely has no SurrealQL yet is a legitimate state.
+fn warn_if_no_sources(
+	analyzer_project: &surrealql_analyzer::Project,
+	sources_checked: usize,
+	schema_dirs: &[String],
+) {
+	if sources_checked > 0 {
+		return;
+	}
+	eprintln!(
+		"warning: no SurrealQL sources found under {} (schema: {}); \
+		 check --folder and [analyze] ignore",
+		analyzer_project.root().display(),
+		if schema_dirs.is_empty() {
+			"none".to_string()
+		} else {
+			schema_dirs.join(", ")
+		}
+	);
 }
 
 /// One `generate` over the project. A blocked run prints the embedded
@@ -1081,11 +1165,13 @@ fn run_generate(analyzer_project: &surrealql_analyzer::Project, out: Option<&Pat
 	match surrealql_analyzer::generate(analyzer_project, out) {
 		Ok(report) => {
 			for block in report.render_warnings(styles()) {
-				println!("{block}");
+				eprintln!("{block}");
 			}
 			if let Some(block) = report.render_missing_client(styles()) {
-				println!("{block}");
+				eprintln!("{block}");
 			}
+			// The one line that reports a *product* rather than a finding, so
+			// the one line that belongs on stdout.
 			println!(
 				"wrote {} ({})",
 				analyzer_project.display_relative(&report.path),
@@ -1095,7 +1181,7 @@ fn run_generate(analyzer_project: &surrealql_analyzer::Project, out: Option<&Pat
 		}
 		Err(GenerateError::Blocked(blocked)) => {
 			for block in blocked.render(styles()) {
-				println!("{block}");
+				eprintln!("{block}");
 			}
 			bail!("{blocked}");
 		}
@@ -1103,12 +1189,26 @@ fn run_generate(analyzer_project: &surrealql_analyzer::Project, out: Option<&Pat
 	}
 }
 
+/// What a watch needs in order to rebuild its view of the project after every
+/// change. The config is re-read each time; these are fixed for the process,
+/// because they come from the command line.
+#[derive(Clone, Copy)]
+struct AnalysisTarget<'a> {
+	folder: &'a str,
+	selected: &'a [String],
+	no_deps: bool,
+}
+
 /// `generate --watch`: regenerate on every change, without the full check.
-fn run_watch_generate_only(folder: &str, selected: &[String], out: Option<PathBuf>) -> Result<()> {
-	let exclude = out_for_exclusion(folder, selected, out.as_deref())?;
+fn run_watch_generate_only(
+	analyzer_project: surrealql_analyzer::Project,
+	target: AnalysisTarget<'_>,
+	out: Option<PathBuf>,
+) -> Result<()> {
+	let exclude = out_for_exclusion(&analyzer_project, out.as_deref())?;
 	watch(
-		folder,
-		selected,
+		analyzer_project,
+		target,
 		move |analyzer_project| {
 			if let Err(error) = run_generate(analyzer_project, out.as_deref()) {
 				eprintln!("{error:#}");
@@ -1122,20 +1222,22 @@ fn run_watch_generate_only(folder: &str, selected: &[String], out: Option<PathBu
 /// check passes. `generate`'s own findings are the embedded-query subset of
 /// what `check` just printed, so they are not printed twice.
 fn run_watch(
-	folder: &str,
-	selected: &[String],
+	analyzer_project: surrealql_analyzer::Project,
+	target: AnalysisTarget<'_>,
+	schema_dirs: &[String],
 	out: Option<PathBuf>,
 	check_only: bool,
 ) -> Result<()> {
 	let exclude = if check_only {
 		None
 	} else {
-		out_for_exclusion(folder, selected, out.as_deref())?
+		out_for_exclusion(&analyzer_project, out.as_deref())?
 	};
+	let schema_dirs = schema_dirs.to_vec();
 	watch(
-		folder,
-		selected,
-		move |analyzer_project| match run_check(analyzer_project, false) {
+		analyzer_project,
+		target,
+		move |analyzer_project| match run_check(analyzer_project, false, &schema_dirs) {
 			Ok(true) if !check_only => {
 				if let Err(error) = run_generate(analyzer_project, out.as_deref()) {
 					eprintln!("{error:#}");
@@ -1150,33 +1252,46 @@ fn run_watch(
 
 /// The registry path a watch must not treat as an input, or it would
 /// re-trigger itself on every write.
+///
+/// The directory is created here, before the first run: the watcher resolves
+/// this path through the filesystem to get the spelling it will report, and a
+/// directory that does not exist yet cannot be resolved. `generate` would
+/// create it a moment later anyway — doing it first is what makes the
+/// exclusion and the write agree on the first run rather than the second.
 fn out_for_exclusion(
-	folder: &str,
-	selected: &[String],
+	analyzer_project: &surrealql_analyzer::Project,
 	out: Option<&Path>,
 ) -> Result<Option<PathBuf>> {
-	let project = ProjectConfig::load(None)?;
-	let analyzer_project = surrealkit::analyze::analyzer_project(&project, folder, selected)?;
-	Ok(Some(analyzer_project.registry_path(out)))
+	let registry = analyzer_project.registry_path(out);
+	if let Some(parent) = registry.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+		std::fs::create_dir_all(parent)
+			.with_context(|| format!("creating the directory for {}", registry.display()))?;
+	}
+	Ok(Some(registry))
 }
 
 /// The watch loop: re-read `surrealkit.toml` before every run (an edit
 /// re-targets the analysis on the next save; a half-typed file keeps the last
 /// good configuration), and hand each run to `run` with a header line.
 fn watch(
-	folder: &str,
-	selected: &[String],
+	initial: surrealql_analyzer::Project,
+	target: AnalysisTarget<'_>,
 	mut run: impl FnMut(&surrealql_analyzer::Project),
 	exclude: Option<PathBuf>,
 ) -> Result<()> {
 	let load = || -> Result<surrealql_analyzer::Project> {
 		let project = ProjectConfig::load(None)?;
-		surrealkit::analyze::analyzer_project(&project, folder, selected)
+		surrealkit::analyze::analyzer_project(
+			&project,
+			target.folder,
+			target.selected,
+			target.no_deps,
+		)
 	};
 	// The loader and the runner are two closures the loop calls in turn, and
 	// both need the current project: the loader replaces it, the runner reads
 	// it. A `RefCell` lets each hold a shared borrow of the cell.
-	let current = std::cell::RefCell::new(load()?);
+	let current = std::cell::RefCell::new(initial);
 	let extra_inputs: Vec<PathBuf> = surrealkit::analyze::config_path()?.into_iter().collect();
 
 	println!("watching {} — Ctrl-C to stop", current.borrow().root().display());

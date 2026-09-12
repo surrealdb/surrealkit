@@ -3290,7 +3290,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "27c6023962132f4b30eb4c172c91ce92d933da334c59c23cddee82358ddafb0b"
 dependencies = [
  "anyhow",
- "itertools 0.13.0",
+ "itertools 0.14.0",
  "proc-macro2",
  "quote",
  "syn 2.0.106",
@@ -4783,7 +4783,7 @@ dependencies = [
 [[package]]
 name = "surrealql-analyzer"
 version = "0.5.3"
-source = "git+https://github.com/surrealdb/analyzer?branch=analyzer-library#82975d450d234a71aca2f2ad859bdcb7f978b598"
+source = "git+https://github.com/surrealdb/analyzer?branch=analyzer-library#82dd20826b6da88df5657c0afdd4f1db6d313215"
 dependencies = [
  "glob",
  "notify-debouncer-full",
@@ -4800,7 +4800,7 @@ dependencies = [
 [[package]]
 name = "surrealql-analyzer-codegen"
 version = "0.5.3"
-source = "git+https://github.com/surrealdb/analyzer?branch=analyzer-library#82975d450d234a71aca2f2ad859bdcb7f978b598"
+source = "git+https://github.com/surrealdb/analyzer?branch=analyzer-library#82dd20826b6da88df5657c0afdd4f1db6d313215"
 dependencies = [
  "surrealdb-types",
  "surrealql-analyzer-workspace",
@@ -4809,7 +4809,7 @@ dependencies = [
 [[package]]
 name = "surrealql-analyzer-diagnostics"
 version = "0.5.3"
-source = "git+https://github.com/surrealdb/analyzer?branch=analyzer-library#82975d450d234a71aca2f2ad859bdcb7f978b598"
+source = "git+https://github.com/surrealdb/analyzer?branch=analyzer-library#82dd20826b6da88df5657c0afdd4f1db6d313215"
 dependencies = [
  "serde",
  "surrealql-analyzer-syntax",
@@ -4818,7 +4818,7 @@ dependencies = [
 [[package]]
 name = "surrealql-analyzer-embed"
 version = "0.5.3"
-source = "git+https://github.com/surrealdb/analyzer?branch=analyzer-library#82975d450d234a71aca2f2ad859bdcb7f978b598"
+source = "git+https://github.com/surrealdb/analyzer?branch=analyzer-library#82dd20826b6da88df5657c0afdd4f1db6d313215"
 dependencies = [
  "tree-sitter",
  "tree-sitter-svelte-ng",
@@ -4828,7 +4828,7 @@ dependencies = [
 [[package]]
 name = "surrealql-analyzer-syntax"
 version = "0.5.3"
-source = "git+https://github.com/surrealdb/analyzer?branch=analyzer-library#82975d450d234a71aca2f2ad859bdcb7f978b598"
+source = "git+https://github.com/surrealdb/analyzer?branch=analyzer-library#82dd20826b6da88df5657c0afdd4f1db6d313215"
 dependencies = [
  "serde",
  "surrealql-analyzer-tree-sitter-surrealql",
@@ -4838,7 +4838,7 @@ dependencies = [
 [[package]]
 name = "surrealql-analyzer-tree-sitter-surrealql"
 version = "0.5.3"
-source = "git+https://github.com/surrealdb/analyzer?branch=analyzer-library#82975d450d234a71aca2f2ad859bdcb7f978b598"
+source = "git+https://github.com/surrealdb/analyzer?branch=analyzer-library#82dd20826b6da88df5657c0afdd4f1db6d313215"
 dependencies = [
  "cc",
  "tree-sitter-language",
@@ -4847,7 +4847,7 @@ dependencies = [
 [[package]]
 name = "surrealql-analyzer-workspace"
 version = "0.5.3"
-source = "git+https://github.com/surrealdb/analyzer?branch=analyzer-library#82975d450d234a71aca2f2ad859bdcb7f978b598"
+source = "git+https://github.com/surrealdb/analyzer?branch=analyzer-library#82dd20826b6da88df5657c0afdd4f1db6d313215"
 dependencies = [
  "serde",
  "surrealdb-types",
@@ -5825,7 +5825,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.0",
 ]
 
 [[package]]

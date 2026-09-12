@@ -22,11 +22,11 @@ fn write_project(root: &Path, query: &str, config: &str) {
 
 /// Run the CLI against `root` with a *clean* environment.
 ///
-/// `env_clear` is the point of this helper. These commands read
-/// `SURREALDB_FOLDER` and reject a leftover `DATABASE_*` variable, so a
-/// developer with either one exported would watch every test in this file
-/// fail for a reason that has nothing to do with the analyzer. The binary is
-/// invoked by absolute path and spawns nothing, so it needs no `PATH`.
+/// `env_clear` is the point of this helper: these commands resolve the
+/// database folder from `SURREALDB_FOLDER`, so a developer with one exported
+/// would watch these tests analyze a directory the fixture never wrote. The
+/// binary is invoked by absolute path and spawns nothing, so it needs no
+/// `PATH`.
 fn surrealkit(root: &Path, args: &[&str]) -> std::process::Output {
 	Command::new(env!("CARGO_BIN_EXE_surrealkit"))
 		.current_dir(root)
@@ -60,9 +60,16 @@ fn check_passes_a_valid_project_and_the_module_layout_supplies_the_schema() {
 	write_project(dir.path(), "SELECT name FROM person", "");
 
 	let output = surrealkit(dir.path(), &["check"]);
-	let stdout = String::from_utf8_lossy(&output.stdout);
-	assert!(output.status.success(), "clean project: {stdout}");
-	assert!(stdout.contains("0 errors"), "{stdout}");
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	assert!(output.status.success(), "clean project: {stderr}");
+	// Findings and the summary go to stderr, as rustc's do, so redirecting
+	// stdout cannot hide an error.
+	assert!(stderr.contains("0 errors"), "{stderr}");
+	assert!(
+		String::from_utf8_lossy(&output.stdout).is_empty(),
+		"text mode writes nothing to stdout: {:?}",
+		String::from_utf8_lossy(&output.stdout)
+	);
 }
 
 #[test]
@@ -198,4 +205,117 @@ fn a_schema_folder_outside_the_project_root_is_named_rather_than_silently_empty(
 		!String::from_utf8_lossy(&output.stdout).contains("E1001"),
 		"it must not report the schema's tables as undefined instead"
 	);
+}
+
+#[test]
+fn json_sources_are_project_relative_for_every_kind_of_finding() {
+	// Host files reported a bare absolute path and `.surql` files a
+	// `file:///abs/...` URL, so a consumer had to know which it was holding,
+	// and two machines analyzing the same commit disagreed about every row.
+	let dir = TempDir::new().expect("tempdir");
+	write_project(dir.path(), "SELECT nope FROM person", "");
+	fs::write(dir.path().join("bad.surql"), "SELECT alsonope FROM person;\n").expect("query file");
+
+	let output = surrealkit(dir.path(), &["check", "--json"]);
+	let json: serde_json::Value =
+		serde_json::from_slice(&output.stdout).expect("stdout is the JSON document");
+	let sources: Vec<&str> = json["diagnostics"]
+		.as_array()
+		.expect("array")
+		.iter()
+		.filter_map(|d| d["source"].as_str())
+		.collect();
+	assert!(sources.contains(&"src/app.ts"), "host file: {sources:?}");
+	assert!(sources.contains(&"bad.surql"), "surql file: {sources:?}");
+	for source in &sources {
+		assert!(!source.starts_with("file://"), "no scheme: {source}");
+		assert!(!source.starts_with('/'), "no absolute path: {source}");
+	}
+}
+
+#[test]
+fn the_dotenv_beside_surrealkit_toml_decides_the_folder_from_any_directory() {
+	// `.env` was looked for in the working directory, so `SURREALDB_FOLDER` in
+	// the project's own `.env` was honoured from the root and ignored from a
+	// subdirectory -- two different analyses of one project.
+	let dir = TempDir::new().expect("tempdir");
+	write_project(dir.path(), "SELECT name FROM person", "");
+	fs::create_dir_all(dir.path().join("db/schema")).expect("db dir");
+	fs::rename(
+		dir.path().join("database/schema/001_person.surql"),
+		dir.path().join("db/schema/001_person.surql"),
+	)
+	.expect("move schema");
+	fs::write(dir.path().join(".env"), "SURREALDB_FOLDER=./db\n").expect("dotenv");
+	let nested = dir.path().join("src/nested");
+	fs::create_dir_all(&nested).expect("nested dir");
+
+	for cwd in [dir.path(), nested.as_path()] {
+		let output = surrealkit(cwd, &["check"]);
+		assert!(
+			output.status.success(),
+			"the .env-named folder must be found from {cwd:?}: {}",
+			String::from_utf8_lossy(&output.stderr)
+		);
+	}
+}
+
+#[test]
+fn flags_that_do_not_apply_are_reported_rather_than_ignored() {
+	let dir = TempDir::new().expect("tempdir");
+	write_project(
+		dir.path(),
+		"SELECT name FROM person",
+		"[target.prod]\nns = \"app\"\ndb = \"prod\"\n",
+	);
+
+	let output = surrealkit(dir.path(), &["check", "--target", "prod"]);
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	assert!(output.status.success(), "{stderr}");
+	assert!(stderr.contains("--target/--all has no effect"), "{stderr}");
+	assert!(stderr.contains("check"), "the message names the command: {stderr}");
+}
+
+#[test]
+fn an_ignore_that_would_blank_the_schema_is_refused() {
+	// `ignore` entries are directory names matched anywhere in the tree, so
+	// `"schema"` skips every module's schema directory and the run reports
+	// every table in the project as undefined.
+	let dir = TempDir::new().expect("tempdir");
+	write_project(dir.path(), "SELECT name FROM person", "[analyze]\nignore = [\"schema\"]\n");
+
+	let output = surrealkit(dir.path(), &["check"]);
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	assert!(!output.status.success(), "an ignore that blanks the schema is an error");
+	assert!(stderr.contains("schema directory"), "{stderr}");
+	assert!(!stderr.contains("E1001"), "it must not report the tables as undefined: {stderr}");
+}
+
+#[test]
+fn a_misspelled_surrealdb_version_is_refused_rather_than_read_as_latest() {
+	let dir = TempDir::new().expect("tempdir");
+	write_project(
+		dir.path(),
+		"SELECT name FROM person",
+		"[analyze]\nsurrealdb_version = \"3.x\"\n",
+	);
+
+	let output = surrealkit(dir.path(), &["check"]);
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	assert!(!output.status.success(), "a version that parses as nothing is an error");
+	assert!(stderr.contains("is not a release"), "{stderr}");
+}
+
+#[test]
+fn a_run_that_read_nothing_says_so_and_still_exits_zero() {
+	// Exit 0 on an empty run reads as "checked, all clear" in CI, which is the
+	// most expensive possible way to misconfigure `--folder`.
+	let dir = TempDir::new().expect("tempdir");
+	fs::write(dir.path().join("surrealkit.toml"), "").expect("config");
+
+	let output = surrealkit(dir.path(), &["check"]);
+	let stderr = String::from_utf8_lossy(&output.stderr);
+	assert!(output.status.success(), "an empty project is not a failure: {stderr}");
+	assert!(stderr.contains("no SurrealQL sources found"), "{stderr}");
+	assert!(stderr.contains("database/schema"), "it names where it looked: {stderr}");
 }
