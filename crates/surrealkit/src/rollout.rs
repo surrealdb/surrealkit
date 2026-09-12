@@ -734,6 +734,21 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 	Ok(())
 }
 
+/// File paths a manifest recorded, used to recover the key spelling a
+/// pre-1.0.0-beta.2 build wrote.
+fn recorded_file_paths(spec: &RolloutSpec) -> Vec<String> {
+	spec.steps
+		.iter()
+		.filter_map(|step| match &step.action {
+			RolloutAction::ApplyFiles {
+				files,
+			} => Some(files.clone()),
+			_ => None,
+		})
+		.flatten()
+		.collect()
+}
+
 #[doc(hidden)]
 pub async fn run_lint(folder: &str, opts: RolloutExecutionOpts) -> Result<()> {
 	ensure_local_state_dirs(folder)?;
@@ -745,6 +760,7 @@ pub async fn run_lint(folder: &str, opts: RolloutExecutionOpts) -> Result<()> {
 		folder,
 		&rollout.spec.target_schema_hash,
 		&rollout.spec.id,
+		&recorded_file_paths(&rollout.spec),
 	)?;
 	log::info!("Rollout {} is valid (checksum {}).", rollout.spec.id, rollout.checksum);
 	Ok(())
@@ -861,6 +877,7 @@ pub async fn run_start(
 		folder,
 		&rollout.spec.target_schema_hash,
 		&rollout.spec.id,
+		&recorded_file_paths(&rollout.spec),
 	)?;
 	let target_catalog = build_catalog_snapshot(&files, false)?;
 	let source_entities = load_managed_entities(db, &rollout.spec.module()?, Some(folder)).await?;
@@ -1974,37 +1991,37 @@ async fn with_heartbeat<T>(step_id: &str, future: impl Future<Output = T>) -> T 
 
 /// Resolve an `apply_files` step's recorded path.
 ///
-/// Recorded paths were cwd-relative before 1.0.0-beta.2, so a manifest planned
-/// from a repo root (`database/schema/a.surql`) could not find its files in a
-/// container whose folder is `/database`. Try the folder-relative spelling first,
-/// then the legacy folder-prefixed one, then the path exactly as recorded.
+/// Recorded paths were working-directory-relative before 1.0.0-beta.2, so a
+/// manifest planned inside a container carries `/database/schema/a.surql` while
+/// the file lives under whatever folder this run is configured with. Strip
+/// leading segments until the remainder resolves, longest first so the most
+/// specific match wins.
+///
+/// A candidate must keep a directory component. Every key this tool writes has
+/// one (`schema/a.surql`, `seed/a.surql`, `modules/<name>/schema/a.surql`), so a
+/// candidate that has decayed to a bare filename has been stripped too far, and
+/// accepting it could apply an unrelated top-level `.surql` instead of failing.
 fn resolve_step_file(folder: Option<&str>, recorded: &str) -> Result<PathBuf> {
 	let mut tried = Vec::new();
+
 	if let Some(folder) = folder {
 		let root = Path::new(folder);
-		let direct = root.join(recorded);
-		if direct.is_file() {
-			return Ok(direct);
-		}
-		tried.push(direct);
+		let normalised = recorded.replace('\\', "/");
 
-		// Legacy `<folder-name>/schema/...`. Only drop the leading segment when it
-		// really is the folder's name: dropping it unconditionally turns
-		// `schema/user.surql` into a probe for `<folder>/user.surql`, and a stray
-		// top-level file there would be applied instead of the step failing.
-		let folder_name = Path::new(folder.trim_end_matches('/'))
-			.file_name()
-			.and_then(|n| n.to_str())
-			.unwrap_or_default();
-		if let Some((head, rest)) = recorded.split_once('/')
-			&& !folder_name.is_empty()
-			&& head == folder_name
-		{
-			let stripped = root.join(rest);
-			if stripped.is_file() {
-				return Ok(stripped);
+		let mut candidate = normalised.trim_start_matches('/');
+		loop {
+			let joined = root.join(candidate);
+			if joined.is_file() {
+				return Ok(joined);
 			}
-			tried.push(stripped);
+			if !tried.iter().any(|p: &PathBuf| p == &joined) {
+				tried.push(joined);
+			}
+			match candidate.split_once('/') {
+				// Keep a directory component: stop before a bare filename.
+				Some((_, rest)) if rest.contains('/') => candidate = rest,
+				_ => break,
+			}
 		}
 	}
 
@@ -2012,7 +2029,9 @@ fn resolve_step_file(folder: Option<&str>, recorded: &str) -> Result<PathBuf> {
 	if as_recorded.is_file() {
 		return Ok(as_recorded);
 	}
-	tried.push(as_recorded);
+	if !tried.iter().any(|p| p == &as_recorded) {
+		tried.push(as_recorded);
+	}
 
 	bail!(
 		"apply_files step references {recorded:?}, which was not found. Tried: {}",

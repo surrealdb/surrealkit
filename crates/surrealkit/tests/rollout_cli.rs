@@ -271,3 +271,23 @@ fn a_manifest_verifies_from_a_different_working_directory() {
 	);
 	assert!(output.status.success(), "lint failed from another directory: {text}");
 }
+
+/// An `apply_files` step whose recorded path is absolute, which is what a
+/// manifest planned inside a container carries. The file exists, just not at the
+/// path the manifest names, so resolution has to strip the foreign prefix rather
+/// than give up.
+#[test]
+fn apply_files_resolves_a_path_recorded_in_another_environment() {
+	let temp = TempDir::new().expect("tempdir");
+	let root = temp.path();
+	write_project(root, "");
+	fs::write(root.join("database/schema/014_sku.surql"), "DEFINE TABLE sku SCHEMAFULL;\n")
+		.expect("schema source");
+	// A decoy at the folder root: stripping too far must not reach it.
+	fs::write(root.join("database/014_sku.surql"), "DEFINE TABLE wrong SCHEMAFULL;\n")
+		.expect("decoy");
+
+	let output = run(root, &["rollout", "lint", ROLLOUT_ID]);
+	let text = combined(&output);
+	assert!(text.contains("unable to find rollout"), "fixture sanity: {text}");
+}
