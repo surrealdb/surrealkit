@@ -8,7 +8,13 @@
 		"declarationMap": true,
 		"sourceMap": true,
 		"outDir": "dist",
-		"types": ["node"]
+		"types": [
+			"node"
+		]
 	},
-	"include": ["src/**/*.ts"]
+	"include": [
+		"src/**/*.ts",
+		"test/**/*.ts",
+		"vitest.config.ts"
+	]
 }

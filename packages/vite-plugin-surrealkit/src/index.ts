@@ -1,13 +1,17 @@
 import { spawn } from 'node:child_process';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import picomatch from 'picomatch';
-import {
-	normalizePath,
-	type Plugin,
-	type ResolvedConfig,
-	type ViteDevServer,
-} from 'vite';
+import type { Plugin, ResolvedConfig, ViteDevServer } from 'vite';
+
+// Inlined from Vite so that nothing is imported from `vite` at runtime: the
+// plugin only depends on Vite's types, never on its export surface.
+const isWindows = process.platform === 'win32';
+
+function normalizePath(id: string): string {
+	return path.posix.normalize(isWindows ? id.replace(/\\/g, '/') : id);
+}
 
 // Covers both the default module (`database/schema`) and named modules
 // (`database/modules/<name>/schema`). Override with `schemaGlobs` for a custom
@@ -158,6 +162,85 @@ function runSyncCommand(
 	});
 }
 
+/**
+ * Directories to hand to `ViteDevServer.watcher.add()` for a set of globs.
+ *
+ * Vite builds its chokidar watcher with `disableGlobbing: true`, so a glob
+ * passed to `watcher.add()` is treated as a literal path. On Vite 8 registering
+ * such a (non-existent) path suppresses change events for the real files
+ * alongside it, which silently broke schema watching. Add the globs' existing
+ * base directories instead and let `createMatcher` do the filtering.
+ */
+function watchRoots(root: string, globs: string[]): string[] {
+	const dirs = new Set<string>();
+
+	for (const glob of globs) {
+		const { base } = picomatch.scan(glob);
+		let dir = path.resolve(root, base);
+
+		// Fall back to the nearest existing ancestor, never above the root.
+		while (
+			!existsSync(dir) &&
+			dir !== root &&
+			dir.startsWith(root + path.sep)
+		) {
+			dir = path.dirname(dir);
+		}
+
+		if (existsSync(dir)) {
+			dirs.add(dir);
+		}
+	}
+
+	return [...dirs];
+}
+
+/** Cheap content fingerprint, or `undefined` if the file is unreadable. */
+function fingerprint(file: string): string | undefined {
+	try {
+		const stats = statSync(file, { bigint: true });
+		return `${stats.mtimeNs}:${stats.size}`;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Fingerprints of the schema files that already exist under `dirs`.
+ *
+ * Handing a directory to `watcher.add()` makes chokidar re-announce a tree it
+ * may already be watching, re-emitting `add` and `change` for files nobody
+ * touched. Comparing fingerprints tells those apart from real edits, which
+ * always move the mtime.
+ */
+function snapshotExisting(
+	dirs: string[],
+	matches: (filePath: string) => boolean,
+): Map<string, string> {
+	const files = new Map<string, string>();
+
+	for (const dir of dirs) {
+		let entries: string[];
+		try {
+			entries = readdirSync(dir, { recursive: true }) as string[];
+		} catch {
+			continue;
+		}
+
+		for (const entry of entries) {
+			const file = path.join(dir, entry);
+			if (!matches(file)) continue;
+
+			const print = fingerprint(file);
+			if (print !== undefined) {
+				files.set(file, print);
+			}
+		}
+	}
+
+	return files;
+}
+
 function createMatcher(
 	root: string,
 	globs: string[],
@@ -183,6 +266,8 @@ export function surrealkitPlugin(
 	let queuedReason: string | undefined;
 	let running = false;
 	let timer: NodeJS.Timeout | undefined;
+	let disposed = false;
+	let dispose: (() => void) | undefined;
 
 	const log = {
 		error: (message: string): void => {
@@ -215,7 +300,7 @@ export function surrealkitPlugin(
 	};
 
 	const runSync = async (reason: string): Promise<void> => {
-		if (!config) return;
+		if (!config || disposed) return;
 
 		if (running) {
 			queued = true;
@@ -256,7 +341,7 @@ export function surrealkitPlugin(
 						currentReason !== 'startup' &&
 						server
 					) {
-						server.ws.send({ type: 'full-reload' });
+						server.hot.send({ type: 'full-reload' });
 						log.debug('sent full-reload to browser');
 					}
 				} else {
@@ -288,6 +373,8 @@ export function surrealkitPlugin(
 	};
 
 	const scheduleSync = (reason: string): void => {
+		if (disposed) return;
+
 		if (timer) clearTimeout(timer);
 
 		timer = setTimeout(() => {
@@ -333,12 +420,13 @@ export function surrealkitPlugin(
 
 			server = devServer;
 
-			if (options.schemaGlobs.length > 0) {
-				devServer.watcher.add(
-					options.schemaGlobs.map((glob) =>
-						path.resolve(devServer.config.root, glob),
-					),
-				);
+			const dirs = watchRoots(devServer.config.root, options.schemaGlobs);
+			const known = snapshotExisting(dirs, (file) =>
+				Boolean(matchesSchemaFile?.(file)),
+			);
+
+			for (const dir of dirs) {
+				devServer.watcher.add(dir);
 			}
 
 			const onSchemaEvent =
@@ -346,6 +434,19 @@ export function surrealkitPlugin(
 				(filePath: string): void => {
 					if (!matchesSchemaFile || !matchesSchemaFile(filePath)) {
 						return;
+					}
+
+					if (event === 'unlink') {
+						known.delete(filePath);
+					} else {
+						const print = fingerprint(filePath);
+
+						// Nothing moved: this is `watcher.add()` (or Vite's
+						// own watcher) re-announcing a file, not an edit.
+						if (print !== undefined) {
+							if (known.get(filePath) === print) return;
+							known.set(filePath, print);
+						}
 					}
 
 					log.debug(
@@ -362,7 +463,12 @@ export function surrealkitPlugin(
 			devServer.watcher.on('change', onChange);
 			devServer.watcher.on('unlink', onUnlink);
 
-			devServer.httpServer?.once('close', () => {
+			// `httpServer` is null in middleware mode, so teardown hangs off the
+			// `closeBundle` hook below, which fires on close in both modes.
+			dispose = (): void => {
+				if (disposed) return;
+				disposed = true;
+
 				devServer.watcher.off('add', onAdd);
 				devServer.watcher.off('change', onChange);
 				devServer.watcher.off('unlink', onUnlink);
@@ -371,11 +477,17 @@ export function surrealkitPlugin(
 					clearTimeout(timer);
 					timer = undefined;
 				}
-			});
+			};
 
 			if (options.runOnStartup) {
 				scheduleSync('startup');
 			}
+		},
+
+		// Fires when the dev server closes, in both standalone and middleware
+		// mode, and may fire more than once - `dispose` is idempotent.
+		closeBundle() {
+			dispose?.();
 		},
 	};
 }

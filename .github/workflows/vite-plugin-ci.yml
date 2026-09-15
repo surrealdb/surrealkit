@@ -20,8 +20,13 @@ permissions:
 
 jobs:
     check:
-        name: Lint, typecheck and build
+        name: Lint, typecheck, test and build (Node ${{ matrix.node }})
         runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                # The floor declared in `engines`, plus current.
+                node: ["20.19", "24"]
         defaults:
             run:
                 working-directory: packages/vite-plugin-surrealkit
@@ -33,7 +38,7 @@ jobs:
             - name: Setup Node.js
               uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
               with:
-                  node-version: 22
+                  node-version: ${{ matrix.node }}
 
             # NOTE: the package commits a bun.lock but no package-lock.json, so
             # `npm ci` is impossible and installs here are unpinned. Matches what
@@ -47,6 +52,11 @@ jobs:
 
             - name: Typecheck
               run: npm run typecheck
+
+            # These boot real Vite dev servers and a filesystem watcher; they
+            # are what catches a Vite release breaking schema watching.
+            - name: Test
+              run: npm test
 
             - name: Build
               run: npm run build
