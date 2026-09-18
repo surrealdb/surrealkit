@@ -312,36 +312,70 @@ pub fn hash_schema_snapshot(snapshot: &SchemaSnapshot) -> Result<String> {
 	Ok(sha256_hex(&canonical))
 }
 
+/// Map a path a manifest recorded onto the canonical key it should have been
+/// written as, together with the prefix it carried.
+///
+/// `/database/schema/a.surql` against `schema/a.surql` yields
+/// `("schema/a.surql", "/database")`. A path already canonical yields an empty
+/// prefix, and so does one rooted at `/`, which is a real prefix and not an
+/// absent one.
+///
+/// Longest match wins, matching [`canonicalise_keys`]: with modules, both
+/// `schema/a.surql` and `modules/billing/schema/a.surql` are suffixes of the same
+/// legacy key, and taking the first would bind it to the wrong module and apply
+/// the wrong file.
+pub fn canonicalise_recorded_path(
+	recorded: &str,
+	canonical: &[String],
+) -> Option<(String, String)> {
+	let key = canonical
+		.iter()
+		.filter(|candidate| is_legacy_key_for(recorded, candidate))
+		.max_by_key(|candidate| candidate.len())?;
+	let prefix = recorded.strip_suffix(key.as_str())?.trim_end_matches('/').to_string();
+	Some((key.clone(), prefix))
+}
+
 /// The hashes a pre-1.0.0-beta.2 manifest could carry for this same content.
 ///
 /// `hash_schema_snapshot` includes each file's path, and paths used to be
-/// working-directory-relative. A manifest planned from a repo root recorded
-/// `database/schema/a.surql`; the same schema in a container recorded
-/// `/database/schema/a.surql`. Both hash differently from the folder-relative
-/// `schema/a.surql` used now, so `start`/`lint` would reject a perfectly valid
-/// manifest. Re-derive the legacy spellings from the configured folder and accept
-/// them, with a warning, until 1.1.0.
-pub fn legacy_schema_hashes(snapshot: &SchemaSnapshot, folder: &str) -> Result<Vec<String>> {
+/// working-directory-relative, so a manifest planned in one environment hashes
+/// differently from the same schema read in another.
+///
+/// `legacy_prefixes` are recovered from the paths the manifest itself recorded,
+/// which is the only reliable source: the spelling belongs to whichever machine
+/// ran `plan`, so a manifest planned in a container carries `/database` while the
+/// folder here is somewhere else entirely. The configured folder is tried too,
+/// for a manifest that recorded no paths to recover from.
+///
+/// Pure by design. This sits on the path that reports a hash mismatch, and an
+/// unreadable file here would replace that actionable error with an I/O one.
+#[doc(hidden)]
+pub fn legacy_schema_hashes(
+	snapshot: &SchemaSnapshot,
+	folder: &str,
+	legacy_prefixes: &[String],
+) -> Result<Vec<String>> {
 	let trimmed = folder.trim_end_matches('/');
 	let bare = trimmed.strip_prefix("./").unwrap_or(trimmed);
-
-	// beta.1 stripped the *working directory*, not the folder, so a project at
-	// `/srv/app/database` run from `/srv/app` recorded `database/schema/a.surql`.
-	// Reconstructing only from the configured folder string would miss that and
-	// reject the very manifest this fallback exists to rescue.
 	let basename = Path::new(bare).file_name().and_then(|n| n.to_str()).unwrap_or(bare);
 
-	let mut out = Vec::new();
-	for prefix in [bare, trimmed, basename] {
-		if prefix.is_empty() {
-			continue;
+	let mut prefixes: Vec<&str> = Vec::new();
+	for prefix in legacy_prefixes.iter().map(String::as_str).chain([bare, trimmed, basename]) {
+		if !prefixes.contains(&prefix) {
+			prefixes.push(prefix);
 		}
+	}
+
+	let mut out = Vec::new();
+	for prefix in prefixes {
 		let mut legacy = SchemaSnapshot {
 			version: snapshot.version,
 			files: snapshot
 				.files
 				.iter()
 				.map(|f| SchemaSnapshotEntry {
+					// An empty prefix is the filesystem root, not an absent one.
 					path: format!("{prefix}/{}", f.path),
 					hash: f.hash.clone(),
 				})
@@ -359,18 +393,21 @@ pub fn legacy_schema_hashes(snapshot: &SchemaSnapshot, folder: &str) -> Result<V
 /// Verify a manifest's recorded schema hash against the current files.
 ///
 /// Accepts the canonical hash, or a pre-1.0.0-beta.2 path-dependent one with a
-/// warning naming the manifest.
+/// warning naming the manifest. `legacy_prefixes` come from
+/// [`canonicalise_recorded_path`] over the paths the manifest recorded.
+#[doc(hidden)]
 pub fn verify_schema_hash(
 	snapshot: &SchemaSnapshot,
 	folder: &str,
 	recorded: &str,
 	rollout_id: &str,
+	legacy_prefixes: &[String],
 ) -> Result<()> {
 	let current = hash_schema_snapshot(snapshot)?;
 	if current == recorded {
 		return Ok(());
 	}
-	if legacy_schema_hashes(snapshot, folder)?.iter().any(|h| h == recorded) {
+	if legacy_schema_hashes(snapshot, folder, legacy_prefixes)?.iter().any(|h| h == recorded) {
 		log::warn!(
 			"rollout '{rollout_id}' carries a pre-1.0.0-beta.2 schema hash, which depended on \
 			 the working directory. Accepting it for now -- re-run `surrealkit rollout plan` to \
@@ -2358,6 +2395,62 @@ mod tests {
 		assert_eq!(local, container, "the same schema must hash identically in any environment");
 	}
 
+	/// The case a real project hits: the manifest was planned inside a container
+	/// with `SURREALDB_FOLDER=/database`, so its keys carry `/database`, and the
+	/// developer's folder is somewhere else entirely. No amount of guessing from
+	/// the local folder string reaches that prefix, but the manifest records it in
+	/// its own `apply_files` paths.
+	#[test]
+	fn a_manifest_planned_elsewhere_verifies_from_its_recorded_paths() {
+		let snapshot = snapshot_from_files(&[SchemaFile {
+			path: "schema/014-sku.surql".to_string(),
+			sql: "DEFINE TABLE sku SCHEMAFULL;".to_string(),
+			hash: "content-hash".to_string(),
+		}]);
+
+		// What the container recorded when it planned.
+		let legacy = SchemaSnapshot {
+			version: snapshot.version,
+			files: vec![SchemaSnapshotEntry {
+				path: "/database/schema/014-sku.surql".to_string(),
+				hash: "content-hash".to_string(),
+			}],
+		};
+		let recorded = hash_schema_snapshot(&legacy).expect("legacy hash");
+
+		// Derived the way callers derive it: from the paths the manifest recorded.
+		let canonical = vec!["schema/014-sku.surql".to_string()];
+		let (key, prefix) =
+			canonicalise_recorded_path("/database/schema/014-sku.surql", &canonical)
+				.expect("the recorded path should map onto its canonical key");
+		assert_eq!(key, "schema/014-sku.surql");
+		assert_eq!(prefix, "/database");
+		let hints = vec![prefix];
+
+		// The local folder shares no prefix with the container's.
+		verify_schema_hash(
+			&snapshot,
+			"/home/dev/project/database",
+			&recorded,
+			"20260911194216__sku_on_hand",
+			&hints,
+		)
+		.expect("a manifest planned in another environment must still verify");
+
+		// Without the recorded paths there is nothing to derive the prefix from.
+		assert!(
+			verify_schema_hash(
+				&snapshot,
+				"/home/dev/project/database",
+				&recorded,
+				"20260911194216__sku_on_hand",
+				&[],
+			)
+			.is_err(),
+			"the hint is what makes this work; guard against it becoming a no-op"
+		);
+	}
+
 	#[test]
 	fn a_pre_beta2_manifest_hash_is_accepted_with_a_warning() {
 		let snapshot = snapshot_from_files(&[SchemaFile {
@@ -2366,18 +2459,19 @@ mod tests {
 			hash: "content-hash".to_string(),
 		}]);
 
-		let legacy = legacy_schema_hashes(&snapshot, "./database").expect("legacy hashes");
+		let legacy = legacy_schema_hashes(&snapshot, "./database", &[]).expect("legacy hashes");
 		assert!(!legacy.is_empty(), "expected at least one legacy spelling");
 
 		// Every legacy spelling the old code could have recorded must still verify.
 		for recorded in &legacy {
-			verify_schema_hash(&snapshot, "./database", recorded, "20260101000000__demo")
+			verify_schema_hash(&snapshot, "./database", recorded, "20260101000000__demo", &[])
 				.expect("a pre-beta2 manifest must still start");
 		}
 
 		// A genuinely different schema must still be rejected.
-		let err = verify_schema_hash(&snapshot, "./database", "deadbeef", "20260101000000__demo")
-			.expect_err("a real mismatch must fail");
+		let err =
+			verify_schema_hash(&snapshot, "./database", "deadbeef", "20260101000000__demo", &[])
+				.expect_err("a real mismatch must fail");
 		assert!(err.to_string().contains("target schema hash mismatch"), "got: {err}");
 	}
 }
