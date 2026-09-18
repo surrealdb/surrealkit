@@ -41,6 +41,11 @@ rustls = { version = '0.23', default-features = false, features = ['aws-lc-rs'],
 inquire = { version = '0.7', optional = true }
 tempfile = { version = '3', optional = true }
 indoc = "2"
+# Model Context Protocol server. `server` brings ServerHandler and schemars (which
+# rmcp re-exports, so we take no direct schemars dependency and cannot skew
+# versions with it); `transport-io` is stdio. `default-features = false` drops
+# `base64`, which nothing here uses.
+rmcp = { version = '1.7.0', default-features = false, features = ['server', 'macros', 'transport-io'], optional = true }
 
 [features]
 # The published CLI binary bundles only the in-memory engine, keeping the
@@ -57,7 +62,18 @@ default = ['kv-mem', 'cli', 'analyze']
 # `default-features = false` drops clap, inquire, rustls (and its aws-lc-rs
 # backend) and tempfile from a library consumer's dependency tree -- none of them
 # are used by the library itself.
-cli = ['dep:clap', 'dep:inquire', 'dep:rustls', 'dep:tempfile']
+cli = ['templates', 'dep:clap', 'dep:inquire', 'dep:rustls']
+# `surrealkit init`'s template engine. Shared by the CLI and the MCP server, so it
+# lives in the library rather than the binary. Interactive feature selection needs
+# `inquire` and is compiled only under `cli`; every other consumer is
+# non-interactive, which is what a server needs.
+templates = ['dep:tempfile']
+# The `surrealkit mcp` MCP server, over stdio. Deliberately does NOT imply `cli`:
+# a library consumer can embed the server without pulling in clap/inquire/rustls.
+# (A stateless streamable-HTTP transport is deferred until its auth story is
+# designed -- in stateless mode MCP requires no handshake, so an unauthenticated
+# port would expose arbitrary SurrealQL execution.)
+mcp = ['templates', 'dep:rmcp']
 # Static analysis of a project's SurrealQL: the `check`/`generate`/`watch`
 # subcommands and the `surrealkit::analyzer` re-export. On by default, and
 # deliberately NOT implied by `cli`, so that turning it off is one flag rather
@@ -85,6 +101,27 @@ required-features = ['cli']
 tempfile = '3'
 test-case = '3'
 insta = { version = '1', features = ['json'] }
+# An in-process MCP client, so the protocol tests drive the real server over an
+# in-memory duplex rather than a socket. `client` is deliberately a dev-only
+# feature: the shipped server has no need of it.
+rmcp = { version = '1.7.0', default-features = false, features = ['client', 'server', 'macros', 'transport-io', 'transport-async-rw'] }
+
+# The MCP tests need the server compiled in. Without `required-features` they
+# would break `cargo test --no-default-features --features cli`.
+[[test]]
+name = 'mcp_contract'
+path = 'tests/mcp_contract.rs'
+required-features = ['mcp']
+
+[[test]]
+name = 'mcp_protocol'
+path = 'tests/mcp_protocol.rs'
+required-features = ['mcp']
+
+[[test]]
+name = 'mcp_stdout_purity'
+path = 'tests/mcp_stdout_purity.rs'
+required-features = ['mcp', 'cli']
 
 [lints]
 workspace = true

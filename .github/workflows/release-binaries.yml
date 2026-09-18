@@ -55,7 +55,10 @@ jobs:
               uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
 
             - name: Build release binary
-              run: cargo build --manifest-path crates/surrealkit/Cargo.toml --locked --release --target ${{ matrix.target }}
+              # `--features mcp` is additive to the default set, so the published binary
+              # is kv-mem + cli + mcp and `surrealkit mcp` works straight after
+              # `cargo binstall surrealkit`.
+              run: cargo build --manifest-path crates/surrealkit/Cargo.toml --locked --release --features mcp --target ${{ matrix.target }}
 
             - name: Package archive (unix)
               if: runner.os != 'Windows'

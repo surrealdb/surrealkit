@@ -14,6 +14,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
         --manifest-path crates/surrealkit/Cargo.toml \
         --locked \
         --release \
+        --features mcp \
     && cp target/release/surrealkit /surrealkit
 
 FROM gcr.io/distroless/cc-debian12:nonroot
@@ -21,5 +22,7 @@ FROM gcr.io/distroless/cc-debian12:nonroot
 COPY --from=builder /surrealkit /usr/local/bin/surrealkit
 
 ENV SURREALDB_FOLDER=/database
+
+# `docker run -i surrealkit mcp` serves the Model Context Protocol on stdio.
 
 ENTRYPOINT ["/usr/local/bin/surrealkit"]

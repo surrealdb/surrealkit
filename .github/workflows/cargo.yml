@@ -43,6 +43,13 @@ jobs:
               env:
                   RUSTDOCFLAGS: -D warnings
 
+            # The MCP server must build as a pure library dependency: no clap, no
+            # inquire, no TTY prompting. This is the configuration an embedding
+            # application uses, and it is what stops `mcp` quietly growing a
+            # dependency on `cli`.
+            - name: Lint (library, mcp only)
+              run: cargo clippy -p surrealkit --lib --no-default-features --features mcp,kv-mem --locked -- -D warnings
+
             # The binary declares `required-features = ["cli"]`, so a build that turns
             # default features off must opt back in. integration-test.yml does exactly
             # that, and this catches it without waiting for that workflow's path filter.
