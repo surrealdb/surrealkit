@@ -18,7 +18,7 @@ use surrealkit::core::exec_surql;
 use surrealkit::module::Module;
 use surrealkit::project::{ProjectConfig, Target};
 use surrealkit::rollout::{self, RolloutExecutionOpts, RolloutPlanOpts};
-use surrealkit::setup::run_setup;
+use surrealkit::setup::force_setup;
 use surrealkit::sync::{self, SyncOpts};
 use surrealkit::tester::{TestOpts, run_test};
 use surrealkit::typegen::{TypegenOpts, run_typegen};
@@ -729,7 +729,7 @@ async fn main() -> Result<()> {
 		)?,
 		Commands::Setup => {
 			let db = connect(&cfg).await?;
-			run_setup(&db, &folder).await?;
+			force_setup(&db, &folder).await?;
 		}
 		Commands::Sync {
 			watch,

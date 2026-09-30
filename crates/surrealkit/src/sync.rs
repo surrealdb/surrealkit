@@ -13,8 +13,9 @@ use crate::constants::Layout;
 use crate::core::{exec_surql, sha256_hex};
 use crate::module::{Module, Partition};
 use crate::rollout::{
-	acquire_lock, delete_managed_entities, delete_sync_hashes, load_active_rollout_id,
-	load_managed_entities, release_lock, upsert_managed_entities,
+	PartitionWrite, acquire_lock, delete_managed_entities, delete_sync_hashes,
+	load_active_rollout_id, load_managed_entities, release_lock, upsert_managed_entities,
+	write_partition,
 };
 use crate::schema_state::{
 	CatalogEntity, EntityKey, SchemaFile, build_catalog_snapshot, canonicalise_keys,
@@ -701,15 +702,10 @@ async fn store_last_sync_meta(db: &Surreal<Any>) -> Result<()> {
 }
 
 async fn upsert_meta(db: &Surreal<Any>, key: &str, value: serde_json::Value) -> Result<()> {
-	db.query(
-		"DELETE __entity WHERE ns = 'meta' AND key = $key; \
-		 CREATE __entity CONTENT { ns: 'meta', key: $key, val: $value, updated_at: time::now() };",
-	)
-	.bind(("key", key.to_string()))
-	.bind(("value", value))
-	.await?
-	.check()?;
-	Ok(())
+	// In place, not delete-then-create: those were two transactions, so a failed
+	// create lost the row.
+	let rows = BTreeMap::from([(key.to_string(), value)]);
+	write_partition(db, Partition::Meta.as_str(), &rows, PartitionWrite::Merge).await
 }
 
 fn parse_bool(value: &str) -> Option<bool> {

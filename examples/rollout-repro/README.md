@@ -92,6 +92,8 @@ bash examples/rollout-repro/scenarios/ci_lifecycle.sh
 bash examples/rollout-repro/scenarios/ci_modified_entity.sh
 bash examples/rollout-repro/scenarios/ci_resume.sh
 bash examples/rollout-repro/scenarios/ci_container_keys.sh
+bash examples/rollout-repro/scenarios/ci_key_migration.sh
+bash examples/rollout-repro/scenarios/ci_large_catalog.sh
 ```
 
 Each uses its own namespace and database, so they are independent and any one of

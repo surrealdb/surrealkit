@@ -210,6 +210,12 @@ jobs:
             - name: Container path keys — working_dir is not /
               run: examples/rollout-repro/scenarios/ci_container_keys.sh
 
+            # `complete` used to delete the whole entity catalog and then recreate
+            # it in a second transaction. When that failed, the catalog stayed
+            # empty and `repair` failed the same way.
+            - name: Large catalog — complete writes the diff, repair rebuilds a wiped catalog
+              run: examples/rollout-repro/scenarios/ci_large_catalog.sh
+
             # The upgrade path for a project that was synced from both a local
             # checkout and a container, so `__entity` holds two spellings of every
             # file. If the suffix match fails here every tracked key looks removed

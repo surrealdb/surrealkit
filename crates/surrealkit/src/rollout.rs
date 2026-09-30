@@ -1026,6 +1026,8 @@ async fn start_inner(
 				);
 			}
 			None => {
+				let restored = restore_wiped_catalog(db, rollout, source_catalog).await?;
+				let source_entities = restored.as_deref().unwrap_or(&source_catalog.entities);
 				let captured = if restorable.is_empty() {
 					BTreeMap::new()
 				} else {
@@ -1068,7 +1070,7 @@ async fn start_inner(
 				create_rollout_record(
 					db,
 					rollout,
-					&source_catalog.entities,
+					source_entities,
 					&target_catalog.entities,
 					RolloutStatus::Planned,
 					&captured,
@@ -1175,8 +1177,18 @@ async fn complete_inner(
 			return Err(err);
 		}
 		let target_entities = deserialize_entities_field(&row, "target_entities")?;
-		replace_managed_entities(db, &rollout.spec.module()?, &target_entities, None, "active")
-			.await?;
+		if let Err(err) =
+			replace_managed_entities(db, &rollout.spec.module()?, &target_entities, None, "active")
+				.await
+		{
+			return Err(catalog_write_failed(
+				db,
+				&rollout.spec.id,
+				RolloutStatus::RunningComplete,
+				err,
+			)
+			.await);
+		}
 		set_rollout_status(
 			db,
 			&rollout.spec.id,
@@ -1270,8 +1282,18 @@ async fn rollback_inner(
 			return Err(err);
 		}
 		let source_entities = deserialize_entities_field(&row, "source_entities")?;
-		replace_managed_entities(db, &rollout.spec.module()?, &source_entities, None, "active")
-			.await?;
+		if let Err(err) =
+			replace_managed_entities(db, &rollout.spec.module()?, &source_entities, None, "active")
+				.await
+		{
+			return Err(catalog_write_failed(
+				db,
+				&rollout.spec.id,
+				RolloutStatus::RunningRollback,
+				err,
+			)
+			.await);
+		}
 		set_rollout_status(
 			db,
 			&rollout.spec.id,
@@ -1312,8 +1334,23 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 		match status.as_str() {
 			"running_complete" => {
 				let target_entities = deserialize_entities_field(&row, "target_entities")?;
-				replace_managed_entities(db, &rollout.spec.module()?, &target_entities, None, "active")
-					.await?;
+				if let Err(err) = replace_managed_entities(
+					db,
+					&rollout.spec.module()?,
+					&target_entities,
+					None,
+					"active",
+				)
+				.await
+				{
+					return Err(catalog_write_failed(
+						db,
+						&rollout.spec.id,
+						RolloutStatus::RunningComplete,
+						err,
+					)
+					.await);
+				}
 				set_rollout_status(
 					db,
 					&rollout.spec.id,
@@ -1329,8 +1366,23 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 			}
 			"running_rollback" => {
 				let source_entities = deserialize_entities_field(&row, "source_entities")?;
-				replace_managed_entities(db, &rollout.spec.module()?, &source_entities, None, "active")
-					.await?;
+				if let Err(err) = replace_managed_entities(
+					db,
+					&rollout.spec.module()?,
+					&source_entities,
+					None,
+					"active",
+				)
+				.await
+				{
+					return Err(catalog_write_failed(
+						db,
+						&rollout.spec.id,
+						RolloutStatus::RunningRollback,
+						err,
+					)
+					.await);
+				}
 				set_rollout_status(
 					db,
 					&rollout.spec.id,
@@ -1503,20 +1555,236 @@ pub(crate) async fn load_managed_entities(
 	Ok(out)
 }
 
-// All entity catalog writes go through a single bound query so a rollout with
-// N managed entities is N HTTP round-trips → 1. This fixes a hang against
-// SurrealDB Cloud where the per-entity loop in `complete` would stall the
-// final `__rollout` status flip (issue #55).
-fn entities_payload(entities: &[CatalogEntity]) -> Vec<Value> {
+/// Most rows a single `__entity` write puts in one transaction.
+///
+/// `complete` used to rewrite the whole catalog in one `FOR` statement, so the
+/// transaction grew with every object the schema had ever defined. A few hundred
+/// rows in, SurrealDB Cloud stopped committing it. Chunking keeps every
+/// transaction this size however large the schema grows, at the cost of one
+/// round trip per chunk rather than the one per row that hung in issue #55.
+const ENTITY_WRITE_CHUNK: usize = 50;
+
+/// How many write passes [`write_partition`] makes before giving up. A chunk that
+/// loses a retryable transaction conflict commits nothing, so the next pass
+/// re-reads the partition and carries on from where the last one stopped.
+const ENTITY_WRITE_PASSES: u32 = 4;
+
+/// What [`write_partition`] does with stored keys that are not in `desired`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PartitionWrite {
+	/// Delete them, so the partition ends up holding exactly `desired`.
+	Replace,
+	/// Leave them alone.
+	Merge,
+}
+
+/// Bring one `__entity` partition to `desired` (key → `val`) without ever losing
+/// a row.
+///
+/// This replaces deleting the whole partition and then creating every row. Those
+/// ran as two transactions, so when the second failed the first had already
+/// committed and the catalog was left empty. Here:
+///
+/// - only the difference is written, so a rollout touches its own delta rather
+///   than the whole catalog;
+/// - an existing row is updated in place, so it is never absent and its
+///   `by_ns_key` entry is never rewritten;
+/// - stale keys are deleted only after every other write has committed;
+/// - writes go in bounded chunks of one transaction each.
+///
+/// At every point in between, each key of old ∪ new is present with either its
+/// old or its new value. The loop only returns once a fresh read of the partition
+/// leaves nothing to write, so success is verified, and a re-run after a failure
+/// converges from wherever the failed run stopped.
+pub(crate) async fn write_partition(
+	db: &Surreal<Any>,
+	ns: &str,
+	desired: &BTreeMap<String, Value>,
+	mode: PartitionWrite,
+) -> Result<()> {
+	let desired: BTreeMap<&str, Value> =
+		desired.iter().map(|(key, val)| (key.as_str(), strip_nulls(val))).collect();
+	let mut pass = 0;
+	loop {
+		let stored = load_partition(db, ns).await?;
+		let plan = PartitionPlan::diff(&stored, &desired, mode);
+		if plan.is_empty() {
+			return Ok(());
+		}
+		pass += 1;
+		if pass > ENTITY_WRITE_PASSES {
+			bail!(
+				"__entity partition '{ns}' did not converge after {ENTITY_WRITE_PASSES} passes \
+				 ({} to create, {} to update, {} to delete). No row was deleted before its \
+				 replacement was written, so re-running is safe.",
+				plan.create.len(),
+				plan.update.len(),
+				plan.delete.len()
+			);
+		}
+		match plan.apply(db, ns).await {
+			Ok(()) => {}
+			Err(err) if is_retryable_conflict(&err) && pass < ENTITY_WRITE_PASSES => {
+				log::warn!(
+					"__entity partition '{ns}': transaction conflict on pass \
+					 {pass}/{ENTITY_WRITE_PASSES}, retrying: {err:#}"
+				);
+				tokio::time::sleep(Duration::from_millis(250 * u64::from(pass))).await;
+			}
+			Err(err) => {
+				return Err(err).with_context(|| format!("writing __entity partition '{ns}'"));
+			}
+		}
+	}
+}
+
+/// The writes that take a stored partition to the desired one.
+#[derive(Debug, Default)]
+struct PartitionPlan {
+	/// `{ key, val }` rows for keys that are not stored yet.
+	create: Vec<Value>,
+	/// `{ key, val }` rows for stored keys whose value differs.
+	update: Vec<Value>,
+	/// Stored keys that are not desired. Empty under [`PartitionWrite::Merge`].
+	delete: Vec<String>,
+}
+
+impl PartitionPlan {
+	fn diff(
+		stored: &BTreeMap<String, Value>,
+		desired: &BTreeMap<&str, Value>,
+		mode: PartitionWrite,
+	) -> Self {
+		let mut plan = Self::default();
+		for (&key, val) in desired {
+			match stored.get(key) {
+				Some(current) if current == val => {}
+				Some(_) => plan.update.push(serde_json::json!({ "key": key, "val": val })),
+				None => plan.create.push(serde_json::json!({ "key": key, "val": val })),
+			}
+		}
+		if mode == PartitionWrite::Replace {
+			plan.delete =
+				stored.keys().filter(|key| !desired.contains_key(key.as_str())).cloned().collect();
+		}
+		plan
+	}
+
+	fn is_empty(&self) -> bool {
+		self.create.is_empty() && self.update.is_empty() && self.delete.is_empty()
+	}
+
+	/// Creates and updates first, deletes last: until the deletes run, nothing that
+	/// was stored has gone anywhere.
+	async fn apply(&self, db: &Surreal<Any>, ns: &str) -> Result<()> {
+		for chunk in self.create.chunks(ENTITY_WRITE_CHUNK) {
+			db.query(
+				"FOR $row IN $rows { \
+				 	CREATE __entity CONTENT { ns: $ns, key: $row.key, val: $row.val, updated_at: time::now() }; \
+				 };",
+			)
+			.bind(("ns", ns.to_string()))
+			.bind(("rows", chunk.to_vec()))
+			.await?
+			.check()?;
+		}
+		for chunk in self.update.chunks(ENTITY_WRITE_CHUNK) {
+			db.query(
+				"FOR $row IN $rows { \
+				 	UPDATE __entity SET val = $row.val, updated_at = time::now() \
+				 		WHERE ns = $ns AND key = $row.key; \
+				 };",
+			)
+			.bind(("ns", ns.to_string()))
+			.bind(("rows", chunk.to_vec()))
+			.await?
+			.check()?;
+		}
+		delete_keys(db, ns, &self.delete).await
+	}
+}
+
+/// Every stored row of partition `ns`, as key → `val` with nulls stripped.
+async fn load_partition(db: &Surreal<Any>, ns: &str) -> Result<BTreeMap<String, Value>> {
+	let mut resp = db
+		.query("SELECT key, val FROM __entity WHERE ns = $ns;")
+		.bind(("ns", ns.to_string()))
+		.await?;
+	let rows: Vec<Value> = resp.take(0)?;
+	Ok(rows
+		.into_iter()
+		.filter_map(|row| {
+			let key = row.get("key")?.as_str()?.to_string();
+			let val = row.get("val").map(strip_nulls).unwrap_or(Value::Null);
+			Some((key, val))
+		})
+		.collect())
+}
+
+/// Delete `keys` from partition `ns`, one bounded transaction per chunk.
+async fn delete_keys(db: &Surreal<Any>, ns: &str, keys: &[String]) -> Result<()> {
+	for chunk in keys.chunks(ENTITY_WRITE_CHUNK) {
+		db.query("DELETE __entity WHERE ns = $ns AND key INSIDE $keys;")
+			.bind(("ns", ns.to_string()))
+			.bind(("keys", chunk.to_vec()))
+			.await?
+			.check()?;
+	}
+	Ok(())
+}
+
+/// `val` with null members dropped, recursively.
+///
+/// An absent `active_rollout_id` is written as a null, and whether it reads back
+/// as null or as missing depends on the release that wrote it. Comparing with
+/// nulls stripped keeps an unchanged row from looking changed on every run.
+fn strip_nulls(val: &Value) -> Value {
+	match val {
+		Value::Object(map) => Value::Object(
+			map.iter()
+				.filter(|(_, v)| !v.is_null())
+				.map(|(k, v)| (k.clone(), strip_nulls(v)))
+				.collect(),
+		),
+		Value::Array(items) => Value::Array(items.iter().map(strip_nulls).collect()),
+		other => other.clone(),
+	}
+}
+
+/// Whether `err` is SurrealDB reporting a transaction conflict that can be retried.
+fn is_retryable_conflict(err: &anyhow::Error) -> bool {
+	err.chain().any(|cause| {
+		if let Some(err) = cause.downcast_ref::<surrealdb::Error>()
+			&& matches!(err.query_details(), Some(surrealdb_types::QueryError::TransactionConflict))
+		{
+			return true;
+		}
+		// A conflict raised inside a statement can reach the client as a plain
+		// message rather than as the structured kind.
+		let message = cause.to_string().to_ascii_lowercase();
+		message.contains("transaction conflict") || message.contains("can be retried")
+	})
+}
+
+/// The `__entity` rows for `entities`, keyed `kind:scope:name`.
+fn entity_rows(
+	entities: &[CatalogEntity],
+	active_rollout_id: Option<&str>,
+	state: &str,
+) -> BTreeMap<String, Value> {
 	entities
 		.iter()
 		.map(|e| {
-			serde_json::json!({
-				"key": entity_key_string(&e.kind, e.scope.as_deref(), &e.name),
-				"source_path": e.source_path,
-				"statement_hash": e.statement_hash,
-				"file_hash": e.file_hash,
-			})
+			(
+				entity_key_string(&e.kind, e.scope.as_deref(), &e.name),
+				serde_json::json!({
+					"source_path": e.source_path,
+					"statement_hash": e.statement_hash,
+					"file_hash": e.file_hash,
+					"active_rollout_id": active_rollout_id,
+					"state": state,
+				}),
+			)
 		})
 		.collect()
 }
@@ -1535,30 +1803,13 @@ pub(crate) async fn upsert_managed_entities(
 	if entities.is_empty() {
 		return Ok(());
 	}
-	db.query(
-		"FOR $e IN $entities { \
-		 	DELETE __entity WHERE ns = $ns AND key = $e.key; \
-		 	CREATE __entity CONTENT { \
-		 		ns: $ns, \
-		 		key: $e.key, \
-		 		val: { \
-		 			source_path: $e.source_path, \
-		 			statement_hash: $e.statement_hash, \
-		 			file_hash: $e.file_hash, \
-		 			active_rollout_id: $active_rollout_id, \
-		 			state: $state \
-		 		}, \
-		 		updated_at: time::now() \
-		 	}; \
-		 };",
+	write_partition(
+		db,
+		&module.partition(Partition::Schema),
+		&entity_rows(entities, active_rollout_id, state),
+		PartitionWrite::Merge,
 	)
-	.bind(("ns", module.partition(Partition::Schema)))
-	.bind(("entities", entities_payload(entities)))
-	.bind(("active_rollout_id", active_rollout_id.map(str::to_string)))
-	.bind(("state", state.to_string()))
-	.await?
-	.check()?;
-	Ok(())
+	.await
 }
 
 fn entity_key_string(kind: &EntityKind, scope: Option<&str>, name: &str) -> String {
@@ -1570,15 +1821,7 @@ pub(crate) async fn delete_managed_entities(
 	module: &Module,
 	entities: &[EntityKey],
 ) -> Result<()> {
-	if entities.is_empty() {
-		return Ok(());
-	}
-	db.query("DELETE __entity WHERE ns = $ns AND key INSIDE $keys;")
-		.bind(("ns", module.partition(Partition::Schema)))
-		.bind(("keys", entity_keys_payload(entities)))
-		.await?
-		.check()?;
-	Ok(())
+	delete_keys(db, &module.partition(Partition::Schema), &entity_keys_payload(entities)).await
 }
 
 pub(crate) async fn replace_managed_entities(
@@ -1588,32 +1831,15 @@ pub(crate) async fn replace_managed_entities(
 	active_rollout_id: Option<&str>,
 	state: &str,
 ) -> Result<()> {
-	// Scoped to `$ns`: unscoped, this wiped every module's catalog, not just
-	// the one being rolled out.
-	db.query(
-		"DELETE __entity WHERE ns = $ns; \
-		 FOR $e IN $entities { \
-		 	CREATE __entity CONTENT { \
-		 		ns: $ns, \
-		 		key: $e.key, \
-		 		val: { \
-		 			source_path: $e.source_path, \
-		 			statement_hash: $e.statement_hash, \
-		 			file_hash: $e.file_hash, \
-		 			active_rollout_id: $active_rollout_id, \
-		 			state: $state \
-		 		}, \
-		 		updated_at: time::now() \
-		 	}; \
-		 };",
+	// Scoped to this module's partition: unscoped, this wiped every module's
+	// catalog, not just the one being rolled out.
+	write_partition(
+		db,
+		&module.partition(Partition::Schema),
+		&entity_rows(entities, active_rollout_id, state),
+		PartitionWrite::Replace,
 	)
-	.bind(("ns", module.partition(Partition::Schema)))
-	.bind(("entities", entities_payload(entities)))
-	.bind(("active_rollout_id", active_rollout_id.map(str::to_string)))
-	.bind(("state", state.to_string()))
-	.await?
-	.check()?;
-	Ok(())
+	.await
 }
 
 pub(crate) async fn replace_sync_hashes(
@@ -1621,20 +1847,13 @@ pub(crate) async fn replace_sync_hashes(
 	module: &Module,
 	files: &[SchemaFile],
 ) -> Result<()> {
-	let ns = module.partition(Partition::Sync);
-	// Scoped to `$ns`: unscoped, this wiped every module's file hashes.
-	db.query("DELETE __entity WHERE ns = $ns;").bind(("ns", ns.clone())).await?.check()?;
-	for file in files {
-		db.query(
-			"CREATE __entity CONTENT { ns: $ns, key: $path, val: { hash: $hash }, updated_at: time::now() };",
-		)
-		.bind(("ns", ns.clone()))
-		.bind(("path", file.path.clone()))
-		.bind(("hash", file.hash.clone()))
-		.await?
-		.check()?;
-	}
-	Ok(())
+	let rows = files
+		.iter()
+		.map(|file| (file.path.clone(), serde_json::json!({ "hash": file.hash })))
+		.collect();
+	// Scoped to this module's partition: unscoped, this wiped every module's
+	// file hashes.
+	write_partition(db, &module.partition(Partition::Sync), &rows, PartitionWrite::Replace).await
 }
 
 pub(crate) async fn delete_sync_hashes(
@@ -1642,14 +1861,7 @@ pub(crate) async fn delete_sync_hashes(
 	module: &Module,
 	paths: &[String],
 ) -> Result<()> {
-	for path in paths {
-		db.query("DELETE __entity WHERE ns = $ns AND key = $path;")
-			.bind(("ns", module.partition(Partition::Sync)))
-			.bind(("path", path.clone()))
-			.await?
-			.check()?;
-	}
-	Ok(())
+	delete_keys(db, &module.partition(Partition::Sync), paths).await
 }
 
 fn build_rollout_spec(
@@ -2371,6 +2583,78 @@ fn deserialize_entities_field(row: &Value, key: &str) -> Result<Vec<CatalogEntit
 	let value =
 		row.get(key).cloned().ok_or_else(|| anyhow!("missing '{}' on rollout record", key))?;
 	serde_json::from_value(value).with_context(|| format!("parsing {}", key))
+}
+
+/// Record a failed catalog write on the rollout, and build the error to return.
+///
+/// The status stays `running_*`: every step has already run, and only the
+/// bookkeeping is behind. `repair` finishes exactly that, and since the catalog
+/// write converges, it carries on from wherever this one stopped.
+async fn catalog_write_failed(
+	db: &Surreal<Any>,
+	rollout_id: &str,
+	status: RolloutStatus,
+	err: anyhow::Error,
+) -> anyhow::Error {
+	let err = err.context(format!(
+		"the steps of rollout '{rollout_id}' ran, but recording the entity catalog failed. No \
+		 catalog row was removed before its replacement was written. Run `surrealkit rollout \
+		 repair {rollout_id}` to finish."
+	));
+	if let Err(record_err) =
+		set_rollout_status(db, rollout_id, status, Some(&format!("{err:#}")), None).await
+	{
+		log::warn!("could not record the failure on rollout '{rollout_id}': {record_err:#}");
+	}
+	err
+}
+
+/// Put back a catalog that a release before 1.0.0-beta.4 wiped, before a new
+/// rollout records it as the state its rollback returns to.
+///
+/// Those releases rewrote the catalog by deleting it and then creating every row,
+/// in two transactions, so a failed `complete` or `repair` could leave it empty.
+/// Starting on top of that would record an empty source, and rolling this rollout
+/// back would then "restore" the empty catalog. The rollout this one was planned
+/// from recorded what the catalog should hold, so that is what goes back.
+///
+/// Returns the restored entities, or `None` when there was nothing to restore:
+/// the catalog is not empty, or no completed rollout here ends at this one's
+/// source schema (a first rollout, or one defined in code).
+async fn restore_wiped_catalog(
+	db: &Surreal<Any>,
+	rollout: &LoadedRolloutSpec,
+	source_catalog: &CatalogSnapshot,
+) -> Result<Option<Vec<CatalogEntity>>> {
+	if !source_catalog.entities.is_empty() || rollout.spec.source_schema_hash.is_empty() {
+		return Ok(None);
+	}
+	let mut resp = db
+		.query(
+			"SELECT record::id(id) AS rollout_id, target_entities, completed_at FROM __rollout \
+			 WHERE status = 'completed' AND target_schema_hash = $hash \
+			 ORDER BY completed_at DESC LIMIT 1;",
+		)
+		.bind(("hash", rollout.spec.source_schema_hash.clone()))
+		.await?;
+	let raw: Option<surrealdb_types::Value> = resp.take(0)?;
+	let Some(row) = raw.map(|v| Value::from_value(v).unwrap_or(Value::Null)) else {
+		return Ok(None);
+	};
+	let entities = deserialize_entities_field(&row, "target_entities")?;
+	if entities.is_empty() {
+		return Ok(None);
+	}
+	let predecessor = string_field(&row, "rollout_id").unwrap_or_default();
+	log::warn!(
+		"the entity catalog is empty, but rollout '{predecessor}' completed here and recorded {} \
+		 entities for it. An earlier release can leave it empty after a failed `complete`; \
+		 restoring it from that rollout before '{}' starts.",
+		entities.len(),
+		rollout.spec.id
+	);
+	replace_managed_entities(db, &rollout.spec.module()?, &entities, None, "active").await?;
+	Ok(Some(entities))
 }
 
 async fn set_rollout_status(
@@ -3236,6 +3520,293 @@ mod tests {
 			.await
 			.expect("empty replace");
 		assert_eq!(entity_row_count(&db).await, 0, "empty entities clears ns=schema");
+	}
+
+	fn entities_named(prefix: &str, count: usize) -> Vec<CatalogEntity> {
+		(0..count).map(|i| sample_entity(&format!("{prefix}_{i:03}"))).collect()
+	}
+
+	fn key_of(entity: &CatalogEntity) -> String {
+		entity_key_string(&entity.kind, entity.scope.as_deref(), &entity.name)
+	}
+
+	/// `key → updated_at` for the default module's catalog: whether a write
+	/// touched a row.
+	async fn entity_stamps(db: &Surreal<Any>) -> BTreeMap<String, String> {
+		let mut resp = db
+			.query("SELECT key, <string> updated_at AS at FROM __entity WHERE ns = 'schema';")
+			.await
+			.expect("select stamps");
+		let rows: Vec<Value> = resp.take(0).expect("take stamps");
+		rows.iter()
+			.map(|row| {
+				(
+					string_field_req(row, "key").expect("key"),
+					string_field_req(row, "at").expect("at"),
+				)
+			})
+			.collect()
+	}
+
+	/// `key → statement_hash` for the default module's catalog.
+	async fn stored_statement_hashes(db: &Surreal<Any>) -> BTreeMap<String, String> {
+		load_managed_entities(db, &Module::default_module(), None)
+			.await
+			.expect("load catalog")
+			.into_iter()
+			.map(|record| (key_of(&record.entity), record.entity.statement_hash))
+			.collect()
+	}
+
+	async fn stored_catalog(db: &Surreal<Any>) -> Vec<CatalogEntity> {
+		load_managed_entities(db, &Module::default_module(), None)
+			.await
+			.expect("load catalog")
+			.into_iter()
+			.map(|record| record.entity)
+			.collect()
+	}
+
+	/// Make every write of `key` into `__entity` fail, to fail a chosen chunk.
+	async fn poison_entity_key(db: &Surreal<Any>, key: &str) {
+		db.query(format!(
+			"DEFINE FIELD OVERWRITE key ON __entity TYPE string ASSERT $value != '{key}';"
+		))
+		.await
+		.expect("poison key")
+		.check()
+		.expect("poison key");
+	}
+
+	async fn lift_poison(db: &Surreal<Any>) {
+		db.query("DEFINE FIELD OVERWRITE key ON __entity TYPE string;")
+			.await
+			.expect("lift poison")
+			.check()
+			.expect("lift poison");
+	}
+
+	// The catalog write is a diff, not a rewrite: a rollout that adds a few
+	// tables to a large schema must not rewrite every row. An unchanged catalog
+	// writes nothing, and a changed one only what changed.
+	#[tokio::test]
+	async fn replace_managed_entities_writes_only_the_difference() {
+		let db = connect_mem_db().await;
+		let module = Module::default_module();
+		let old = entities_named("col", 300);
+		replace_managed_entities(&db, &module, &old, None, "active").await.expect("seed");
+		assert_eq!(entity_row_count(&db).await, 300);
+
+		let before = entity_stamps(&db).await;
+		replace_managed_entities(&db, &module, &old, None, "active").await.expect("no-op");
+		assert_eq!(entity_stamps(&db).await, before, "an unchanged catalog rewrote rows");
+
+		// 10 modified, 5 removed, 30 added.
+		let mut new = old[..295].to_vec();
+		for entity in new.iter_mut().take(10) {
+			entity.statement_hash = format!("{}-v2", entity.statement_hash);
+		}
+		new.extend(entities_named("added", 30));
+		replace_managed_entities(&db, &module, &new, None, "active").await.expect("apply diff");
+
+		let after = entity_stamps(&db).await;
+		assert_eq!(after.len(), 325);
+		for entity in &old[10..295] {
+			let key = key_of(entity);
+			assert_eq!(after.get(&key), before.get(&key), "{key} was rewritten but did not change");
+		}
+		let mut expected = new;
+		expected.sort();
+		assert_eq!(stored_catalog(&db).await, expected);
+	}
+
+	// The property the old delete-then-create lacked: a catalog write that fails
+	// part way must leave every row that was stored before it, and a re-run must
+	// converge from wherever it stopped.
+	#[tokio::test]
+	async fn a_failed_catalog_write_loses_no_row() {
+		let db = connect_mem_db().await;
+		let module = Module::default_module();
+		let old = entities_named("col", 120);
+		replace_managed_entities(&db, &module, &old, None, "active").await.expect("seed");
+
+		// Modify 60, drop 20 and add 80. The additions span two chunks, and the
+		// second one fails.
+		let mut new = old[..100].to_vec();
+		for entity in new.iter_mut().take(60) {
+			entity.statement_hash = format!("{}-v2", entity.statement_hash);
+		}
+		new.extend(entities_named("new", 80));
+		poison_entity_key(&db, "field:person:new_070").await;
+
+		let err = replace_managed_entities(&db, &module, &new, None, "active")
+			.await
+			.expect_err("the poisoned chunk must fail the write");
+		assert!(format!("{err:#}").contains("writing __entity partition 'schema'"), "{err:#}");
+
+		let stored = stored_statement_hashes(&db).await;
+		for entity in &old {
+			let key = key_of(entity);
+			assert_eq!(
+				stored.get(&key),
+				Some(&entity.statement_hash),
+				"{key} was lost or changed by a write that failed"
+			);
+		}
+		assert!(
+			stored.contains_key("field:person:new_000"),
+			"the chunk before the failure is kept"
+		);
+		assert!(!stored.contains_key("field:person:new_070"));
+
+		lift_poison(&db).await;
+		replace_managed_entities(&db, &module, &new, None, "active").await.expect("converge");
+		let mut expected = new;
+		expected.sort();
+		assert_eq!(stored_catalog(&db).await, expected);
+	}
+
+	#[tokio::test]
+	async fn replacing_the_catalog_leaves_other_partitions_alone() {
+		let db = connect_mem_db().await;
+		db.query(
+			"CREATE __entity CONTENT { ns: 'lock', key: 'global', val: { owner: 'x' } }; \
+			 CREATE __entity CONTENT { ns: 'sync', key: 'schema/a.surql', val: { hash: 'h' } }; \
+			 CREATE __entity CONTENT { ns: 'schema@billing', key: 'table::invoice', val: { state: 'active' } };",
+		)
+		.await
+		.expect("seed other partitions")
+		.check()
+		.expect("seed other partitions");
+		let module = Module::default_module();
+		replace_managed_entities(&db, &module, &entities_named("col", 3), None, "active")
+			.await
+			.expect("replace");
+		replace_managed_entities(&db, &module, &[], None, "active").await.expect("replace empty");
+
+		let mut resp = db
+			.query("SELECT VALUE ns FROM __entity WHERE ns != 'schema' ORDER BY ns;")
+			.await
+			.expect("select other partitions");
+		let others: Vec<String> = resp.take(0).expect("take partitions");
+		assert_eq!(others, vec!["lock", "schema@billing", "sync"]);
+	}
+
+	#[tokio::test]
+	async fn upsert_managed_entities_never_deletes() {
+		let db = connect_mem_db().await;
+		let module = Module::default_module();
+		let old = entities_named("col", 5);
+		replace_managed_entities(&db, &module, &old, None, "active").await.expect("seed");
+
+		let mut changed = old[..2].to_vec();
+		changed[0].statement_hash = "changed".to_string();
+		changed.push(sample_entity("extra"));
+		upsert_managed_entities(&db, &module, &changed, None, "active").await.expect("upsert");
+
+		let stored = stored_statement_hashes(&db).await;
+		assert_eq!(stored.len(), 6, "a merge kept every stored row and added one");
+		assert_eq!(stored.get(&key_of(&old[0])).map(String::as_str), Some("changed"));
+	}
+
+	#[test]
+	fn only_transaction_conflicts_are_retried() {
+		let structured: anyhow::Error = surrealdb::Error::query(
+			"conflict".to_string(),
+			surrealdb_types::QueryError::TransactionConflict,
+		)
+		.into();
+		assert!(is_retryable_conflict(&structured));
+
+		let message = anyhow!(
+			"There was a problem with the key-value store: Transaction conflict: write \
+			 conflict. This transaction can be retried"
+		)
+		.context("writing __entity partition 'schema'");
+		assert!(is_retryable_conflict(&message));
+
+		assert!(!is_retryable_conflict(&anyhow!(
+			"Found 'field:person:x' for field `key`, but field must conform to: $value != 'x'"
+		)));
+	}
+
+	// A failed catalog write leaves the rollout where `repair` can finish it,
+	// says so on the record, and `repair` then does.
+	#[tokio::test]
+	async fn a_failed_catalog_write_keeps_the_rollout_repairable() {
+		let db = connect_mem_db().await;
+		let loaded = sample_loaded_spec("20260930000000__catalog_write_fails");
+		let target = vec![sample_entity("a"), sample_entity("poison")];
+		create_rollout_record(
+			&db,
+			&loaded,
+			&[],
+			&target,
+			RolloutStatus::RunningComplete,
+			&BTreeMap::new(),
+		)
+		.await
+		.expect("seed rollout record");
+		poison_entity_key(&db, "field:person:poison").await;
+
+		let err = repair_inner(&db, &loaded).await.expect_err("the catalog write must fail");
+		let hint = "surrealkit rollout repair 20260930000000__catalog_write_fails";
+		assert!(format!("{err:#}").contains(hint), "{err:#}");
+		let row = load_single_row(&db).await;
+		assert_eq!(row.get("status").and_then(|v| v.as_str()), Some("running_complete"));
+		let last_error = row.get("last_error").and_then(|v| v.as_str()).unwrap_or_default();
+		assert!(last_error.contains(hint), "last_error was {last_error:?}");
+
+		lift_poison(&db).await;
+		repair_inner(&db, &loaded).await.expect("repair after the fault clears");
+		let row = load_single_row(&db).await;
+		assert_eq!(row.get("status").and_then(|v| v.as_str()), Some("completed"));
+		assert_eq!(entity_row_count(&db).await, 2);
+	}
+
+	// A catalog wiped by a release before 1.0.0-beta.4 is put back from the
+	// rollout this one builds on, rather than recorded as an empty rollback source.
+	#[tokio::test]
+	async fn start_restores_a_wiped_catalog_from_its_predecessor() {
+		let db = connect_mem_db().await;
+		let mut predecessor = sample_loaded_spec("20260929000000__predecessor");
+		predecessor.spec.target_schema_hash = "after_predecessor".to_string();
+		let recorded = vec![sample_entity("a"), sample_entity("b")];
+		create_rollout_record(
+			&db,
+			&predecessor,
+			&[],
+			&recorded,
+			RolloutStatus::Completed,
+			&BTreeMap::new(),
+		)
+		.await
+		.expect("seed predecessor");
+
+		let empty = CatalogSnapshot {
+			version: 2,
+			entities: Vec::new(),
+			operations: Vec::new(),
+		};
+		let mut next = sample_loaded_spec("20260930000000__next");
+		next.spec.source_schema_hash = "after_predecessor".to_string();
+		let restored = restore_wiped_catalog(&db, &next, &empty).await.expect("restore");
+		assert_eq!(restored.as_deref(), Some(recorded.as_slice()));
+		assert_eq!(entity_row_count(&db).await, 2);
+
+		// A catalog that is not empty is left as it is.
+		let live = CatalogSnapshot {
+			version: 2,
+			entities: vec![sample_entity("a")],
+			operations: Vec::new(),
+		};
+		assert!(restore_wiped_catalog(&db, &next, &live).await.expect("live").is_none());
+
+		// Nothing completed here ends where this rollout starts: a first rollout
+		// legitimately starts from an empty catalog.
+		let mut first = sample_loaded_spec("20260930000001__first");
+		first.spec.source_schema_hash = "unrelated".to_string();
+		assert!(restore_wiped_catalog(&db, &first, &empty).await.expect("first").is_none());
 	}
 
 	// Issue #55: when `complete` hangs after executing all SQL steps,

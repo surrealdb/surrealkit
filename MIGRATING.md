@@ -7,7 +7,7 @@ produces the same database metadata, apart from the safety refusal for an empty
 filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
-Seven things do need attention.
+Eight things do need attention.
 
 ### 1. Move `database/seed.surql`
 
@@ -180,6 +180,35 @@ cargo install surrealkit --no-default-features --features kv-mem,cli
 That binary has no `check`/`generate`/`watch` subcommands; everything else is
 unchanged, and an `[analyze]` section in `surrealkit.toml` still parses, so the
 same config file works with either build.
+
+### 8. Finishing a rollout no longer rewrites the whole catalog
+
+Before 1.0.0-beta.4, `rollout complete`, `rollback` and `repair` replaced the
+entity catalog (`__entity` rows with `ns = 'schema'`) by deleting all of it and
+then creating every row, in two transactions. The second one grew with the whole
+schema rather than with the rollout, and on a large schema it could fail after
+the first had committed. The catalog was then left empty, the rollout stayed in
+`running_complete`, and `repair` failed the same way every time.
+
+The catalog is now brought to its target by writing only what changed, in chunks
+of bounded size. Rows are updated in place and stale rows are deleted last, so a
+failure at any point leaves every row that was there before. Transaction
+conflicts are retried, and the catalog is read back before the rollout is marked
+completed. A failed write is recorded in the rollout's `last_error`.
+
+**If a rollout is stuck in `running_complete`** after that failure, upgrade and
+run `surrealkit rollout repair <id>`. Repair rebuilds the catalog from the
+rollout record, whether it is empty, partly written or intact. If such a rollout
+was marked completed by hand while the catalog was still empty, the next
+`rollout start` restores it from that rollout's record before it starts, and
+logs that it did.
+
+The metadata DDL (your `setup.surql` and the built-in definitions) now runs only
+when it has changed since it last ran against that database, or when one of the
+metadata indexes is missing. On SurrealDB 3.2 every `DEFINE INDEX OVERWRITE`
+rebuilds the index, so each command used to rebuild the unique index the catalog
+and the rollout lock rely on. `surrealkit setup` still runs the DDL
+unconditionally.
 
 ## Opting into multiple schema modules
 
