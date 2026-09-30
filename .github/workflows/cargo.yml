@@ -57,14 +57,16 @@ jobs:
 
             # Catches packaging breaks on PRs instead of at tag time, when a partial
             # release has already happened (see 8b83dd8, where templates were missing
-            # from the published crate).
+            # from the published crate, and the v1.0.0-beta.3/beta.4 tags, where
+            # crates.io refused surrealkit for a git-only dependency after
+            # surrealkit-macros had already gone out).
             #
-            # surrealkit itself cannot use `publish --dry-run`: it depends on
-            # surrealkit-macros by exact version, which is not on crates.io until the
-            # release tag publishes it. `package --list` needs no registry resolution
-            # and verifies the thing that actually broke -- the file manifest.
-            - name: Package dry-run (macros)
-              run: cargo publish --dry-run --manifest-path crates/surrealkit-macros/Cargo.toml --locked
+            # `--workspace` packages both crates together, so surrealkit's exact
+            # requirement on surrealkit-macros resolves against the macros package
+            # built here instead of one that must already be on crates.io. The
+            # manifest checks are the ones the tag-time publish runs.
+            - name: Publish dry-run
+              run: cargo publish --workspace --dry-run --locked
 
             - name: Package contents (surrealkit)
               run: |
