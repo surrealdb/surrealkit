@@ -3873,13 +3873,7 @@ mod tests {
 	}
 
 	async fn connect_mem_db() -> Surreal<Any> {
-		use surrealdb::engine::any::connect;
-		use surrealdb::opt::Config;
-		use surrealdb::opt::capabilities::Capabilities;
-
-		let config = Config::new().capabilities(Capabilities::all());
-		let db = connect(("mem://", config)).await.expect("connect mem://");
-		db.use_ns("surrealkit_test").use_db("rollout_test").await.expect("use_ns/use_db");
+		let db = crate::test_db::fresh("rollout_test").await;
 		db.query(crate::scaffold::DEFAULT_SETUP)
 			.await
 			.expect("setup schema")

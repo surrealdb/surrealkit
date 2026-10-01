@@ -11,7 +11,7 @@ use std::{env, io};
 
 use anyhow::{Result, bail};
 use rust_dotenv::dotenv::DotEnv;
-pub use types::TestOpts;
+pub use types::{SchemaSource, TestOpts};
 
 use crate::config::{AuthLevel, DbCfg, DbOverrides};
 use crate::variables::TemplateVars;

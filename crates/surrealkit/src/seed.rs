@@ -341,19 +341,13 @@ mod tests {
 		assert!(err.contains("mkdir"), "error should say how to fix it: {err}");
 	}
 
-	use surrealdb::engine::any::connect;
-	use surrealdb::opt::Config;
-	use surrealdb::opt::capabilities::Capabilities;
 	use tempfile::TempDir;
 
 	use super::*;
 	use crate::variables::TemplateVars;
 
 	async fn mem_db() -> Surreal<Any> {
-		let config = Config::new().capabilities(Capabilities::all());
-		let db = connect(("mem://", config)).await.expect("connect mem://");
-		db.use_ns("test").use_db("seed_test").await.expect("use_ns/use_db");
-		db
+		crate::test_db::fresh("seed_test").await
 	}
 
 	#[tokio::test]

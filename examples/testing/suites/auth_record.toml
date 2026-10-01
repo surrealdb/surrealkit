@@ -1,0 +1,41 @@
+name = "auth record"
+
+# `record_id = "$auth"` is the record the actor signed in as. Rules on it act on
+# that record itself (and put it back afterwards), so permissions written as
+# `WHERE id = $auth` can be tested directly.
+
+[[cases]]
+name = "a record user and its own record"
+kind = "permissions_matrix"
+actor = "access_user"
+table = "app_user"
+record_id = "$auth"
+
+[[cases.rules]]
+name = "reads its own record"
+action = "select"
+allow = true
+
+[[cases.rules]]
+name = "updates its own record"
+action = "update"
+allow = true
+
+[[cases.rules]]
+name = "cannot delete its own record"
+action = "delete"
+allow = false
+
+[[cases]]
+name = "auth is the signed-in record"
+kind = "sql_expect"
+actor = "access_user"
+sql = "RETURN { me: $auth }"
+assertions = [{ path = "me", equals_auth = "$auth.id" }]
+
+[[cases]]
+name = "the record is intact after the in-place rules"
+kind = "sql_expect"
+actor = "access_user"
+sql = "SELECT VALUE email FROM ONLY $auth"
+assertions = [{ path = ".", equals = "viewer@example.com" }]

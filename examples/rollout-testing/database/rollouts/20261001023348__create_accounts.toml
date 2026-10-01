@@ -1,0 +1,44 @@
+id = "20261001023348__create_accounts"
+name = "create_accounts"
+source_schema_hash = "ad301433f67ec7108b54797ac5d7a61df8c92f62fa52ae631da3f49731576ac3"
+target_schema_hash = "c0083fb707fc6fa860986532a580f33a1dc7381308bd7ff252210b415c4fa2ec"
+compatibility = "phased"
+renames = []
+
+[[steps]]
+id = "apply_expand_schema"
+phase = "start"
+kind = "apply_files"
+
+[[steps.files]]
+path = "schema/account.surql"
+hash = "8748042053487e29fbf319d265e4960d44d18d23118eec36d5f9be3caf5b40cd"
+
+[[steps]]
+id = "rollback_expand_schema"
+phase = "rollback"
+kind = "remove_entities"
+
+[[steps.entities]]
+kind = "access"
+scope = "DATABASE"
+name = "member"
+
+[[steps.entities]]
+kind = "field"
+scope = "account"
+name = "email"
+
+[[steps.entities]]
+kind = "field"
+scope = "account"
+name = "passphrase"
+
+[[steps.entities]]
+kind = "index"
+scope = "account"
+name = "account_email"
+
+[[steps.entities]]
+kind = "table"
+name = "account"

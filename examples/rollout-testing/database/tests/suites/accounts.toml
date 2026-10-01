@@ -1,0 +1,101 @@
+name = "accounts and notes"
+
+[[cases]]
+name = "an account sees and edits only itself"
+kind = "permissions_matrix"
+actor = "ann"
+table = "account"
+record_id = "$auth"
+
+[[cases.rules]]
+name = "reads its own account"
+action = "select"
+allow = true
+
+[[cases.rules]]
+name = "updates its own account"
+action = "update"
+allow = true
+
+[[cases.rules]]
+name = "cannot delete its own account"
+action = "delete"
+allow = false
+
+[[cases]]
+name = "ann writes a note, numbered by the sequence"
+kind = "sql_expect"
+actor = "ann"
+sql = "CREATE ONLY note:first SET body = 'hello'"
+assertions = [
+  { path = "number", equals = 1 },
+  { path = "owner", equals_auth = "$auth.id" },
+]
+
+[[cases]]
+name = "ann can work with her note"
+kind = "permissions_matrix"
+actor = "ann"
+table = "note"
+record_id = "first"
+
+[[cases.rules]]
+name = "reads her note"
+action = "select"
+allow = true
+
+[[cases.rules]]
+name = "updates her note"
+action = "update"
+allow = true
+
+[[cases.rules]]
+name = "deletes her note"
+action = "delete"
+allow = true
+
+[[cases]]
+name = "bob cannot touch ann's note"
+kind = "permissions_matrix"
+actor = "bob"
+table = "note"
+record_id = "first"
+
+[[cases.rules]]
+name = "cannot read it"
+action = "select"
+allow = false
+
+[[cases.rules]]
+name = "cannot update it"
+action = "update"
+allow = false
+
+[[cases.rules]]
+name = "cannot delete it"
+action = "delete"
+allow = false
+
+[[cases]]
+name = "a tag has to look like one"
+kind = "sql_expect"
+actor = "ann"
+sql = "CREATE note SET body = 'x', tag = 'Not A Tag'"
+allow = false
+error_contains = "tag"
+
+[[cases]]
+name = "another account is off limits"
+kind = "permissions_matrix"
+actor = "bob"
+table = "account"
+record_id = "seeded"
+
+[[cases.rules]]
+name = "cannot read another account"
+action = "select"
+allow = false
+
+# Update and delete rules on a record other than `$auth` act on a copy, and a
+# copy of an account would collide with the original on the unique email
+# index, so they are left to the in-place `$auth` case above.

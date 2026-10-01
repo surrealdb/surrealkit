@@ -1,0 +1,38 @@
+id = "20261001023351__number_notes"
+name = "number_notes"
+source_schema_hash = "43b2ffada680ac1405565ddb94f730eec4feb39ffb519241314811d41d71bef3"
+target_schema_hash = "362044c4b950143acf7fa08f9cd241b0daf23534b52bb919f981c8bd7f26424e"
+compatibility = "phased"
+renames = []
+
+[[steps]]
+id = "apply_expand_schema"
+phase = "start"
+kind = "apply_files"
+
+[[steps.files]]
+path = "schema/note_number.surql"
+hash = "2c118e2d9cc73ee921aa922a731e62cce3f6bd53181fef67bc6f90819a7f03c4"
+
+[[steps]]
+id = "rollback_expand_schema"
+phase = "rollback"
+kind = "remove_entities"
+
+[[steps.entities]]
+kind = "field"
+scope = "note"
+name = "number"
+
+[[steps.entities]]
+kind = "sequence"
+name = "note_no"
+
+# Hand-written after planning: a data check that travels with the rollout and
+# runs wherever it is replayed.
+[[steps]]
+id = "every_note_is_numbered"
+phase = "start"
+kind = "assert_sql"
+sql = "RETURN count(SELECT * FROM note WHERE number = NONE)"
+expect = "0"

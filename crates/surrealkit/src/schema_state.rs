@@ -2903,13 +2903,7 @@ DEFINE ACCESS acc ON DATABASE TYPE RECORD
 ";
 
 	async fn mem_db() -> surrealdb::Surreal<surrealdb::engine::any::Any> {
-		use surrealdb::engine::any::connect;
-		use surrealdb::opt::Config;
-		use surrealdb::opt::capabilities::Capabilities;
-		let db =
-			connect(("mem://", Config::new().capabilities(Capabilities::all()))).await.unwrap();
-		db.use_ns("scan").use_db("scan").await.unwrap();
-		db
+		crate::test_db::fresh("scan").await
 	}
 
 	async fn schema_info(db: &surrealdb::Surreal<surrealdb::engine::any::Any>) -> String {

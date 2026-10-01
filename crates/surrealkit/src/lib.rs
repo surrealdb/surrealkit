@@ -12,6 +12,8 @@ pub mod seed;
 pub mod setup;
 mod surql_scan;
 pub mod sync;
+#[cfg(test)]
+mod test_db;
 pub mod tester;
 pub mod typegen;
 pub mod variables;

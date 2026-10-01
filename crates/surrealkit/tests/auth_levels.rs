@@ -322,6 +322,7 @@ async fn test_runner_rejects_database_auth_level() {
 		base_url: None,
 		timeout_ms: None,
 		keep_db: false,
+		schema_from: None,
 	};
 	let err = run_test(None, opts, TemplateVars::default(), &overrides)
 		.await

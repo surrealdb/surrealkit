@@ -1,0 +1,18 @@
+[defaults]
+timeout_ms = 12000
+# Every suite runs twice: once on a database built by `surrealkit sync`, once on
+# one built by replaying every rollout from an empty database. A parity check
+# that the two define the same schema runs first.
+schema_from = "both"
+
+[actors.ann]
+kind = "record"
+access = "member"
+signup_params = { email = "ann@example.test", passphrase = "correct horse" }
+signin_params = { email = "ann@example.test", passphrase = "correct horse" }
+
+[actors.bob]
+kind = "record"
+access = "member"
+signup_params = { email = "bob@example.test", passphrase = "battery staple" }
+signin_params = { email = "bob@example.test", passphrase = "battery staple" }

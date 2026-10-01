@@ -788,10 +788,6 @@ fn parse_bool(value: &str) -> Option<bool> {
 mod tests {
 	use std::fs;
 
-	use surrealdb::engine::any::connect;
-	use surrealdb::opt::Config;
-	use surrealdb::opt::capabilities::Capabilities;
-
 	use super::*;
 
 	#[test]
@@ -820,9 +816,7 @@ mod tests {
 			..SyncOpts::default()
 		};
 
-		let cfg = Config::new().capabilities(Capabilities::all());
-		let db = connect(("mem://", cfg)).await.expect("connect mem");
-		db.use_ns("watch_layout").use_db("watch_layout").await.expect("select namespace");
+		let db = crate::test_db::fresh("watch_layout").await;
 		let files =
 			collect_filesystem_schema_files(layout.folder(), &schema_dir, layout.module(), false)
 				.expect("preflight custom path");
@@ -845,10 +839,7 @@ mod tests {
 	}
 
 	async fn mem() -> Surreal<Any> {
-		let cfg = Config::new().capabilities(Capabilities::all());
-		let db = connect(("mem://", cfg)).await.expect("connect mem");
-		db.use_ns("sync_test").use_db("sync_test").await.expect("select namespace");
-		db
+		crate::test_db::fresh("sync_test").await
 	}
 
 	/// A filesystem project with one schema file, and a sync over it.
@@ -948,7 +939,13 @@ mod tests {
 
 		project.write("DEFINE SEQUENCE OVERWRITE order_no BATCH 1 START 500;\n");
 		project.sync(&db).await.expect("re-sync");
-		assert_eq!(next_id(&db).await, 500);
+		// 3.3 drops the node's cached batch, so the rewind is immediate. 3.2 keeps
+		// handing out the cached batch until a restart, which is why #93 only
+		// showed up after one there; the restart case is in the e2e scenarios.
+		let version = db.version().await.expect("server version");
+		if (version.major, version.minor) >= (3, 3) {
+			assert_eq!(next_id(&db).await, 500);
+		}
 	}
 
 	#[tokio::test]

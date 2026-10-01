@@ -48,7 +48,11 @@ use crate::core::create_surreal_client;
 pub struct ActorSession {
 	pub db: Surreal<Any>,
 	pub headers: BTreeMap<String, String>,
+	/// `$auth` as JSON: for a record user, its record id as a string.
 	pub auth: Option<Value>,
+	/// The record a record user is signed in as, kept typed so a case can act on
+	/// it with `record_id = "$auth"`.
+	pub auth_record: Option<surrealdb_types::RecordId>,
 }
 
 pub fn merged_actor_specs(
@@ -122,8 +126,10 @@ async fn build_default_bootstrap_session(
 		}
 	}
 
+	let (auth, auth_record) = fetch_auth(&db).await?;
 	Ok(ActorSession {
-		auth: fetch_auth(&db).await?,
+		auth,
+		auth_record,
 		db,
 		headers: BTreeMap::new(),
 	})
@@ -282,18 +288,23 @@ async fn build_session(
 			.or_insert_with(|| format!("Bearer {token}"));
 	}
 
+	let (auth, auth_record) = fetch_auth(&db).await?;
 	Ok(ActorSession {
-		auth: fetch_auth(&db).await?,
+		auth,
+		auth_record,
 		db,
 		headers: session_headers,
 	})
 }
 
-async fn fetch_auth(db: &Surreal<Any>) -> Result<Option<Value>> {
+async fn fetch_auth(
+	db: &Surreal<Any>,
+) -> Result<(Option<Value>, Option<surrealdb_types::RecordId>)> {
 	let mut response = db.query("RETURN $auth;").await?.check()?;
 	let raw: surrealdb_types::Value = response.take(0)?;
+	let record = raw.as_record().cloned();
 	let json = Value::from_value(raw).unwrap_or(Value::Null);
-	Ok((json != Value::Null).then_some(json))
+	Ok(((json != Value::Null).then_some(json), record))
 }
 
 pub fn actor_name_or_default(name: Option<&str>) -> &str {

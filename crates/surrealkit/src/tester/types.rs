@@ -17,6 +17,41 @@ pub struct TestOpts {
 	pub base_url: Option<String>,
 	pub timeout_ms: Option<u64>,
 	pub keep_db: bool,
+	/// How each suite's database gets its schema, overriding the config files.
+	pub schema_from: Option<SchemaSource>,
+}
+
+/// How a suite's database gets its schema.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[cfg_attr(feature = "cli", derive(clap::ValueEnum))]
+pub enum SchemaSource {
+	/// `surrealkit sync` from the schema folder. The default.
+	Sync,
+	/// Every rollout in `rollouts/`, replayed in order from an empty database,
+	/// the way a production database got its schema.
+	Rollouts,
+	/// Each suite twice, once on each, reported separately.
+	Both,
+}
+
+impl SchemaSource {
+	/// The single sources this expands to.
+	pub fn sources(self) -> &'static [SchemaSource] {
+		match self {
+			Self::Sync => &[Self::Sync],
+			Self::Rollouts => &[Self::Rollouts],
+			Self::Both => &[Self::Sync, Self::Rollouts],
+		}
+	}
+
+	pub fn label(self) -> &'static str {
+		match self {
+			Self::Sync => "sync",
+			Self::Rollouts => "rollouts",
+			Self::Both => "both",
+		}
+	}
 }
 
 #[derive(Debug, Clone, Deserialize, Default)]
@@ -24,6 +59,8 @@ pub struct TestOpts {
 pub struct GlobalTestConfig {
 	#[serde(default)]
 	pub defaults: GlobalDefaults,
+	#[serde(default)]
+	pub rollouts: RolloutTestConfig,
 	#[serde(default)]
 	pub actors: BTreeMap<String, ActorSpec>,
 	#[serde(default)]
@@ -35,12 +72,26 @@ pub struct GlobalTestConfig {
 pub struct GlobalDefaults {
 	pub base_url: Option<String>,
 	pub timeout_ms: Option<u64>,
+	/// How suites get their schema unless a suite says otherwise.
+	pub schema_from: Option<SchemaSource>,
+}
+
+/// The `[rollouts]` section of `tests/config.toml`.
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RolloutTestConfig {
+	/// Before any suite runs on replayed rollouts, build one database with sync
+	/// and one from the rollouts, and fail if their schemas differ. On by
+	/// default.
+	pub parity: Option<bool>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SuiteSpec {
 	pub name: Option<String>,
+	/// How this suite's database gets its schema, overriding `[defaults]`.
+	pub schema_from: Option<SchemaSource>,
 	#[serde(default)]
 	pub tags: Vec<String>,
 	#[serde(default)]
@@ -143,6 +194,8 @@ pub struct SqlExpectCase {
 pub struct PermissionsMatrixCase {
 	pub actor: Option<String>,
 	pub table: String,
+	/// The record the rules act on, by key. `"$auth"` means the record the actor
+	/// is signed in as.
 	pub record_id: Option<String>,
 	#[serde(default)]
 	pub rules: Vec<PermissionRuleSpec>,
@@ -151,6 +204,8 @@ pub struct PermissionsMatrixCase {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct PermissionRuleSpec {
+	/// Shown in the report instead of `action:<action> (#n)`.
+	pub name: Option<String>,
 	pub action: PermissionAction,
 	#[serde(default = "default_true")]
 	pub allow: bool,
@@ -375,5 +430,56 @@ error_contains = "permission"
 		let suite: SuiteSpec = toml::from_str(raw).expect("suite should parse");
 		assert_eq!(suite.cases.len(), 1);
 		assert!(matches!(suite.cases[0].kind, CaseKind::SqlExpect(_)));
+	}
+
+	#[test]
+	fn the_issue_example_suite_parses_with_named_rules() {
+		let raw = r#"
+name = "user"
+
+[actors.record]
+kind = "record"
+access = "human_passphrase"
+signup_params = { email = "user@example.test", passphrase = "abc" }
+signin_params = { email = "user@example.test", passphrase = "abc" }
+
+[[cases]]
+name = "user can be created and signed in and read its own record"
+kind = "permissions_matrix"
+actor = "record"
+table = "user"
+record_id = "$auth"
+
+[[cases.rules]]
+name = "reads its own record"
+action = "select"
+allow = true
+
+[[cases.rules]]
+action = "select"
+"#;
+		let suite: SuiteSpec = toml::from_str(raw).expect("suite should parse");
+		let CaseKind::PermissionsMatrix(matrix) = &suite.cases[0].kind else {
+			panic!("expected a permissions_matrix case");
+		};
+		assert_eq!(matrix.record_id.as_deref(), Some("$auth"));
+		assert_eq!(matrix.rules[0].name.as_deref(), Some("reads its own record"));
+		assert_eq!(matrix.rules[1].name, None);
+		assert!(matrix.rules[1].allow, "allow defaults to true");
+	}
+
+	#[test]
+	fn schema_from_parses_at_both_levels() {
+		use super::SchemaSource;
+		let global: GlobalTestConfig =
+			toml::from_str("[defaults]\nschema_from = \"both\"\n\n[rollouts]\nparity = false\n")
+				.unwrap();
+		assert_eq!(global.defaults.schema_from, Some(SchemaSource::Both));
+		assert_eq!(global.rollouts.parity, Some(false));
+		let suite: SuiteSpec = toml::from_str("schema_from = \"rollouts\"\n").unwrap();
+		assert_eq!(suite.schema_from, Some(SchemaSource::Rollouts));
+		assert!(toml::from_str::<SuiteSpec>("schema_from = \"migrations\"\n").is_err());
+		assert!(toml::from_str::<GlobalTestConfig>("[rollouts]\nparty = true\n").is_err());
+		assert_eq!(SchemaSource::Both.sources(), &[SchemaSource::Sync, SchemaSource::Rollouts]);
 	}
 }

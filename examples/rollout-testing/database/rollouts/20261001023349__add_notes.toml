@@ -1,0 +1,39 @@
+id = "20261001023349__add_notes"
+name = "add_notes"
+source_schema_hash = "c0083fb707fc6fa860986532a580f33a1dc7381308bd7ff252210b415c4fa2ec"
+target_schema_hash = "43b2ffada680ac1405565ddb94f730eec4feb39ffb519241314811d41d71bef3"
+compatibility = "phased"
+renames = []
+
+[[steps]]
+id = "apply_expand_schema"
+phase = "start"
+kind = "apply_files"
+
+[[steps.files]]
+path = "schema/note.surql"
+hash = "ea1247ec645c37f2876275555619d75223e6b3ac6faec5b461d27f71c17c0623"
+
+[[steps]]
+id = "rollback_expand_schema"
+phase = "rollback"
+kind = "remove_entities"
+
+[[steps.entities]]
+kind = "field"
+scope = "note"
+name = "body"
+
+[[steps.entities]]
+kind = "field"
+scope = "note"
+name = "owner"
+
+[[steps.entities]]
+kind = "field"
+scope = "note"
+name = "tag"
+
+[[steps.entities]]
+kind = "table"
+name = "note"

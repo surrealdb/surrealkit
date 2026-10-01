@@ -141,17 +141,11 @@ async fn setup_is_current(db: &Surreal<Any>, hash: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-	use surrealdb::engine::any::connect;
-	use surrealdb::opt::Config;
-	use surrealdb::opt::capabilities::Capabilities;
 
 	use super::*;
 
 	async fn connect_mem_db() -> Surreal<Any> {
-		let config = Config::new().capabilities(Capabilities::all());
-		let db = connect(("mem://", config)).await.expect("connect mem://");
-		db.use_ns("surrealkit_test").use_db("setup_test").await.expect("use_ns/use_db");
-		db
+		crate::test_db::fresh("setup_test").await
 	}
 
 	/// Redefine a field the setup DDL owns, so a later run shows whether it ran:

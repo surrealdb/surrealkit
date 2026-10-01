@@ -190,6 +190,11 @@ enum Commands {
 		timeout_ms: Option<u64>,
 		#[arg(long)]
 		keep_db: bool,
+		/// How each suite's database gets its schema: `sync` from the schema
+		/// folder (the default), `rollouts` replayed in order from empty, or
+		/// `both`, running every suite once on each.
+		#[arg(long, value_enum, value_name = "SOURCE")]
+		schema_from: Option<surrealkit::tester::SchemaSource>,
 	},
 	/// Introspect the database and generate a typed schema document (JSON).
 	Typegen {
@@ -887,6 +892,7 @@ async fn main() -> Result<()> {
 			base_url,
 			timeout_ms,
 			keep_db,
+			schema_from,
 		} => {
 			run_test(
 				env.as_ref(),
@@ -903,6 +909,7 @@ async fn main() -> Result<()> {
 					base_url,
 					timeout_ms,
 					keep_db,
+					schema_from,
 				},
 				template_vars,
 				&overrides,

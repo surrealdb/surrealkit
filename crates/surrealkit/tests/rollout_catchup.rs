@@ -24,11 +24,27 @@ use surrealkit::{
 	TemplateVars,
 };
 
+/// A fresh database: in memory by default, or a new namespace on the server at
+/// `SURREALKIT_TEST_URL`, so the same tests also run against a released server
+/// (CI covers 3.2.4 and 3.3.0, whose SurrealQL differs in places).
 async fn mem_db() -> Surreal<Any> {
-	let db = connect(("mem://", Config::new().capabilities(Capabilities::all())))
-		.await
-		.expect("connect");
-	db.use_ns("catchup").use_db("catchup").await.expect("use");
+	let db = match std::env::var("SURREALKIT_TEST_URL").ok().filter(|url| !url.is_empty()) {
+		Some(url) => {
+			let db = connect(url).await.expect("connect");
+			db.signin(surrealdb::opt::auth::Root {
+				username: std::env::var("SURREALKIT_TEST_USER").unwrap_or_else(|_| "root".into()),
+				password: std::env::var("SURREALKIT_TEST_PASS").unwrap_or_else(|_| "secret".into()),
+			})
+			.await
+			.expect("signin");
+			db
+		}
+		None => connect(("mem://", Config::new().capabilities(Capabilities::all())))
+			.await
+			.expect("connect"),
+	};
+	let ns = format!("catchup_{}", surrealdb_types::uuid::Uuid::new_v4().simple());
+	db.use_ns(ns).use_db("catchup").await.expect("use");
 	db
 }
 

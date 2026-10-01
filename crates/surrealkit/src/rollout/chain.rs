@@ -278,7 +278,7 @@ impl Ledger {
 		let mut resp = db
 			.query(
 				"SELECT record::id(id) AS id, status, last_error, steps FROM __rollout; \
-				 SELECT record::id(id) AS id, target_schema_hash FROM __rollout \
+				 SELECT record::id(id) AS id, target_schema_hash, completed_at FROM __rollout \
 				 WHERE status = 'completed' AND target_schema_hash != '' \
 				 ORDER BY completed_at DESC LIMIT 1;",
 			)
@@ -489,6 +489,12 @@ pub(crate) fn locate<'a>(
 						id,
 						..
 					} if chain.position_of(id).is_some() => chain.position_of(id).expect("checked") + 1,
+					Position::Empty => bail!(
+						"this database is empty, and no manifest starts from an empty schema: the \
+						 first rollout here was planned on top of an existing one (after `rollout \
+						 baseline`). Create the schema first (`surrealkit sync`, then `surrealkit \
+						 rollout baseline`), or pass `--from <id>`."
+					),
 					_ => bail!(
 						"this database is {} (schema {}), and no manifest starts from there. Its \
 						 schema was changed some other way, or the manifests it ran are not in this \
@@ -842,7 +848,7 @@ mod tests {
 		let err = locate(&five(), &ledger(&[], None), &baseline(None, true), None)
 			.unwrap_err()
 			.to_string();
-		assert!(err.contains("no manifest starts from there"), "{err}");
+		assert!(err.contains("no manifest starts from an empty schema"), "{err}");
 	}
 
 	#[test]

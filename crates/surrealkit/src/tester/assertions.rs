@@ -235,6 +235,12 @@ fn lookup_auth_value<'a>(auth: &'a Value, auth_ref: &str) -> Option<&'a Value> {
 		return Some(auth);
 	}
 	let path = auth_ref.strip_prefix("$auth.")?;
+	// For a record user `$auth` is the record id itself, which reaches the
+	// tester as its string form, so `$auth.id` is that same string. Before this,
+	// the documented `equals_auth = "$auth.id"` could never resolve.
+	if path == "id" && auth.is_string() {
+		return Some(auth);
+	}
 	lookup_path(auth, path)
 }
 
@@ -454,5 +460,20 @@ mod tests {
 		assert!(matched.passed, "{}", matched.message);
 		assert!(!mismatched.passed);
 		assert!(mismatched.message.contains("expected 'text/plain' got 'application/json'"));
+	}
+
+	#[test]
+	fn auth_id_resolves_for_a_record_user() {
+		// For a record user the tester holds `$auth` as the record id string.
+		let auth = serde_json::json!("user:abc");
+		assert_eq!(lookup_auth_value(&auth, "$auth"), Some(&auth));
+		assert_eq!(lookup_auth_value(&auth, "$auth.id"), Some(&auth));
+		assert_eq!(lookup_auth_value(&auth, "$auth.email"), None);
+		// An object `$auth` still resolves by path.
+		let object = serde_json::json!({ "id": "user:abc", "email": "a@example.test" });
+		assert_eq!(
+			lookup_auth_value(&object, "$auth.email"),
+			Some(&serde_json::json!("a@example.test"))
+		);
 	}
 }
