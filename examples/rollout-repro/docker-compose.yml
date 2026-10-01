@@ -9,7 +9,9 @@ name: surrealkit-rollout-repro
 
 services:
     surrealdb:
-        image: surrealdb/surrealdb:v3.2.4
+        # Pinned to the server the before/after comparison was recorded against.
+        # Override with SURREALDB_IMAGE to run the same harness on another version.
+        image: ${SURREALDB_IMAGE:-surrealdb/surrealdb:v3.2.4}
         command: start --user root --pass secret memory
         healthcheck:
             test:

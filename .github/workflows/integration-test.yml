@@ -23,9 +23,15 @@ permissions:
 
 jobs:
     integration_test:
-        name: Surrealkit integration tests
+        name: Surrealkit integration tests (SurrealDB ${{ matrix.surrealdb }})
         runs-on: ubuntu-22.04
         timeout-minutes: 15
+        strategy:
+            fail-fast: false
+            matrix:
+                # The previous minor's latest patch and the current minor. 3.3
+                # tightened auth handling, which is exactly what these suites hit.
+                surrealdb: ["v3.2.4", "v3.3.0"]
         env:
             SURREALKIT_TEST_BASE_URL: http://127.0.0.1:8000
             SURREALDB_FOLDER: ${{ github.workspace }}/database
@@ -40,7 +46,7 @@ jobs:
 
         services:
             surrealdb:
-                image: surrealdb/surrealdb:v3.2.4
+                image: surrealdb/surrealdb:${{ matrix.surrealdb }}
                 command: start --user root --pass secret memory
                 ports:
                     - 8000:8000
@@ -71,7 +77,7 @@ jobs:
             - name: Install Rust toolchain
               uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
               with:
-                  toolchain: 1.94.0
+                  toolchain: 1.95.0
 
             - name: Build surrealkit (debug)
               env:
@@ -135,7 +141,7 @@ jobs:
               if: always()
               uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
               with:
-                  name: integration-test-report
+                  name: integration-test-report-${{ matrix.surrealdb }}
                   path: database/tests/report.json
                   if-no-files-found: warn
 
@@ -150,8 +156,9 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                # The two versions users are actually on.
-                surrealdb: ["v3.2.0", "v3.2.4"]
+                # The minimum supported server, the previous minor's latest patch,
+                # and the current minor (the embedded engine's version).
+                surrealdb: ["v3.2.0", "v3.2.4", "v3.3.0"]
         env:
             SURREALDB_HOST: ws://127.0.0.1:8000
             SURREALDB_NAME: rollout_db
@@ -171,7 +178,7 @@ jobs:
             - name: Install Rust toolchain
               uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
               with:
-                  toolchain: 1.94.0
+                  toolchain: 1.95.0
 
             - name: Build surrealkit (debug)
               env:

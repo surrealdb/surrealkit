@@ -11,7 +11,7 @@
 
 ARG SOURCE=worktree
 
-FROM rust:1.94-slim-bookworm AS build-worktree
+FROM rust:1.95-slim-bookworm AS build-worktree
 WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates

@@ -16,6 +16,13 @@ fn toml_to_surreal(val: toml::Value) -> surrealdb_types::Value {
 		toml::Value::Boolean(b) => surrealdb_types::Value::Bool(b),
 		toml::Value::Datetime(dt) => {
 			let s = dt.to_string();
+			// Only an offset datetime names an instant. SurrealDB 3.3's parser also
+			// accepts a bare date or a local time, which 3.2 rejected, so promoting
+			// those would quietly turn `dob = 1979-05-27` from a string into a
+			// midnight-UTC datetime. Keep the 3.2 behaviour: they stay strings.
+			if dt.date.is_none() || dt.time.is_none() || dt.offset.is_none() {
+				return surrealdb_types::Value::String(s);
+			}
 			s.parse::<surrealdb_types::Datetime>()
 				.map(surrealdb_types::Value::Datetime)
 				.unwrap_or_else(|_| surrealdb_types::Value::String(s))
@@ -353,6 +360,30 @@ mod tests {
 			}
 			other => panic!("expected Object, got {other:?}"),
 		}
+	}
+
+	#[test_case::test_case("dob = 1979-05-27\n" ; "local date")]
+	#[test_case::test_case("at = 07:32:00\n" ; "local time")]
+	#[test_case::test_case("at = 1979-05-27T07:32:00\n" ; "local datetime")]
+	fn toml_datetime_without_offset_stays_string(src: &str) {
+		let val: toml::Value = toml::from_str(src).unwrap();
+		let surrealdb_types::Value::Object(obj) = toml_to_surreal(val) else {
+			panic!("expected Object");
+		};
+		let (_, value) = obj.iter().next().expect("one key");
+		assert!(
+			matches!(value, surrealdb_types::Value::String(_)),
+			"a TOML date or time without an offset must stay a string, got: {value:?}"
+		);
+	}
+
+	#[test]
+	fn toml_offset_datetime_with_non_utc_offset_converts() {
+		let val: toml::Value = toml::from_str("at = 1979-05-27T00:32:00-07:00\n").unwrap();
+		let surrealdb_types::Value::Object(obj) = toml_to_surreal(val) else {
+			panic!("expected Object");
+		};
+		assert!(matches!(obj.get("at").unwrap(), surrealdb_types::Value::Datetime(_)));
 	}
 
 	#[test]
