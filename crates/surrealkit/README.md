@@ -12,7 +12,7 @@ The library is useful when you want schema management to happen inside your proc
 
 ```toml
 [dependencies]
-surrealkit = "1.0.0-beta.1"
+surrealkit = "1.0.0-beta.6"
 ```
 
 ---
@@ -27,11 +27,14 @@ only it needs — `clap`, `inquire`, `rustls` (and its `aws-lc-rs` backend) and
 
 ```toml
 [dependencies]
-surrealkit = { version = "1.0.0-beta.1", default-features = false, features = ["kv-mem"] }
+surrealkit = { version = "1.0.0-beta.6", default-features = false, features = ["kv-mem"] }
 ```
 
 Storage engines: `kv-mem` (default), `kv-surrealkv`, `kv-rocksdb`, and `embedded`
 for all three. Remote connections over HTTP need no feature.
+
+SurrealKit builds against SurrealDB 3.3, so the embedded engines are 3.3. It
+works with servers from 3.2.0 on. It needs Rust 1.95.
 
 > You do not need these features to target an embedded engine from a library:
 > cargo unifies features across the dependency graph, so enabling e.g.
@@ -96,7 +99,7 @@ SurrealKit works against an in-process SurrealDB such as `mem://`, `surrealkv://
 
 ```toml
 [dependencies]
-surrealkit = "1.0.0-beta.1"
+surrealkit = "1.0.0-beta.6"
 surrealdb = { version = "3", features = ["kv-surrealkv"] }
 ```
 
@@ -254,10 +257,36 @@ Each [`RolloutStep`] carries exactly one action, built with a constructor — in
 
 | Constructor | What it does |
 |---|---|
-| `RolloutStep::apply_schema(id, phase, sql)` | Apply inline DDL (`OVERWRITE` is injected; safe to retry) |
+| `RolloutStep::apply_schema(id, phase, sql)` | Apply inline DDL, made safe to re-apply (see below) |
+| `RolloutStep::apply_files(id, phase, files)` | Apply `.surql` files: [`FileRef`] paths, or [`FrozenFile`]s planned by the CLI (these need `.folder(..)`) |
 | `RolloutStep::run_sql(id, phase, sql)` | Run data-mutation SQL (must be safe to re-run) |
 | `RolloutStep::assert_sql(id, phase, sql, expect)` | Assert a query's output equals `expect` |
 | `RolloutStep::remove_entities(id, phase, entities)` | `REMOVE … IF EXISTS` the given objects |
+
+DDL is made safe to re-apply by [`schema_state::prepare_schema_sql`]: `OVERWRITE`
+for every kind but `DEFINE SEQUENCE`, which is applied with `IF NOT EXISTS`
+because `OVERWRITE` resets its counter.
+
+### Running a project's rollouts in order
+
+The CLI's `rollout plan` writes manifests into `<folder>/rollouts/`, each with
+its SQL frozen beside it. [`Rollouts`] runs the ones a database has not run yet,
+in order, the way `surrealkit rollout up` does:
+
+```rust,no_run
+# use surrealkit::{Rollouts, Surreal};
+# use surrealkit::engine::any::Any;
+# async fn run(db: &Surreal<Any>) -> anyhow::Result<()> {
+let rollouts = Rollouts::load("./database")?;
+println!("pending: {:?}", rollouts.pending(db).await?.pending);
+
+let report = rollouts.up(db).await?;           // the newest is left ready to complete
+if report.waiting.is_some() {
+    // ... cut the application over ...
+    rollouts.clone().complete_newest(true).up(db).await?;
+}
+# Ok(()) }
+```
 
 ### Recovery / stuck rollouts
 

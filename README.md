@@ -465,15 +465,56 @@ undo for `ASSERT`, `PERMISSIONS` and `COMMENT`, and only a partial one for `TYPE
 under the new definition. Such a rollout is recorded as
 `reversibility: definition_only` and `rollout status` says so.
 
-`plan` writes the snapshots alongside the manifest, so commit the two together.
-Reverting a plan you decided not to run means reverting both.
+`plan` freezes a copy of every schema file the rollout changes into a directory
+beside the manifest, `database/rollouts/<id>/`, and records each file's sha256 in
+the manifest. The rollout applies those copies, not whatever `database/schema`
+holds when it runs, so a rollout planned for release 1.0.3 still applies 1.0.3's
+SQL when a database catches up to 1.0.5. Frozen files are what was reviewed:
+editing one fails the rollout with a hash mismatch; plan a new rollout instead.
 
-6. Start the rollout, let application cutover happen, then complete it:
+`plan` also writes the snapshots, so commit the manifest, its directory and the
+snapshots together. Reverting a plan you decided not to run means reverting all
+three.
+
+Steps you add to a manifest by hand (a `run_sql` backfill, an `assert_sql`
+check) travel with it, and run wherever it runs.
+
+6. Deploy with `rollout up`, let application cutover happen, then complete:
+
+```sh
+surrealkit rollout up               # every pending rollout, in order
+# deploy the application
+surrealkit rollout up --complete    # finish the newest
+```
+
+`up` works out where the database is (from its completed rollouts, or for a
+database that has only been baselined, from the file hashes `baseline` stored)
+and runs every rollout it has not run yet, in order. Each one is started and
+completed, except the newest, which is started and left `ready_to_complete` so
+the old and new application can overlap. Running `up` again leaves it waiting;
+`up --complete` or `rollout complete <id>` finishes it.
+
+Catching up across several releases runs the older rollouts' contract phases
+straight away, so anything they remove is gone before the new application
+starts. That is the same as running each release's deploy in turn.
+
+Rollouts can still be driven one at a time:
 
 ```sh
 surrealkit rollout start 20260302153045__add_customer_indexes
 surrealkit rollout complete 20260302153045__add_customer_indexes
 ```
+
+`start` refuses a rollout whose predecessors have not run here, and names them.
+
+`surrealkit rollout up --dry-run` shows what would run. `--from <id>` names the
+first rollout a database still needs, when its history cannot say: say, one
+whose schema was applied by hand.
+
+A new database should get its schema with `surrealkit sync` and then
+`surrealkit rollout baseline`, after which `up` has nothing to do. If the first
+rollout in the project was planned from an empty schema folder, `up` can also
+build a database from nothing.
 
 7. Roll back an in-flight rollout if needed:
 
@@ -493,6 +534,39 @@ To validate a rollout manifest without mutating the database:
 surrealkit rollout lint 20260302153045__add_customer_indexes
 ```
 
+Without an id, `lint` checks every manifest and how they chain, without
+connecting. That suits a CI check:
+
+```sh
+surrealkit rollout lint
+```
+
+It fails on:
+- two rollouts planned from the same snapshots (two branches each ran `plan`;
+  delete the later one and plan it again after merging)
+- a gap in the chain
+- a frozen file that does not match its manifest
+- schema files that no rollout plans yet
+
+Manifests planned before 1.0.0-beta.6 do not carry their SQL, and can only run
+against the schema they were planned from. `lint` lists them. To let a
+database catch up across one, check out the commit that planned it and run:
+
+```sh
+surrealkit rollout freeze 20260302153045__add_customer_indexes
+```
+
+If you check out on Windows, keep git from converting line endings in frozen
+files, which would change their hashes:
+
+```gitattributes
+database/rollouts/** -text
+```
+
+`rollout status` lists, after the rollout records, what is still pending in
+order, and any rollout the database moved past without running (whose data
+steps never ran there).
+
 To inspect rollout state stored in the database:
 
 ```sh
@@ -510,6 +584,31 @@ To allow non-`DEFINE` statements (e.g. `INSERT`, `UPDATE`, `CREATE`) in schema f
 ```sh
 surrealkit sync --allow-all-statements
 ```
+
+### How schema files are applied
+
+Sync and rollouts re-apply whole files, so every `DEFINE` is made safe to run
+again: SurrealKit adds `OVERWRITE`, and turns `IF NOT EXISTS` into `OVERWRITE`
+so a changed definition is applied. Everything else in the statement, comments
+and regex literals included, reaches the server exactly as written.
+
+`DEFINE SEQUENCE` is the exception, because a sequence's definition carries its
+counter: `OVERWRITE` puts it back to `START` (immediately on SurrealDB 3.3, after
+a restart on 3.2), and the ids it hands out next collide with existing records.
+A plain `DEFINE SEQUENCE` is applied as `IF NOT EXISTS`, and an explicit
+`IF NOT EXISTS` is kept. A changed definition therefore does not reach a database
+where the sequence exists, and sync says so. An explicit `OVERWRITE` is applied as
+written, with a warning every time. Reposition a sequence deliberately, in a
+rollout `run_sql` step or by hand.
+
+A record `DEFINE ACCESS` with no `WITH JWT ... KEY` gets a new random signing key
+every time it is overwritten, which signs every user out. SurrealKit warns when it
+applies one. Give it a stable key, for example
+`WITH JWT ALGORITHM HS512 KEY ${JWT_SECRET}`.
+
+A file SurrealKit cannot read (an unterminated string, an unmatched bracket, a
+`DEFINE` that starts inside another statement) stops sync or plan with the file,
+line and column, before anything is applied or pruned.
 
 `surrealkit sync` is the local/dev reconciliation path. `surrealkit rollout ...` is the shared/prod migration path.
 
@@ -663,6 +762,35 @@ The runner performs filesystem sync first, so the same non-empty source prefligh
 applies. Use `--no-sync` when the suite's fixtures intentionally own the complete
 schema instead.
 
+### Testing against replayed rollouts
+
+A suite can get its database's schema from the rollouts instead of sync, the
+way production got it:
+
+```toml
+# database/tests/config.toml
+[defaults]
+schema_from = "both"   # "sync" (the default), "rollouts", or "both"
+```
+
+With `rollouts`, each suite's database is built by replaying every rollout in
+order from an empty database, which needs the first rollout to have been
+planned from an empty schema folder. With `both`, every suite runs once on each,
+reported as `name [sync]` and `name [rollouts]`. A suite can set `schema_from`
+itself, and `surrealkit test --schema-from <source>` overrides both.
+
+Whenever rollouts are replayed, a parity check runs first. It builds one
+database with sync and one from the rollouts, and fails on any definition they
+disagree on. That is how a schema change nobody planned a rollout for shows up.
+Turn it off with:
+
+```toml
+[rollouts]
+parity = false
+```
+
+See [examples/rollout-testing](examples/rollout-testing).
+
 ### CLI Flags
 
 `surrealkit test` supports:
@@ -679,6 +807,7 @@ schema instead.
 - `--base-url <url>`
 - `--timeout-ms <ms>`
 - `--keep-db`
+- `--schema-from <sync|rollouts|both>`
 
 ### Global Config
 
@@ -787,6 +916,7 @@ table = "order"
 record_id = "perm_test"
 
 [[cases.rules]]
+name = "reader can see orders"
 action = "select"
 allow = true
 
@@ -795,6 +925,46 @@ action = "update"
 allow = false
 error_contains = "permission"
 ```
+
+A rule's `name` is what the report shows; without one it reads `action:update (#2)`.
+
+Update and delete rules act on a copy of the record, with a new id, so the
+record itself is untouched. Create rules create a new record with its content.
+
+`record_id = "$auth"` targets the record the actor is signed in as:
+
+```toml
+[actors.record]
+kind = "record"
+access = "human_passphrase"
+signup_params = { email = "user@example.test", passphrase = "abc" }
+signin_params = { email = "user@example.test", passphrase = "abc" }
+
+[[cases]]
+name = "user can be created and signed in and read its own record"
+kind = "permissions_matrix"
+actor = "record"
+table = "user"
+record_id = "$auth"
+
+[[cases.rules]]
+name = "reads its own record"
+action = "select"
+allow = true
+
+[[cases.rules]]
+name = "updates its own record"
+action = "update"
+allow = true
+```
+
+With `$auth`, update and delete rules act on the record itself, because a
+permission written as `WHERE id = $auth` can never match a copy. Root puts the
+record back afterwards: an update is reverted with the record's original content
+(fields computed with `VALUE` are recomputed then), and a deleted record is
+created again (anything the delete cascaded to through `REFERENCE ... ON DELETE`
+is not). `table` must be the table of the signed-in record. A create rule on
+`$auth` is rejected when the suite loads, since signup already created it.
 
 ### JSON Reports for CI
 
