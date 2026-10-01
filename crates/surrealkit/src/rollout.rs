@@ -18,11 +18,12 @@ use crate::constants::{catalog_snapshot_path, rollouts_dir};
 use crate::core::{exec_surql, sha256_hex};
 use crate::module::{Module, Partition};
 use crate::schema_state::{
-	CatalogDiff, CatalogEntity, CatalogSnapshot, EntityKey, EntityKind, FileDiff, SchemaFile,
-	build_catalog_snapshot, canonicalise_recorded_path, collect_schema_files, diff_catalog,
-	diff_schema, ensure_local_state_dirs, ensure_overwrite, hash_schema_snapshot,
-	load_catalog_snapshot, load_schema_snapshot, render_remove_sql, save_catalog_snapshot,
-	save_schema_snapshot, snapshot_from_files, strip_folder_prefix, verify_schema_hash,
+	CatalogChange, CatalogDiff, CatalogEntity, CatalogSnapshot, EntityKey, EntityKind, FileDiff,
+	SchemaFile, build_catalog_snapshot, canonicalise_recorded_path, collect_schema_files,
+	diff_catalog, diff_schema, ensure_local_state_dirs, hash_schema_snapshot,
+	load_catalog_snapshot, load_schema_snapshot, overwrite_sequences, prepare_schema_sql,
+	render_remove_sql, save_catalog_snapshot, save_schema_snapshot, snapshot_from_files,
+	strip_folder_prefix, verify_schema_hash,
 };
 use crate::setup::run_setup;
 use crate::variables::TemplateVars;
@@ -676,7 +677,7 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 	let file_diff = diff_schema(&old_schema, &new_schema);
 	let catalog_diff = diff_catalog(&old_catalog, &new_catalog);
 
-	validate_autoplan(&catalog_diff, opts.allow_modified)?;
+	validate_autoplan(&catalog_diff, opts.allow_modified, &overwrite_sequences(&files))?;
 
 	let name = opts.name.unwrap_or_else(|| "schema_rollout".to_string());
 	let slug = slugify(&name);
@@ -1001,6 +1002,9 @@ async fn start_inner(
 		// capture, and `rollout rollback` would be permanently unavailable for that
 		// rollout with no way to recover it. Capturing first means a failure here
 		// leaves no record at all, so re-running `start` is still a first run.
+		// Sequences, users and access methods are never restored (see
+		// `unrestorable`), so there is nothing to capture for them, and no point
+		// warning that their live definition is missing.
 		let restorable: Vec<EntityKey> = rollout
 			.spec
 			.steps
@@ -1012,6 +1016,7 @@ async fn start_inner(
 				_ => None,
 			})
 			.flatten()
+			.filter(|entity| restorable_kind(&entity.kind))
 			.collect();
 
 		match record.as_ref() {
@@ -1895,9 +1900,31 @@ fn build_rollout_spec(
 
 	// A modified entity cannot be undone by removing it -- it existed before. The
 	// rollback re-applies whatever definition `start` captured from the live
-	// database.
-	let modified_entities: Vec<EntityKey> =
-		catalog_diff.modified.iter().map(|change| change.new.key()).collect();
+	// database. Some kinds cannot be restored that way; they are left out, and
+	// planning says so.
+	for change in &catalog_diff.modified {
+		if !restorable_kind(&change.new.kind) {
+			log::warn!(
+				"{} changed, and `rollout rollback` will not restore its previous definition: {}",
+				describe_entity(&change.new),
+				match change.new.kind {
+					EntityKind::Sequence => {
+						"sequences are applied with IF NOT EXISTS, so the change does not reach a \
+						 database where the sequence already exists. To reposition one, add a \
+						 run_sql step"
+					}
+					_ =>
+						"SurrealDB redacts its secrets in INFO output, so there is nothing safe to restore",
+				}
+			);
+		}
+	}
+	let modified_entities: Vec<EntityKey> = catalog_diff
+		.modified
+		.iter()
+		.map(|change| change.new.key())
+		.filter(|key| restorable_kind(&key.kind))
+		.collect();
 	if !modified_entities.is_empty() {
 		steps.push(RolloutStep::restore_definitions(
 			"rollback_modified_schema",
@@ -1928,6 +1955,13 @@ fn build_rollout_spec(
 	})
 }
 
+/// Whether a rollback can restore this kind of entity from its captured `INFO`
+/// definition. See `unrestorable` for why sequences, users and access methods
+/// cannot.
+fn restorable_kind(kind: &EntityKind) -> bool {
+	!matches!(kind, EntityKind::Sequence | EntityKind::User | EntityKind::Access)
+}
+
 /// A human-readable, scope-qualified name for a catalog entity.
 ///
 /// The refusal used to print `field:email`, which is ambiguous the moment two
@@ -1944,10 +1978,25 @@ fn describe_entity(entity: &CatalogEntity) -> String {
 	}
 }
 
-fn validate_autoplan(diff: &CatalogDiff, allow_modified: bool) -> Result<()> {
-	if !diff.modified.is_empty() && !allow_modified {
-		let names = diff
-			.modified
+fn validate_autoplan(
+	diff: &CatalogDiff,
+	allow_modified: bool,
+	overwrite_sequences: &BTreeSet<String>,
+) -> Result<()> {
+	// A changed sequence without OVERWRITE is applied with IF NOT EXISTS, which
+	// leaves an existing one alone, so there is nothing for a rollback to undo
+	// and no reason to ask for the opt-in. One that says OVERWRITE does reset the
+	// counter, so it stays gated.
+	let gated: Vec<&CatalogChange> = diff
+		.modified
+		.iter()
+		.filter(|change| {
+			change.new.kind != EntityKind::Sequence
+				|| overwrite_sequences.contains(&change.new.name)
+		})
+		.collect();
+	if !gated.is_empty() && !allow_modified {
+		let names = gated
 			.iter()
 			.map(|change| describe_entity(&change.new))
 			.collect::<Vec<_>>()
@@ -1962,13 +2011,13 @@ fn validate_autoplan(diff: &CatalogDiff, allow_modified: bool) -> Result<()> {
 			 a partial one for TYPE, VALUE or DEFAULT changes.\n\n\
 			 Re-run with --allow-modified once you are satisfied that is the right undo, or \
 			 author a manual manifest.",
-			diff.modified.len(),
-			if diff.modified.len() == 1 {
+			gated.len(),
+			if gated.len() == 1 {
 				"y"
 			} else {
 				"ies"
 			},
-			if diff.modified.len() == 1 {
+			if gated.len() == 1 {
 				"it"
 			} else {
 				"them"
@@ -2380,7 +2429,7 @@ async fn execute_step(
 			sql,
 		} => {
 			let substituted = vars.apply(sql)?;
-			run(ensure_overwrite(&substituted)).await
+			run(prepare_logged(&substituted, &format!("step '{}'", step.id))?).await
 		}
 		RolloutAction::ApplyFiles {
 			files,
@@ -2392,7 +2441,7 @@ async fn execute_step(
 				let substituted = vars.apply(&raw).with_context(|| {
 					format!("applying template variables in {}", path.display())
 				})?;
-				run(ensure_overwrite(&substituted)).await?;
+				run(prepare_logged(&substituted, &path.display().to_string())?).await?;
 			}
 			Ok(())
 		}
@@ -2435,8 +2484,14 @@ async fn execute_step(
 			let mut missing = Vec::new();
 			for entity in entities {
 				let key = entity_key_string(&entity.kind, entity.scope.as_deref(), &entity.name);
+				if let Some(reason) = unrestorable(entity, captured.get(&key).map(String::as_str)) {
+					log::warn!("step '{}': not restoring {key}: {reason}", step.id);
+					continue;
+				}
 				match captured.get(&key) {
-					Some(definition) => statements.push(ensure_overwrite(definition)),
+					Some(definition) => {
+						statements.push(prepare_logged(definition, &format!("step '{}'", step.id))?)
+					}
 					None => missing.push(key),
 				}
 			}
@@ -2456,6 +2511,44 @@ async fn execute_step(
 			run(statements.join("\n")).await
 		}
 	}
+}
+
+/// Prepare DDL for re-apply, logging its warnings against `source`.
+fn prepare_logged(sql: &str, source: &str) -> Result<String> {
+	let prepared =
+		prepare_schema_sql(sql).with_context(|| format!("preparing {source} for apply"))?;
+	for warning in &prepared.warnings {
+		log::warn!("{source}: {warning}");
+	}
+	Ok(prepared.sql)
+}
+
+/// Why a captured definition must not be re-applied by a rollback, if it must not.
+///
+/// - A sequence's definition is not its state. `INFO` shows the original
+///   `START`, so restoring it would at best do nothing and, with `OVERWRITE`,
+///   rewind the counter.
+/// - `INFO` redacts secrets (`PASSHASH '[REDACTED]'`, `KEY '[REDACTED]'`).
+///   Restoring that text would set a user's password hash, or an access method's
+///   signing key, to the literal string `[REDACTED]`. Users and access methods
+///   are refused by kind, since `start` no longer captures them, and any other
+///   captured text carrying a redaction is refused too.
+fn unrestorable(entity: &EntityKey, captured: Option<&str>) -> Option<&'static str> {
+	if entity.kind == EntityKind::Sequence {
+		return Some(
+			"a sequence's definition does not hold its position, so restoring it could only \
+			 rewind the counter",
+		);
+	}
+	if matches!(entity.kind, EntityKind::User | EntityKind::Access)
+		|| captured.is_some_and(|definition| definition.contains("'[REDACTED]'"))
+	{
+		return Some(
+			"SurrealDB redacts its secrets in INFO output, so the captured definition cannot be \
+			 re-applied without breaking sign-in; restore it by hand if the change must be undone",
+		);
+	}
+	None
 }
 
 async fn execute_sql_value(db: &Surreal<Any>, sql: &str) -> Result<Value> {
@@ -2950,7 +3043,7 @@ fn string_field_req(row: &Value, key: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
 	use super::*;
-	use crate::schema_state::{CatalogChange, SchemaSnapshot, SchemaSnapshotEntry};
+	use crate::schema_state::{SchemaSnapshot, SchemaSnapshotEntry};
 
 	#[test]
 	fn plan_rejects_modified_entities() {
@@ -2977,7 +3070,8 @@ mod tests {
 			}],
 		};
 
-		let err = validate_autoplan(&diff, false).expect_err("should reject modified entities");
+		let err = validate_autoplan(&diff, false, &BTreeSet::new())
+			.expect_err("should reject modified entities");
 		let message = err.to_string();
 		assert!(
 			message.contains("--allow-modified"),
@@ -2994,7 +3088,8 @@ mod tests {
 		);
 
 		// With the opt-in, the same diff plans.
-		validate_autoplan(&diff, true).expect("--allow-modified should permit the change");
+		validate_autoplan(&diff, true, &BTreeSet::new())
+			.expect("--allow-modified should permit the change");
 	}
 
 	/// A table rename reaches the planner as "add people, remove person". Tables
@@ -3018,14 +3113,15 @@ mod tests {
 			modified: Vec::new(),
 		};
 
-		let err = validate_autoplan(&diff, false).expect_err("a table rename must be refused");
+		let err = validate_autoplan(&diff, false, &BTreeSet::new())
+			.expect_err("a table rename must be refused");
 		let message = err.to_string();
 		assert!(message.contains("person") && message.contains("people"), "got: {message}");
 
 		// --allow-modified is about changing an entity that stays in place. It must
 		// not wave through one that may be disappearing.
 		assert!(
-			validate_autoplan(&diff, true).is_err(),
+			validate_autoplan(&diff, true, &BTreeSet::new()).is_err(),
 			"--allow-modified must not bypass the rename guard"
 		);
 	}
@@ -3046,7 +3142,10 @@ mod tests {
 			removed: vec![field("name")],
 			modified: Vec::new(),
 		};
-		assert!(validate_autoplan(&diff, false).is_err(), "a field rename must be refused");
+		assert!(
+			validate_autoplan(&diff, false, &BTreeSet::new()).is_err(),
+			"a field rename must be refused"
+		);
 	}
 
 	#[test]
@@ -3990,5 +4089,184 @@ mod tests {
 			panic!("expected an apply_files step");
 		};
 		assert_eq!(rewritten, &vec!["/database/schema/gone.surql".to_string()]);
+	}
+
+	// ---- sequences, redacted secrets (#93) -------------------------------------
+
+	fn changed(kind: EntityKind, scope: Option<&str>, name: &str) -> CatalogChange {
+		let entity = |hash: &str| CatalogEntity {
+			kind: kind.clone(),
+			scope: scope.map(str::to_string),
+			name: name.to_string(),
+			source_path: "schema/x.surql".to_string(),
+			statement_hash: hash.to_string(),
+			file_hash: hash.to_string(),
+		};
+		CatalogChange {
+			old: entity("a"),
+			new: entity("b"),
+		}
+	}
+
+	#[test]
+	fn a_changed_sequence_needs_no_opt_in_unless_it_says_overwrite() {
+		let diff = CatalogDiff {
+			modified: vec![changed(EntityKind::Sequence, None, "order_no")],
+			..CatalogDiff::default()
+		};
+		validate_autoplan(&diff, false, &BTreeSet::new())
+			.expect("a sequence applied with IF NOT EXISTS changes nothing to roll back");
+		let err = validate_autoplan(&diff, false, &BTreeSet::from(["order_no".to_string()]))
+			.expect_err("an OVERWRITE sequence resets the counter, so it stays gated");
+		assert!(err.to_string().contains("1 modified entity"), "{err}");
+	}
+
+	#[test]
+	fn plan_leaves_unrestorable_kinds_out_of_the_rollback_step() {
+		let diff = CatalogDiff {
+			modified: vec![
+				changed(EntityKind::Field, Some("person"), "name"),
+				changed(EntityKind::Sequence, None, "order_no"),
+				changed(EntityKind::User, Some("DATABASE"), "app"),
+				changed(EntityKind::Access, Some("DATABASE"), "account"),
+			],
+			..CatalogDiff::default()
+		};
+		let empty = SchemaSnapshot {
+			version: 1,
+			files: Vec::new(),
+		};
+		let spec = build_rollout_spec(
+			"20260101000000__x",
+			"x",
+			&[],
+			&FileDiff::default(),
+			&diff,
+			&empty,
+			&empty,
+		)
+		.expect("build rollout");
+		let restored: Vec<&EntityKey> = spec
+			.steps
+			.iter()
+			.flat_map(|step| match &step.action {
+				RolloutAction::RestoreDefinitions {
+					entities,
+				} => entities.iter().collect(),
+				_ => Vec::new(),
+			})
+			.collect();
+		assert_eq!(restored.len(), 1);
+		assert_eq!(restored[0].kind, EntityKind::Field);
+	}
+
+	#[test]
+	fn unrestorable_explains_sequences_and_redacted_secrets() {
+		let key = |kind| EntityKey {
+			kind,
+			scope: None,
+			name: "x".to_string(),
+		};
+		assert!(
+			unrestorable(&key(EntityKind::Sequence), Some("DEFINE SEQUENCE x START 1")).is_some()
+		);
+		assert!(
+			unrestorable(
+				&key(EntityKind::User),
+				Some("DEFINE USER x ON DATABASE PASSHASH '[REDACTED]'")
+			)
+			.is_some()
+		);
+		assert!(
+			unrestorable(&key(EntityKind::Field), Some("DEFINE FIELD x ON t TYPE string"))
+				.is_none()
+		);
+		assert!(unrestorable(&key(EntityKind::Access), None).is_some());
+		assert!(unrestorable(&key(EntityKind::Field), None).is_none());
+	}
+
+	async fn next_order_no(db: &Surreal<Any>) -> i64 {
+		let mut res =
+			db.query("RETURN sequence::nextval('order_no');").await.unwrap().check().unwrap();
+		let value: Option<i64> = res.take(0).unwrap();
+		value.expect("nextval")
+	}
+
+	#[tokio::test]
+	async fn rollout_steps_do_not_rewind_a_sequence() {
+		let db = connect_mem_db().await;
+		db.query("DEFINE SEQUENCE order_no BATCH 1 START 1;").await.unwrap().check().unwrap();
+		assert_eq!([next_order_no(&db).await, next_order_no(&db).await], [1, 2]);
+
+		let spec = RolloutSpec::builder("20260101000000__seq")
+			.step(RolloutStep::apply_schema(
+				"reapply",
+				RolloutPhase::Start,
+				"DEFINE SEQUENCE order_no BATCH 1 START 1;\nDEFINE TABLE invoice SCHEMALESS;",
+			))
+			.build();
+		let rollout = Rollout::new(spec, &[]);
+		rollout.start(&db).await.expect("start");
+		assert_eq!(next_order_no(&db).await, 3, "apply_schema rewound the sequence");
+		rollout.complete(&db).await.expect("complete");
+		assert_eq!(next_order_no(&db).await, 4);
+	}
+
+	#[tokio::test]
+	async fn rollback_skips_sequences_and_redacted_users_instead_of_failing() {
+		// A manifest planned before beta.6 can list a sequence (never captured,
+		// so rollback used to fail with "no captured definition") and a user
+		// (captured as PASSHASH '[REDACTED]', which rollback used to re-apply).
+		let db = connect_mem_db().await;
+		db.query(
+			"DEFINE SEQUENCE order_no BATCH 1 START 1;\n\
+			 DEFINE USER app ON DATABASE PASSWORD 'first' ROLES VIEWER;\n\
+			 DEFINE TABLE person SCHEMAFULL;\n\
+			 DEFINE FIELD name ON person TYPE string;",
+		)
+		.await
+		.unwrap()
+		.check()
+		.unwrap();
+		assert_eq!(next_order_no(&db).await, 1);
+
+		let restore = vec![
+			EntityKey {
+				kind: EntityKind::Sequence,
+				scope: None,
+				name: "order_no".to_string(),
+			},
+			EntityKey {
+				kind: EntityKind::User,
+				scope: Some("DATABASE".to_string()),
+				name: "app".to_string(),
+			},
+			EntityKey {
+				kind: EntityKind::Field,
+				scope: Some("person".to_string()),
+				name: "name".to_string(),
+			},
+		];
+		let spec = RolloutSpec::builder("20260101000000__legacy_restore")
+			.step(RolloutStep::apply_schema(
+				"modify",
+				RolloutPhase::Start,
+				"DEFINE FIELD name ON person TYPE option<string>;",
+			))
+			.step(RolloutStep::restore_definitions("restore", RolloutPhase::Rollback, restore))
+			.build();
+		let rollout = Rollout::new(spec, &[]);
+		rollout.start(&db).await.expect("start");
+		rollout.rollback(&db).await.expect("rollback must skip what it cannot restore");
+
+		let status = rollout.status(&db).await.unwrap().expect("record");
+		assert_eq!(status.status, Some(RolloutStatus::RolledBack));
+		// The field it could restore, it did.
+		let mut res = db.query("INFO FOR TABLE person;").await.unwrap();
+		let info: Option<serde_json::Value> = res.take(0).unwrap();
+		let field = info.unwrap()["fields"]["name"].as_str().unwrap().to_string();
+		assert!(field.contains("TYPE string"), "{field}");
+		// And the sequence kept counting.
+		assert_eq!(next_order_no(&db).await, 2);
 	}
 }

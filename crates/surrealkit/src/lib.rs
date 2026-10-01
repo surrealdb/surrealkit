@@ -10,6 +10,7 @@ pub mod scaffold;
 pub mod schema_state;
 pub mod seed;
 pub mod setup;
+mod surql_scan;
 pub mod sync;
 pub mod tester;
 pub mod typegen;

@@ -13,13 +13,14 @@ use crate::constants::Layout;
 use crate::core::{exec_surql, sha256_hex};
 use crate::module::{Module, Partition};
 use crate::rollout::{
-	PartitionWrite, acquire_lock, delete_managed_entities, delete_sync_hashes,
+	ManagedEntityRecord, PartitionWrite, acquire_lock, delete_managed_entities, delete_sync_hashes,
 	load_active_rollout_id, load_managed_entities, release_lock, upsert_managed_entities,
 	write_partition,
 };
 use crate::schema_state::{
-	CatalogEntity, EntityKey, SchemaFile, build_catalog_snapshot, canonicalise_keys,
-	collect_schema_files_at, ensure_local_state_dirs_for, ensure_overwrite, render_remove_sql,
+	CatalogEntity, EntityKey, EntityKind, SchemaFile, build_catalog_snapshot, canonicalise_keys,
+	collect_schema_files_at, ensure_local_state_dirs_for, overwrite_sequences, prepare_schema_sql,
+	render_remove_sql,
 };
 use crate::setup::{run_setup, run_setup_embedded};
 use crate::variables::TemplateVars;
@@ -118,7 +119,7 @@ pub async fn run_sync_with_filesystem_sources(
 	ensure_local_state_dirs_for(layout)?;
 
 	if opts.watch {
-		run_sync_with_files(db, &opts, layout, files, true).await?;
+		run_sync_with_files(db, &opts, layout, files, true, Substituted::No).await?;
 		log::info!(
 			"Watch mode active ({}ms interval). Waiting for schema changes... (Ctrl+C to stop)",
 			opts.debounce_ms.max(250)
@@ -142,7 +143,7 @@ pub async fn run_sync_with_filesystem_sources(
 		}
 		Ok(())
 	} else {
-		run_sync_with_files(db, &opts, layout, files, false).await
+		run_sync_with_files(db, &opts, layout, files, false, Substituted::No).await
 	}
 }
 
@@ -306,7 +307,18 @@ async fn sync_embedded(
 		})
 		.collect::<anyhow::Result<Vec<_>>>()?;
 	let layout = Layout::new(opts.folder.clone(), opts.module.clone());
-	run_sync_with_files(db, opts, &layout, &schema_files, false).await
+	// The files above are already substituted. Their catalog, and so the entity
+	// keys already in `__entity`, come from the substituted text, so that stays;
+	// what must not happen is a second substitution at apply time, which turned a
+	// `$${X}` escape into `${X}` and then substituted or rejected it.
+	run_sync_with_files(db, opts, &layout, &schema_files, false, Substituted::Yes).await
+}
+
+/// Whether a file's SQL has had template variables applied yet.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Substituted {
+	Yes,
+	No,
 }
 
 async fn run_sync_once(
@@ -316,7 +328,7 @@ async fn run_sync_once(
 	watch_mode: bool,
 ) -> Result<()> {
 	let files = collect_schema_files_at(layout.folder(), &layout.schema_dir())?;
-	run_sync_with_files(db, opts, layout, &files, watch_mode).await
+	run_sync_with_files(db, opts, layout, &files, watch_mode, Substituted::No).await
 }
 
 async fn run_sync_with_files(
@@ -325,10 +337,32 @@ async fn run_sync_with_files(
 	layout: &Layout,
 	files: &[SchemaFile],
 	watch_mode: bool,
+	substituted: Substituted,
 ) -> Result<()> {
+	let substitute = |sql: &str, source: &str| -> Result<String> {
+		match substituted {
+			Substituted::Yes => Ok(sql.to_string()),
+			Substituted::No => opts
+				.vars
+				.apply(sql)
+				.with_context(|| format!("applying template variables in {source}")),
+		}
+	};
 	let desired_catalog = build_catalog_snapshot(files, opts.allow_all_statements)?;
 	let tracked = migrate_legacy_sync_keys(db, layout, files, opts.dry_run).await?;
 	let managed = load_managed_entities(db, layout.module(), Some(layout.folder())).await?;
+	for sequence in
+		changed_sequences(&managed, &desired_catalog.entities, &overwrite_sequences(files))
+	{
+		log::warn!(
+			"{}: the definition of sequence `{}` changed, but SurrealKit applies sequences with IF \
+			 NOT EXISTS so an existing one keeps its old settings and position. Redefining it with \
+			 OVERWRITE resets the counter to START; do that deliberately, in a rollout run_sql step \
+			 or by hand.",
+			sequence.source_path,
+			sequence.name
+		);
+	}
 
 	if files.is_empty() && !watch_mode {
 		log::info!("No schema files found in {}", layout.schema_dir().display());
@@ -357,12 +391,17 @@ async fn run_sync_with_files(
 			continue;
 		}
 
-		let substituted = opts
-			.vars
-			.apply(&file.sql)
-			.with_context(|| format!("applying template variables in {}", file.path))?;
-		let sql = ensure_overwrite(&substituted);
-		match exec_surql(db, &sql).await {
+		let sql = substitute(&file.sql, &file.path)?;
+		let applied = match prepare_schema_sql(&sql) {
+			Ok(prepared) => {
+				for warning in &prepared.warnings {
+					log::warn!("{}: {warning}", file.path);
+				}
+				exec_surql(db, &prepared.sql).await
+			}
+			Err(err) => Err(err.context(format!("preparing {} for apply", file.path))),
+		};
+		match applied {
 			Ok(_) => {
 				if !watch_mode {
 					log::info!("applied {}", file.path);
@@ -502,7 +541,10 @@ async fn run_sync_with_files(
 			}
 		} else {
 			for op in &pending_operations {
-				match exec_surql(db, &op.sql).await {
+				// Operations come from the unsubstituted file on the filesystem path,
+				// so they need the same substitution the file apply got.
+				let sql = substitute(&op.sql, &op.source_path)?;
+				match exec_surql(db, &sql).await {
 					Ok(_) => {
 						if !watch_mode {
 							log::info!("ran operation from {}", op.source_path);
@@ -708,6 +750,28 @@ async fn upsert_meta(db: &Surreal<Any>, key: &str, value: serde_json::Value) -> 
 	write_partition(db, Partition::Meta.as_str(), &rows, PartitionWrite::Merge).await
 }
 
+/// Managed sequences whose definition changed, apart from those the files now
+/// define with an explicit `OVERWRITE` (applying those does reset them, and
+/// `prepare_schema_sql` warns about that instead).
+fn changed_sequences<'a>(
+	managed: &[ManagedEntityRecord],
+	desired: &'a [CatalogEntity],
+	overwritten: &BTreeSet<String>,
+) -> Vec<&'a CatalogEntity> {
+	let previous: BTreeMap<EntityKey, &str> = managed
+		.iter()
+		.filter(|record| record.entity.kind == EntityKind::Sequence)
+		.map(|record| (record.entity.key(), record.entity.statement_hash.as_str()))
+		.collect();
+	desired
+		.iter()
+		.filter(|entity| entity.kind == EntityKind::Sequence && !overwritten.contains(&entity.name))
+		.filter(|entity| {
+			previous.get(&entity.key()).is_some_and(|hash| *hash != entity.statement_hash)
+		})
+		.collect()
+}
+
 fn parse_bool(value: &str) -> Option<bool> {
 	match value.trim().to_ascii_lowercase().as_str() {
 		"1" | "true" | "yes" | "y" => Some(true),
@@ -774,5 +838,223 @@ mod tests {
 		let info: Option<serde_json::Value> = response.take(0).expect("take database info");
 		let tables = info.as_ref().and_then(|value| value.get("tables")).expect("tables");
 		assert!(tables.get("after_refresh").is_some(), "refresh read the wrong layout: {tables}");
+	}
+
+	async fn mem() -> Surreal<Any> {
+		let cfg = Config::new().capabilities(Capabilities::all());
+		let db = connect(("mem://", cfg)).await.expect("connect mem");
+		db.use_ns("sync_test").use_db("sync_test").await.expect("select namespace");
+		db
+	}
+
+	/// A filesystem project with one schema file, and a sync over it.
+	struct Project {
+		_temp: tempfile::TempDir,
+		layout: Layout,
+		file: std::path::PathBuf,
+		opts: SyncOpts,
+	}
+
+	impl Project {
+		fn new(sql: &str) -> Self {
+			let temp = tempfile::TempDir::new().expect("tempdir");
+			let folder = temp.path().join("database").to_string_lossy().into_owned();
+			let layout = Layout::new(folder.clone(), Module::default_module());
+			fs::create_dir_all(layout.schema_dir()).expect("schema dir");
+			let file = layout.schema_dir().join("main.surql");
+			fs::write(&file, sql).expect("schema");
+			let opts = SyncOpts {
+				folder,
+				module: Module::default_module(),
+				prune: true,
+				fail_fast: true,
+				..SyncOpts::default()
+			};
+			Self {
+				_temp: temp,
+				layout,
+				file,
+				opts,
+			}
+		}
+
+		fn write(&self, sql: &str) {
+			fs::write(&self.file, sql).expect("schema");
+		}
+
+		async fn sync(&self, db: &Surreal<Any>) -> Result<()> {
+			let files = collect_filesystem_schema_files(
+				self.layout.folder(),
+				&self.layout.schema_dir(),
+				self.layout.module(),
+				true,
+			)?;
+			run_sync_with_filesystem_sources(db, self.opts.clone(), &self.layout, &files).await
+		}
+	}
+
+	async fn next_id(db: &Surreal<Any>) -> i64 {
+		let mut res =
+			db.query("RETURN sequence::nextval('order_no');").await.unwrap().check().unwrap();
+		let value: Option<i64> = res.take(0).unwrap();
+		value.expect("nextval")
+	}
+
+	async fn tables(db: &Surreal<Any>) -> Vec<String> {
+		let mut response = db.query("INFO FOR DB;").await.expect("database info");
+		let info: Option<serde_json::Value> = response.take(0).expect("take database info");
+		let mut names: Vec<String> = info
+			.and_then(|v| {
+				v.get("tables").and_then(|t| t.as_object()).map(|t| t.keys().cloned().collect())
+			})
+			.unwrap_or_default();
+		names.retain(|name: &String| !name.starts_with("__"));
+		names.sort();
+		names
+	}
+
+	#[tokio::test]
+	async fn a_resync_does_not_rewind_a_sequence() {
+		// #93. Before, the re-sync sent `DEFINE SEQUENCE OVERWRITE order_no ...`,
+		// which SurrealDB 3.3 answers by putting the counter back to START.
+		let db = mem().await;
+		let project = Project::new("DEFINE SEQUENCE order_no BATCH 1 START 1;\n");
+		project.sync(&db).await.expect("first sync");
+		assert_eq!([next_id(&db).await, next_id(&db).await, next_id(&db).await], [1, 2, 3]);
+
+		project
+			.write("DEFINE SEQUENCE order_no BATCH 1 START 1;\nDEFINE TABLE invoice SCHEMALESS;\n");
+		project.sync(&db).await.expect("re-sync");
+		assert_eq!(next_id(&db).await, 4, "the re-sync rewound the sequence");
+
+		// An explicit IF NOT EXISTS is left alone too.
+		project.write("DEFINE SEQUENCE IF NOT EXISTS order_no BATCH 1 START 1;\n");
+		project.sync(&db).await.expect("re-sync");
+		assert_eq!(next_id(&db).await, 5);
+	}
+
+	#[tokio::test]
+	async fn an_explicit_sequence_overwrite_still_repositions_it() {
+		// The control for the test above: this engine really does rewind on
+		// OVERWRITE, so a passing re-sync test is not an accident of the engine.
+		let db = mem().await;
+		let project = Project::new("DEFINE SEQUENCE order_no BATCH 1 START 1;\n");
+		project.sync(&db).await.expect("first sync");
+		assert_eq!(next_id(&db).await, 1);
+
+		project.write("DEFINE SEQUENCE OVERWRITE order_no BATCH 1 START 500;\n");
+		project.sync(&db).await.expect("re-sync");
+		assert_eq!(next_id(&db).await, 500);
+	}
+
+	#[tokio::test]
+	async fn a_file_that_does_not_scan_is_neither_applied_nor_pruned() {
+		// The old splitter glued `DEFINE TABLE b` into the unterminated string, lost
+		// it from the catalog, applied the file, and pruned table b.
+		let db = mem().await;
+		let project = Project::new("DEFINE TABLE a SCHEMALESS;\nDEFINE TABLE b SCHEMALESS;\n");
+		project.sync(&db).await.expect("first sync");
+		db.query("CREATE b:keep SET n = 1;").await.unwrap().check().unwrap();
+
+		project.write("DEFINE TABLE a SCHEMALESS;\nDEFINE PARAM $x VALUE 'oops;\nDEFINE TABLE b SCHEMALESS;\nDEFINE TABLE c;\n");
+		let err = project.sync(&db).await.expect_err("an unterminated string must stop the sync");
+		assert!(format!("{err:#}").contains("line 2, column 23"), "{err:#}");
+
+		assert_eq!(tables(&db).await, vec!["a", "b"]);
+		let mut res = db.query("SELECT VALUE n FROM b:keep;").await.unwrap();
+		let kept: Vec<i64> = res.take(0).unwrap();
+		assert_eq!(kept, vec![1], "the data in b must survive");
+	}
+
+	#[tokio::test]
+	async fn the_92_regex_param_syncs_and_resyncs_without_pruning() {
+		let db = mem().await;
+		let sql = "DEFINE PARAM OVERWRITE $PRE_FILTER VALUE /[ \\-_().,\\\\\\/$&+,:;=?@#|'<>^*%!]/;\n\
+			DEFINE FUNCTION OVERWRITE fn::preFilter($str: option<string>) {\n\
+			\tRETURN IF $str { string::replace($str, $PRE_FILTER, '') };\n\
+			};\n\
+			DEFINE TABLE after SCHEMALESS;\n";
+		let project = Project::new(sql);
+		project.sync(&db).await.expect("the #92 file must sync");
+		let mut res =
+			db.query("RETURN fn::preFilter('a-b c#d;e');").await.unwrap().check().unwrap();
+		let cleaned: Option<String> = res.take(0).unwrap();
+		assert_eq!(cleaned.as_deref(), Some("abcde"));
+
+		project.write(&format!("{sql}-- touched\n"));
+		project.sync(&db).await.expect("re-sync");
+		assert_eq!(tables(&db).await, vec!["after"]);
+	}
+
+	#[tokio::test]
+	async fn operations_get_template_variables_on_the_filesystem_path() {
+		// Non-DEFINE statements run as operations, from the unsubstituted file, so
+		// `${X}` reached the server verbatim.
+		let db = mem().await;
+		let mut project = Project::new(
+			"DEFINE TABLE item SCHEMALESS;\nUPSERT item:one SET label = '${LABEL}';\n",
+		);
+		project.opts.allow_all_statements = true;
+		project.opts.vars = TemplateVars {
+			vars: [("LABEL".to_string(), "from-vars".to_string())].into(),
+		};
+		project.sync(&db).await.expect("sync");
+		let mut res = db.query("SELECT VALUE label FROM item:one;").await.unwrap();
+		let labels: Vec<String> = res.take(0).unwrap();
+		assert_eq!(labels, vec!["from-vars"]);
+	}
+
+	#[tokio::test]
+	async fn embedded_sync_substitutes_once() {
+		// The escape `$${KEEP}` must reach the database as the literal `${KEEP}`.
+		// Substituting twice turned it into `${KEEP}` and then failed on it.
+		static FILES: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+			path: "schema/escape.surql",
+			sql: "DEFINE PARAM $literal VALUE '$${KEEP}';\nDEFINE PARAM $real VALUE '${REAL}';\n",
+		}];
+		let db = mem().await;
+		Sync::embedded(FILES)
+			.vars(TemplateVars {
+				vars: [("REAL".to_string(), "yes".to_string())].into(),
+			})
+			.run(&db)
+			.await
+			.expect("embedded sync");
+		let mut res = db.query("RETURN [$literal, $real];").await.unwrap().check().unwrap();
+		let values: Vec<String> = res.take(0).unwrap();
+		assert_eq!(values, vec!["${KEEP}".to_string(), "yes".to_string()]);
+	}
+
+	#[test]
+	fn changed_sequences_skips_unchanged_new_and_explicitly_overwritten_ones() {
+		let entity = |name: &str, hash: &str| CatalogEntity {
+			kind: EntityKind::Sequence,
+			scope: None,
+			name: name.to_string(),
+			source_path: "schema/s.surql".to_string(),
+			statement_hash: hash.to_string(),
+			file_hash: "f".to_string(),
+		};
+		let managed: Vec<ManagedEntityRecord> =
+			[entity("same", "1"), entity("changed", "1"), entity("forced", "1")]
+				.into_iter()
+				.map(|entity| ManagedEntityRecord {
+					entity,
+					active_rollout_id: None,
+					state: "active".to_string(),
+				})
+				.collect();
+		let desired = vec![
+			entity("same", "1"),
+			entity("changed", "2"),
+			entity("forced", "2"),
+			entity("new", "9"),
+		];
+		let overwritten = BTreeSet::from(["forced".to_string()]);
+		let changed: Vec<&str> = changed_sequences(&managed, &desired, &overwritten)
+			.iter()
+			.map(|e| e.name.as_str())
+			.collect();
+		assert_eq!(changed, vec!["changed"]);
 	}
 }
