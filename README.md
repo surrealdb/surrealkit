@@ -363,14 +363,23 @@ Configure TypeScript output in `surrealkit.toml`:
 
 ```toml
 [typegen]
-# Directory for generated TypeScript. Setting this enables TS generation:
-# `surrealkit typegen` and `surrealkit sync` both write <dir>/index.ts.
+# Where generated TypeScript goes. Setting this enables TS generation:
+# `surrealkit typegen` and `surrealkit sync` both write it.
 typescript = "src/types"
+
+# The file to write in that directory (default: index.ts). Naming it leaves
+# index.ts free to be your package's own barrel.
+filename = "schema.generated.ts"
 
 # Optional formatter run on the generated file. The path is appended as the
 # final argument. Failures are warnings, not errors.
 format = "biome check --write"
 ```
+
+`typescript` can also name the file itself, as in
+`typescript = "src/types/database.ts"` (any `.ts`, `.mts` or `.cts` path), in
+which case `filename` is not used. `surrealkit typegen --typescript <path>`
+overrides the configured path for one run.
 
 With `typescript` set, `surrealkit sync` regenerates types after applying schema
 changes, so the generated types never drift from the database.

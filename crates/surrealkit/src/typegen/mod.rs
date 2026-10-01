@@ -32,10 +32,11 @@ pub struct TypegenOpts {
 	pub stdout: bool,
 	/// Pretty-print the JSON.
 	pub pretty: bool,
-	/// When set, also emit TypeScript types into this directory (`index.ts`).
-	/// Configured via `[typegen] typescript` in `surrealkit.toml`.
+	/// When set, also emit TypeScript types: to this file when it ends in `.ts`
+	/// (or `.mts`/`.cts`), otherwise to `index.ts` in this directory. Configured
+	/// via `[typegen] typescript` and `filename` in `surrealkit.toml`.
 	pub ts_out: Option<PathBuf>,
-	/// Optional formatter command run on the generated `index.ts` after writing.
+	/// Optional formatter command run on the generated TypeScript file after writing.
 	/// Configured via `[typegen] format` in `surrealkit.toml`.
 	pub ts_format: Option<String>,
 }
@@ -46,12 +47,24 @@ pub fn render_typescript(doc: &SchemaTypes) -> Result<String> {
 	emit::to_typescript(doc)
 }
 
-/// Write the TypeScript types for `doc` into `dir/index.ts`, creating `dir` if
-/// needed. Returns the path written.
-pub fn write_typescript(doc: &SchemaTypes, dir: &std::path::Path) -> Result<PathBuf> {
+/// The file TypeScript types go to for `out`: `out` itself when it names a
+/// `.ts`, `.mts` or `.cts` file, otherwise `index.ts` inside the directory `out`.
+pub fn typescript_file(out: &std::path::Path) -> PathBuf {
+	if crate::variables::is_typescript_file(out) {
+		out.to_path_buf()
+	} else {
+		out.join(crate::variables::DEFAULT_TYPESCRIPT_FILE)
+	}
+}
+
+/// Write the TypeScript types for `doc` to [`typescript_file`]`(out)`, creating
+/// its directory if needed. Returns the path written.
+pub fn write_typescript(doc: &SchemaTypes, out: &std::path::Path) -> Result<PathBuf> {
 	let ts = emit::to_typescript(doc)?;
-	std::fs::create_dir_all(dir)?;
-	let path = dir.join("index.ts");
+	let path = typescript_file(out);
+	if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+		std::fs::create_dir_all(dir)?;
+	}
 	std::fs::write(&path, ts)?;
 	Ok(path)
 }
@@ -61,10 +74,10 @@ pub fn write_typescript(doc: &SchemaTypes, dir: &std::path::Path) -> Result<Path
 /// (Biome / ESLint / Prettier). Returns the path written.
 pub fn write_typescript_formatted(
 	doc: &SchemaTypes,
-	dir: &std::path::Path,
+	out: &std::path::Path,
 	format: Option<&str>,
 ) -> Result<PathBuf> {
-	let path = write_typescript(doc, dir)?;
+	let path = write_typescript(doc, out)?;
 	if let Some(cmd) = format {
 		format_file(cmd, &path);
 	}
@@ -138,8 +151,8 @@ pub async fn run_typegen(
 	std::fs::write(&path, format!("{json}\n"))?;
 	log::info!("typegen: wrote {}", path.display());
 
-	if let Some(ts_dir) = &opts.ts_out {
-		let ts_path = write_typescript_formatted(&doc, ts_dir, opts.ts_format.as_deref())?;
+	if let Some(ts_out) = &opts.ts_out {
+		let ts_path = write_typescript_formatted(&doc, ts_out, opts.ts_format.as_deref())?;
 		log::info!("typegen: wrote {}", ts_path.display());
 	}
 	Ok(())

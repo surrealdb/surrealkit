@@ -202,6 +202,11 @@ enum Commands {
 		/// Emit compact (single-line) JSON instead of pretty-printed.
 		#[arg(long)]
 		compact: bool,
+		/// Also write TypeScript types, overriding `[typegen] typescript`: a
+		/// `.ts` file, or a directory to write `index.ts` (or `[typegen]
+		/// filename`) in.
+		#[arg(long, value_name = "PATH")]
+		typescript: Option<PathBuf>,
 	},
 }
 
@@ -613,6 +618,7 @@ async fn main() -> Result<()> {
 			allow_all_statements,
 		} => {
 			let typegen_cfg = surrealkit::variables::load_typegen_config(None)?;
+			let typegen_ts_out = typegen_cfg.typescript_path()?;
 			if selection.pairs() == 0 {
 				bail!(
 					"refusing filesystem sync: the selected targets accept none of the selected \
@@ -679,7 +685,7 @@ async fn main() -> Result<()> {
 						vars: template_vars.clone(),
 						folder: folder.clone(),
 						module: module.clone(),
-						typegen_ts_out: typegen_cfg.typescript.clone(),
+						typegen_ts_out: typegen_ts_out.clone(),
 						typegen_ts_format: typegen_cfg.format.clone(),
 					};
 					let outcome =
@@ -907,9 +913,19 @@ async fn main() -> Result<()> {
 			out,
 			stdout,
 			compact,
+			typescript,
 		} => {
+			let mut typegen_cfg = surrealkit::variables::load_typegen_config(None)?;
+			if let Some(typescript) = typescript {
+				// A file on the command line wins outright; a directory still takes
+				// the configured file name.
+				if surrealkit::variables::is_typescript_file(&typescript) {
+					typegen_cfg.filename = None;
+				}
+				typegen_cfg.typescript = Some(typescript);
+			}
+			let ts_out = typegen_cfg.typescript_path()?;
 			let db = connect(&cfg).await?;
-			let typegen_cfg = surrealkit::variables::load_typegen_config(None)?;
 			run_typegen(
 				&db,
 				&folder,
@@ -919,7 +935,7 @@ async fn main() -> Result<()> {
 					out,
 					stdout,
 					pretty: !compact,
-					ts_out: typegen_cfg.typescript,
+					ts_out,
 					ts_format: typegen_cfg.format,
 				},
 			)

@@ -197,14 +197,16 @@ pub const DEFAULT_PROJECT_CONFIG: &str = r#"# Template variables for use in .sur
 # environment   = "development"
 
 # Generate TypeScript types from your schema (surrealdb JS SDK v2).
-# When `typescript` is set, `surrealkit typegen` and `sync --watch` write an
-# index.ts of typed table interfaces into this directory.
+# When `typescript` is set, `surrealkit typegen` and `sync --watch` write typed
+# table interfaces there: into that file if it ends in .ts, otherwise into
+# `filename` (default index.ts) in that directory.
 #
 # Optionally run your formatter on the generated file so it matches your house
 # style (the file path is appended to the command). Failures are non-fatal.
 #
 # [typegen]
 # typescript = "../src/types"
+# filename   = "schema.generated.ts"   # keeps index.ts free for your own exports
 # format     = "biome check --write"   # or "prettier --write", "eslint --fix"
 "#;
 

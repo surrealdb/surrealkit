@@ -50,10 +50,11 @@ pub struct SyncOpts {
 	/// never removes another module's database objects.
 	pub module: Module,
 	/// When set (via `[typegen] typescript` in `surrealkit.toml`), regenerate
-	/// TypeScript types into this directory after applying schema changes.
+	/// TypeScript types after applying schema changes: into this file when it
+	/// ends in `.ts`, otherwise into `index.ts` in this directory.
 	pub typegen_ts_out: Option<std::path::PathBuf>,
 	/// Optional formatter command (`[typegen] format`) run on the regenerated
-	/// `index.ts`.
+	/// TypeScript file.
 	pub typegen_ts_format: Option<String>,
 }
 
@@ -571,15 +572,15 @@ async fn run_sync_with_files(
 
 	// Regenerate TypeScript types when configured. Gate on actual changes (or a
 	// missing output file) so idle watch ticks don't re-introspect every cycle.
-	if let Some(ts_dir) = &opts.typegen_ts_out
+	if let Some(ts_out) = &opts.typegen_ts_out
 		&& !opts.dry_run
 	{
-		let ts_path = ts_dir.join("index.ts");
+		let ts_path = crate::typegen::typescript_file(ts_out);
 		if has_changes || !ts_path.exists() {
 			match crate::typegen::generate(db).await {
 				Ok(doc) => match crate::typegen::write_typescript_formatted(
 					&doc,
-					ts_dir,
+					&ts_path,
 					opts.typegen_ts_format.as_deref(),
 				) {
 					Ok(path) => log::info!("typegen: wrote {}", path.display()),
@@ -1059,5 +1060,23 @@ mod tests {
 			.map(|e| e.name.as_str())
 			.collect();
 		assert_eq!(changed, vec!["changed"]);
+	}
+
+	#[tokio::test]
+	async fn sync_regenerates_typescript_at_the_configured_file() {
+		let db = mem().await;
+		let mut project =
+			Project::new("DEFINE TABLE item SCHEMAFULL;\nDEFINE FIELD name ON item TYPE string;\n");
+		let ts_file = project.layout.schema_dir().join("../types/database.ts");
+		project.opts.typegen_ts_out = Some(ts_file.clone());
+		project.sync(&db).await.expect("sync");
+		let ts = fs::read_to_string(&ts_file).expect("typegen wrote the named file");
+		assert!(ts.contains("export interface Item {"), "{ts}");
+		assert!(!ts_file.with_file_name("index.ts").exists());
+
+		// Deleted, it comes back on the next sync even with nothing to apply.
+		fs::remove_file(&ts_file).unwrap();
+		project.sync(&db).await.expect("idle sync");
+		assert!(ts_file.exists());
 	}
 }

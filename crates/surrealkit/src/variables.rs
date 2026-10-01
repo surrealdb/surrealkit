@@ -142,14 +142,57 @@ struct ProjectConfig {
 /// The `[typegen]` section of `surrealkit.toml`.
 #[derive(Debug, Default, Clone, Deserialize)]
 pub struct TypegenConfig {
-	/// Directory for generated TypeScript types. When set, TS generation is
-	/// enabled: `surrealkit typegen` and `sync --watch` write an `index.ts` here.
+	/// Where generated TypeScript types go. When set, TS generation is enabled:
+	/// `surrealkit typegen` and `sync --watch` write them here. A path ending in
+	/// `.ts`, `.mts` or `.cts` is the file itself; anything else is a directory,
+	/// and the file in it is `filename`.
 	pub typescript: Option<PathBuf>,
+	/// The file name to write inside the `typescript` directory. Defaults to
+	/// `index.ts`, which a project may want for its own barrel file.
+	pub filename: Option<String>,
 	/// Optional formatter command run on the generated file after writing
 	/// (e.g. `"biome check --write"`, `"prettier --write"`, `"eslint --fix"`).
 	/// The generated file path is appended as the final argument. Failures are
 	/// non-fatal warnings.
 	pub format: Option<String>,
+}
+
+impl TypegenConfig {
+	/// The TypeScript file to write, if TS generation is configured.
+	pub fn typescript_path(&self) -> Result<Option<PathBuf>> {
+		let Some(typescript) = &self.typescript else {
+			if self.filename.is_some() {
+				bail!(
+					"[typegen] filename is set but typescript is not; set typescript to the directory to write it in"
+				);
+			}
+			return Ok(None);
+		};
+		if is_typescript_file(typescript) {
+			if let Some(filename) = &self.filename {
+				bail!(
+					"[typegen] typescript = {:?} already names a file, so filename = {filename:?} has \
+					 nothing to apply to; set one or the other",
+					typescript.display().to_string()
+				);
+			}
+			return Ok(Some(typescript.clone()));
+		}
+		let filename = self.filename.as_deref().unwrap_or(DEFAULT_TYPESCRIPT_FILE);
+		let bare = Path::new(filename).file_name().is_some_and(|name| name == filename);
+		if filename.trim().is_empty() || !bare || filename.contains('\\') {
+			bail!("[typegen] filename = {filename:?} must be a file name, without a directory");
+		}
+		Ok(Some(typescript.join(filename)))
+	}
+}
+
+/// The TypeScript file written when the configured path is a directory.
+pub const DEFAULT_TYPESCRIPT_FILE: &str = "index.ts";
+
+/// Whether `path` names a TypeScript file rather than a directory.
+pub fn is_typescript_file(path: &Path) -> bool {
+	path.extension().is_some_and(|ext| ext == "ts" || ext == "mts" || ext == "cts")
 }
 
 /// Load the `[typegen]` section from `surrealkit.toml`. `toml_path` defaults to
@@ -435,6 +478,57 @@ mod tests {
 		.unwrap();
 		let parsed = load_typegen_config(Some(&cfg)).unwrap();
 		assert_eq!(parsed.format.as_deref(), Some("biome check --write"));
+	}
+
+	fn typegen(typescript: Option<&str>, filename: Option<&str>) -> TypegenConfig {
+		TypegenConfig {
+			typescript: typescript.map(PathBuf::from),
+			filename: filename.map(str::to_string),
+			format: None,
+		}
+	}
+
+	#[test_case::test_case(Some("libs/db/types"), None, Some("libs/db/types/index.ts") ; "directory keeps index ts")]
+	#[test_case::test_case(Some("libs/db/types"), Some("schema.generated.ts"), Some("libs/db/types/schema.generated.ts") ; "directory and filename")]
+	#[test_case::test_case(Some("libs/db/types/database.ts"), None, Some("libs/db/types/database.ts") ; "ts file")]
+	#[test_case::test_case(Some("libs/db/types/database.mts"), None, Some("libs/db/types/database.mts") ; "mts file")]
+	#[test_case::test_case(Some("libs/db/types.d"), None, Some("libs/db/types.d/index.ts") ; "dotted directory")]
+	#[test_case::test_case(None, None, None ; "not configured")]
+	fn typescript_path_resolves(
+		typescript: Option<&str>,
+		filename: Option<&str>,
+		expected: Option<&str>,
+	) {
+		assert_eq!(
+			typegen(typescript, filename).typescript_path().unwrap(),
+			expected.map(PathBuf::from)
+		);
+	}
+
+	#[test_case::test_case(Some("types/database.ts"), Some("other.ts"), "already names a file" ; "file and filename")]
+	#[test_case::test_case(None, Some("x.ts"), "typescript is not" ; "filename alone")]
+	#[test_case::test_case(Some("types"), Some("sub/x.ts"), "without a directory" ; "filename with a directory")]
+	#[test_case::test_case(Some("types"), Some(".."), "without a directory" ; "filename dot dot")]
+	#[test_case::test_case(Some("types"), Some(" "), "without a directory" ; "blank filename")]
+	fn typescript_path_rejects(typescript: Option<&str>, filename: Option<&str>, message: &str) {
+		let err = typegen(typescript, filename).typescript_path().unwrap_err().to_string();
+		assert!(err.contains(message), "{err}");
+	}
+
+	#[test]
+	fn load_typegen_config_reads_filename() {
+		let tmp = TempDir::new().unwrap();
+		let cfg = tmp.path().join("surrealkit.toml");
+		std::fs::write(
+			&cfg,
+			"[typegen]\ntypescript = \"types\"\nfilename = \"schema.generated.ts\"\n",
+		)
+		.unwrap();
+		let parsed = load_typegen_config(Some(&cfg)).unwrap();
+		assert_eq!(
+			parsed.typescript_path().unwrap(),
+			Some(PathBuf::from("types/schema.generated.ts"))
+		);
 	}
 
 	#[test]
