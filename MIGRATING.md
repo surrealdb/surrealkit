@@ -403,11 +403,23 @@ Nothing to change; all additive:
 - `schema_from = "sync" | "rollouts" | "both"` (in `[defaults]` or per suite,
   or `--schema-from`) builds suite databases from replayed rollouts, with a
   parity check against sync.
+- Update and delete rules work on tables with a `UNIQUE` index. A copy of the
+  record collided with the original there, and the case failed with
+  `Database index ... already contains`; now they act on the record itself and
+  put it back.
 
-One behaviour change: a TOML date or time without an offset in
-`signup_params`/`signin_params` (`dob = 1979-05-27`) stays a string. SurrealDB
-3.3's parser accepts those as datetimes and 3.2's did not, so without this they
-would have changed type on upgrade.
+Two behaviour changes:
+
+- A TOML date or time without an offset in `signup_params`/`signin_params`
+  (`dob = 1979-05-27`) stays a string. SurrealDB 3.3's parser accepts those as
+  datetimes and 3.2's did not, so without this they would have changed type on
+  upgrade.
+- A create rule whose new record a unique index refuses now fails, whatever
+  `allow` says. Before, the refusal counted as a denial, and SurrealDB only gets
+  as far as the index once the permission has let the create through, so an
+  `allow = false` create rule on such a table passed exactly when the actor was
+  allowed to create. Test those creates with a `sql_expect` case that sets its
+  own unique values.
 
 ## If you use the Rust library
 

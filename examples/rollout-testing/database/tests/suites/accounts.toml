@@ -96,6 +96,14 @@ name = "cannot read another account"
 action = "select"
 allow = false
 
-# Update and delete rules on a record other than `$auth` act on a copy, and a
-# copy of an account would collide with the original on the unique email
-# index, so they are left to the in-place `$auth` case above.
+# A copy of an account would collide with the original on the unique email
+# index, so these two act on account:seeded itself and root puts it back.
+[[cases.rules]]
+name = "cannot update another account"
+action = "update"
+allow = false
+
+[[cases.rules]]
+name = "cannot delete another account"
+action = "delete"
+allow = false

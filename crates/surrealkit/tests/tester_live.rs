@@ -307,6 +307,209 @@ action = "create"
 	assert!(err.unwrap().contains("create rule with record_id = \"$auth\""));
 }
 
+/// `member` and `handle` have unique indexes, so a copy of one of their records
+/// collides with the original; `plain` has none. Deleting a handle or a plain
+/// record leaves a `gone` row naming the id that was deleted.
+const UNIQUE_SCHEMA: &str = "DEFINE TABLE member SCHEMAFULL
+	PERMISSIONS FOR select, update, delete WHERE id = $auth FOR create NONE;
+DEFINE FIELD email ON member TYPE string;
+DEFINE FIELD passphrase ON member TYPE string;
+DEFINE INDEX member_email ON member FIELDS email UNIQUE;
+DEFINE ACCESS member_passphrase ON DATABASE TYPE RECORD
+	SIGNUP (CREATE member SET email = $email, passphrase = crypto::argon2::generate($passphrase))
+	SIGNIN (SELECT * FROM member WHERE email = $email AND crypto::argon2::compare(passphrase, $passphrase))
+	WITH JWT ALGORITHM HS512 KEY 'tester-live-only'
+	DURATION FOR SESSION 1h;
+DEFINE TABLE handle SCHEMAFULL PERMISSIONS FULL;
+DEFINE FIELD name ON handle TYPE string;
+DEFINE INDEX handle_name ON handle FIELDS name UNIQUE;
+DEFINE EVENT handle_gone ON handle WHEN $event = 'DELETE' THEN (CREATE gone SET was = $before.id);
+DEFINE TABLE plain SCHEMAFULL PERMISSIONS FULL;
+DEFINE FIELD name ON plain TYPE string;
+DEFINE EVENT plain_gone ON plain WHEN $event = 'DELETE' THEN (CREATE gone SET was = $before.id);
+DEFINE TABLE gone SCHEMALESS PERMISSIONS FULL;
+";
+
+#[tokio::test]
+async fn rules_on_tables_with_unique_indexes() {
+	let url = require_server!();
+	let project = Project::new();
+	project.write("schema/unique.surql", UNIQUE_SCHEMA);
+	project.write(
+		"tests/suites/unique.toml",
+		r#"name = "unique"
+
+[actors.member]
+kind = "record"
+access = "member_passphrase"
+signup_params = { email = "member@example.test", passphrase = "abc" }
+signin_params = { email = "member@example.test", passphrase = "abc" }
+
+[[fixtures]]
+sql = """
+CREATE member:other SET email = 'other@example.test', passphrase = 'x';
+CREATE handle:taken SET name = 'taken';
+CREATE plain:kept SET name = 'kept';
+"""
+
+[[cases]]
+name = "another member is off limits"
+kind = "permissions_matrix"
+actor = "member"
+table = "member"
+record_id = "other"
+
+[[cases.rules]]
+name = "cannot read another member"
+action = "select"
+allow = false
+
+[[cases.rules]]
+name = "cannot update another member"
+action = "update"
+allow = false
+
+[[cases.rules]]
+name = "cannot delete another member"
+action = "delete"
+allow = false
+
+[[cases.rules]]
+name = "cannot create a member"
+action = "create"
+allow = false
+
+[[cases]]
+name = "the other member is as it was"
+kind = "sql_expect"
+actor = "root"
+sql = "RETURN { email: (SELECT VALUE email FROM ONLY member:other), members: count(SELECT * FROM member) }"
+assertions = [
+  { path = "email", equals = "other@example.test" },
+  { path = "members", equals = 2 },
+]
+
+[[cases]]
+name = "anyone can change a handle"
+kind = "permissions_matrix"
+actor = "member"
+table = "handle"
+record_id = "taken"
+
+[[cases.rules]]
+name = "updates a handle"
+action = "update"
+allow = true
+
+[[cases.rules]]
+name = "deletes a handle"
+action = "delete"
+allow = true
+
+[[cases]]
+name = "the handle itself was changed and put back"
+kind = "sql_expect"
+actor = "root"
+sql = """
+RETURN {
+  handles: (SELECT VALUE name FROM handle),
+  marked: (SELECT VALUE _marker FROM ONLY handle:taken) != NONE,
+  deleted: (SELECT VALUE record::id(was) FROM gone WHERE record::tb(was) = 'handle'),
+}
+"""
+assertions = [
+  { path = "handles", equals = ["taken"] },
+  { path = "marked", equals = false },
+  { path = "deleted", equals = ["taken"] },
+]
+
+[[cases]]
+name = "a plain record is still worked on through a copy"
+kind = "permissions_matrix"
+actor = "member"
+table = "plain"
+record_id = "kept"
+
+[[cases.rules]]
+name = "updates a plain record"
+action = "update"
+allow = true
+
+[[cases.rules]]
+name = "deletes a plain record"
+action = "delete"
+allow = true
+
+[[cases.rules]]
+name = "creates a plain record"
+action = "create"
+allow = true
+
+[[cases]]
+name = "the plain record was never deleted"
+kind = "sql_expect"
+actor = "root"
+sql = """
+RETURN {
+  plains: (SELECT VALUE name FROM plain),
+  copies_deleted: count(SELECT * FROM gone WHERE record::tb(was) = 'plain') > 0,
+  original_deleted: (SELECT VALUE record::id(was) FROM gone WHERE record::tb(was) = 'plain') CONTAINS 'kept',
+}
+"""
+assertions = [
+  { path = "plains", equals = ["kept"] },
+  { path = "copies_deleted", equals = true },
+  { path = "original_deleted", equals = false },
+]
+
+[[cases]]
+name = "a create that collides in a unique index"
+kind = "permissions_matrix"
+actor = "member"
+table = "handle"
+record_id = "taken"
+
+[[cases.rules]]
+name = "expected to be denied"
+action = "create"
+allow = false
+
+[[cases.rules]]
+name = "expected to be allowed"
+action = "create"
+allow = true
+"#,
+	);
+
+	let (err, report) = project.test(&url, None).await;
+	// Only the colliding create case fails.
+	assert_eq!(err.as_deref(), Some("1 test cases failed"), "{report:#}");
+	for name in [
+		"another member is off limits",
+		"the other member is as it was",
+		"anyone can change a handle",
+		"the handle itself was changed and put back",
+		"a plain record is still worked on through a copy",
+		"the plain record was never deleted",
+	] {
+		let found = case(&report, "unique", name);
+		assert_eq!(found["passed"], true, "{found:#}");
+	}
+
+	// The index refused both creates. Neither rule may pass: not the one that
+	// expects a denial, which the collision used to satisfy, and not the other.
+	let collides = case(&report, "unique", "a create that collides in a unique index");
+	let rules = collides["assertions"].as_array().unwrap();
+	assert_eq!(rules.len(), 2, "{collides:#}");
+	for rule in rules {
+		assert_eq!(rule["passed"], false, "{collides:#}");
+		let message = rule["message"].as_str().unwrap();
+		assert!(message.starts_with("inconclusive: "), "{message}");
+		assert!(message.contains("unique index `handle_name`"), "{message}");
+		assert!(message.contains("handle:taken"), "{message}");
+	}
+}
+
 fn rollout_project() -> Project {
 	let project = Project::new();
 	project.write("tests/suites/smoke.toml", "name = \"smoke\"\n\n[[cases]]\nname = \"note table exists\"\nkind = \"schema_metadata\"\nactor = \"root\"\nsql = \"INFO FOR DB;\"\ncontains = [\"note\"]\n");

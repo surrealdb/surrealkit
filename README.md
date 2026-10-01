@@ -966,6 +966,29 @@ created again (anything the delete cascaded to through `REFERENCE ... ON DELETE`
 is not). `table` must be the table of the signed-in record. A create rule on
 `$auth` is rejected when the suite loads, since signup already created it.
 
+On a table with a `UNIQUE` index, a copy of a record duplicates the original in
+that index, and SurrealDB refuses to create it. Update and delete rules then act
+on the record itself and root puts it back afterwards, the same way as for
+`$auth` above. A table without a unique index, or one whose copy doesn't
+collide, still gets a copy.
+
+A create rule has no record to fall back on. A permission that refuses a create
+makes SurrealDB return no record, so an `allow = false` create rule still
+passes when the permission says no. When the create is refused by a unique
+index instead, the rule fails with a message naming the index, whatever `allow`
+says, so a collision is never counted as a denial. To test that a create is
+allowed on such a table, use a `sql_expect` case that sets its own unique
+values:
+
+```toml
+[[cases]]
+name = "an admin can create an account"
+kind = "sql_expect"
+actor = "admin"
+sql = "CREATE ONLY account SET email = 'new@example.test', passphrase = 'x'"
+assertions = [{ path = "email", equals = "new@example.test" }]
+```
+
 ### JSON Reports for CI
 
 Generate machine-readable output:

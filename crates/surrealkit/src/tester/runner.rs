@@ -8,7 +8,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use serde_json::Value;
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
-use surrealdb_types::{RecordId, RecordIdKey, SurrealValue, uuid};
+use surrealdb_types::{RecordId, RecordIdKey, SurrealValue, ToSql, uuid};
 use time::OffsetDateTime;
 use time::format_description::well_known::Rfc3339;
 use tokio::sync::Semaphore;
@@ -554,11 +554,6 @@ fn compare_schemas(
 	out
 }
 
-fn get_record_id(record: &surrealdb_types::Object) -> Result<RecordId> {
-	let value = record.get("id").ok_or_else(|| anyhow!("Record has no id"))?;
-	value.as_record().cloned().ok_or_else(|| anyhow!("Record id is not a record"))
-}
-
 async fn get_record(
 	db: &Surreal<Any>,
 	record_id: RecordId,
@@ -574,25 +569,49 @@ async fn delete_record(db: &Surreal<Any>, record_id: RecordId) -> Result<()> {
 	Ok(())
 }
 
-async fn copy_record(
-	root_db: &Surreal<Any>,
-	record_id: RecordId,
-) -> Result<surrealdb_types::Object> {
+/// What came of copying a record to a new id.
+enum Copied {
+	/// The copy, at a random id in the same table.
+	Made(RecordId),
+	/// The copy would duplicate the original in this unique index, so there is
+	/// none.
+	Collides(String),
+}
+
+async fn copy_record(root_db: &Surreal<Any>, record_id: RecordId) -> Result<Copied> {
 	let Some(mut content) = get_record(root_db, record_id.clone()).await? else {
 		bail!("Record {:?} cannot be copied", record_id);
 	};
 	let tmp_record_id = RecordId::new(record_id.table.clone(), RecordIdKey::rand());
 	content.remove("id");
-	root_db
+	let created = root_db
 		.query("CREATE $tmp_record_id CONTENT $content;")
 		.bind(("tmp_record_id", tmp_record_id.clone()))
 		.bind(("content", content))
 		.await?
-		.check()?;
-	match get_record(root_db, tmp_record_id).await? {
-		Some(record) => Ok(record),
+		.check();
+	if let Err(err) = created {
+		return match unique_index_conflict(&err.to_string()) {
+			Some(index) => Ok(Copied::Collides(index.to_string())),
+			None => Err(err.into()),
+		};
+	}
+	match get_record(root_db, tmp_record_id.clone()).await? {
+		Some(..) => Ok(Copied::Made(tmp_record_id)),
 		None => bail!("New record was not copied"),
 	}
+}
+
+/// The unique index a write was refused by, if `error` is SurrealDB saying the
+/// write would duplicate an entry in one.
+///
+/// SurrealDB sends this as an `Internal` error with no structured details, so
+/// the message is all there is to go on: "Database index `name` already
+/// contains 'value', with record `table:id`".
+fn unique_index_conflict(error: &str) -> Option<&str> {
+	let (_, rest) = error.split_once("Database index `")?;
+	let (index, rest) = rest.split_once('`')?;
+	rest.starts_with(" already contains ").then_some(index)
 }
 
 async fn add_marker_field(db: &Surreal<Any>, table: &str) -> Result<()> {
@@ -610,6 +629,9 @@ type AssertionResult = Result<(), AssertionError>;
 enum AssertionError {
 	PermissionThrow(String),
 	PermissionFailed(String),
+	/// The action was refused for a reason other than a permission, so the rule
+	/// says nothing about whether it is allowed. Fails the rule either way.
+	Inconclusive(String),
 	InternalError(anyhow::Error),
 }
 
@@ -640,6 +662,7 @@ impl std::fmt::Display for AssertionError {
 		match self {
 			AssertionError::PermissionThrow(error) => write!(f, "permission throw: {error}"),
 			AssertionError::PermissionFailed(error) => write!(f, "permission failed: {error}"),
+			AssertionError::Inconclusive(error) => write!(f, "inconclusive: {error}"),
 			AssertionError::InternalError(error) => write!(f, "internal error: {error}"),
 		}
 	}
@@ -669,14 +692,27 @@ async fn assert_permission_action_create(
 		.bind(("tmp_record_id", tmp_record_id.clone()))
 		.bind(("content", content))
 		.await?
-		.check()
-		.map_err(AssertionError::throw);
+		.check();
 
 	let record = get_record(root_db, tmp_record_id.clone()).await?;
 	if record.is_some() {
 		delete_record(root_db, tmp_record_id.clone()).await?;
 	}
-	create_result?;
+	if let Err(err) = create_result {
+		let text = err.to_string();
+		// The new record has the original's content, so a unique index refuses
+		// it. That is the index speaking, not a permission, so it is no denial.
+		return Err(match unique_index_conflict(&text) {
+			Some(index) => AssertionError::Inconclusive(format!(
+				"a record with the content of {} duplicates it in the unique index `{index}`, \
+				 so the index refused the create and this rule cannot tell whether it is \
+				 allowed; test create on this table with a sql_expect case that sets its own \
+				 unique values ({text})",
+				record_id.to_sql()
+			)),
+			None => AssertionError::throw(text),
+		});
+	}
 	match record {
 		None => Err(AssertionError::failed("New record was not created")),
 		Some(..) => Ok(()),
@@ -709,8 +745,16 @@ async fn assert_permission_action_update(
 	record_id: RecordId,
 ) -> AssertionResult {
 	add_marker_field(root_db, &record_id.table).await?;
-	let tmp_record = copy_record(root_db, record_id.clone()).await?;
-	let tmp_record_id = get_record_id(&tmp_record)?;
+	let tmp_record_id = match copy_record(root_db, record_id.clone()).await? {
+		Copied::Made(id) => id,
+		Copied::Collides(index) => {
+			log::debug!(
+				"a copy of {} collides in unique index `{index}`; updating it in place",
+				record_id.to_sql()
+			);
+			return assert_permission_action_update_in_place(user_db, root_db, record_id).await;
+		}
+	};
 	let new_marker = uuid::Uuid::new_v4().to_string();
 
 	// assert update permission
@@ -739,8 +783,16 @@ async fn assert_permission_action_delete(
 	root_db: &Surreal<Any>,
 	record_id: RecordId,
 ) -> AssertionResult {
-	let tmp_record = copy_record(root_db, record_id.clone()).await?;
-	let tmp_record_id = get_record_id(&tmp_record)?;
+	let tmp_record_id = match copy_record(root_db, record_id.clone()).await? {
+		Copied::Made(id) => id,
+		Copied::Collides(index) => {
+			log::debug!(
+				"a copy of {} collides in unique index `{index}`; deleting it in place",
+				record_id.to_sql()
+			);
+			return assert_permission_action_delete_in_place(user_db, root_db, record_id).await;
+		}
+	};
 
 	// assert delete permission
 	let delete_result = user_db
@@ -789,8 +841,9 @@ fn auth_record_for(
 /// Update a record as the actor, then put it back as it was.
 ///
 /// Used for `$auth`, where only the real record can satisfy a permission keyed
-/// on it. The restore runs as root with the record's original content, so a
-/// field computed with `VALUE` is recomputed then.
+/// on it, and for any record whose copy a unique index refuses. The restore runs
+/// as root with the record's original content, so a field computed with `VALUE`
+/// is recomputed then.
 async fn assert_permission_action_update_in_place(
 	user_db: &Surreal<Any>,
 	root_db: &Surreal<Any>,
@@ -827,8 +880,9 @@ async fn assert_permission_action_update_in_place(
 
 /// Delete a record as the actor, then create it again as it was.
 ///
-/// Used for `$auth`. Anything the delete cascaded to through
-/// `REFERENCE ... ON DELETE` is not put back.
+/// Used for `$auth`, and for any record whose copy a unique index refuses.
+/// Anything the delete cascaded to through `REFERENCE ... ON DELETE` is not put
+/// back.
 async fn assert_permission_action_delete_in_place(
 	user_db: &Surreal<Any>,
 	root_db: &Surreal<Any>,
@@ -1183,6 +1237,14 @@ fn evaluate_outcome(
 	error_contains: Option<&str>,
 	error_code: Option<&str>,
 ) -> Result<AssertionReport> {
+	// Neither a pass nor a denial, whatever the rule expects.
+	if let Err(err @ AssertionError::Inconclusive(..)) = &result {
+		return Ok(AssertionReport {
+			name: label,
+			passed: false,
+			message: format!("{err}"),
+		});
+	}
 	match (allow, result) {
 		(true, Ok(_)) => Ok(AssertionReport {
 			name: label,
@@ -1452,6 +1514,181 @@ mod tests {
 			.expect_err("undefined variable must error");
 		let msg = err.to_string();
 		assert!(msg.contains("missing-var"), "error should name the fixture: {err}");
+	}
+
+	#[test]
+	fn unique_index_conflict_reads_the_index_from_surrealdb_errors() {
+		use super::unique_index_conflict;
+		let message = "Database index `account_email` already contains 'seeded@example.test', \
+		               with record `account:seeded`";
+		assert_eq!(unique_index_conflict(message), Some("account_email"));
+		// However the error was wrapped on the way here.
+		assert_eq!(
+			unique_index_conflict(&format!("internal error: query failed: {message}")),
+			Some("account_email")
+		);
+		// A composite index reports an array of values.
+		assert_eq!(
+			unique_index_conflict(
+				"Database index `by_ns_key` already contains ['schema', 'table:a'], with record \
+				 `__entity:x`"
+			),
+			Some("by_ns_key")
+		);
+		for other in [
+			"Permission denied: You are not allowed to access this resource",
+			"Database record `account:seeded` already exists",
+			"Found 'x' for field `email`, with record `account:a`, but expected a string",
+			"Database index `account_email` does not exist",
+		] {
+			assert_eq!(unique_index_conflict(other), None, "{other}");
+		}
+	}
+
+	#[test]
+	fn an_inconclusive_rule_fails_whatever_it_expects() {
+		use super::{AssertionError, evaluate_outcome};
+		for allow in [true, false] {
+			let report = evaluate_outcome(
+				"rule".into(),
+				Err(AssertionError::Inconclusive("the index refused it".into())),
+				allow,
+				None,
+				None,
+			)
+			.unwrap();
+			assert!(!report.passed, "allow = {allow}");
+			assert_eq!(report.message, "inconclusive: the index refused it");
+		}
+		// `error_contains` matching the text does not turn it into a denial.
+		let report = evaluate_outcome(
+			"rule".into(),
+			Err(AssertionError::Inconclusive("index".into())),
+			false,
+			Some("index"),
+			None,
+		)
+		.unwrap();
+		assert!(!report.passed);
+	}
+
+	/// `handle` has a unique index, `plain` has none. Without signing in, the
+	/// embedded engine lets a session do anything, so the root session stands in
+	/// for an actor who is allowed every action.
+	async fn unique_and_plain_tables(
+		label: &str,
+	) -> surrealdb::Surreal<surrealdb::engine::any::Any> {
+		let db = crate::test_db::fresh(label).await;
+		db.query(
+			"DEFINE TABLE handle SCHEMAFULL;
+			DEFINE FIELD name ON handle TYPE string;
+			DEFINE INDEX handle_name ON handle FIELDS name UNIQUE;
+			DEFINE TABLE plain SCHEMAFULL;
+			DEFINE FIELD name ON plain TYPE string;
+			CREATE handle:taken SET name = 'taken';
+			CREATE plain:kept SET name = 'kept';",
+		)
+		.await
+		.unwrap()
+		.check()
+		.unwrap();
+		db
+	}
+
+	async fn rows(
+		db: &surrealdb::Surreal<surrealdb::engine::any::Any>,
+		table: &str,
+	) -> Vec<serde_json::Value> {
+		let mut response =
+			db.query(format!("SELECT * FROM {table} ORDER BY id;")).await.unwrap().check().unwrap();
+		response.take(0).unwrap()
+	}
+
+	fn rid(table: &str, key: &str) -> surrealdb_types::RecordId {
+		surrealdb_types::RecordId::new(
+			table.to_string(),
+			surrealdb_types::RecordIdKey::String(key.to_string()),
+		)
+	}
+
+	fn expect_ok(result: super::AssertionResult) {
+		if let Err(err) = result {
+			panic!("expected the action to be allowed, got {err}");
+		}
+	}
+
+	#[tokio::test]
+	async fn a_copy_that_collides_in_a_unique_index_is_reported_not_raised() {
+		use super::{Copied, copy_record};
+		let db = unique_and_plain_tables("copy_collides").await;
+
+		match copy_record(&db, rid("handle", "taken")).await.unwrap() {
+			Copied::Collides(index) => assert_eq!(index, "handle_name"),
+			Copied::Made(id) => panic!("copied to {id:?} despite the unique index"),
+		}
+		assert_eq!(rows(&db, "handle").await.len(), 1, "a failed copy leaves nothing behind");
+
+		match copy_record(&db, rid("plain", "kept")).await.unwrap() {
+			Copied::Made(id) => assert_ne!(id, rid("plain", "kept")),
+			Copied::Collides(index) => panic!("no unique index on plain, yet collided in {index}"),
+		}
+	}
+
+	#[tokio::test]
+	async fn update_and_delete_fall_back_to_the_record_itself_and_restore_it() {
+		use super::{assert_permission_action_delete, assert_permission_action_update};
+		let db = unique_and_plain_tables("unique_fallback").await;
+		let before = rows(&db, "handle").await;
+
+		expect_ok(assert_permission_action_update(&db, &db, rid("handle", "taken")).await);
+		expect_ok(assert_permission_action_delete(&db, &db, rid("handle", "taken")).await);
+
+		assert_eq!(rows(&db, "handle").await, before, "the record is back as it was");
+	}
+
+	#[tokio::test]
+	async fn tables_without_a_unique_index_still_work_on_a_copy() {
+		use super::{assert_permission_action_delete, assert_permission_action_update};
+		let db = unique_and_plain_tables("plain_copy").await;
+		// A delete event shows which record was deleted: with a copy, never the original.
+		db.query(
+			"DEFINE TABLE gone SCHEMALESS;
+			DEFINE EVENT plain_gone ON plain WHEN $event = 'DELETE' THEN (CREATE gone SET was = $before.id);",
+		)
+		.await
+		.unwrap()
+		.check()
+		.unwrap();
+		let before = rows(&db, "plain").await;
+
+		expect_ok(assert_permission_action_update(&db, &db, rid("plain", "kept")).await);
+		expect_ok(assert_permission_action_delete(&db, &db, rid("plain", "kept")).await);
+
+		assert_eq!(rows(&db, "plain").await, before);
+		let mut response =
+			db.query("SELECT VALUE record::id(was) FROM gone;").await.unwrap().check().unwrap();
+		let deleted: Vec<String> = response.take(0).unwrap();
+		assert!(!deleted.is_empty(), "the copies were deleted");
+		assert!(!deleted.contains(&"kept".to_string()), "the original was deleted: {deleted:?}");
+	}
+
+	#[tokio::test]
+	async fn a_create_that_collides_in_a_unique_index_is_inconclusive() {
+		use super::{AssertionError, assert_permission_action_create};
+		let db = unique_and_plain_tables("create_collides").await;
+
+		match assert_permission_action_create(&db, &db, rid("handle", "taken")).await {
+			Err(AssertionError::Inconclusive(message)) => {
+				assert!(message.contains("unique index `handle_name`"), "{message}");
+				assert!(message.contains("handle:taken"), "{message}");
+			}
+			Err(err) => panic!("expected an inconclusive result, got {err}"),
+			Ok(()) => panic!("a duplicate of handle:taken was created"),
+		}
+		assert_eq!(rows(&db, "handle").await.len(), 1);
+
+		expect_ok(assert_permission_action_create(&db, &db, rid("plain", "kept")).await);
+		assert_eq!(rows(&db, "plain").await.len(), 1, "the created record is cleaned up");
 	}
 
 	#[test]
