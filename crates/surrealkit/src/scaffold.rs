@@ -205,7 +205,7 @@ pub const DEFAULT_PROJECT_CONFIG: &str = r#"# Template variables for use in .sur
 # style (the file path is appended to the command). Failures are non-fatal.
 #
 # [typegen]
-# typescript = "../src/types"
+# typescript = "src/types"           # relative to where surrealkit runs, the project root
 # filename   = "schema.generated.ts"   # keeps index.ts free for your own exports
 # format     = "biome check --write"   # or "prettier --write", "eslint --fix"
 "#;

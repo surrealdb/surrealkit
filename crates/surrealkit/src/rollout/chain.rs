@@ -213,7 +213,7 @@ fn order_by_hash(
 			"rollout '{}' ends at schema {}, but no manifest starts there; the next one, '{}', \
 			 starts from {}. A manifest is missing between them, or '{}' was planned from \
 			 snapshots that were reverted or merged by hand. Restore the missing manifest, or \
-			 delete '{}' (its .toml and directory) and plan it again.",
+			 discard '{}' with `surrealkit rollout discard` and plan it again.",
 			before.spec.id,
 			short(&before.spec.target_schema_hash),
 			after.spec.id,
@@ -245,8 +245,9 @@ fn fork_message(a: &LoadedRolloutSpec, b: &LoadedRolloutSpec) -> String {
 	};
 	format!(
 		"rollouts '{}' and '{}' were both planned from the same schema ({}), so they cannot both \
-		 apply in order. That happens when two branches each ran `rollout plan`. Delete the later \
-		 one, '{}' (its .toml and its directory), merge, and plan it again.",
+		 apply in order. That happens when two branches each ran `rollout plan`. Keep the other \
+		 branch's snapshots, discard the later one with `surrealkit rollout discard {} \
+		 --keep-snapshots`, and plan it again.",
 		first.spec.id,
 		second.spec.id,
 		short(&first.spec.source_schema_hash),
@@ -370,7 +371,10 @@ impl Position {
 			} => format!("after rollout '{id}'"),
 			Self::Baseline {
 				hash,
-			} => format!("at its baseline (schema {})", short(hash)),
+			} => format!(
+				"at the schema its file hashes record, from `rollout baseline` or `sync` (schema {})",
+				short(hash)
+			),
 			Self::Empty => "empty".to_string(),
 			Self::From(id) => format!("starting from '{id}' (--from)"),
 		}
@@ -385,6 +389,10 @@ pub(crate) struct ChainPlan<'a> {
 	pub applied: Vec<&'a LoadedRolloutSpec>,
 	/// In order. A rollout already in progress, if any, comes first.
 	pub pending: Vec<&'a LoadedRolloutSpec>,
+	/// What the database records for the first pending rollout, if anything: an
+	/// in-progress status, or `rolled_back` for one that was rolled back here and
+	/// has to run again (or be discarded) before anything after it.
+	pub head_status: Option<String>,
 	/// Never run here, although this database has moved past them, so their
 	/// `run_sql` and `assert_sql` steps never ran either.
 	pub skipped: Vec<&'a LoadedRolloutSpec>,
@@ -512,6 +520,7 @@ pub(crate) fn locate<'a>(
 		position,
 		applied: Vec::new(),
 		pending: Vec::new(),
+		head_status: None,
 		skipped: Vec::new(),
 		untracked: Vec::new(),
 	};
@@ -531,11 +540,10 @@ pub(crate) fn locate<'a>(
 				}
 				plan.applied.push(m);
 			}
-			Some("rolled_back") => bail!(
-				"rollout '{id}' was rolled back (or abandoned) here, and the rollouts after it were \
-				 planned on top of it. Delete it and everything after it, and plan again from the \
-				 current schema; or fix what made it roll back and plan a new rollout."
-			),
+			// Rolled back (or abandoned): the database is back where it was before it,
+			// so it is pending again. Whether to run it again or discard it is the
+			// operator's call, which `up` and `start` ask for.
+			Some("rolled_back") => plan.pending.push(m),
 			Some(status) if is_active(status) => {
 				if let Some(first) = plan.pending.first() {
 					bail!(
@@ -549,6 +557,9 @@ pub(crate) fn locate<'a>(
 			_ => plan.pending.push(m),
 		}
 	}
+
+	plan.head_status =
+		plan.pending.first().and_then(|m| ledger.status(&m.spec.id)).map(str::to_string);
 
 	if let Some((id, row)) = ledger.rows.iter().find(|(_, row)| is_active(&row.status))
 		&& !plan.pending.iter().any(|m| m.spec.id == *id)
@@ -633,7 +644,12 @@ pub(crate) async fn require_next(
 		return Ok(());
 	}
 	match plan.pending.iter().position(|m| m.spec.id == id) {
+		// Starting a rolled-back rollout by name runs it again: that is what the
+		// operator asked for.
 		Some(0) => Ok(()),
+		Some(_) if plan.head_status.as_deref() == Some("rolled_back") => {
+			bail!(rolled_back_message(&plan))
+		}
 		Some(idx) => bail!(
 			"rollout '{id}' is not next: this database is {}, and {} must run first. Run \
 			 `surrealkit rollout up` to apply them in order.",
@@ -650,6 +666,42 @@ pub(crate) async fn require_next(
 			plan.position.describe()
 		),
 	}
+}
+
+/// What to do about a rolled-back rollout at the head of the pending list.
+pub(crate) fn rolled_back_message(plan: &ChainPlan<'_>) -> String {
+	let head = &plan.pending[0].spec.id;
+	let later: Vec<&str> = plan.pending[1..].iter().map(|m| m.spec.id.as_str()).collect();
+	let (blocked, carries_on, discard_first) = if later.is_empty() {
+		(String::new(), String::new(), String::new())
+	} else {
+		(
+			format!(
+				", and the {} planned after it ({}) cannot run until it does",
+				later.len(),
+				later.join(", ")
+			),
+			", then `surrealkit rollout up` carries on with the rest".to_string(),
+			format!(
+				" Discard the later ones first, newest first: {}.",
+				later
+					.iter()
+					.rev()
+					.map(|id| format!("`surrealkit rollout discard {id}`"))
+					.collect::<Vec<_>>()
+					.join(", ")
+			),
+		)
+	};
+	format!(
+		"rollout '{head}' was rolled back here, so this database is where it was before \
+		 it{blocked}. Either:\n\
+		 \x20 - run it again once whatever made you roll it back is fixed: `surrealkit rollout \
+		 start {head}`{carries_on}; or\n\
+		 \x20 - drop it from the project with `surrealkit rollout discard {head}`, which deletes \
+		 its manifest and directory and puts the snapshots back to before it was planned, then \
+		 plan again.{discard_first}"
+	)
 }
 
 /// For a manifest without frozen files, only point out an ordering problem; the
@@ -730,7 +782,10 @@ mod tests {
 	fn two_changes_from_one_schema_are_a_fork() {
 		let err =
 			chain(vec![manifest("1", "A", "B"), manifest("2", "A", "C")]).unwrap_err().to_string();
-		assert!(err.contains("'1' and '2'") && err.contains("Delete the later one, '2'"), "{err}");
+		assert!(
+			err.contains("'1' and '2'") && err.contains("rollout discard 2 --keep-snapshots"),
+			"{err}"
+		);
 	}
 
 	#[test]
@@ -925,14 +980,39 @@ mod tests {
 	}
 
 	#[test]
-	fn a_rolled_back_rollout_on_the_way_stops_placement() {
+	fn a_rolled_back_rollout_is_pending_again() {
 		let c = five();
 		let l = ledger(
 			&[("101", "completed"), ("102", "completed"), ("103", "rolled_back")],
 			Some(("102", "B")),
 		);
-		let err = locate(&c, &l, &baseline(None, false), None).unwrap_err().to_string();
-		assert!(err.contains("'103' was rolled back"), "{err}");
+		let plan = locate(&c, &l, &baseline(None, false), None).unwrap();
+		assert_eq!(ids(&plan.pending), vec!["103", "104", "105"]);
+		assert_eq!(plan.head_status.as_deref(), Some("rolled_back"));
+		let message = rolled_back_message(&plan);
+		assert!(message.contains("rollout start 103"), "{message}");
+		assert!(message.contains("rollout discard 103"), "{message}");
+		assert!(message.contains("the 2 planned after it (104, 105) cannot run"), "{message}");
+		assert!(
+			message.contains("`surrealkit rollout discard 105`, `surrealkit rollout discard 104`"),
+			"{message}"
+		);
+
+		// The newest rolled back: nothing "after it" to mention.
+		let l = ledger(
+			&[
+				("101", "completed"),
+				("102", "completed"),
+				("103", "completed"),
+				("104", "completed"),
+				("105", "rolled_back"),
+			],
+			Some(("104", "D")),
+		);
+		let plan = locate(&c, &l, &baseline(None, false), None).unwrap();
+		let message = rolled_back_message(&plan);
+		assert!(!message.contains("planned after it"), "{message}");
+		assert!(!message.contains("Discard the later ones"), "{message}");
 	}
 
 	#[test]

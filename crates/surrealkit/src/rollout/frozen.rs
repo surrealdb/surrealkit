@@ -240,7 +240,14 @@ impl TargetCatalog {
 	}
 }
 
-/// Write a rollout's frozen files to `rollouts/<id>/`, all or nothing.
+/// Where a rollout's directory keeps the snapshots `plan` started from, the
+/// project's `snapshots/` as they were before this rollout was planned.
+/// `rollout discard` puts them back.
+pub(crate) const BASE_SCHEMA_SNAPSHOT: &str = "snapshots/schema_snapshot.json";
+pub(crate) const BASE_CATALOG_SNAPSHOT: &str = "snapshots/catalog_snapshot.json";
+
+/// Write a rollout's frozen files, and the snapshots it was planned from, to
+/// `rollouts/<id>/`, all or nothing.
 ///
 /// They go to a temporary directory first, which is renamed into place, so an
 /// interrupted plan never leaves a half-written directory that looks complete.
@@ -248,6 +255,7 @@ pub(crate) fn write_frozen_dir(
 	rollouts_dir: &Path,
 	rollout_id: &str,
 	files: &[&SchemaFile],
+	extra: &[(&str, String)],
 ) -> Result<()> {
 	let target = rollouts_dir.join(rollout_id);
 	if target.exists() {
@@ -269,6 +277,14 @@ pub(crate) fn write_frozen_dir(
 			}
 			fs::write(&path, file.sql.as_bytes())
 				.with_context(|| format!("writing {}", path.display()))?;
+		}
+		for (rel, body) in extra {
+			let path = staging.join(rel);
+			if let Some(parent) = path.parent() {
+				fs::create_dir_all(parent)
+					.with_context(|| format!("creating {}", parent.display()))?;
+			}
+			fs::write(&path, body).with_context(|| format!("writing {}", path.display()))?;
 		}
 		fs::create_dir_all(&staging).with_context(|| format!("creating {}", staging.display()))?;
 		fs::rename(&staging, &target)
@@ -400,18 +416,23 @@ mod tests {
 			sql: "DEFINE TABLE b;".to_string(),
 			hash: String::new(),
 		};
-		write_frozen_dir(dir.path(), "r1", &[&a, &nested]).unwrap();
+		write_frozen_dir(dir.path(), "r1", &[&a, &nested], &[]).unwrap();
 		assert_eq!(
 			fs::read_to_string(dir.path().join("r1/schema/sub/b.surql")).unwrap(),
 			"DEFINE TABLE b;"
 		);
 		assert!(!dir.path().join(".r1.tmp").exists());
 
-		let err = write_frozen_dir(dir.path(), "r1", &[&a]).unwrap_err().to_string();
+		let err = write_frozen_dir(dir.path(), "r1", &[&a], &[]).unwrap_err().to_string();
 		assert!(err.contains("already exists"), "{err}");
 
-		// A rollout that changes no files still gets its (empty) directory.
-		write_frozen_dir(dir.path(), "r2", &[]).unwrap();
-		assert!(dir.path().join("r2").is_dir());
+		// A rollout that changes no files still gets its directory, holding the
+		// snapshots it was planned from.
+		write_frozen_dir(dir.path(), "r2", &[], &[(BASE_SCHEMA_SNAPSHOT, "{}".to_string())])
+			.unwrap();
+		assert_eq!(
+			fs::read_to_string(dir.path().join("r2").join(BASE_SCHEMA_SNAPSHOT)).unwrap(),
+			"{}"
+		);
 	}
 }

@@ -15,8 +15,8 @@ use surrealdb::opt::Config;
 use surrealdb::opt::capabilities::Capabilities;
 use surrealkit::module::Module;
 use surrealkit::rollout::{
-	RolloutExecutionOpts, RolloutPlanOpts, RolloutUpOpts, run_baseline, run_complete, run_freeze,
-	run_lint, run_plan, run_rollback, run_start, run_up,
+	RolloutExecutionOpts, RolloutPlanOpts, RolloutUpOpts, run_baseline, run_complete, run_discard,
+	run_freeze, run_lint, run_plan, run_rollback, run_start, run_up,
 };
 use surrealkit::sync::{SyncOpts, run_sync};
 use surrealkit::{
@@ -201,6 +201,24 @@ impl Project {
 			&TemplateVars::default(),
 		)
 		.await
+	}
+}
+
+trait FileRefsForTest {
+	fn file_refs_for_test(&self) -> Vec<String>;
+}
+
+impl FileRefsForTest for RolloutSpec {
+	fn file_refs_for_test(&self) -> Vec<String> {
+		self.steps
+			.iter()
+			.flat_map(|step| match &step.action {
+				surrealkit::RolloutAction::ApplyFiles {
+					files,
+				} => files.iter().map(|f| f.path().to_string()).collect(),
+				_ => Vec::new(),
+			})
+			.collect()
 	}
 }
 
@@ -402,7 +420,15 @@ async fn plan_freezes_each_changed_file_beside_the_manifest() {
 	// Only the files that changed: v3 touched person.surql and account.surql.
 	let mut frozen: Vec<String> = walk(&s.project.frozen_dir(&s.v3));
 	frozen.sort();
-	assert_eq!(frozen, vec!["schema/account.surql", "schema/person.surql"]);
+	assert_eq!(
+		frozen,
+		vec![
+			"schema/account.surql",
+			"schema/person.surql",
+			"snapshots/catalog_snapshot.json",
+			"snapshots/schema_snapshot.json",
+		]
+	);
 	run_lint(&s.project.folder(), RolloutExecutionOpts::new(Some(s.v3.clone())))
 		.await
 		.expect("lint one");
@@ -469,20 +495,134 @@ async fn start_refuses_a_frozen_rollout_out_of_order() {
 	s.project.start(&s.db, &s.v3).await.expect("start v3");
 }
 
+impl Project {
+	async fn rollback(&self, db: &Surreal<Any>, id: &str) {
+		run_rollback(
+			db,
+			&self.folder(),
+			RolloutExecutionOpts::new(Some(id.to_string())),
+			&TemplateVars::default(),
+		)
+		.await
+		.expect("rollback");
+	}
+
+	fn snapshots(&self) -> (String, String) {
+		(
+			fs::read_to_string(self.root.join("snapshots/schema_snapshot.json")).unwrap(),
+			fs::read_to_string(self.root.join("snapshots/catalog_snapshot.json")).unwrap(),
+		)
+	}
+}
+
 #[tokio::test]
-async fn a_rolled_back_rollout_stops_up_with_advice() {
+async fn a_rolled_back_rollout_stops_up_with_both_remedies() {
 	let s = scenario().await;
 	s.project.start(&s.db, &s.v2).await.expect("start v2");
-	run_rollback(
-		&s.db,
-		&s.project.folder(),
-		RolloutExecutionOpts::new(Some(s.v2.clone())),
-		&TemplateVars::default(),
-	)
-	.await
-	.expect("rollback");
+	s.project.rollback(&s.db, &s.v2).await;
 	let err = s.project.up(&s.db, false).await.expect_err("rolled back").to_string();
-	assert!(err.contains("was rolled back"), "{err}");
+	assert!(err.contains(&format!("rollout start {}", s.v2)), "{err}");
+	assert!(err.contains(&format!("rollout discard {}", s.v2)), "{err}");
+	assert!(err.contains("planned after it"), "{err}");
+	// Starting a later one names the rolled-back one too.
+	let err = s.project.start(&s.db, &s.v3).await.expect_err("v2 first").to_string();
+	assert!(err.contains(&format!("rollout start {}", s.v2)), "{err}");
+}
+
+#[tokio::test]
+async fn a_rolled_back_rollout_runs_again_when_started_by_name() {
+	// The reviewer's case: roll back a modifying rollout, fix the cause, carry on.
+	let s = scenario().await;
+	s.project.start(&s.db, &s.v2).await.expect("start v2");
+	s.project.rollback(&s.db, &s.v2).await;
+	assert_eq!(status(&s.db, &s.v2).await.as_deref(), Some("rolled_back"));
+	assert!(!field_names(&s.db, "person").await.contains(&"email".to_string()));
+
+	let pending = Rollouts::load(s.project.folder()).unwrap().pending(&s.db).await.unwrap();
+	assert_eq!(pending.in_flight, Some((s.v2.clone(), "rolled_back".to_string())));
+
+	s.project.start(&s.db, &s.v2).await.expect("starting a rolled-back rollout again");
+	assert_eq!(status(&s.db, &s.v2).await.as_deref(), Some("ready_to_complete"));
+	let report = s.project.up(&s.db, true).await.expect("up carries on");
+	assert_eq!(report.completed, vec![s.v2.clone(), s.v3.clone(), s.v4.clone()]);
+	assert_eq!(catalog_keys(&s.db).await, snapshot_keys(&s.project));
+}
+
+#[tokio::test]
+async fn the_newest_rollout_rolled_back_and_discarded_plans_again_cleanly() {
+	let s = scenario().await;
+	s.project.up(&s.db, true).await.expect("up");
+	// One more rollout, rolled back.
+	let before = s.project.snapshots();
+	// Undo the scenario's unplanned edits (which would read as a rename), and add one table.
+	s.project.write("account.surql", "DEFINE TABLE account SCHEMALESS;\n");
+	s.project.write("later.surql", "DEFINE TABLE later SCHEMALESS;\n");
+	let v5 = s.project.plan("v5_later").await;
+	assert_ne!(s.project.snapshots(), before);
+	s.project.start(&s.db, &v5).await.expect("start v5");
+	s.project.rollback(&s.db, &v5).await;
+	let err = s.project.up(&s.db, false).await.expect_err("rolled back").to_string();
+	assert!(!err.contains("planned after it"), "nothing comes after the newest: {err}");
+
+	run_discard(&s.project.folder(), &v5, false).expect("discard");
+	assert!(!s.project.manifest(&v5).exists() && !s.project.frozen_dir(&v5).exists());
+	assert_eq!(s.project.snapshots(), before, "discard must put the snapshots back");
+
+	// Planning again picks the change up, chains after v4, and runs.
+	let again = s.project.plan("v5_again").await;
+	let spec: RolloutSpec =
+		toml::from_str(&fs::read_to_string(s.project.manifest(&again)).unwrap()).unwrap();
+	assert!(spec.file_refs_for_test().contains(&"schema/later.surql".to_string()));
+	run_lint(&s.project.folder(), RolloutExecutionOpts::new(None))
+		.await
+		.expect("lint after discard");
+	let report = s.project.up(&s.db, true).await.expect("up");
+	assert_eq!(report.completed, vec![again]);
+}
+
+#[tokio::test]
+async fn discard_refuses_what_it_cannot_undo() {
+	let s = scenario().await;
+	// Not the newest: later rollouts were planned on top of it.
+	let err = run_discard(&s.project.folder(), &s.v3, false).unwrap_err().to_string();
+	assert!(err.contains(&s.v4), "{err}");
+	assert!(s.project.manifest(&s.v3).exists());
+
+	// No snapshots kept (planned before beta.6): it says how to proceed.
+	fs::remove_dir_all(s.project.frozen_dir(&s.v4).join("snapshots")).unwrap();
+	let err = run_discard(&s.project.folder(), &s.v4, false).unwrap_err().to_string();
+	assert!(err.contains("--keep-snapshots") && err.contains("git checkout"), "{err}");
+	assert!(s.project.manifest(&s.v4).exists());
+	let before = s.project.snapshots();
+	run_discard(&s.project.folder(), &s.v4, true).expect("discard keeping the snapshots");
+	assert!(!s.project.manifest(&s.v4).exists());
+	assert_eq!(s.project.snapshots(), before);
+}
+
+#[tokio::test]
+async fn plan_keeps_the_snapshots_it_started_from() {
+	let project = Project::new();
+	project.write("a.surql", "DEFINE TABLE a;\n");
+	let first = project.plan("first").await;
+	let after_first = project.snapshots();
+	project.write("b.surql", "DEFINE TABLE b;\n");
+	let second = project.plan("second").await;
+	let kept = |id: &str| {
+		(
+			fs::read_to_string(project.frozen_dir(id).join("snapshots/schema_snapshot.json"))
+				.unwrap(),
+			fs::read_to_string(project.frozen_dir(id).join("snapshots/catalog_snapshot.json"))
+				.unwrap(),
+		)
+	};
+	assert_eq!(kept(&second), after_first);
+	assert!(kept(&first).1.contains("\"entities\": []"), "{}", kept(&first).1);
+	// A rollout that changes nothing still gets a directory, so a git clone has it.
+	let empty = project.plan("nothing").await;
+	assert!(project.frozen_dir(&empty).join("snapshots/schema_snapshot.json").is_file());
+	run_lint(&project.folder(), RolloutExecutionOpts::new(None))
+		.await
+		.expect("lint accepts the kept snapshots");
 }
 
 #[tokio::test]

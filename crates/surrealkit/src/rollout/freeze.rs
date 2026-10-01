@@ -74,7 +74,7 @@ pub fn run_freeze(folder: &str, selector: &str) -> Result<()> {
 
 	let rollouts = rollouts_dir(folder);
 	let to_write: Vec<&SchemaFile> = frozen.values().copied().collect();
-	write_frozen_dir(&rollouts, &id, &to_write)?;
+	write_frozen_dir(&rollouts, &id, &to_write, &[])?;
 	if let Err(err) = fs::write(&path, doc.to_string()) {
 		let _ = fs::remove_dir_all(rollouts.join(&id));
 		return Err(err).with_context(|| format!("writing {}", path.display()));

@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": "schema/account.surql",
+      "hash": "8748042053487e29fbf319d265e4960d44d18d23118eec36d5f9be3caf5b40cd"
+    },
+    {
+      "path": "schema/note.surql",
+      "hash": "ea1247ec645c37f2876275555619d75223e6b3ac6faec5b461d27f71c17c0623"
+    }
+  ]
+}

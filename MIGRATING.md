@@ -232,6 +232,11 @@ order, each applying what was planned (#91). What changes for you:
   after merging.
 - **`rollout lint` with no id** checks the whole directory, including schema
   changes no rollout plans yet. It needs no database, so it suits CI.
+- **A rolled-back rollout can be started again** by name, and `up` carries on
+  after it. Before, it could never run again. To drop one instead,
+  `surrealkit rollout discard <id>` deletes its manifest and directory and puts
+  `snapshots/` back to where they were before it was planned; each rollout's
+  directory now keeps those snapshots under `snapshots/`.
 
 Manifests planned before beta.6 still work as before: they run against the
 schema they were planned from, and `rollout start`/`complete` treat them as they
@@ -500,6 +505,7 @@ From 1.0.0-beta.6:
 | `typegen::write_typescript(doc, dir)` | takes a directory (as before) or a `.ts` file |
 | `rollout::run_lint(folder, opts)` | `opts.selector = None` lints every manifest instead of erroring |
 | `rollout::LoadedRolloutSpec { .. }` | gains `frozen_root` |
+| `Rollout::start` on a rolled-back rollout | starts it again, where it used to fail |
 
 New: `Rollouts` (run a project's rollouts in order), `FileRef`, `FrozenFile`,
 `RolloutChainReport`, `UpReport`, `schema_state::{prepare_schema_sql, PreparedSql,

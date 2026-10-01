@@ -280,6 +280,17 @@ enum RolloutCommands {
 		#[arg(value_name = "ROLLOUT_ID")]
 		rollout: String,
 	},
+	/// Drop the newest rollout from the project, as if it had never been
+	/// planned: delete its manifest and directory, and put the snapshots back to
+	/// where they were before it. Only for a rollout no database has completed.
+	Discard {
+		#[arg(value_name = "ROLLOUT_ID")]
+		rollout: String,
+		/// Leave the snapshots as they are, for when they have been put right by
+		/// hand.
+		#[arg(long)]
+		keep_snapshots: bool,
+	},
 	/// Heal a rollout stuck in an intermediate state without re-running SQL
 	/// steps. Useful when `complete` was killed mid-flight (issue #55) and
 	/// `__rollout.status` is still `running_complete` / `running_rollback`.
@@ -830,10 +841,18 @@ async fn main() -> Result<()> {
 						from,
 						dry_run,
 						query_timeout: target.cfg().query_timeout,
+						quiet: false,
 					},
 					&template_vars,
 				)
 				.await?;
+			}
+			RolloutCommands::Discard {
+				rollout,
+				keep_snapshots,
+			} => {
+				warn_unused_target_selection("rollout discard", target_selection_used);
+				rollout::run_discard(&folder, &rollout, keep_snapshots)?;
 			}
 			RolloutCommands::Freeze {
 				rollout,

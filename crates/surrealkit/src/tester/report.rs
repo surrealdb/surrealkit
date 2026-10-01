@@ -44,14 +44,27 @@ pub fn print_human_report<W: Write>(out: &mut W, report: &RunReport) -> Result<(
 
 				Suite: {suite_name}
 				- file     : {suite_file}
-				- namespace: {namespace}
-				- database : {database}
-				- result   : {cases_passed} passed, {cases_failed} failed
 				",
 				suite_name = suite.suite_name,
 				suite_file = suite.suite_file,
-				namespace = suite.namespace,
-				database = suite.database,
+			)?;
+			// The rollout parity check builds its own databases and has none to name.
+			if !suite.namespace.is_empty() {
+				writedoc!(
+					out,
+					"
+					- namespace: {namespace}
+					- database : {database}
+					",
+					namespace = suite.namespace,
+					database = suite.database,
+				)?;
+			}
+			writedoc!(
+				out,
+				"
+				- result   : {cases_passed} passed, {cases_failed} failed
+				",
 				cases_passed = suite.cases_passed,
 				cases_failed = suite.cases_failed
 			)?;

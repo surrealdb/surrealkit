@@ -275,6 +275,10 @@ jobs:
             - name: Concurrency — two rollout up runs at once
               run: examples/rollout-repro/scenarios/ci_concurrency.sh
 
+            # After a rollback: run it again, or discard it and plan again.
+            - name: Rollback recovery — start again, or discard
+              run: examples/rollout-repro/scenarios/ci_rollback_recovery.sh
+
             - name: Sync lifecycle — apply, prune, idle
               run: examples/rollout-repro/scenarios/ci_sync_lifecycle.sh
 

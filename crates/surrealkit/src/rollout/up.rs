@@ -33,6 +33,8 @@ pub struct RolloutUpOpts {
 	/// Report what would run, and run nothing.
 	pub dry_run: bool,
 	pub query_timeout: Option<Duration>,
+	/// One line per rollout instead of one per step, for replays run as setup.
+	pub quiet: bool,
 }
 
 /// What [`Rollouts::up`](super::Rollouts::up) did.
@@ -116,6 +118,11 @@ async fn up_locked(
 		log::info!("This database is {}; every rollout has run.", plan.position.describe());
 		return Ok(report);
 	}
+	// Running a rolled-back rollout again is a decision `up` does not make on
+	// its own: it was rolled back for a reason.
+	if plan.head_status.as_deref() == Some("rolled_back") {
+		bail!(chain::rolled_back_message(&plan));
+	}
 
 	// Everything that can be checked without the database is checked before any
 	// rollout starts, so a missing or edited frozen file in the third rollout
@@ -163,7 +170,12 @@ async fn up_locked(
 		);
 	}
 
-	log::info!(
+	log::log!(
+		if opts.quiet {
+			log::Level::Debug
+		} else {
+			log::Level::Info
+		},
 		"This database is {}. Pending, in order: {}",
 		plan.position.describe(),
 		report.pending.join(", ")
@@ -184,7 +196,7 @@ async fn up_locked(
 		return Ok(report);
 	}
 
-	let ctx = StepContext::new(vars, Some(folder), opts.query_timeout);
+	let ctx = StepContext::new(vars, Some(folder), opts.query_timeout).quiet(opts.quiet);
 	for (idx, (loaded, target)) in prepared.iter().enumerate() {
 		let id = loaded.spec.id.as_str();
 		let row = ledger.rows.get(id);
@@ -216,9 +228,16 @@ async fn up_locked(
 					.unwrap_or_default()
 			);
 		} else {
+			// Starting it just said it is ready; say what comes next, or that it was
+			// already waiting.
 			log::info!(
-				"Rollout {id} is ready to complete. Once the application has cut over, run \
-				 `surrealkit rollout complete {id}` or `surrealkit rollout up --complete`."
+				"{}Once the application has cut over, run `surrealkit rollout complete {id}` or \
+				 `surrealkit rollout up --complete`.",
+				if started {
+					format!("Rollout {id} was already waiting at ready_to_complete. ")
+				} else {
+					String::new()
+				}
 			);
 			report.waiting = Some(id.to_string());
 		}
@@ -244,8 +263,10 @@ pub(crate) fn report_history(plan: &ChainPlan<'_>) {
 			}
 		);
 	}
+	// Routine for any database synced or baselined before its first rollout, so
+	// only at debug: it would otherwise print on every status and up.
 	if !plan.untracked.is_empty() {
-		log::info!(
+		log::debug!(
 			"{} rollout(s) predate this database's history and are not run: {}",
 			plan.untracked.len(),
 			ids(&plan.untracked).join(", ")

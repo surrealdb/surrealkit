@@ -29,10 +29,13 @@ use crate::setup::run_setup;
 use crate::variables::TemplateVars;
 
 mod chain;
+mod discard;
 mod freeze;
 mod frozen;
 mod up;
 
+#[doc(hidden)]
+pub use discard::run_discard;
 #[doc(hidden)]
 pub use freeze::run_freeze;
 use frozen::{TargetCatalog, preflight_frozen};
@@ -82,6 +85,10 @@ pub(crate) struct StepContext<'a> {
 	/// `None` for the embedded/library path, which reads no files.
 	pub(crate) folder: Option<&'a str>,
 	pub(crate) query_timeout: Option<Duration>,
+	/// Report each step at debug level rather than info, for callers that
+	/// replay rollouts as setup (the tester), where one line per rollout is
+	/// enough.
+	pub(crate) quiet: bool,
 }
 
 impl<'a> StepContext<'a> {
@@ -94,6 +101,21 @@ impl<'a> StepContext<'a> {
 			vars,
 			folder,
 			query_timeout,
+			quiet: false,
+		}
+	}
+
+	pub(crate) fn quiet(mut self, quiet: bool) -> Self {
+		self.quiet = quiet;
+		self
+	}
+
+	/// The level for routine progress lines.
+	fn progress(&self) -> log::Level {
+		if self.quiet {
+			log::Level::Debug
+		} else {
+			log::Level::Info
 		}
 	}
 }
@@ -782,8 +804,11 @@ pub struct RolloutChainReport {
 	/// How the position was worked out, e.g. `after rollout '<id>'`.
 	pub position: String,
 	pub applied: Vec<String>,
-	/// In order. A rollout already in progress comes first.
+	/// In order. A rollout already in progress, or rolled back here, comes first.
 	pub pending: Vec<String>,
+	/// The first pending rollout, if it has started here: `(id, status)`, where
+	/// the status is an in-progress one or `rolled_back`.
+	pub in_flight: Option<(String, String)>,
 	/// Never run here, although the database moved past them.
 	pub skipped: Vec<String>,
 	/// From before the database's history began.
@@ -834,6 +859,11 @@ impl Rollouts {
 			position: plan.position.describe(),
 			applied: ids(&plan.applied),
 			pending: ids(&plan.pending),
+			in_flight: plan
+				.pending
+				.first()
+				.zip(plan.head_status.as_ref())
+				.map(|(m, status)| (m.spec.id.clone(), status.clone())),
 			skipped: ids(&plan.skipped),
 			untracked: ids(&plan.untracked),
 		})
@@ -849,6 +879,7 @@ impl Rollouts {
 				from: None,
 				dry_run: false,
 				query_timeout: self.query_timeout,
+				quiet: false,
 			},
 			&self.vars,
 		)
@@ -974,9 +1005,11 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 		&& tail.spec.target_schema_hash != spec.source_schema_hash
 	{
 		log::warn!(
-			"the snapshots this plan starts from are not where rollout '{}' left them, so the new \
-			 rollout will not follow it in the chain and `rollout lint` will report a gap. That \
-			 usually means the snapshots were reverted or merged by hand.",
+			"the snapshots this plan starts from are not where the newest rollout, '{}', leaves \
+			 the schema, so the new rollout will not follow it in the chain and `rollout lint` will \
+			 report a gap. A rollout deleted by hand leaves its snapshots behind; `surrealkit \
+			 rollout discard <id>` puts them back. Otherwise the snapshots were edited or merged \
+			 by hand.",
 			tail.spec.id
 		);
 	}
@@ -1007,7 +1040,16 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 	let frozen_paths: BTreeSet<&str> = spec.file_refs().map(FileRef::path).collect();
 	let frozen_files: Vec<&SchemaFile> =
 		files.iter().filter(|file| frozen_paths.contains(file.path.as_str())).collect();
-	frozen::write_frozen_dir(&rollouts, &rollout_id, &frozen_files)?;
+	// The snapshots this plan starts from, kept so `rollout discard` can put them
+	// back. They are exactly what the diff above was taken against.
+	let base = [
+		(frozen::BASE_SCHEMA_SNAPSHOT, format!("{}\n", serde_json::to_string_pretty(&old_schema)?)),
+		(
+			frozen::BASE_CATALOG_SNAPSHOT,
+			format!("{}\n", serde_json::to_string_pretty(&old_catalog)?),
+		),
+	];
+	frozen::write_frozen_dir(&rollouts, &rollout_id, &frozen_files, &base)?;
 	if let Err(err) = fs::write(&path, raw) {
 		let _ = fs::remove_dir_all(rollouts.join(&rollout_id));
 		return Err(err).with_context(|| format!("writing rollout file {}", path.display()));
@@ -1025,11 +1067,13 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 	save_catalog_snapshot(folder, &new_catalog)?;
 
 	log::info!("Generated rollout manifest {}", path.display());
-	log::info!(
-		"Froze {} schema file(s) into {}",
-		frozen_files.len(),
-		rollouts.join(&rollout_id).display()
-	);
+	if !frozen_files.is_empty() {
+		log::info!(
+			"Froze {} schema file(s) into {}",
+			frozen_files.len(),
+			rollouts.join(&rollout_id).display()
+		);
+	}
 	log::info!("Updated {}", catalog_snapshot_path(folder).display());
 	log::info!(
 		"Commit the manifest, its directory and the snapshots together; reverting means reverting \
@@ -1130,6 +1174,7 @@ fn lint_all(folder: &str) -> Result<()> {
 	let mut legacy = Vec::new();
 	for rollout in chain.order.iter().chain(&chain.unchained) {
 		validate_rollout_spec(&rollout.spec)?;
+		lint_base_snapshot(rollout);
 		if rollout.spec.has_frozen_files() {
 			preflight_frozen(rollout)?;
 		} else if rollout.spec.file_refs().next().is_some() {
@@ -1183,6 +1228,25 @@ fn lint_all(folder: &str) -> Result<()> {
 	Ok(())
 }
 
+/// Warn when the snapshots a rollout keeps from its planning do not hash to
+/// where it starts: `rollout discard` would refuse to put them back.
+fn lint_base_snapshot(rollout: &LoadedRolloutSpec) {
+	let Some(root) = rollout.frozen_root.as_deref() else {
+		return;
+	};
+	let Ok(raw) = fs::read_to_string(root.join(frozen::BASE_SCHEMA_SNAPSHOT)) else {
+		return;
+	};
+	let hash = serde_json::from_str(&raw).ok().and_then(|s| hash_schema_snapshot(&s).ok());
+	if hash.as_deref() != Some(rollout.spec.source_schema_hash.as_str()) {
+		log::warn!(
+			"rollout '{}' keeps snapshots that do not hash to where it starts, so `rollout discard` \
+			 could not put them back",
+			rollout.spec.id
+		);
+	}
+}
+
 /// Warn about directories in `rollouts/` that belong to no manifest, and files in
 /// a manifest's directory that it does not apply.
 fn lint_leftovers(dir: &Path, chain: &chain::RolloutChain) -> Result<()> {
@@ -1208,8 +1272,13 @@ fn lint_leftovers(dir: &Path, chain: &chain::RolloutChain) -> Result<()> {
 			);
 			continue;
 		};
-		let referenced: BTreeSet<PathBuf> =
-			manifest.spec.file_refs().map(|file| path.join(file.path())).collect();
+		let referenced: BTreeSet<PathBuf> = manifest
+			.spec
+			.file_refs()
+			.map(FileRef::path)
+			.chain([frozen::BASE_SCHEMA_SNAPSHOT, frozen::BASE_CATALOG_SNAPSHOT])
+			.map(|rel| path.join(rel))
+			.collect();
 		for file in walkdir::WalkDir::new(&path).into_iter().filter_map(Result::ok) {
 			if file.file_type().is_file() && !referenced.contains(file.path()) {
 				log::warn!(
@@ -1297,11 +1366,29 @@ async fn log_chain(db: &Surreal<Any>, folder: &str) -> Result<()> {
 	log::info!("");
 	log::info!("This database is {}.", plan.position.describe());
 	log::info!("  applied: {}", plan.applied.len());
-	if plan.pending.is_empty() {
+	let mut waiting = plan.pending.as_slice();
+	match (plan.head_status.as_deref(), plan.pending.first()) {
+		(Some("rolled_back"), Some(head)) => {
+			log::info!(
+				"  rolled back: {} (run it again with `surrealkit rollout start {}`, or drop it with \
+				 `surrealkit rollout discard {}`)",
+				head.spec.id,
+				head.spec.id,
+				head.spec.id
+			);
+			waiting = &plan.pending[1..];
+		}
+		(Some(status), Some(head)) => {
+			log::info!("  in flight: {} ({status})", head.spec.id);
+			waiting = &plan.pending[1..];
+		}
+		_ => {}
+	}
+	if waiting.is_empty() {
 		log::info!("  pending: none");
 	} else {
 		log::info!("  pending, in order:");
-		for m in &plan.pending {
+		for m in waiting {
 			log::info!("    - {}", m.spec.id);
 		}
 	}
@@ -1486,11 +1573,15 @@ async fn start_inner(
 	let keep_alive = LockKeepAlive::spawn(db, &lock);
 	let result = async {
 		ensure_no_conflicting_active_rollout(db, &rollout.spec.id).await?;
-		let record = load_rollout_record(db, &rollout.spec.id).await?;
+		let mut record = load_rollout_record(db, &rollout.spec.id).await?;
 		match record.as_ref().and_then(|row| string_field(row, "status")).as_deref() {
 			Some("completed") => bail!("rollout '{}' is already completed", rollout.spec.id),
+			// Rollback put the database back where it was before this rollout, so
+			// starting it again is a first run: a fresh record, and a fresh capture
+			// of what a rollback would restore.
 			Some("rolled_back") => {
-				bail!("rollout '{}' has already been rolled back", rollout.spec.id)
+				log::info!("Rollout {} was rolled back; starting it again.", rollout.spec.id);
+				record = None;
 			}
 			_ => {}
 		}
@@ -1604,7 +1695,7 @@ async fn start_inner(
 		}
 		set_rollout_status(db, &rollout.spec.id, RolloutStatus::ReadyToComplete, None, None)
 			.await?;
-		log::info!("Rollout {} is ready to complete.", rollout.spec.id);
+		log::log!(ctx.progress(), "Rollout {} is ready to complete.", rollout.spec.id);
 		Ok(())
 	}
 	.await;
@@ -2836,7 +2927,8 @@ async fn execute_phase(
 
 	for (index, step) in planned.into_iter().enumerate() {
 		if step_already_completed(db, &rollout.spec.id, &step.id).await? {
-			log::info!(
+			log::log!(
+				ctx.progress(),
 				"step {}/{} '{}' ({}) already completed; skipping",
 				index + 1,
 				total,
@@ -2846,7 +2938,8 @@ async fn execute_phase(
 			continue;
 		}
 
-		log::info!(
+		log::log!(
+			ctx.progress(),
 			"step {}/{} '{}' ({}, phase {}) starting",
 			index + 1,
 			total,
@@ -2860,7 +2953,8 @@ async fn execute_phase(
 		let result = with_heartbeat(&step.id, execute_step(db, rollout, step, ctx)).await;
 		match result {
 			Ok(()) => {
-				log::info!(
+				log::log!(
+					ctx.progress(),
 					"step {}/{} '{}' completed in {}ms",
 					index + 1,
 					total,
@@ -3157,7 +3251,7 @@ async fn execute_step(
 			sql,
 		} => {
 			let substituted = vars.apply(sql)?;
-			run(prepare_logged(&substituted, &format!("step '{}'", step.id))?).await
+			run(prepare_logged(db, &substituted, &format!("step '{}'", step.id)).await?).await
 		}
 		RolloutAction::ApplyFiles {
 			files,
@@ -3178,7 +3272,7 @@ async fn execute_step(
 				let substituted = vars
 					.apply(&raw)
 					.with_context(|| format!("applying template variables in {source}"))?;
-				run(prepare_logged(&substituted, &source)?).await?;
+				run(prepare_logged(db, &substituted, &source).await?).await?;
 			}
 			Ok(())
 		}
@@ -3226,9 +3320,9 @@ async fn execute_step(
 					continue;
 				}
 				match captured.get(&key) {
-					Some(definition) => {
-						statements.push(prepare_logged(definition, &format!("step '{}'", step.id))?)
-					}
+					Some(definition) => statements.push(
+						prepare_logged(db, definition, &format!("step '{}'", step.id)).await?,
+					),
 					None => missing.push(key),
 				}
 			}
@@ -3251,13 +3345,53 @@ async fn execute_step(
 }
 
 /// Prepare DDL for re-apply, logging its warnings against `source`.
-fn prepare_logged(sql: &str, source: &str) -> Result<String> {
+async fn prepare_logged(db: &Surreal<Any>, sql: &str, source: &str) -> Result<String> {
 	let prepared =
 		prepare_schema_sql(sql).with_context(|| format!("preparing {source} for apply"))?;
-	for warning in &prepared.warnings {
+	for warning in relevant_warnings(db, prepared.warnings).await {
 		log::warn!("{source}: {warning}");
 	}
 	Ok(prepared.sql)
+}
+
+/// The warnings worth showing before an apply. A keyless record access is only
+/// a problem when it already exists: the first apply has signed no one in yet,
+/// so there is no one to sign out.
+pub(crate) async fn relevant_warnings(
+	db: &Surreal<Any>,
+	warnings: Vec<crate::schema_state::PrepareWarning>,
+) -> Vec<crate::schema_state::PrepareWarning> {
+	use crate::schema_state::PrepareWarning;
+	if !warnings.iter().any(|w| matches!(w, PrepareWarning::KeylessRecordAccess { .. })) {
+		return warnings;
+	}
+	let mut existing = BTreeSet::new();
+	for sql in ["INFO FOR DB;", "INFO FOR NS;"] {
+		if let Ok(info) = info_json(db, sql, None).await
+			&& let Some(accesses) = info.get("accesses").and_then(|v| v.as_object())
+		{
+			existing.extend(accesses.keys().map(|name| bare_ident(name)));
+		}
+	}
+	warnings
+		.into_iter()
+		.filter(|warning| match warning {
+			PrepareWarning::KeylessRecordAccess {
+				name,
+				..
+			} => existing.contains(&bare_ident(name)),
+			_ => true,
+		})
+		.collect()
+}
+
+/// An identifier without its quoting, which is how INFO lists names.
+fn bare_ident(name: &str) -> String {
+	name.strip_prefix('`')
+		.and_then(|n| n.strip_suffix('`'))
+		.or_else(|| name.strip_prefix('⟨').and_then(|n| n.strip_suffix('⟩')))
+		.unwrap_or(name)
+		.to_string()
 }
 
 /// Why a captured definition must not be re-applied by a rollback, if it must not.
@@ -5649,5 +5783,36 @@ files = ["schema/a.surql", { path = "schema/b.surql", hash = "h" }]
 				&& err.contains("schema/a.surql, schema/b.surql"),
 			"{err}"
 		);
+	}
+
+	#[tokio::test]
+	async fn the_keyless_access_warning_waits_until_there_is_someone_to_sign_out() {
+		use crate::schema_state::PrepareWarning;
+		let db = connect_mem_db().await;
+		let warnings = || {
+			vec![
+				PrepareWarning::KeylessRecordAccess {
+					name: "member".to_string(),
+					line: 1,
+				},
+				PrepareWarning::SequenceOverwrite {
+					name: "s".to_string(),
+					line: 2,
+				},
+			]
+		};
+		// First apply: no access yet, so only the sequence warning is left.
+		let first = relevant_warnings(&db, warnings()).await;
+		assert_eq!(first.len(), 1);
+		assert!(matches!(first[0], PrepareWarning::SequenceOverwrite { .. }));
+
+		db.query("DEFINE ACCESS member ON DATABASE TYPE RECORD SIGNIN (SELECT * FROM user);")
+			.await
+			.unwrap()
+			.check()
+			.unwrap();
+		assert_eq!(relevant_warnings(&db, warnings()).await.len(), 2);
+		assert_eq!(bare_ident("`member`"), "member");
+		assert_eq!(bare_ident("⟨member⟩"), "member");
 	}
 }

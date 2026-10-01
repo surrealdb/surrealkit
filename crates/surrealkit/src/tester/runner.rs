@@ -294,7 +294,10 @@ impl RunnerContext {
 			self.build_schema(&root.db, source).await?;
 		}
 		if !self.opts.no_seed {
-			seed::seed(&root.db, self.cfg.folder(), &self.vars).await?;
+			seed::seed(&root.db, self.cfg.folder(), &self.vars).await.context(
+				"seeding the suite database; `surrealkit test --no-seed` skips this for a project \
+				 without seed files",
+			)?;
 		}
 
 		let tests_dir = PathBuf::from(self.cfg.folder()).join("tests");
@@ -350,6 +353,7 @@ impl RunnerContext {
 					self.cfg.folder(),
 					crate::rollout::RolloutUpOpts {
 						complete_newest: true,
+						quiet: true,
 						..Default::default()
 					},
 					&self.vars,

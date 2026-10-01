@@ -1,0 +1,9 @@
+{
+  "version": 1,
+  "files": [
+    {
+      "path": "schema/account.surql",
+      "hash": "8748042053487e29fbf319d265e4960d44d18d23118eec36d5f9be3caf5b40cd"
+    }
+  ]
+}

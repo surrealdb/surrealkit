@@ -412,7 +412,7 @@ async fn run_sync_with_files(
 		let sql = substitute(&file.sql, &file.path)?;
 		let applied = match prepare_schema_sql(&sql) {
 			Ok(prepared) => {
-				for warning in &prepared.warnings {
+				for warning in crate::rollout::relevant_warnings(db, prepared.warnings).await {
 					log::warn!("{}: {warning}", file.path);
 				}
 				exec_surql(db, &prepared.sql).await

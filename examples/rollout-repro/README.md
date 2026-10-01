@@ -102,6 +102,7 @@ bash examples/rollout-repro/scenarios/ci_lifecycle.sh
 | `ci_catchup.sh` | `rollout up` across three frozen rollouts, with backfills (#91) |
 | `ci_regex.sh` | regex literals through sync and rollouts (#92) |
 | `ci_concurrency.sh` | two `rollout up` runs at once |
+| `ci_rollback_recovery.sh` | after a rollback: run it again, or `rollout discard` it and plan again |
 | `ci_sync_lifecycle.sh` | sync applies, prunes and idles |
 | `ci_sync_typegen.sh` | sync writes TypeScript to the configured file (#75) |
 | `ci_sync_rollout_interop.sh` | sync on a rollout-managed database |

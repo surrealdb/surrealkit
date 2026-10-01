@@ -522,6 +522,32 @@ build a database from nothing.
 surrealkit rollout rollback 20260302153045__add_customer_indexes
 ```
 
+A rolled-back rollout leaves the database where it was before it, and nothing
+planned after it can run until you decide what to do with it. `rollout up`
+stops and asks; it does not re-run it on its own. Either:
+
+- fix whatever made you roll it back, then run it again by name. `up` carries
+  on from there:
+
+  ```sh
+  surrealkit rollout start 20260302153045__add_customer_indexes
+  surrealkit rollout up
+  ```
+
+- or drop it from the project and plan again:
+
+  ```sh
+  surrealkit rollout discard 20260302153045__add_customer_indexes
+  surrealkit rollout plan --name add_customer_indexes
+  ```
+
+  `discard` deletes the manifest and its directory, and puts `snapshots/` back
+  to where they were before it was planned. Each rollout's directory keeps
+  those snapshots for this. Deleting a manifest by hand leaves the snapshots at
+  the end of the discarded rollout, so the next plan would find nothing to do.
+  Only discard the newest rollout, and only one that no database has completed:
+  a database that ran it can no longer be placed in the chain.
+
 Generated rollout manifests are written to `database/rollouts/*.toml`.
 Local snapshots are tracked in:
 
@@ -563,9 +589,11 @@ files, which would change their hashes:
 database/rollouts/** -text
 ```
 
-`rollout status` lists, after the rollout records, what is still pending in
-order, and any rollout the database moved past without running (whose data
-steps never ran there).
+`rollout status` lists, after the rollout records:
+- a rollout in flight (started, not completed) or rolled back here;
+- what is still pending, in order;
+- any rollout the database moved past without running, whose data steps never
+  ran there.
 
 To inspect rollout state stored in the database:
 
@@ -857,11 +885,19 @@ path = "0.id"
 exists = true
 ```
 
+A `sql_expect` case asserts against the result of the first statement in its
+`sql`. To check something a write produced, select it in a single statement
+(`CREATE ... RETURN AFTER`), or put the write in a fixture and the check in the
+case.
+
 An assertion whose `path` (or `header_assertions` `name`) is not present in the result
 **fails** with `path '<path>' not found`. This catches typos and queries that matched
 zero rows, which would otherwise report a pass without ever running the comparison. To
 assert that a field is genuinely absent, state it explicitly with `exists = false` —
-that is the only spec that passes on a missing path.
+that is the only spec that passes on a missing path. TOML has no null, so a field
+that is present but `NONE` (JSON `null`) is best checked in the query itself,
+e.g. `sql = "RETURN (SELECT VALUE nickname FROM ONLY person:ann) IS NONE"` with
+`{ path = ".", equals = true }`.
 
 To compare a returned field against the authenticated actor, use `equals_auth` with `$auth` or `$auth.<property>`:
 

@@ -1,0 +1,45 @@
+{
+  "version": 2,
+  "entities": [
+    {
+      "kind": "access",
+      "scope": "DATABASE",
+      "name": "member",
+      "source_path": "schema/account.surql",
+      "statement_hash": "9f5a290ae8db45dc5bedff224fa58aadb1870a4dec8486466775dfbfcb701c28",
+      "file_hash": "8748042053487e29fbf319d265e4960d44d18d23118eec36d5f9be3caf5b40cd"
+    },
+    {
+      "kind": "field",
+      "scope": "account",
+      "name": "email",
+      "source_path": "schema/account.surql",
+      "statement_hash": "be50d45ba038b88ceb634a81b31f2189322022d4691c6cf3bb19c79dbe09fade",
+      "file_hash": "8748042053487e29fbf319d265e4960d44d18d23118eec36d5f9be3caf5b40cd"
+    },
+    {
+      "kind": "field",
+      "scope": "account",
+      "name": "passphrase",
+      "source_path": "schema/account.surql",
+      "statement_hash": "ce75eac0bab297500e5c028500327ca9813598b463f599c65ae557e9a67a2213",
+      "file_hash": "8748042053487e29fbf319d265e4960d44d18d23118eec36d5f9be3caf5b40cd"
+    },
+    {
+      "kind": "index",
+      "scope": "account",
+      "name": "account_email",
+      "source_path": "schema/account.surql",
+      "statement_hash": "bec96059f89c0f9a44a4200bf567bab3c727310abf7e431653b5fa475b59b2a8",
+      "file_hash": "8748042053487e29fbf319d265e4960d44d18d23118eec36d5f9be3caf5b40cd"
+    },
+    {
+      "kind": "table",
+      "scope": null,
+      "name": "account",
+      "source_path": "schema/account.surql",
+      "statement_hash": "a76e1422ee3aec989113109a8ce62fade9a882bf244d155e05e382615069c30b",
+      "file_hash": "8748042053487e29fbf319d265e4960d44d18d23118eec36d5f9be3caf5b40cd"
+    }
+  ]
+}
