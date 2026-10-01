@@ -10,6 +10,7 @@ on:
         paths: &integration_paths
             - "Cargo.toml"
             - "examples/testing/**"
+            - "examples/rollout-testing/**"
             - "examples/rollout-repro/**"
             - "crates/surrealkit/src/**"
             - "crates/surrealkit/tests/**"
@@ -43,6 +44,13 @@ jobs:
             # Without this, tests/auth_levels.rs prints SKIP and passes, so the
             # namespace- and database-level signin paths were never exercised.
             SURREALKIT_AUTH_TEST_URL: ws://127.0.0.1:8000
+            # Points the library's own tests at this server instead of the
+            # embedded engine, which is always the SDK's version (3.3). SurrealQL
+            # differs between minors: 3.2 refuses an ORDER BY on a field a query
+            # does not select, and only a 3.2 server shows that.
+            SURREALKIT_TEST_URL: ws://127.0.0.1:8000
+            SURREALKIT_TEST_USER: root
+            SURREALKIT_TEST_PASS: secret
 
         services:
             surrealdb:
@@ -133,6 +141,25 @@ jobs:
                 cargo test \
                     --manifest-path crates/surrealkit/Cargo.toml \
                     --test auth_levels \
+                    --no-default-features \
+                    --features cli \
+                    --locked
+
+            # The same suites against a schema built by replaying the rollouts, and
+            # the parity check between that and sync.
+            - name: Run the rollout-testing suites (sync and replayed rollouts)
+              run: ./target/debug/surrealkit --folder examples/rollout-testing/database test
+
+            - name: Lint the rollout-testing chain
+              run: ./target/debug/surrealkit --folder examples/rollout-testing/database rollout lint
+
+            # Library unit tests, rollout catch-up and the tester's live cases, on
+            # this server rather than the embedded engine.
+            - name: Library and rollout tests against this server
+              run: |
+                cargo test \
+                    --manifest-path crates/surrealkit/Cargo.toml \
+                    --lib --test rollout_catchup --test tester_live \
                     --no-default-features \
                     --features cli \
                     --locked
@@ -230,6 +257,103 @@ jobs:
             # test that must never be allowed to rot.
             - name: Key migration — two legacy spellings collapse without pruning
               run: examples/rollout-repro/scenarios/ci_key_migration.sh
+
+            # #91: a database several releases behind runs every rollout it
+            # missed, in order, each applying what was planned.
+            - name: Catch-up — rollout up across three frozen rollouts
+              run: examples/rollout-repro/scenarios/ci_catchup.sh
+
+            # #92: a regex literal with `;`, `#` and `'` in it.
+            - name: Regex literals — sync and rollouts read them whole
+              run: examples/rollout-repro/scenarios/ci_regex.sh
+
+            - name: Concurrency — two rollout up runs at once
+              run: examples/rollout-repro/scenarios/ci_concurrency.sh
+
+            - name: Sync lifecycle — apply, prune, idle
+              run: examples/rollout-repro/scenarios/ci_sync_lifecycle.sh
+
+            - name: Sync typegen — the configured TypeScript file (#75)
+              run: examples/rollout-repro/scenarios/ci_sync_typegen.sh
+
+            - name: Sync on a rollout-managed database leaves the chain alone
+              run: examples/rollout-repro/scenarios/ci_sync_rollout_interop.sh
+
+    # Scenarios that need what a service container cannot give: a server on disk
+    # that can be restarted mid-scenario (#93 rewinds a sequence on 3.2 only
+    # after a restart), and a proxy that cuts the connection partway through an
+    # operation (the #94 class).
+    restart_and_faults:
+        name: Restarts and dropped connections (SurrealDB ${{ matrix.surrealdb }})
+        runs-on: ubuntu-22.04
+        timeout-minutes: 30
+        strategy:
+            fail-fast: false
+            matrix:
+                surrealdb: ["v3.2.4", "v3.3.0"]
+        env:
+            SURREALDB_USER: root
+            SURREALDB_PASSWORD: secret
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+              with:
+                  toolchain: 1.95.0
+
+            - name: Build surrealkit (debug)
+              env:
+                  CARGO_INCREMENTAL: 0
+                  RUSTFLAGS: "-C debuginfo=0"
+              run: |
+                cargo build \
+                    --manifest-path crates/surrealkit/Cargo.toml \
+                    --bin surrealkit \
+                    --no-default-features \
+                    --features cli \
+                    --locked
+
+            - name: Start SurrealDB on disk, and SurrealDB behind toxiproxy
+              run: |
+                set -euo pipefail
+                docker network create surreal-net
+                docker run -d --user root --name surreal-disk -p 8100:8000 -v surreal-data:/data \
+                    "surrealdb/surrealdb:${{ matrix.surrealdb }}" start --user root --pass secret surrealkv:/data/db
+                docker run -d --name surrealdb --network surreal-net -p 8200:8000 \
+                    "surrealdb/surrealdb:${{ matrix.surrealdb }}" start --user root --pass secret memory
+                docker run -d --name toxiproxy --network surreal-net -p 8474:8474 -p 28000:28000 \
+                    ghcr.io/shopify/toxiproxy:2.12.0
+                for port in 8100 8200; do
+                    for _ in $(seq 1 30); do
+                        curl -sf -o /dev/null -X POST "http://127.0.0.1:$port/signin" \
+                            -H 'Content-Type: application/json' -d '{"user":"root","pass":"secret"}' && break
+                        sleep 1
+                    done
+                done
+                for _ in $(seq 1 30); do curl -sf http://127.0.0.1:8474/version && break; sleep 1; done
+
+            - name: Sequences survive re-applies and a restart (#93)
+              env:
+                  SURREALDB_HOST: ws://127.0.0.1:8100
+                  SURREAL_HTTP: http://127.0.0.1:8100
+                  SURREALDB_RESTART: docker restart surreal-disk
+              run: examples/rollout-repro/scenarios/ci_sequences.sh
+
+            - name: Rollout state survives restarts and a killed run
+              env:
+                  SURREALDB_HOST: ws://127.0.0.1:8100
+                  SURREAL_HTTP: http://127.0.0.1:8100
+                  SURREALDB_RESTART: docker restart surreal-disk
+              run: examples/rollout-repro/scenarios/ci_restart.sh
+
+            - name: Dropped connections during complete and sync converge
+              env:
+                  SURREALDB_HOST: ws://127.0.0.1:8200
+                  SURREAL_HTTP: http://127.0.0.1:8200
+                  TOXIPROXY_UPSTREAM: surrealdb:8000
+              run: examples/rollout-repro/scenarios/ci_faults.sh
 
     # The before/after harness. Separate from rollout_e2e because it builds two
     # images, one of them the published 1.0.0-beta.1 from crates.io, and takes

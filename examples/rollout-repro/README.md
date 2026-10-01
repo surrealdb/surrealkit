@@ -83,18 +83,53 @@ bug 1.
 iterating:
 
 ```bash
-docker run -d --rm -p 18000:8000 surrealdb/surrealdb:v3.2.4 \
+docker run -d --rm -p 18000:8000 surrealdb/surrealdb:v3.3.0 \
     start --user root --pass secret memory
 cargo build -p surrealkit --bin surrealkit --no-default-features --features cli
 
 export SURREALDB_HOST=ws://127.0.0.1:18000 SURREAL_HTTP=http://127.0.0.1:18000
 bash examples/rollout-repro/scenarios/ci_lifecycle.sh
-bash examples/rollout-repro/scenarios/ci_modified_entity.sh
-bash examples/rollout-repro/scenarios/ci_resume.sh
-bash examples/rollout-repro/scenarios/ci_container_keys.sh
-bash examples/rollout-repro/scenarios/ci_key_migration.sh
-bash examples/rollout-repro/scenarios/ci_large_catalog.sh
+```
+
+| scenario | what it covers |
+| --- | --- |
+| `ci_lifecycle.sh` | baseline, plan, lint, start, status, complete |
+| `ci_modified_entity.sh` | `--allow-modified`, and rollback restoring a definition |
+| `ci_resume.sh` | a killed `start` resumes (#79) |
+| `ci_container_keys.sh` | manifests planned in one working directory, run in another |
+| `ci_key_migration.sh` | two legacy key spellings collapse without pruning |
+| `ci_large_catalog.sh` | catalog writes as a diff, and repair of a wiped catalog |
+| `ci_catchup.sh` | `rollout up` across three frozen rollouts, with backfills (#91) |
+| `ci_regex.sh` | regex literals through sync and rollouts (#92) |
+| `ci_concurrency.sh` | two `rollout up` runs at once |
+| `ci_sync_lifecycle.sh` | sync applies, prunes and idles |
+| `ci_sync_typegen.sh` | sync writes TypeScript to the configured file (#75) |
+| `ci_sync_rollout_interop.sh` | sync on a rollout-managed database |
+| `ci_sequences.sh` | re-applies never rewind a sequence (#93); needs `SURREALDB_RESTART` for the restart cases |
+| `ci_restart.sh` | rollout state across restarts, and a killed `up`; needs `SURREALDB_RESTART` |
+| `ci_faults.sh` | the connection cut at many points during `complete` and `sync` (the #94 class); needs toxiproxy |
+
+The restart scenarios need a server on disk and a command that restarts it:
+
+```bash
+docker run -d --user root --name sk-disk -p 18100:8000 -v sk-data:/data \
+    surrealdb/surrealdb:v3.3.0 start --user root --pass secret surrealkv:/data/db
+SURREALDB_HOST=ws://127.0.0.1:18100 SURREAL_HTTP=http://127.0.0.1:18100 \
+    SURREALDB_RESTART="docker restart sk-disk" bash examples/rollout-repro/scenarios/ci_sequences.sh
+```
+
+`ci_faults.sh` needs SurrealDB behind a toxiproxy on the same Docker network:
+
+```bash
+docker network create sk-net
+docker run -d --name surrealdb --network sk-net -p 18200:8000 \
+    surrealdb/surrealdb:v3.3.0 start --user root --pass secret memory
+docker run -d --name toxiproxy --network sk-net -p 8474:8474 -p 28000:28000 \
+    ghcr.io/shopify/toxiproxy:2.12.0
+SURREALDB_HOST=ws://127.0.0.1:18200 SURREAL_HTTP=http://127.0.0.1:18200 \
+    bash examples/rollout-repro/scenarios/ci_faults.sh
 ```
 
 Each uses its own namespace and database, so they are independent and any one of
-them can be re-run in isolation.
+them can be re-run in isolation. `SURREALKIT_BIN` runs them against another
+build, such as a published release.
