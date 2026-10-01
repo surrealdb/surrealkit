@@ -5,8 +5,13 @@ name: Integration Test
 # the structural reason a rollout CLI regression shipped in 1.0.0-beta.1: the
 # rollout id was parsed as a --target name and every rollout subcommand failed
 # before connecting, with nothing in CI to catch it.
+#
+# Branches are tested through their pull request; pushes run only on main, so a
+# commit on a PR branch does not run this twice.
 on:
     push:
+        branches:
+            - main
         paths: &integration_paths
             - "Cargo.toml"
             - "examples/testing/**"

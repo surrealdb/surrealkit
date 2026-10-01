@@ -1,9 +1,11 @@
 name: CI
 
+# Branches are tested through their pull request. Pushing to every branch as
+# well ran CI twice for each commit on a PR branch.
 on:
     push:
         branches:
-            - "**"
+            - main
         tags:
             - "v*"
     pull_request:

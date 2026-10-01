@@ -2,10 +2,11 @@ name: Vite plugin CI
 
 # The plugin previously had no CI at all: publish-vite-plugin.yml runs only on a
 # `vite-plugin-v*` tag, so a broken build was only discovered at publish time.
+# Branches are tested through their pull request; pushes run only on main.
 on:
     push:
         branches:
-            - "**"
+            - main
         paths:
             - "packages/vite-plugin-surrealkit/**"
             - ".github/workflows/vite-plugin-ci.yml"
