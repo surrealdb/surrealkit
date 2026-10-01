@@ -1505,7 +1505,7 @@ async fn start_inner(
 		// capture, and `rollout rollback` would be permanently unavailable for that
 		// rollout with no way to recover it. Capturing first means a failure here
 		// leaves no record at all, so re-running `start` is still a first run.
-		// Sequences, users and access methods are never restored (see
+		// Sequences, users, access methods and models are never restored (see
 		// `unrestorable`), so there is nothing to capture for them, and no point
 		// warning that their live definition is missing.
 		let restorable: Vec<EntityKey> = rollout
@@ -2427,6 +2427,10 @@ fn build_rollout_spec(
 						 database where the sequence already exists. To reposition one, add a \
 						 run_sql step"
 					}
+					EntityKind::Model => {
+						"SurrealQL has no DEFINE MODEL statement, so there is no definition to \
+						 re-apply. Re-import the previous version with `surreal ml import`"
+					}
 					_ =>
 						"SurrealDB redacts its secrets in INFO output, so there is nothing safe to restore",
 				}
@@ -2470,10 +2474,13 @@ fn build_rollout_spec(
 }
 
 /// Whether a rollback can restore this kind of entity from its captured `INFO`
-/// definition. See `unrestorable` for why sequences, users and access methods
-/// cannot.
+/// definition. See `unrestorable` for why sequences, users, access methods and
+/// models cannot.
 fn restorable_kind(kind: &EntityKind) -> bool {
-	!matches!(kind, EntityKind::Sequence | EntityKind::User | EntityKind::Access)
+	!matches!(
+		kind,
+		EntityKind::Sequence | EntityKind::User | EntityKind::Access | EntityKind::Model
+	)
 }
 
 /// A human-readable, scope-qualified name for a catalog entity.
@@ -2932,52 +2939,172 @@ pub(crate) async fn capture_definitions(
 		return Ok(BTreeMap::new());
 	}
 
-	let db_info = info_json(db, "INFO FOR DB;").await?;
-	// One `INFO FOR TABLE` per distinct scope, not per entity.
-	let scopes: BTreeSet<String> = entities.iter().filter_map(|e| e.scope.clone()).collect();
+	let db_info = info_json(db, "INFO FOR DB;", None).await?;
+	// One `INFO FOR TABLE` per distinct table, not per entity. The catalog keeps
+	// a scope as written, so `` `foo--bar` `` arrives quoted; wrapping that in
+	// backticks again asked for a table that does not exist. Binding the bare
+	// name leaves the quoting to SurrealDB.
+	let tables: BTreeSet<String> =
+		entities.iter().filter_map(table_scope).map(unquote_ident).collect();
 	let mut table_info = BTreeMap::new();
-	for scope in scopes {
-		let info = info_json(db, &format!("INFO FOR TABLE `{scope}`;")).await?;
-		table_info.insert(scope, info);
+	for table in tables {
+		let info = info_json(db, "INFO FOR TABLE $table;", Some(&table)).await?;
+		table_info.insert(table, info);
 	}
 
 	let mut out = BTreeMap::new();
 	for entity in entities {
-		let section = match entity.kind {
-			EntityKind::Table => Some("tables"),
-			EntityKind::Function => Some("functions"),
-			EntityKind::Param => Some("params"),
-			EntityKind::Analyzer => Some("analyzers"),
-			EntityKind::Access => Some("accesses"),
-			EntityKind::User => Some("users"),
-			EntityKind::Field => Some("fields"),
-			EntityKind::Index => Some("indexes"),
-			EntityKind::Event => Some("events"),
-			_ => None,
-		};
-		let Some(section) = section else {
+		let Some(section) = info_section(&entity.kind) else {
 			continue;
 		};
-		let source = match &entity.scope {
-			Some(scope) => table_info.get(scope),
+		let source = match table_scope(entity) {
+			Some(table) => table_info.get(&unquote_ident(table)),
 			None => Some(&db_info),
 		};
 		let definition = source
 			.and_then(|info| info.get(section))
-			.and_then(|m| m.get(&entity.name))
-			.and_then(|v| v.as_str());
+			.and_then(Value::as_object)
+			.and_then(|listed| info_entry(listed, &entity.kind, &entity.name));
 		if let Some(definition) = definition {
 			out.insert(
 				entity_key_string(&entity.kind, entity.scope.as_deref(), &entity.name),
-				definition.to_string(),
+				reapplicable(&entity.kind, definition),
 			);
 		}
 	}
 	Ok(out)
 }
 
-async fn info_json(db: &Surreal<Any>, sql: &str) -> Result<Value> {
-	let mut response = db.query(sql).await?.check().with_context(|| sql.to_string())?;
+/// The `INFO` section that lists entities of this kind, if a rollback can
+/// restore them from it. Fields, indexes and events are in `INFO FOR TABLE`,
+/// everything else in `INFO FOR DB`.
+fn info_section(kind: &EntityKind) -> Option<&'static str> {
+	Some(match kind {
+		EntityKind::Table => "tables",
+		EntityKind::Function => "functions",
+		EntityKind::Param => "params",
+		EntityKind::Analyzer => "analyzers",
+		EntityKind::Access => "accesses",
+		EntityKind::User => "users",
+		EntityKind::Api => "apis",
+		EntityKind::Bucket => "buckets",
+		EntityKind::Config => "configs",
+		EntityKind::Module => "modules",
+		EntityKind::Field => "fields",
+		EntityKind::Index => "indexes",
+		EntityKind::Event => "events",
+		// `INFO FOR DB` lists models and sequences too, but what it lists for them
+		// cannot be re-applied (see `unrestorable`). An unknown kind has no section.
+		EntityKind::Model | EntityKind::Sequence | EntityKind::Other(_) => return None,
+	})
+}
+
+/// The table an entity is defined on, for the kinds `INFO FOR TABLE` lists.
+fn table_scope(entity: &EntityKey) -> Option<&str> {
+	match entity.kind {
+		EntityKind::Field | EntityKind::Index | EntityKind::Event => entity.scope.as_deref(),
+		_ => None,
+	}
+}
+
+/// Find an entity's definition in its `INFO` section.
+///
+/// The catalog records a name the way the schema file spells it, but `INFO`
+/// keys each kind its own way. On SurrealDB 3.2.4 and 3.3.0 alike:
+///
+/// - most kinds drop the quotes, so `` `odd-bucket` `` is listed as `odd-bucket`;
+/// - functions and params drop their sigil too: `fn::greet` is `greet`, `$env` is `env`;
+/// - fields keep SurrealQL's own quoting, which is backticks, so `⟨last-name⟩`
+///   is listed as `` `last-name` ``;
+/// - an API is listed by its path, without the string quotes and without a
+///   trailing `/`, so `"/health/"` is `/health`;
+/// - a config is listed by its type as SurrealDB spells it, so `GRAPHQL` is `GraphQL`;
+/// - a module is listed as `mod::<name>`, which is how the catalog records it.
+fn info_entry<'a>(
+	listed: &'a serde_json::Map<String, Value>,
+	kind: &EntityKind,
+	name: &str,
+) -> Option<&'a str> {
+	let get = |key: &str| listed.get(key).and_then(Value::as_str);
+	if let Some(definition) = get(name) {
+		return Some(definition);
+	}
+	match kind {
+		EntityKind::Api => {
+			let path = unquote_string(name);
+			get(&path).or_else(|| get(path.trim_end_matches('/')))
+		}
+		EntityKind::Config => {
+			let config = unquote_ident(name);
+			listed.iter().find(|(key, _)| key.eq_ignore_ascii_case(&config))?.1.as_str()
+		}
+		EntityKind::Function => get(&unquote_ident(name.strip_prefix("fn::").unwrap_or(name))),
+		EntityKind::Param => get(&unquote_ident(name.strip_prefix('$').unwrap_or(name))),
+		EntityKind::Field => {
+			let bare = unquote_ident(name);
+			get(&quote_ident(&bare)).or_else(|| get(&bare))
+		}
+		_ => get(&unquote_ident(name)),
+	}
+}
+
+/// The captured text as a statement a rollback can run. `INFO` lists a config
+/// as `GRAPHQL TABLES AUTO ...`, without the `DEFINE CONFIG` that makes it one.
+fn reapplicable(kind: &EntityKind, definition: &str) -> String {
+	let is_define =
+		definition.trim_start().get(..6).is_some_and(|word| word.eq_ignore_ascii_case("DEFINE"));
+	match kind {
+		EntityKind::Config if !is_define => format!("DEFINE CONFIG {definition}"),
+		_ => definition.to_string(),
+	}
+}
+
+/// An identifier without the backticks or `⟨⟩` it was written with.
+fn unquote_ident(ident: &str) -> String {
+	let quoted = ident
+		.strip_prefix('`')
+		.and_then(|inner| inner.strip_suffix('`'))
+		.or_else(|| ident.strip_prefix('⟨').and_then(|inner| inner.strip_suffix('⟩')));
+	quoted.map_or_else(|| ident.to_string(), unescape)
+}
+
+/// A string literal's contents, such as an API path written as `"/users/:id"`.
+fn unquote_string(literal: &str) -> String {
+	let quoted = literal
+		.strip_prefix('"')
+		.and_then(|inner| inner.strip_suffix('"'))
+		.or_else(|| literal.strip_prefix('\'').and_then(|inner| inner.strip_suffix('\'')));
+	quoted.map_or_else(|| literal.to_string(), unescape)
+}
+
+/// Drop the backslash from each escape. Quotes, brackets and backslashes are
+/// the only escapes a name realistically carries.
+fn unescape(quoted: &str) -> String {
+	let mut out = String::with_capacity(quoted.len());
+	let mut chars = quoted.chars();
+	while let Some(c) = chars.next() {
+		match c {
+			'\\' => out.extend(chars.next()),
+			c => out.push(c),
+		}
+	}
+	out
+}
+
+/// `ident` in backticks, the way SurrealDB prints a name that needs quoting.
+fn quote_ident(ident: &str) -> String {
+	format!("`{}`", ident.replace('\\', "\\\\").replace('`', "\\`"))
+}
+
+async fn info_json(db: &Surreal<Any>, sql: &str, table: Option<&str>) -> Result<Value> {
+	let mut query = db.query(sql);
+	if let Some(table) = table {
+		query = query.bind(("table", table.to_string()));
+	}
+	let mut response = query.await?.check().with_context(|| match table {
+		Some(table) => format!("{sql} (table {table:?})"),
+		None => sql.to_string(),
+	})?;
 	let raw: surrealdb_types::Value = response.take(0)?;
 	Ok(Value::from_value(raw).unwrap_or(Value::Null))
 }
@@ -3143,11 +3270,19 @@ fn prepare_logged(sql: &str, source: &str) -> Result<String> {
 ///   signing key, to the literal string `[REDACTED]`. Users and access methods
 ///   are refused by kind, since `start` no longer captures them, and any other
 ///   captured text carrying a redaction is refused too.
+/// - SurrealQL has no `DEFINE MODEL`. Models only arrive through `surreal ml
+///   import`, so the `DEFINE MODEL` text `INFO` prints cannot be run.
 fn unrestorable(entity: &EntityKey, captured: Option<&str>) -> Option<&'static str> {
 	if entity.kind == EntityKind::Sequence {
 		return Some(
 			"a sequence's definition does not hold its position, so restoring it could only \
 			 rewind the counter",
+		);
+	}
+	if entity.kind == EntityKind::Model {
+		return Some(
+			"SurrealQL has no DEFINE MODEL statement, so a model cannot be re-applied; \
+			 re-import the previous version with `surreal ml import`",
 		);
 	}
 	if matches!(entity.kind, EntityKind::User | EntityKind::Access)
@@ -4791,6 +4926,7 @@ mod tests {
 				changed(EntityKind::Sequence, None, "order_no"),
 				changed(EntityKind::User, Some("DATABASE"), "app"),
 				changed(EntityKind::Access, Some("DATABASE"), "account"),
+				changed(EntityKind::Model, None, "ml::scorer<1.0.0>"),
 			],
 			..CatalogDiff::default()
 		};
@@ -4844,6 +4980,7 @@ mod tests {
 				.is_none()
 		);
 		assert!(unrestorable(&key(EntityKind::Access), None).is_some());
+		assert!(unrestorable(&key(EntityKind::Model), None).is_some());
 		assert!(unrestorable(&key(EntityKind::Field), None).is_none());
 	}
 
@@ -4876,9 +5013,9 @@ mod tests {
 
 	#[tokio::test]
 	async fn rollback_skips_sequences_and_redacted_users_instead_of_failing() {
-		// A manifest planned before beta.6 can list a sequence (never captured,
-		// so rollback used to fail with "no captured definition") and a user
-		// (captured as PASSHASH '[REDACTED]', which rollback used to re-apply).
+		// A manifest planned before beta.6 can list a sequence or a model (never
+		// captured, so rollback used to fail with "no captured definition") and a
+		// user (captured as PASSHASH '[REDACTED]', which rollback used to re-apply).
 		let db = connect_mem_db().await;
 		db.query(
 			"DEFINE SEQUENCE order_no BATCH 1 START 1;\n\
@@ -4902,6 +5039,11 @@ mod tests {
 				kind: EntityKind::User,
 				scope: Some("DATABASE".to_string()),
 				name: "app".to_string(),
+			},
+			EntityKey {
+				kind: EntityKind::Model,
+				scope: None,
+				name: "ml::scorer<1.0.0>".to_string(),
 			},
 			EntityKey {
 				kind: EntityKind::Field,
@@ -4930,6 +5072,273 @@ mod tests {
 		assert!(field.contains("TYPE string"), "{field}");
 		// And the sequence kept counting.
 		assert_eq!(next_order_no(&db).await, 2);
+	}
+
+	// ---- restoring each kind -------------------------------------------------
+
+	/// Where `INFO` lists an entity, written out by hand so the test does not
+	/// share `capture_definitions`' idea of it.
+	struct Listed {
+		table: Option<&'static str>,
+		section: &'static str,
+		key: &'static str,
+	}
+
+	const fn in_db(section: &'static str, key: &'static str) -> Listed {
+		Listed {
+			table: None,
+			section,
+			key,
+		}
+	}
+
+	const fn on_table(table: &'static str, section: &'static str, key: &'static str) -> Listed {
+		Listed {
+			table: Some(table),
+			section,
+			key,
+		}
+	}
+
+	async fn listed_definition(db: &Surreal<Any>, listed: &Listed) -> Option<String> {
+		let query = match listed.table {
+			Some(table) => db.query("INFO FOR TABLE $t;").bind(("t", table.to_string())),
+			None => db.query("INFO FOR DB;"),
+		};
+		let mut res = query.await.unwrap().check().unwrap();
+		let info: Option<serde_json::Value> = res.take(0).unwrap();
+		Some(info?.get(listed.section)?.get(listed.key)?.as_str()?.to_string())
+	}
+
+	async fn experimental_db() -> Surreal<Any> {
+		let db = crate::test_db::fresh_experimental("rollout_test").await;
+		db.query(crate::scaffold::DEFAULT_SETUP).await.unwrap().check().unwrap();
+		db
+	}
+
+	/// Define `before`, have a rollout apply `after` over it, roll back, and check
+	/// that each of `listed` reads as it did before the rollout.
+	///
+	/// The rollback step names the entities the way a planned manifest does, by
+	/// parsing `after` with the catalog parser. Skips, saying so on stderr like
+	/// the integration tests do, when a server refuses `before` for want of an
+	/// experimental feature.
+	#[expect(clippy::print_stderr)]
+	async fn assert_rolls_back(db: &Surreal<Any>, before: &str, after: &str, listed: &[Listed]) {
+		if let Err(err) = db.query(before).await.and_then(|res| res.check()) {
+			let msg = err.to_string();
+			if crate::test_db::is_remote()
+				&& (msg.contains("experimental") || msg.contains("not enabled"))
+			{
+				eprintln!(
+					"SKIP: the server at SURREALKIT_TEST_URL refused {before:?}. Start it with \
+					 --allow-experimental=files,surrealism to run this test: {msg}"
+				);
+				return;
+			}
+			panic!("defining {before:?}: {msg}");
+		}
+
+		let file = SchemaFile {
+			path: "schema/modified.surql".to_string(),
+			hash: "h".to_string(),
+			sql: after.to_string(),
+		};
+		let (entities, _) =
+			crate::schema_state::parse_schema_statements(&file, false).expect("parse after");
+		assert_eq!(entities.len(), listed.len(), "one Listed per statement in {after:?}");
+		let restore: Vec<EntityKey> = entities.iter().map(CatalogEntity::key).collect();
+
+		let mut original = Vec::new();
+		for entry in listed {
+			let definition = listed_definition(db, entry).await;
+			original.push(definition.unwrap_or_else(|| panic!("{} is not listed", entry.key)));
+		}
+
+		let spec = RolloutSpec::builder("20260101000000__modify")
+			.step(RolloutStep::apply_schema("modify", RolloutPhase::Start, after))
+			.step(RolloutStep::restore_definitions("restore", RolloutPhase::Rollback, restore))
+			.build();
+		let rollout = Rollout::new(spec, &[]);
+		rollout.start(db).await.expect("start");
+		for (entry, original) in listed.iter().zip(&original) {
+			let modified = listed_definition(db, entry).await;
+			assert_ne!(modified.as_ref(), Some(original), "start did not modify {}", entry.key);
+		}
+
+		rollout.rollback(db).await.expect("rollback");
+		for (entry, original) in listed.iter().zip(&original) {
+			let restored = listed_definition(db, entry).await;
+			assert_eq!(restored.as_ref(), Some(original), "rollback did not restore {}", entry.key);
+		}
+		let status = rollout.status(db).await.unwrap().expect("record");
+		assert_eq!(status.status, Some(RolloutStatus::RolledBack));
+	}
+
+	#[tokio::test]
+	async fn rollback_restores_a_modified_api() {
+		// Listed by path, without the quotes the catalog keeps and without a
+		// trailing slash.
+		assert_rolls_back(
+			&connect_mem_db().await,
+			"DEFINE API \"/users/:id\" FOR get THEN { RETURN { status: 200, body: 'v1' }; };\n\
+			 DEFINE API '/health/' FOR get THEN { RETURN { status: 200 }; };",
+			"DEFINE API \"/users/:id\" FOR get THEN { RETURN { status: 200, body: 'v2' }; };\n\
+			 DEFINE API '/health/' FOR get, post THEN { RETURN { status: 204 }; };",
+			&[in_db("apis", "/users/:id"), in_db("apis", "/health")],
+		)
+		.await;
+	}
+
+	#[tokio::test]
+	async fn rollback_restores_a_modified_bucket() {
+		assert_rolls_back(
+			&experimental_db().await,
+			"DEFINE BUCKET `odd-bucket` BACKEND \"memory\" COMMENT 'v1';",
+			"DEFINE BUCKET `odd-bucket` BACKEND \"memory\" COMMENT 'v2';",
+			&[in_db("buckets", "odd-bucket")],
+		)
+		.await;
+	}
+
+	#[tokio::test]
+	async fn rollback_restores_a_modified_config() {
+		// Listed as `GraphQL` and `API`, and as `GRAPHQL TABLES ...` with no
+		// `DEFINE CONFIG`, which the capture has to put back.
+		assert_rolls_back(
+			&connect_mem_db().await,
+			"DEFINE CONFIG GRAPHQL TABLES AUTO FUNCTIONS AUTO;\n\
+			 DEFINE CONFIG API PERMISSIONS FULL;",
+			"DEFINE CONFIG GRAPHQL TABLES NONE FUNCTIONS NONE;\n\
+			 DEFINE CONFIG API PERMISSIONS NONE;",
+			&[in_db("configs", "GraphQL"), in_db("configs", "API")],
+		)
+		.await;
+	}
+
+	#[tokio::test]
+	async fn rollback_restores_a_modified_module() {
+		let db = experimental_db().await;
+		// 3.3 reads a module's source after FROM, and refuses one without UNSIGNED.
+		let db_minor = db.version().await.expect("version").minor;
+		let define = |comment: &str| {
+			if db_minor < 3 {
+				format!("DEFINE MODULE mod::demo AS f\"modules:/demo.surli\" COMMENT '{comment}';")
+			} else {
+				format!(
+					"DEFINE MODULE mod::demo FROM f\"modules:/demo.surli\" UNSIGNED COMMENT \
+					 '{comment}';"
+				)
+			}
+		};
+		assert_rolls_back(
+			&db,
+			&format!("DEFINE BUCKET modules BACKEND \"memory\";\n{}", define("v1")),
+			&define("v2"),
+			&[in_db("modules", "mod::demo")],
+		)
+		.await;
+	}
+
+	#[tokio::test]
+	async fn rollback_restores_a_modified_function_and_param() {
+		// Listed as `greet` and `env`. The catalog's `fn::greet` and `$env` never
+		// matched, so these failed with "no captured definition" too.
+		assert_rolls_back(
+			&connect_mem_db().await,
+			"DEFINE FUNCTION fn::greet($n: string) { RETURN 'hi ' + $n; };\n\
+			 DEFINE PARAM $env VALUE 'dev';",
+			"DEFINE FUNCTION fn::greet($n: string) { RETURN 'hello ' + $n; };\n\
+			 DEFINE PARAM $env VALUE 'prod';",
+			&[in_db("functions", "greet"), in_db("params", "env")],
+		)
+		.await;
+	}
+
+	#[tokio::test]
+	async fn rollback_restores_entities_on_a_quoted_table() {
+		// The catalog records `` `foo--bar` `` with its quotes, which the capture
+		// used to wrap in a second pair. Tables, indexes and events are listed
+		// unquoted, and fields in backticks however they were written.
+		assert_rolls_back(
+			&connect_mem_db().await,
+			"DEFINE TABLE `foo--bar` SCHEMALESS COMMENT 'v1';\n\
+			 DEFINE FIELD `first-name` ON `foo--bar` TYPE string;\n\
+			 DEFINE FIELD ⟨last-name⟩ ON ⟨foo--bar⟩ TYPE string;\n\
+			 DEFINE INDEX `by-first` ON `foo--bar` FIELDS `first-name`;\n\
+			 DEFINE EVENT `on-change` ON `foo--bar` WHEN true THEN {};",
+			"DEFINE TABLE `foo--bar` SCHEMALESS COMMENT 'v2';\n\
+			 DEFINE FIELD `first-name` ON `foo--bar` TYPE option<string>;\n\
+			 DEFINE FIELD ⟨last-name⟩ ON ⟨foo--bar⟩ TYPE option<string>;\n\
+			 DEFINE INDEX `by-first` ON `foo--bar` FIELDS `first-name` UNIQUE;\n\
+			 DEFINE EVENT `on-change` ON `foo--bar` WHEN false THEN {};",
+			&[
+				in_db("tables", "foo--bar"),
+				on_table("foo--bar", "fields", "`first-name`"),
+				on_table("foo--bar", "fields", "`last-name`"),
+				on_table("foo--bar", "indexes", "by-first"),
+				on_table("foo--bar", "events", "on-change"),
+			],
+		)
+		.await;
+	}
+
+	#[test]
+	fn info_entry_matches_each_kind_the_way_info_keys_it() {
+		let listed: serde_json::Map<String, Value> = serde_json::from_value(serde_json::json!({
+			"/users/:id": "api",
+			"/health": "health",
+			"odd-bucket": "bucket",
+			"GraphQL": "graphql",
+			"mod::demo": "module",
+			"greet": "function",
+			"env": "param",
+			"`last-name`": "field",
+			"name": "plain field",
+		}))
+		.unwrap();
+		let find = |kind, name| info_entry(&listed, &kind, name);
+		assert_eq!(find(EntityKind::Api, "\"/users/:id\""), Some("api"));
+		assert_eq!(find(EntityKind::Api, "'/health/'"), Some("health"));
+		assert_eq!(find(EntityKind::Bucket, "`odd-bucket`"), Some("bucket"));
+		assert_eq!(find(EntityKind::Bucket, "⟨odd-bucket⟩"), Some("bucket"));
+		assert_eq!(find(EntityKind::Config, "GRAPHQL"), Some("graphql"));
+		assert_eq!(find(EntityKind::Config, "graphql"), Some("graphql"));
+		assert_eq!(find(EntityKind::Module, "mod::demo"), Some("module"));
+		assert_eq!(find(EntityKind::Function, "fn::greet"), Some("function"));
+		assert_eq!(find(EntityKind::Param, "$env"), Some("param"));
+		assert_eq!(find(EntityKind::Field, "⟨last-name⟩"), Some("field"));
+		assert_eq!(find(EntityKind::Field, "`last-name`"), Some("field"));
+		assert_eq!(find(EntityKind::Field, "⟨name⟩"), Some("plain field"));
+		assert_eq!(find(EntityKind::Bucket, "missing"), None);
+	}
+
+	#[test]
+	fn names_unquote_the_way_surrealdb_reads_them() {
+		assert_eq!(unquote_ident("`foo--bar`"), "foo--bar");
+		assert_eq!(unquote_ident("⟨foo--bar⟩"), "foo--bar");
+		assert_eq!(unquote_ident(r"`a\`b`"), "a`b");
+		assert_eq!(unquote_ident(r"⟨a\⟩b⟩"), "a⟩b");
+		assert_eq!(unquote_ident("plain"), "plain");
+		assert_eq!(unquote_string("\"/users/:id\""), "/users/:id");
+		assert_eq!(unquote_string("'/a'"), "/a");
+		assert_eq!(quote_ident("a`b"), r"`a\`b`");
+	}
+
+	#[test]
+	fn a_captured_config_gets_its_define_back() {
+		assert_eq!(
+			reapplicable(&EntityKind::Config, "GRAPHQL TABLES AUTO FUNCTIONS AUTO"),
+			"DEFINE CONFIG GRAPHQL TABLES AUTO FUNCTIONS AUTO"
+		);
+		assert_eq!(
+			reapplicable(&EntityKind::Config, "DEFINE CONFIG API PERMISSIONS FULL"),
+			"DEFINE CONFIG API PERMISSIONS FULL"
+		);
+		assert_eq!(
+			reapplicable(&EntityKind::Bucket, "DEFINE BUCKET b BACKEND 'memory'"),
+			"DEFINE BUCKET b BACKEND 'memory'"
+		);
 	}
 
 	// ---- frozen manifests (#91) ----------------------------------------------
