@@ -638,6 +638,101 @@ sync runs inside an already-selected namespace/database. Provision these out-of-
 	Ok((entities, operations))
 }
 
+/// Whether a recorded name or scope is a fragment of a quoted identifier.
+///
+/// Before 1.0.0-beta.6 the catalog split statements on whitespace, so
+/// `` DEFINE TABLE `my table` `` was recorded as the table `` `my ``. Such a
+/// fragment does not scan as SurrealQL, which is how it is recognised.
+fn is_garbled(text: &str) -> bool {
+	crate::surql_scan::scan(text).is_err()
+}
+
+/// Whether `full` is what the old splitter cut down to `fragment`: it starts
+/// with it, and the rest begins with whitespace.
+fn cut_from(fragment: &str, full: &str) -> bool {
+	full.strip_prefix(fragment)
+		.and_then(|rest| rest.chars().next())
+		.is_some_and(char::is_whitespace)
+}
+
+/// What [`reconcile_garbled`] does with a garbled entry it cannot match.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Unmatched {
+	/// Drop it. Right when `desired` is the whole schema: then nothing defines
+	/// it any more, and a fragment cannot be removed by name.
+	Drop,
+	/// Keep it. Right when `desired` is only part of the schema, such as the
+	/// files one rollout changes, so a missing match proves nothing.
+	Keep,
+}
+
+/// Repair catalog entries an older release recorded under a garbled name.
+///
+/// Each garbled entry in `recorded` is renamed to the entry in `desired` it was
+/// cut from, so it reads as the same entity rather than one removed and one
+/// added (which sync would prune, and `rollout plan` would refuse as a rename).
+/// What happens to one with no match is `unmatched`'s call. Returns the original
+/// keys of every renamed or dropped entry, so callers can clear their catalog
+/// rows.
+pub(crate) fn reconcile_garbled(
+	recorded: &mut Vec<CatalogEntity>,
+	desired: &[CatalogEntity],
+	unmatched: Unmatched,
+) -> Vec<EntityKey> {
+	let mut repaired = Vec::new();
+	recorded.retain_mut(|entity| {
+		let name_garbled = is_garbled(&entity.name);
+		let scope_garbled = entity.scope.as_deref().is_some_and(is_garbled);
+		if !name_garbled && !scope_garbled {
+			return true;
+		}
+		let matches = |candidate: &&CatalogEntity| {
+			candidate.kind == entity.kind
+				&& if name_garbled {
+					cut_from(&entity.name, &candidate.name)
+				} else {
+					candidate.name == entity.name
+				} && match (&entity.scope, &candidate.scope) {
+				(Some(old), Some(new)) if scope_garbled => cut_from(old, new),
+				(old, new) => old == new,
+			}
+		};
+		match desired.iter().find(matches) {
+			Some(found) => {
+				repaired.push(entity.key());
+				log::warn!(
+					"catalog entry {}:{}:{} was recorded by an older SurrealKit that cut the quoted \
+					 name short; it is {}:{}:{}",
+					entity.kind,
+					entity.scope.as_deref().unwrap_or(""),
+					entity.name,
+					found.kind,
+					found.scope.as_deref().unwrap_or(""),
+					found.name
+				);
+				entity.name.clone_from(&found.name);
+				entity.scope.clone_from(&found.scope);
+				true
+			}
+			None if unmatched == Unmatched::Keep => true,
+			None => {
+				repaired.push(entity.key());
+				log::warn!(
+					"dropping catalog entry {}:{}:{}: an older SurrealKit recorded it under a cut-short \
+					 quoted name, and no schema file defines anything it could be",
+					entity.kind,
+					entity.scope.as_deref().unwrap_or(""),
+					entity.name
+				);
+				false
+			}
+		}
+	});
+	recorded.sort();
+	recorded.dedup_by(|a, b| a.key() == b.key());
+	repaired
+}
+
 pub fn catalog_snapshot_to_map(snapshot: &CatalogSnapshot) -> BTreeMap<EntityKey, CatalogEntity> {
 	snapshot.entities.iter().cloned().map(|entity| (entity.key(), entity)).collect()
 }
@@ -3238,5 +3333,76 @@ DEFINE ACCESS acc ON DATABASE TYPE RECORD
 		assert_eq!(paths, vec!["schema/live.surql"]);
 		// The default layout never looks there in the first place.
 		assert_eq!(collect_schema_files(&folder).unwrap().len(), 1);
+	}
+
+	fn table(name: &str, scope: Option<&str>, kind: EntityKind) -> CatalogEntity {
+		CatalogEntity {
+			kind,
+			scope: scope.map(str::to_string),
+			name: name.to_string(),
+			source_path: "schema/q.surql".to_string(),
+			statement_hash: "h".to_string(),
+			file_hash: "f".to_string(),
+		}
+	}
+
+	#[test]
+	fn garbled_names_from_older_releases_are_repaired_or_dropped() {
+		let desired = vec![
+			table("`my table`", None, EntityKind::Table),
+			table("name", Some("`my table`"), EntityKind::Field),
+			table("⟨other one⟩", None, EntityKind::Table),
+			table("plain", None, EntityKind::Table),
+		];
+		let mut recorded = vec![
+			table("`my", None, EntityKind::Table),
+			table("name", Some("`my"), EntityKind::Field),
+			table("⟨other", None, EntityKind::Table),
+			table("`gone", None, EntityKind::Table),
+			table("plain", None, EntityKind::Table),
+		];
+		let repaired = reconcile_garbled(&mut recorded, &desired, Unmatched::Drop);
+		let names: Vec<(String, Option<String>)> =
+			recorded.iter().map(|e| (e.name.clone(), e.scope.clone())).collect();
+		assert_eq!(
+			names,
+			vec![
+				("name".to_string(), Some("`my table`".to_string())),
+				("`my table`".to_string(), None),
+				("plain".to_string(), None),
+				("⟨other one⟩".to_string(), None),
+			]
+		);
+		assert_eq!(repaired.len(), 4, "{repaired:?}");
+		// The statement hash and paths carry over: the entity did not change.
+		assert!(recorded.iter().all(|e| e.statement_hash == "h"));
+	}
+
+	#[test]
+	fn ordinary_names_are_never_touched() {
+		let names = [
+			"person",
+			"fn::greet",
+			"a.b[*]",
+			"$x",
+			"\"/users/:id\"",
+			"ml::m<1.0.0>",
+			"`odd;name#`",
+		];
+		let mut recorded: Vec<CatalogEntity> =
+			names.iter().map(|n| table(n, None, EntityKind::Table)).collect();
+		assert!(reconcile_garbled(&mut recorded, &[], Unmatched::Drop).is_empty());
+		assert_eq!(recorded.len(), names.len());
+	}
+
+	#[test]
+	fn a_partial_view_keeps_what_it_cannot_match() {
+		let mut recorded =
+			vec![table("`my", None, EntityKind::Table), table("`other", None, EntityKind::Table)];
+		let desired = vec![table("`my table`", None, EntityKind::Table)];
+		let repaired = reconcile_garbled(&mut recorded, &desired, Unmatched::Keep);
+		assert_eq!(repaired.len(), 1);
+		let names: Vec<&str> = recorded.iter().map(|e| e.name.as_str()).collect();
+		assert_eq!(names, vec!["`my table`", "`other"]);
 	}
 }

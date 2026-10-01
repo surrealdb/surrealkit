@@ -200,7 +200,8 @@ async fn up_locked(
 		let started =
 			failed_completing || matches!(status, Some("ready_to_complete" | "running_complete"));
 		if !started {
-			let source = live_catalog(db, &module, Some(folder)).await?;
+			let mut source = live_catalog(db, &module, Some(folder)).await?;
+			super::repair_live_catalog(&mut source, folder)?;
 			start_inner(db, loaded, &source, target, &ctx).await?;
 		}
 		if idx != last || opts.complete_newest {

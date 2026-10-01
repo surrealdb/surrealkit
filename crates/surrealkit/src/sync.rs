@@ -18,9 +18,9 @@ use crate::rollout::{
 	write_partition,
 };
 use crate::schema_state::{
-	CatalogEntity, EntityKey, EntityKind, SchemaFile, build_catalog_snapshot, canonicalise_keys,
-	collect_schema_files_at, ensure_local_state_dirs_for, overwrite_sequences, prepare_schema_sql,
-	render_remove_sql,
+	CatalogEntity, EntityKey, EntityKind, SchemaFile, Unmatched, build_catalog_snapshot,
+	canonicalise_keys, collect_schema_files_at, ensure_local_state_dirs_for, overwrite_sequences,
+	prepare_schema_sql, reconcile_garbled, render_remove_sql,
 };
 use crate::setup::{run_setup, run_setup_embedded};
 use crate::variables::TemplateVars;
@@ -351,7 +351,24 @@ async fn run_sync_with_files(
 	};
 	let desired_catalog = build_catalog_snapshot(files, opts.allow_all_statements)?;
 	let tracked = migrate_legacy_sync_keys(db, layout, files, opts.dry_run).await?;
-	let managed = load_managed_entities(db, layout.module(), Some(layout.folder())).await?;
+	let mut managed = load_managed_entities(db, layout.module(), Some(layout.folder())).await?;
+	// Rows an older release recorded under a cut-short quoted name. Left alone,
+	// they read as stale, and pruning them issues a REMOVE that cannot parse.
+	let garbled = {
+		let mut entities: Vec<CatalogEntity> = managed.iter().map(|r| r.entity.clone()).collect();
+		let repaired = reconcile_garbled(&mut entities, &desired_catalog.entities, Unmatched::Drop);
+		if !repaired.is_empty() {
+			managed = entities
+				.into_iter()
+				.map(|entity| ManagedEntityRecord {
+					entity,
+					active_rollout_id: None,
+					state: "active".to_string(),
+				})
+				.collect();
+		}
+		repaired
+	};
 	for sequence in
 		changed_sequences(&managed, &desired_catalog.entities, &overwrite_sequences(files))
 	{
@@ -498,6 +515,9 @@ async fn run_sync_with_files(
 
 	if !opts.dry_run {
 		upsert_managed_entities(db, layout.module(), &effective_entities, None, "active").await?;
+		if !garbled.is_empty() {
+			delete_managed_entities(db, layout.module(), &garbled).await?;
+		}
 		if !removed_paths.is_empty() {
 			delete_sync_hashes(db, layout.module(), &removed_paths).await?;
 		}

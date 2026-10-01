@@ -929,9 +929,16 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 	ensure_local_state_dirs(folder)?;
 	let files = collect_schema_files(folder)?;
 	let old_schema = load_schema_snapshot(folder)?;
-	let old_catalog = load_catalog_snapshot(folder)?;
+	let mut old_catalog = load_catalog_snapshot(folder)?;
 	let new_schema = snapshot_from_files(&files);
 	let new_catalog = build_catalog_snapshot(&files, false)?;
+	// A snapshot from before 1.0.0-beta.6 can hold cut-short quoted names, which
+	// would otherwise read as a removal plus an addition: a rename, refused.
+	crate::schema_state::reconcile_garbled(
+		&mut old_catalog.entities,
+		&new_catalog.entities,
+		crate::schema_state::Unmatched::Drop,
+	);
 	let file_diff = diff_schema(&old_schema, &new_schema);
 	let catalog_diff = diff_catalog(&old_catalog, &new_catalog);
 
@@ -1369,9 +1376,24 @@ pub async fn run_start(
 		chain::warn_if_not_next(db, folder, &rollout).await;
 		TargetCatalog::Full(build_catalog_snapshot(&files, false)?)
 	};
-	let source_catalog = live_catalog(db, &rollout.spec.module()?, Some(folder)).await?;
+	let mut source_catalog = live_catalog(db, &rollout.spec.module()?, Some(folder)).await?;
+	repair_live_catalog(&mut source_catalog, folder)?;
 	let ctx = StepContext::new(vars, Some(folder), opts.query_timeout);
 	start_inner(db, &rollout, &source_catalog, &target, &ctx).await
+}
+
+/// Rename entries an older release recorded under cut-short quoted names to the
+/// names the schema folder gives them. The folder is only a lookup here: an
+/// entry it does not explain is kept, since a frozen rollout does not have to
+/// match the folder.
+pub(crate) fn repair_live_catalog(catalog: &mut CatalogSnapshot, folder: &str) -> Result<()> {
+	let disk = build_catalog_snapshot(&collect_schema_files(folder)?, false)?;
+	crate::schema_state::reconcile_garbled(
+		&mut catalog.entities,
+		&disk.entities,
+		crate::schema_state::Unmatched::Keep,
+	);
+	Ok(())
 }
 
 /// The catalog the database records now, as a snapshot.

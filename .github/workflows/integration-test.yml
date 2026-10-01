@@ -355,6 +355,78 @@ jobs:
                   TOXIPROXY_UPSTREAM: surrealdb:8000
               run: examples/rollout-repro/scenarios/ci_faults.sh
 
+    # Upgrade compatibility: state written by each published release since
+    # 0.7.0 (synced schema, baselines, completed rollouts, one in flight) carried
+    # on by this build. 1.0.0-beta.3 and beta.4 never published; beta.5 contains
+    # both.
+    upgrade_compat:
+        name: Upgrade from ${{ matrix.release }} (SurrealDB ${{ matrix.surrealdb }})
+        runs-on: ubuntu-22.04
+        timeout-minutes: 20
+        strategy:
+            fail-fast: false
+            matrix:
+                release: ["v0.7.0", "v1.0.0-beta.1", "v1.0.0-beta.2", "v1.0.0-beta.5"]
+                surrealdb: ["v3.2.4", "v3.3.0"]
+        env:
+            SURREALDB_HOST: ws://127.0.0.1:8000
+            SURREAL_HTTP: http://127.0.0.1:8000
+            SURREALDB_USER: root
+            SURREALDB_PASSWORD: secret
+        services:
+            surrealdb:
+                image: surrealdb/surrealdb:${{ matrix.surrealdb }}
+                command: start --user root --pass secret memory
+                ports:
+                    - 8000:8000
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+              with:
+                  toolchain: 1.95.0
+
+            - name: Build surrealkit (debug)
+              env:
+                  CARGO_INCREMENTAL: 0
+                  RUSTFLAGS: "-C debuginfo=0"
+              run: |
+                cargo build \
+                    --manifest-path crates/surrealkit/Cargo.toml \
+                    --bin surrealkit \
+                    --no-default-features \
+                    --features cli \
+                    --locked
+
+            - name: Download ${{ matrix.release }}
+              env:
+                  GH_TOKEN: ${{ github.token }}
+              run: |
+                set -euo pipefail
+                asset="surrealkit-${{ matrix.release }}-x86_64-unknown-linux-gnu.tar.gz"
+                mkdir -p /tmp/old
+                gh release download "${{ matrix.release }}" --repo "${{ github.repository }}" \
+                    --pattern "$asset" --pattern "$asset.sha256" --dir /tmp/old
+                (cd /tmp/old && sha256sum -c "$asset.sha256")
+                tar -xzf "/tmp/old/$asset" -C /tmp/old
+                /tmp/old/surrealkit --version
+
+            - name: Wait for SurrealDB
+              run: |
+                for _ in $(seq 1 30); do
+                    curl -sf -o /dev/null -X POST http://127.0.0.1:8000/signin \
+                        -H 'Content-Type: application/json' -d '{"user":"root","pass":"secret"}' && exit 0
+                    sleep 1
+                done
+                exit 1
+
+            - name: Carry the release's state forward
+              env:
+                  OLD_BIN: /tmp/old/surrealkit
+              run: examples/rollout-repro/upgrade/upgrade_from.sh
+
     # The before/after harness. Separate from rollout_e2e because it builds two
     # images, one of them the published 1.0.0-beta.1 from crates.io, and takes
     # correspondingly longer. It asserts in both directions: beta.1 must still

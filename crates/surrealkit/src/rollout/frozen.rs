@@ -176,6 +176,12 @@ impl TargetCatalog {
 				upsert,
 				remove,
 			} => {
+				let mut source = source.to_vec();
+				crate::schema_state::reconcile_garbled(
+					&mut source,
+					upsert,
+					crate::schema_state::Unmatched::Keep,
+				);
 				let mut by_key: BTreeMap<EntityKey, CatalogEntity> =
 					source.iter().map(|entity| (entity.key(), entity.clone())).collect();
 				for key in remove {
