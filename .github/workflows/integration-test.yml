@@ -405,7 +405,9 @@ jobs:
                   GH_TOKEN: ${{ github.token }}
               run: |
                 set -euo pipefail
-                asset="surrealkit-${{ matrix.release }}-x86_64-unknown-linux-gnu.tar.gz"
+                # The static musl build: the gnu one is linked against a newer
+                # glibc (2.38+) than this runner has.
+                asset="surrealkit-${{ matrix.release }}-x86_64-unknown-linux-musl.tar.gz"
                 mkdir -p /tmp/old
                 gh release download "${{ matrix.release }}" --repo "${{ github.repository }}" \
                     --pattern "$asset" --pattern "$asset.sha256" --dir /tmp/old
