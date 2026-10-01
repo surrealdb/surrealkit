@@ -22,6 +22,7 @@ log = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = '0.8'
+toml_edit = '0.22'
 rust_dotenv = '0.1.2'
 sha2 = '0.10'
 surrealdb = { workspace = true }

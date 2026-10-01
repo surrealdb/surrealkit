@@ -24,8 +24,9 @@ pub use config::{AuthLevel, DbCfg, DbOverrides, connect};
 pub use module::{Module, Partition};
 pub use project::{ProjectConfig, Target};
 pub use rollout::{
-	Rollout, RolloutAction, RolloutCompatibility, RolloutPhase, RolloutSpec, RolloutSpecBuilder,
-	RolloutStatus, RolloutStatusReport, RolloutStep, RolloutStepStatus,
+	FileRef, FrozenFile, Rollout, RolloutAction, RolloutChainReport, RolloutCompatibility,
+	RolloutPhase, RolloutSpec, RolloutSpecBuilder, RolloutStatus, RolloutStatusReport, RolloutStep,
+	RolloutStepStatus, Rollouts, UpReport,
 };
 pub use schema_state::{EntityKey, EntityKind};
 // Seeding.

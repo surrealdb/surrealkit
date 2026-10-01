@@ -10,6 +10,8 @@
 //! These tests drive the real binary. `rollout lint` and `rollout plan` never
 //! open a connection, so they are fast, hermetic parser probes.
 
+#![expect(clippy::unwrap_used, reason = "test helpers fail the test on any unexpected state")]
+
 use std::fs;
 use std::path::Path;
 use std::process::{Command, Output};
@@ -17,7 +19,8 @@ use std::process::{Command, Output};
 use tempfile::TempDir;
 
 /// Every rollout subcommand that takes a rollout id.
-const ID_SUBCOMMANDS: [&str; 6] = ["start", "complete", "rollback", "status", "lint", "repair"];
+const ID_SUBCOMMANDS: [&str; 7] =
+	["start", "complete", "rollback", "status", "lint", "repair", "freeze"];
 
 const ROLLOUT_ID: &str = "20260302153045__demo";
 
@@ -236,12 +239,7 @@ fn a_manifest_verifies_from_a_different_working_directory() {
 	let planned = run(root, &["rollout", "plan", "--name", "portable"]);
 	assert!(planned.status.success(), "plan failed: {}", combined(&planned));
 
-	let manifest = fs::read_dir(root.join("database/rollouts"))
-		.expect("rollouts dir")
-		.filter_map(|e| e.ok())
-		.map(|e| e.file_name().to_string_lossy().replace(".toml", ""))
-		.next()
-		.expect("a generated manifest");
+	let manifest = only_manifest(root);
 
 	// The manifest must record folder-relative paths, not the folder- or
 	// cwd-prefixed ones: those are what the container fails to resolve.
@@ -249,8 +247,12 @@ fn a_manifest_verifies_from_a_different_working_directory() {
 		fs::read_to_string(root.join("database/rollouts").join(format!("{manifest}.toml")))
 			.expect("manifest");
 	assert!(
-		manifest_body.contains("\"schema/001_person.surql\""),
+		manifest_body.contains("path = \"schema/001_person.surql\""),
 		"manifest should record folder-relative paths, got: {manifest_body}"
+	);
+	assert!(
+		root.join("database/rollouts").join(&manifest).join("schema/001_person.surql").is_file(),
+		"plan must freeze the changed file beside the manifest"
 	);
 
 	// The container case: a different working directory and an absolute --folder.
@@ -270,4 +272,116 @@ fn a_manifest_verifies_from_a_different_working_directory() {
 		"the manifest did not survive the environment change: {text}"
 	);
 	assert!(output.status.success(), "lint failed from another directory: {text}");
+}
+
+/// The id of the one manifest in `database/rollouts`. Its frozen directory has
+/// the same name, so only files count.
+fn only_manifest(root: &Path) -> String {
+	let manifests: Vec<String> = fs::read_dir(root.join("database/rollouts"))
+		.expect("rollouts dir")
+		.filter_map(|e| e.ok())
+		.filter(|e| e.path().is_file() && e.path().extension().is_some_and(|x| x == "toml"))
+		.map(|e| e.path().file_stem().unwrap().to_string_lossy().into_owned())
+		.collect();
+	assert_eq!(manifests.len(), 1, "{manifests:?}");
+	manifests.into_iter().next().unwrap()
+}
+
+#[test]
+fn rollout_up_parses_its_flags_and_gets_as_far_as_connecting() {
+	let temp = TempDir::new().expect("tempdir");
+	let root = temp.path();
+	write_project(root, "");
+
+	let help = combined(&run(root, &["rollout", "up", "--help"]));
+	for flag in ["--complete", "--from", "--dry-run", "--target"] {
+		assert!(help.contains(flag), "`rollout up --help` is missing {flag}: {help}");
+	}
+
+	let output = run(root, &["rollout", "up", "--complete", "--from", ROLLOUT_ID, "--dry-run"]);
+	let text = combined(&output);
+	assert!(!output.status.success());
+	assert!(!text.contains("unexpected argument") && !text.contains("unknown target"), "{text}");
+	assert!(text.contains("127.0.0.1:1"), "expected a connection failure, got: {text}");
+
+	let output = run(root, &["--target", "a", "--target", "b", "rollout", "up"]);
+	assert!(!output.status.success());
+}
+
+#[test]
+fn rollout_start_reaches_the_connection_when_a_frozen_directory_shares_the_id() {
+	let temp = TempDir::new().expect("tempdir");
+	let root = temp.path();
+	write_project(root, "");
+	let planned = run(root, &["rollout", "plan", "--name", "frozen"]);
+	assert!(planned.status.success(), "{}", combined(&planned));
+	let id = only_manifest(root);
+	assert!(root.join("database/rollouts").join(&id).is_dir());
+
+	let text = combined(&run(root, &["rollout", "start", &id]));
+	assert!(!text.contains("Is a directory"), "the directory was taken for the manifest: {text}");
+	assert!(text.contains("127.0.0.1:1"), "expected a connection failure, got: {text}");
+}
+
+#[test]
+fn rollout_lint_without_an_id_lints_the_whole_directory() {
+	let temp = TempDir::new().expect("tempdir");
+	let root = temp.path();
+	write_project(root, "");
+
+	let output = run(root, &["rollout", "lint"]);
+	assert!(output.status.success(), "{}", combined(&output));
+	assert!(combined(&output).contains("No rollout manifests"));
+
+	let planned = run(root, &["rollout", "plan", "--name", "first"]);
+	assert!(planned.status.success(), "{}", combined(&planned));
+	let output = run(root, &["rollout", "lint"]);
+	assert!(output.status.success(), "{}", combined(&output));
+
+	// A schema change nobody planned fails the check, which is what makes it
+	// useful in CI.
+	fs::write(root.join("database/schema/002_more.surql"), "DEFINE TABLE more;\n").unwrap();
+	let output = run(root, &["rollout", "lint"]);
+	assert!(!output.status.success());
+	assert!(combined(&output).contains("no rollout plans"), "{}", combined(&output));
+}
+
+#[test]
+fn rollout_freeze_works_offline_and_warns_about_an_unused_target() {
+	let temp = TempDir::new().expect("tempdir");
+	let root = temp.path();
+	write_project(root, "[target.prod]\nhost = \"http://127.0.0.1:1\"\n");
+	let planned = run(root, &["rollout", "plan", "--name", "frozen"]);
+	assert!(planned.status.success(), "{}", combined(&planned));
+	let id = only_manifest(root);
+
+	let output = run(root, &["--target", "prod", "rollout", "freeze", &id]);
+	let text = combined(&output);
+	assert!(output.status.success(), "{text}");
+	assert!(text.contains("already carries its SQL"), "{text}");
+	assert!(text.contains("--target"), "the unused --target should be called out: {text}");
+}
+
+/// #76: `--folder` used to be ignored in favour of `SURREALDB_FOLDER` and the
+/// default. It was fixed in 1.0.0-beta.1; this pins it at the binary.
+#[test]
+fn the_folder_flag_chooses_where_rollout_files_go() {
+	let temp = TempDir::new().expect("tempdir");
+	let root = temp.path();
+	write_project(root, "");
+	let elsewhere = root.join("elsewhere");
+	fs::create_dir_all(elsewhere.join("schema")).unwrap();
+	fs::write(elsewhere.join("schema/a.surql"), "DEFINE TABLE a;\n").unwrap();
+
+	let output = Command::new(env!("CARGO_BIN_EXE_surrealkit"))
+		.current_dir(root)
+		.env("SURREALDB_FOLDER", root.join("database"))
+		.args(["--folder", &elsewhere.to_string_lossy(), "rollout", "plan", "--name", "here"])
+		.output()
+		.expect("run surrealkit");
+	assert!(output.status.success(), "{}", combined(&output));
+	assert!(elsewhere.join("snapshots/catalog_snapshot.json").is_file());
+	let planned: Vec<_> = fs::read_dir(elsewhere.join("rollouts")).unwrap().collect();
+	assert_eq!(planned.len(), 2, "a manifest and its frozen directory under --folder");
+	assert!(fs::read_dir(root.join("database/rollouts")).unwrap().next().is_none());
 }

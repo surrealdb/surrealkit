@@ -22,6 +22,8 @@ kit() { surrealkit "$@" 2>&1 || true; }
 reset_project() {
     local folder="${SURREALDB_FOLDER:-/database}"
     rm -f "$folder"/rollouts/*.toml 2>/dev/null || true
+    # Each manifest's frozen files live in a directory named after it.
+    rm -rf "$folder"/rollouts/*/ 2>/dev/null || true
     rm -f "$folder"/snapshots/*.json 2>/dev/null || true
     rm -f "$folder"/setup.surql 2>/dev/null || true
     if [ -f "$folder/schema/001_person.surql" ]; then

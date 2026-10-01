@@ -678,7 +678,10 @@ async fn migrate_legacy_sync_keys(
 	Ok(migrated)
 }
 
-async fn load_sync_hashes(db: &Surreal<Any>, module: &Module) -> Result<BTreeMap<String, String>> {
+pub(crate) async fn load_sync_hashes(
+	db: &Surreal<Any>,
+	module: &Module,
+) -> Result<BTreeMap<String, String>> {
 	let mut resp = db
 		.query("SELECT key, val FROM __entity WHERE ns = $ns;")
 		.bind(("ns", module.partition(Partition::Sync)))

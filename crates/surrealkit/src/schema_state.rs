@@ -265,8 +265,17 @@ pub fn collect_schema_files_at(root: &str, sd: &std::path::Path) -> Result<Vec<S
 		return Ok(Vec::new());
 	}
 
+	// A schema directory configured to enclose the project folder (say
+	// `path = "."`) also encloses `rollouts/`, where each rollout keeps frozen
+	// copies of old schema files. Those are history, not schema; applying them
+	// would resurrect whatever they define.
+	let frozen_root = rollouts_dir(root);
 	let mut files = Vec::new();
-	for entry in WalkDir::new(sd).follow_links(true) {
+	let walker = WalkDir::new(sd)
+		.follow_links(true)
+		.into_iter()
+		.filter_entry(|entry| entry.path() != frozen_root);
+	for entry in walker {
 		let entry = entry.with_context(|| format!("walking schema directory {}", sd.display()))?;
 		if entry.file_type().is_file()
 			&& entry.path().extension().and_then(|suffix| suffix.to_str()) == Some("surql")
@@ -3218,5 +3227,22 @@ DEFINE ACCESS acc ON DATABASE TYPE RECORD
 	fn ensure_overwrite_still_works_and_passes_unreadable_sql_through() {
 		assert_eq!(ensure_overwrite("DEFINE TABLE t;"), "DEFINE TABLE OVERWRITE t;\n");
 		assert_eq!(ensure_overwrite("DEFINE TABLE t);"), "DEFINE TABLE t);");
+	}
+
+	#[test]
+	fn a_schema_directory_enclosing_the_project_skips_frozen_rollout_files() {
+		let tmp = tempfile::TempDir::new().unwrap();
+		let folder = tmp.path().join("database");
+		fs::create_dir_all(folder.join("schema")).unwrap();
+		fs::create_dir_all(folder.join("rollouts/20260101000000__x/schema")).unwrap();
+		fs::write(folder.join("schema/live.surql"), "DEFINE TABLE live;").unwrap();
+		fs::write(folder.join("rollouts/20260101000000__x/schema/old.surql"), "DEFINE TABLE old;")
+			.unwrap();
+		let folder = folder.to_string_lossy().into_owned();
+		let files = collect_schema_files_at(&folder, Path::new(&folder)).unwrap();
+		let paths: Vec<&str> = files.iter().map(|f| f.path.as_str()).collect();
+		assert_eq!(paths, vec!["schema/live.surql"]);
+		// The default layout never looks there in the first place.
+		assert_eq!(collect_schema_files(&folder).unwrap().len(), 1);
 	}
 }
