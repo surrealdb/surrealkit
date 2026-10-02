@@ -198,7 +198,8 @@ enum Commands {
 	},
 	/// Introspect the database and generate a typed schema document (JSON).
 	Typegen {
-		/// Output path (default: `{folder}/types/schema.json`).
+		/// Output path (default: `[typegen] json`, else
+		/// `{folder}/types/schema.json`).
 		#[arg(long)]
 		out: Option<PathBuf>,
 		/// Print the JSON to stdout instead of writing a file.
@@ -635,6 +636,7 @@ async fn main() -> Result<()> {
 		} => {
 			let typegen_cfg = surrealkit::variables::load_typegen_config(None)?;
 			let typegen_ts_out = typegen_cfg.typescript_path()?;
+			let typegen_json_out = typegen_cfg.json_path()?;
 			if selection.pairs() == 0 {
 				bail!(
 					"refusing filesystem sync: the selected targets accept none of the selected \
@@ -703,6 +705,7 @@ async fn main() -> Result<()> {
 						module: module.clone(),
 						typegen_ts_out: typegen_ts_out.clone(),
 						typegen_ts_format: typegen_cfg.format.clone(),
+						typegen_json_out: typegen_json_out.clone(),
 					};
 					let outcome =
 						sync::run_sync_with_filesystem_sources(&db, opts, layout, files).await;
@@ -951,14 +954,13 @@ async fn main() -> Result<()> {
 				typegen_cfg.typescript = Some(typescript);
 			}
 			let ts_out = typegen_cfg.typescript_path()?;
+			let json_out = typegen_cfg.json_path()?;
 			let db = connect(&cfg).await?;
 			run_typegen(
 				&db,
 				&folder,
-				cfg.ns(),
-				cfg.db(),
 				TypegenOpts {
-					out,
+					out: out.or(json_out),
 					stdout,
 					pretty: !compact,
 					ts_out,

@@ -118,6 +118,16 @@ async fn generate_captures_all_elements() {
 }
 
 #[tokio::test]
+async fn generate_reports_the_session_namespace_and_database() {
+	let db = mem_db().await;
+	define_schema(&db).await;
+
+	let doc = generate(&db).await.expect("generate");
+	assert_eq!(doc.namespace.as_deref(), Some("surrealkit_test"));
+	assert_eq!(doc.database.as_deref(), Some("typegen_test"));
+}
+
+#[tokio::test]
 async fn run_typegen_writes_valid_json_file() {
 	let db = mem_db().await;
 	define_schema(&db).await;
@@ -128,8 +138,6 @@ async fn run_typegen_writes_valid_json_file() {
 	run_typegen(
 		&db,
 		"./database",
-		"surrealkit_test",
-		"typegen_test",
 		TypegenOpts {
 			out: Some(out.clone()),
 			stdout: false,
@@ -185,8 +193,6 @@ async fn run_typegen_writes_typescript_file_when_configured() {
 	run_typegen(
 		&db,
 		"./database",
-		"surrealkit_test",
-		"typegen_test",
 		TypegenOpts {
 			out: Some(json_out.clone()),
 			stdout: false,
@@ -215,8 +221,6 @@ async fn run_typegen_writes_to_a_named_typescript_file() {
 	run_typegen(
 		&db,
 		"./database",
-		"surrealkit_test",
-		"typegen_test",
 		TypegenOpts {
 			out: Some(tmp.path().join("schema.json")),
 			stdout: false,
