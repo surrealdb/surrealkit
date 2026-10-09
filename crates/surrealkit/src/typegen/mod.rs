@@ -26,7 +26,8 @@ pub use types::{
 /// Options for the `typegen` command.
 #[derive(Debug, Clone, Default)]
 pub struct TypegenOpts {
-	/// Explicit output path. Overrides the default `{folder}/types/schema.json`.
+	/// Output path. The CLI fills it from `--out`, else `[typegen] json` in
+	/// `surrealkit.toml`; when `None`, it is `{folder}/types/schema.json`.
 	pub out: Option<PathBuf>,
 	/// Write to stdout instead of a file.
 	pub stdout: bool,
@@ -55,6 +56,16 @@ pub fn typescript_file(out: &std::path::Path) -> PathBuf {
 	} else {
 		out.join(crate::variables::DEFAULT_TYPESCRIPT_FILE)
 	}
+}
+
+/// Write `doc` as JSON to `path`, creating its directory if needed.
+pub fn write_json(doc: &SchemaTypes, path: &std::path::Path, pretty: bool) -> Result<()> {
+	let json = emit::to_json(doc, pretty)?;
+	if let Some(dir) = path.parent().filter(|dir| !dir.as_os_str().is_empty()) {
+		std::fs::create_dir_all(dir)?;
+	}
+	std::fs::write(path, format!("{json}\n"))?;
+	Ok(())
 }
 
 /// Write the TypeScript types for `doc` to [`typescript_file`]`(out)`, creating
@@ -122,33 +133,16 @@ pub async fn generate(db: &Surreal<Any>) -> Result<SchemaTypes> {
 /// Run the `typegen` command: introspect the database, render JSON, and either
 /// print it or write it to a file.
 #[doc(hidden)]
-pub async fn run_typegen(
-	db: &Surreal<Any>,
-	folder: &str,
-	namespace: &str,
-	database: &str,
-	opts: TypegenOpts,
-) -> Result<()> {
-	let mut doc = generate(db).await?;
-	if !namespace.is_empty() {
-		doc.namespace = Some(namespace.to_string());
-	}
-	if !database.is_empty() {
-		doc.database = Some(database.to_string());
-	}
-
-	let json = emit::to_json(&doc, opts.pretty)?;
+pub async fn run_typegen(db: &Surreal<Any>, folder: &str, opts: TypegenOpts) -> Result<()> {
+	let doc = generate(db).await?;
 
 	if opts.stdout {
-		log::info!("{json}");
+		log::info!("{}", emit::to_json(&doc, opts.pretty)?);
 		return Ok(());
 	}
 
 	let path = opts.out.unwrap_or_else(|| crate::constants::typegen_output_path(folder));
-	if let Some(parent) = path.parent() {
-		std::fs::create_dir_all(parent)?;
-	}
-	std::fs::write(&path, format!("{json}\n"))?;
+	write_json(&doc, &path, opts.pretty)?;
 	log::info!("typegen: wrote {}", path.display());
 
 	if let Some(ts_out) = &opts.ts_out {

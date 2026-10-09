@@ -27,8 +27,8 @@ async fn query_json(db: &Surreal<Any>, sql: &str) -> Result<Value> {
 
 /// Introspect the connected database into a [`SchemaTypes`] document.
 ///
-/// `namespace`/`database` and `generated_at` are left empty here — the caller
-/// fills them in so this function stays deterministic and easy to test.
+/// `generated_at` is left empty here — the caller stamps it so this function
+/// stays deterministic and easy to test.
 pub async fn introspect(db: &Surreal<Any>) -> Result<SchemaTypes> {
 	let info = query_json(db, "INFO FOR DB;").await.context("INFO FOR DB")?;
 
@@ -58,11 +58,13 @@ pub async fn introspect(db: &Surreal<Any>) -> Result<SchemaTypes> {
 		tables.push(introspect_table(db, &name, define).await?);
 	}
 
+	let (namespace, database) = session_ns_db(db).await;
+
 	let mut doc = SchemaTypes {
 		version: 1,
 		generated_at: String::new(),
-		namespace: None,
-		database: None,
+		namespace,
+		database,
 		tables,
 		functions,
 		params,
@@ -78,6 +80,21 @@ pub async fn introspect(db: &Surreal<Any>) -> Result<SchemaTypes> {
 
 	sort_doc(&mut doc);
 	Ok(doc)
+}
+
+/// The namespace and database the session is using. Not fatal when it fails:
+/// the schema itself was already introspected, and both fields are optional.
+async fn session_ns_db(db: &Surreal<Any>) -> (Option<String>, Option<String>) {
+	match query_json(db, "RETURN [session::ns(), session::db()];").await {
+		Ok(value) => (
+			value.get(0).and_then(Value::as_str).map(str::to_string),
+			value.get(1).and_then(Value::as_str).map(str::to_string),
+		),
+		Err(err) => {
+			log::debug!("typegen: could not read the session namespace/database: {err:#}");
+			(None, None)
+		}
+	}
 }
 
 async fn introspect_table(db: &Surreal<Any>, name: &str, define: String) -> Result<TableDef> {

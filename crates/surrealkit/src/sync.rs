@@ -56,6 +56,9 @@ pub struct SyncOpts {
 	/// Optional formatter command (`[typegen] format`) run on the regenerated
 	/// TypeScript file.
 	pub typegen_ts_format: Option<String>,
+	/// When set (via `[typegen] json` in `surrealkit.toml`), write the JSON
+	/// schema document to this file after applying schema changes.
+	pub typegen_json_out: Option<std::path::PathBuf>,
 }
 
 /// A schema file embedded into the binary at compile time (via [`embed_schema!`](crate::embed_schema))
@@ -278,6 +281,7 @@ impl<'a> Sync<'a> {
 			folder: String::new(),
 			typegen_ts_out: None,
 			typegen_ts_format: None,
+			typegen_json_out: None,
 		};
 		sync_embedded(db, self.files, &opts).await
 	}
@@ -590,22 +594,36 @@ async fn run_sync_with_files(
 
 	let has_changes = changed_count > 0 || stale_count > 0 || !removed_paths.is_empty();
 
-	// Regenerate TypeScript types when configured. Gate on actual changes (or a
+	// Regenerate the configured type outputs. Gate on actual changes (or a
 	// missing output file) so idle watch ticks don't re-introspect every cycle.
-	if let Some(ts_out) = &opts.typegen_ts_out
-		&& !opts.dry_run
-	{
-		let ts_path = crate::typegen::typescript_file(ts_out);
-		if has_changes || !ts_path.exists() {
+	if !opts.dry_run {
+		let ts_due_at_path = opts
+			.typegen_ts_out
+			.as_deref()
+			.filter(|out| has_changes || !crate::typegen::typescript_file(out).exists());
+		let json_due_at_path =
+			opts.typegen_json_out.as_deref().filter(|path| has_changes || !path.exists());
+
+		if ts_due_at_path.is_some() || json_due_at_path.is_some() {
 			match crate::typegen::generate(db).await {
-				Ok(doc) => match crate::typegen::write_typescript_formatted(
-					&doc,
-					&ts_path,
-					opts.typegen_ts_format.as_deref(),
-				) {
-					Ok(path) => log::info!("typegen: wrote {}", path.display()),
-					Err(err) => log::error!("typegen: failed to write types: {err:#}"),
-				},
+				Ok(doc) => {
+					if let Some(ts_path) = ts_due_at_path {
+						match crate::typegen::write_typescript_formatted(
+							&doc,
+							ts_path,
+							opts.typegen_ts_format.as_deref(),
+						) {
+							Ok(path) => log::info!("typegen: wrote {}", path.display()),
+							Err(err) => log::error!("typegen: failed to write types: {err:#}"),
+						}
+					}
+					if let Some(json_path) = json_due_at_path {
+						match crate::typegen::write_json(&doc, json_path, true) {
+							Ok(()) => log::info!("typegen: wrote {}", json_path.display()),
+							Err(err) => log::error!("typegen: failed to write JSON: {err:#}"),
+						}
+					}
+				}
 				Err(err) => log::error!("typegen: failed to introspect schema: {err:#}"),
 			}
 		}
@@ -1092,6 +1110,35 @@ mod tests {
 		assert!(!ts_file.with_file_name("index.ts").exists());
 
 		// Deleted, it comes back on the next sync even with nothing to apply.
+		fs::remove_file(&ts_file).unwrap();
+		project.sync(&db).await.expect("idle sync");
+		assert!(ts_file.exists());
+	}
+
+	#[tokio::test]
+	async fn sync_writes_schema_json_at_the_configured_file() {
+		let db = mem().await;
+		let mut project =
+			Project::new("DEFINE TABLE item SCHEMAFULL;\nDEFINE FIELD name ON item TYPE string;\n");
+		let types_dir = project.layout.schema_dir().join("../types");
+		let json_file = types_dir.join("schema.json");
+		let ts_file = types_dir.join("database.ts");
+		project.opts.typegen_json_out = Some(json_file.clone());
+		project.opts.typegen_ts_out = Some(ts_file.clone());
+		project.sync(&db).await.expect("sync");
+
+		let json: serde_json::Value =
+			serde_json::from_str(&fs::read_to_string(&json_file).expect("typegen wrote the JSON"))
+				.expect("valid JSON");
+		assert!(json["tables"].as_array().unwrap().iter().any(|t| t["name"] == "item"), "{json}");
+		assert!(json["namespace"].as_str().is_some_and(|ns| !ns.is_empty()), "{json}");
+		assert!(json["database"].as_str().is_some_and(|db| !db.is_empty()), "{json}");
+		assert!(ts_file.exists(), "both outputs are written");
+
+		// Either file going missing regenerates it on an idle sync.
+		fs::remove_file(&json_file).unwrap();
+		project.sync(&db).await.expect("idle sync");
+		assert!(json_file.exists());
 		fs::remove_file(&ts_file).unwrap();
 		project.sync(&db).await.expect("idle sync");
 		assert!(ts_file.exists());

@@ -204,10 +204,15 @@ pub const DEFAULT_PROJECT_CONFIG: &str = r#"# Template variables for use in .sur
 # Optionally run your formatter on the generated file so it matches your house
 # style (the file path is appended to the command). Failures are non-fatal.
 #
+# `json` writes the schema document those types come from, for your own
+# generators; `sync` keeps it current the same way. Like `typescript`, it is a
+# .json file or a directory (name defaults to schema.json).
+#
 # [typegen]
 # typescript = "src/types"           # relative to where surrealkit runs, the project root
 # filename   = "schema.generated.ts"   # keeps index.ts free for your own exports
 # format     = "biome check --write"   # or "prettier --write", "eslint --fix"
+# json       = "src/types"
 "#;
 
 /// Starter test suite written by [`scaffold`].

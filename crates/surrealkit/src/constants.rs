@@ -69,7 +69,7 @@ pub fn types_dir(folder: &str) -> PathBuf {
 
 /// `<folder>/types/schema.json` — the generated schema document.
 pub fn typegen_output_path(folder: &str) -> PathBuf {
-	types_dir(folder).join("schema.json")
+	types_dir(folder).join(crate::variables::DEFAULT_JSON_FILE)
 }
 
 /// Resolves the on-disk paths for one schema module within a project folder.

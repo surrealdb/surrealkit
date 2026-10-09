@@ -18,3 +18,20 @@ ok "sync writes a .ts path"
 kit typegen --typescript out/cli.ts >/dev/null
 [ -f out/cli.ts ] || fail "--typescript did not write out/cli.ts"
 ok "typegen --typescript"
+
+printf '%s\n' '[typegen]' 'json = "out/schema.json"' > surrealkit.toml
+kit sync
+[ -f out/schema.json ] || fail "sync did not write out/schema.json"
+grep -q "\"namespace\": \"$SURREALDB_NAMESPACE\"" out/schema.json \
+    || fail "schema.json does not name the session namespace"
+ok "sync writes [typegen] json"
+
+rm out/schema.json
+kit typegen >/dev/null
+[ -f out/schema.json ] || fail "typegen ignored [typegen] json"
+ok "typegen writes to [typegen] json"
+
+printf '%s\n' '[typegen]' 'json = "gen"' > surrealkit.toml
+kit sync
+[ -f gen/schema.json ] || fail "sync did not write gen/schema.json for a directory"
+ok "sync writes schema.json into a [typegen] json directory"
