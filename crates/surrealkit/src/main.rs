@@ -25,7 +25,6 @@ use surrealkit::variables::{TemplateVars, build_vars, parse_var_flag};
 use crate::output::Envelope;
 use crate::templates::InitOpts;
 
-// What this binary shares with every other component of the `surreal` CLI:
 // `--version`, `--json` and the JSON error envelope.
 mod output;
 // `init` templates are a CLI-only concern, so the module lives in the binary
@@ -678,8 +677,8 @@ fn load_env() -> Option<DotEnv> {
 	}
 }
 
-/// Parse the process's arguments, or leave the way every component of the
-/// `surreal` CLI leaves when they do not parse.
+/// Parse the process's arguments, or leave through [`parse_failure`] when they
+/// do not parse.
 fn parse_args() -> Cli {
 	let mut command = Cli::command();
 	if let Some(invoked) = output::invoked_as(std::env::var(output::INVOKED_AS_VAR).ok().as_deref())
@@ -695,8 +694,8 @@ fn parse_args() -> Cli {
 
 /// Leave after a parse that did not produce a [`Cli`].
 ///
-/// Help is clap's, on stdout with exit code 0. `--version` is the line every
-/// component prints, or its document under JSON, exit code 0. A usage error is
+/// Help is clap's, on stdout with exit code 0. `--version` is
+/// [`output::version_line`], or its document under JSON, exit code 0. A usage error is
 /// exit code 2: under JSON (read off the raw arguments, because the parse that
 /// would have decided it is the one that failed) it is the JSON error envelope
 /// on stderr, otherwise clap's text.
@@ -736,9 +735,8 @@ async fn main() {
 	init_logging(args.verbose, json);
 	let code = match run(args).await {
 		Ok(code) => code,
-		// The whole context chain on one line, as every component writes a
-		// failure, or the envelope under JSON. Either way nothing more reaches
-		// stdout.
+		// The whole context chain on one line, or the envelope under JSON.
+		// Either way nothing more reaches stdout.
 		Err(err) if json => {
 			let envelope = Envelope::failure(&err);
 			envelope.eprint();

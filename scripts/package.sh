@@ -1,14 +1,7 @@
 #!/usr/bin/env sh
 
-# Packages one built executable in the layout download.surrealdb.com serves for
-# every component of the `surreal` CLI: the database at the bucket root, and
-# each other component, SurrealKit among them under `cli/kit/`, in the same
-# layout under its own prefix, so one reader in the launcher fetches all of
-# them.
-#
-# A copy of surrealdb/surrealctl's `scripts/package.sh`, the layout's reference
-# implementation. Keep the two identical below this header: a difference is an
-# archive one component's clients would read differently.
+# Packages one built executable in the layout download.surrealdb.com serves
+# under `cli/kit/`, which the `surreal` launcher reads.
 #
 #   scripts/package.sh <executable> <binary> <version> <platform> <out-dir>
 #
@@ -23,10 +16,9 @@
 #
 # and for `windows-amd64` the bare executable, `<executable>-<name>.windows-amd64.exe`,
 # with its `.txt` beside it. A bare executable rather than an archive because it
-# runs straight from a browser download, as the database's always has.
+# runs straight from a browser download.
 #
-# <name> is `v<version>`. Only the database publishes nightlies; nothing
-# packaged here has one.
+# <name> is `v<version>`. No nightlies are published.
 #
 # The stem is the executable's own name, never a product or package name, so a
 # file name says what it unpacks to. The sidecar replaces the asset's extension
@@ -36,8 +28,8 @@
 #
 # This is the only implementation of the layout here. The release workflow calls
 # it on all five targets (under bash on Windows too), so the archive a user
-# unpacks is made by exactly the code that runs here. A nested directory or a versioned
-# member name breaks every client with "the archive contained no `surreal`".
+# unpacks is made by exactly the code that runs here. A nested directory or a
+# versioned member name breaks the launcher's install.
 #
 # POSIX sh, so it runs against the macOS bsdtar and the Linux and Git for
 # Windows GNU tar alike.
@@ -67,7 +59,7 @@ printf '%s\n' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$' 
     || fail "\`$version\` is not a version number (X.Y.Z[-prerelease])"
 name="v${version}"
 
-# The five platforms the launcher's `Asset::for_platform` can ask for. Anything
+# The five platforms the launcher can ask for. Anything
 # else would be published under a name no client requests.
 case "$platform" in
     darwin-arm64 | darwin-amd64 | linux-amd64 | linux-arm64) extension=tgz ;;

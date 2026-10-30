@@ -1,18 +1,11 @@
 name: 'Publish surreal-kit'
 description: 'Stage, verify and publish one surreal-kit release to download.surrealdb.com'
 
-# A copy-and-adapt of surrealdb/surrealctl's `publish-cloud`, by way of the
-# language server's `publish-lsp`, itself mirroring surrealdb/surrealdb's
-# `publish-binaries`:
-#
 #   - Everything is written under `cli/kit/`, which is written into every step
-#     rather than passed in. The bucket root belongs to the database and every
-#     other prefix to another product; no input reaches a key outside
-#     `cli/kit/`.
-#   - Within the prefix the layout is the database's, exactly: the same pointer
-#     names, the same `v<version>/<executable>-v<version>.<platform>.tgz` assets
-#     and `.txt` SHA-256 sidecars, and nothing else beside them. One reader in
-#     the launcher fetches every component.
+#     rather than passed in, so no input reaches a key outside `cli/kit/`.
+#   - Within the prefix the layout is the one the `surreal` launcher reads:
+#     channel pointers, `v<version>/<executable>-v<version>.<platform>.tgz`
+#     assets and `.txt` SHA-256 sidecars, and nothing else beside them.
 #   - Every asset is staged and re-verified against its sidecar before the
 #     first upload, so a malformed release fails with nothing written.
 

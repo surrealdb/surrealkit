@@ -1,8 +1,5 @@
-//! What the CLI shares with every other component of the `surreal` CLI.
-//!
-//! The `surreal` launcher runs this binary as `surreal kit`, beside `surreal
-//! db`, `surreal cloud` and `surreal lsp`, and a script should not be able to
-//! tell them apart by how they report a version or a failure:
+//! How the CLI reports its version and its failures, for scripts and for the
+//! `surreal` launcher, which runs this binary as `surreal kit`:
 //!
 //! - `-v`, `--version` (and clap's older `-V`, hidden) print one line, `<version> for <os> on
 //!   <arch>`, which the launcher reads the installed version from. With `--json` it is one
@@ -11,24 +8,23 @@
 //!   envelope on stderr instead of prose, whether clap refused the arguments or the command failed.
 //! - Help names the command the way the launcher says it was typed, [`INVOKED_AS_VAR`].
 //!
-//! The wording and the shapes are those of `surreal_cli_out` in surrealdb/cli.
-//! That crate is private to the CLI repository, so they are restated here,
-//! with tests that pin them.
+//! The help wording and the JSON shapes are a contract scripts rely on, so the
+//! tests below pin them.
 
 use std::ffi::OsString;
 
 use serde::Serialize;
 
-/// The help line for `-v, --version`, the same in every component.
+/// The help line for `-v, --version`.
 pub const VERSION_HELP: &str = "Print version";
 
-/// The help line for `-j, --json`, the same in every component.
+/// The help line for `-j, --json`.
 pub const JSON_HELP: &str = "Emit machine-readable JSON on stdout";
 
 /// The variable `--json` also reads, accepting clap's boolish values.
 pub const JSON_VAR: &str = "SURREAL_KIT_JSON";
 
-/// The variable the `surreal` launcher sets on the component it runs, naming
+/// The variable the `surreal` launcher sets when it runs this binary, naming
 /// how the user reached it: `surreal kit`. Read so `--help` says `Usage:
 /// surreal kit sync` to somebody who typed exactly that.
 pub const INVOKED_AS_VAR: &str = "SURREAL_INVOKED_AS";
@@ -42,8 +38,8 @@ pub const USAGE: &str = "usage";
 /// The `kind` of any other failure.
 pub const UNKNOWN: &str = "unknown";
 
-/// What `--version --json` prints. The keys and their order are the ones
-/// every component prints.
+/// What `--version --json` prints. The keys and their order are pinned:
+/// additions only.
 #[derive(Debug, PartialEq, Eq, Serialize)]
 pub struct VersionReport {
 	/// [`std::env::consts::ARCH`], such as `aarch64`.
@@ -84,7 +80,7 @@ pub fn print_version(json: bool) {
 	}
 }
 
-/// A value as every component writes JSON: pretty-printed.
+/// A value as the CLI writes JSON: pretty-printed.
 pub fn pretty(value: &impl Serialize) -> String {
 	serde_json::to_string_pretty(value).expect("a report serializes")
 }
@@ -93,9 +89,8 @@ pub fn pretty(value: &impl Serialize) -> String {
 /// every key present and `null` when unknown.
 ///
 /// Field order is the order the keys are written in. `status`, `code`,
-/// `request_id`, `docs` and `retry_after_secs` belong to components that talk
-/// to an API; they are written as `null` rather than left out, so a consumer
-/// can index without checking.
+/// `request_id`, `docs` and `retry_after_secs` are always `null` here; they are
+/// written rather than left out, so a consumer can index without checking.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Envelope {
 	pub kind: &'static str,

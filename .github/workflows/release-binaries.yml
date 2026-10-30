@@ -166,7 +166,7 @@ jobs:
             fail-fast: false
             matrix:
                 # `kit` is the platform the `surreal` launcher asks for, one of
-                # the five every component publishes; empty for a build only the
+                # the five published under `cli/kit/`; empty for a build only the
                 # GitHub release gets. Linux is published from the static musl
                 # builds, which run on any distribution.
                 include:
@@ -242,7 +242,7 @@ jobs:
                   "${binary}" --version --json
 
             # The launcher's copy: the same binary as `surreal-kit`, in the
-            # layout every component of the `surreal` CLI is published in.
+            # layout `cli/kit/` is published in.
             - name: Package for the surreal launcher
               if: matrix.kit != ''
               shell: bash

@@ -1,4 +1,4 @@
-//! What the binary shares with every other component of the `surreal` CLI,
+//! The command line's contract with scripts and with the `surreal` launcher,
 //! which runs it as `surreal kit`: `--version`, `--json`, help, and how a
 //! failure reads. Nothing here connects to a database.
 
@@ -47,8 +47,8 @@ fn the_version_is_one_line_led_by_the_release() {
 	}
 }
 
-/// With `--json`, before or after the flag, or the variable, it is the
-/// document every component prints, keys in order.
+/// With `--json`, before or after the flag, or the variable, it is one
+/// document, keys in order.
 #[test]
 fn the_version_under_json_is_arch_os_version() {
 	let cases: [(&[&str], Env); 5] = [
@@ -69,7 +69,7 @@ fn the_version_under_json_is_arch_os_version() {
 	}
 }
 
-/// `-v` is the version, as in every component, and no longer `--verbose`.
+/// `-v` is the version, and no longer `--verbose`.
 #[test]
 fn verbose_is_long_only() {
 	let output = run(&["-v", "status"], &[]);
@@ -93,7 +93,7 @@ fn help_leads_with_the_description() {
 	assert!(!help.contains("-V"), "{help}");
 }
 
-/// No command prints help on stderr and exits 2, as every component does.
+/// No command prints help on stderr and exits 2.
 #[test]
 fn no_command_prints_help() {
 	let output = run(&[], &[]);

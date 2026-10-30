@@ -1,17 +1,12 @@
 name: 'Propagate surreal-kit'
 description: 'Copy cli/kit/ from the download bucket to every regional bucket'
 
-# Adapted from the house `propagate-binaries` (surrealdb/surrealdb, via
-# surrealdb/studio, surrealdb/surrealctl and the language server's
-# `propagate-lsp`), keeping its regions, parallel fan-out and quorum rule, so it
-# fails the way the others do when a region is down. One difference,
-# deliberate:
+# Syncs to every regional bucket in parallel, and fails unless a majority of
+# the regions succeed.
 #
 # The sync is of `cli/kit/` alone, source and destination both, and without
-# `--delete`. The house action syncs the whole bucket with `--delete`, which
-# needs a credential that can write and delete anywhere in eleven buckets.
-# This is a public repository, so its credential is held to `cli/kit/*`, and
-# a prefix-to-prefix sync is all that credential can do. Without `--delete`
+# `--delete`. This is a public repository, so its credential is held to
+# `cli/kit/*`, and a prefix-to-prefix sync is all that credential can do. Without `--delete`
 # nothing is ever removed: the versioned keys are immutable and the pointers
 # are overwritten, so there is nothing for it to delete.
 
