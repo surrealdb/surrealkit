@@ -16,11 +16,36 @@ pub use types::{SchemaSource, TestOpts};
 use crate::config::{AuthLevel, DbCfg, DbOverrides};
 use crate::variables::TemplateVars;
 
+/// How [`run_test_to`] writes a run's report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReportFormat {
+	/// The summary `surrealkit test` prints for a person.
+	Human,
+	/// The JSON document `--json-out` writes, pretty-printed.
+	Json,
+}
+
+/// Run the test suites and print the human report on stdout.
 pub async fn run_test(
 	dotenv: Option<&DotEnv>,
 	opts: TestOpts,
 	vars: TemplateVars,
 	overrides: &DbOverrides,
+) -> Result<()> {
+	run_test_to(dotenv, opts, vars, overrides, ReportFormat::Human, &mut io::stdout()).await
+}
+
+/// Run the test suites and write the report to `out` in `format`.
+///
+/// The report is written whether or not every case passed, and a run with a
+/// failed case is then an error, as with [`run_test`].
+pub async fn run_test_to(
+	dotenv: Option<&DotEnv>,
+	opts: TestOpts,
+	vars: TemplateVars,
+	overrides: &DbOverrides,
+	format: ReportFormat,
+	out: &mut (dyn io::Write + Send),
 ) -> Result<()> {
 	let cfg = DbCfg::from_env(dotenv, overrides)?;
 	if matches!(cfg.auth_level(), AuthLevel::Database) {
@@ -53,9 +78,13 @@ pub async fn run_test(
 		runner::RunnerContext::new(cfg, opts.clone(), loaded.global, base_url, timeout_ms, vars);
 	let report = ctx.run(suites).await?;
 
-	let stdout = io::stdout();
-	let mut out = stdout.lock();
-	report::print_human_report(&mut out, &report)?;
+	match format {
+		ReportFormat::Human => report::print_human_report(out, &report)?,
+		ReportFormat::Json => {
+			serde_json::to_writer_pretty(&mut *out, &report)?;
+			writeln!(out)?;
+		}
+	}
 	if let Some(path) = &opts.json_out {
 		report::write_json_report(path, &report)?;
 	}

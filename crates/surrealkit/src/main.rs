@@ -3,11 +3,13 @@
 #![allow(clippy::print_stdout, clippy::print_stderr)]
 
 use std::collections::BTreeMap;
+use std::ffi::OsString;
 use std::io::Write;
 use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail};
-use clap::{Parser, Subcommand};
+use clap::builder::BoolishValueParser;
+use clap::{ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand};
 use rust_dotenv::dotenv::DotEnv;
 use surrealkit::config::{DbCfg, DbOverrides, connect};
 use surrealkit::core::exec_surql;
@@ -16,88 +18,141 @@ use surrealkit::project::{ProjectConfig, Target};
 use surrealkit::rollout::{self, RolloutExecutionOpts, RolloutPlanOpts, RolloutUpOpts};
 use surrealkit::setup::force_setup;
 use surrealkit::sync::{self, SyncOpts};
-use surrealkit::tester::{TestOpts, run_test};
+use surrealkit::tester::{ReportFormat, TestOpts, run_test_to};
 use surrealkit::typegen::{TypegenOpts, run_typegen};
 use surrealkit::variables::{TemplateVars, build_vars, parse_var_flag};
 
+use crate::output::Envelope;
 use crate::templates::InitOpts;
 
+// What this binary shares with every other component of the `surreal` CLI:
+// `--version`, `--json` and the JSON error envelope.
+mod output;
 // `init` templates are a CLI-only concern, so the module lives in the binary
 // rather than the public library surface.
 mod templates;
 
-#[derive(Parser, Debug)]
-#[command(version, about = "SurrealKit CLI")]
-pub struct Cli {
-	/// Increase output
-	#[arg(short, long, global = true)]
-	verbose: bool,
+/// One line for `--help`, and the same line `surreal list` shows for `kit`.
+const ABOUT: &str = "Schema migrations, seed data, typegen and tests";
 
-	/// Schema module to operate on. Modules are tracked independently: a module
-	/// only ever prunes its own database objects. Files live in
+const SELECTION: &str = "Selection";
+const CONNECTION: &str = "Connection";
+const PROJECT: &str = "Project";
+const OUTPUT: &str = "Output";
+
+/// The `surrealkit` executable, which the `surreal` launcher installs as
+/// `surreal-kit` and runs as `surreal kit`.
+///
+/// No `name`: help and usage name the executable as it was started (or as the
+/// launcher says it was typed, see [`output::INVOKED_AS_VAR`]), so they read
+/// `surrealkit`, `surreal-kit` or `surreal kit` to whoever typed that.
+#[derive(Parser, Debug)]
+#[command(about = ABOUT, long_about = None)]
+#[command(version = output::VERSION, disable_version_flag = true)]
+#[command(arg_required_else_help = true)]
+pub struct Cli {
+	/// `-v`, `--version`, and clap's older `-V`, unlisted. clap stops parsing
+	/// here, so a `--json` after it is read off the raw arguments, in
+	/// [`parse_failure`].
+	#[arg(
+		short = 'v',
+		long = "version",
+		short_alias = 'V',
+		action = ArgAction::Version,
+		help = output::VERSION_HELP
+	)]
+	version: Option<bool>,
+
+	/// Schema module to operate on (repeatable).
+	///
+	/// Modules are tracked independently: a module only ever prunes its own
+	/// database objects. Files live in
 	/// `<folder>/modules/<name>/schema`. Omit for the default module
 	/// (`<folder>/schema`), which is the pre-1.0 layout.
-	#[arg(short = 's', long, global = true, value_name = "NAME")]
+	#[arg(short = 's', long, global = true, value_name = "NAME", help_heading = SELECTION)]
 	schema: Vec<String>,
 
-	/// Database target to operate on, from `[target.<name>]` in surrealkit.toml.
-	/// Repeatable. Omit for the ambient connection (--host/--ns/--db and env).
-	#[arg(short = 't', long, global = true, value_name = "NAME")]
+	/// Database target to operate on (repeatable).
+	///
+	/// A `[target.<name>]` from surrealkit.toml. Omit for the ambient connection
+	/// (--host/--ns/--db and env).
+	#[arg(short = 't', long, global = true, value_name = "NAME", help_heading = SELECTION)]
 	target: Vec<String>,
 
 	/// Every declared schema module against every declared database target.
-	#[arg(long, global = true)]
+	#[arg(long, global = true, help_heading = SELECTION)]
 	all: bool,
 
 	/// Continue to the next target after one fails, instead of stopping.
-	#[arg(long, global = true)]
+	#[arg(long, global = true, help_heading = SELECTION)]
 	keep_going: bool,
 
 	/// Don't pull in the `depends_on` modules of the ones selected with --schema.
-	#[arg(long, global = true)]
+	#[arg(long, global = true, help_heading = SELECTION)]
 	no_deps: bool,
 
 	/// Database host URL
-	#[arg(long, global = true)]
+	#[arg(long, global = true, help_heading = CONNECTION)]
 	host: Option<String>,
 
 	/// Database name
-	#[arg(long, global = true)]
+	#[arg(long, global = true, help_heading = CONNECTION)]
 	db: Option<String>,
 
 	/// Database namespace
-	#[arg(long, global = true)]
+	#[arg(long, global = true, help_heading = CONNECTION)]
 	ns: Option<String>,
 
 	/// Database user
-	#[arg(long, global = true)]
+	#[arg(long, global = true, help_heading = CONNECTION)]
 	user: Option<String>,
 
 	/// Database password
-	#[arg(long, global = true)]
+	#[arg(long, global = true, help_heading = CONNECTION)]
 	pass: Option<String>,
 
 	/// Authentication level: root (default), namespace/ns, or database/db
-	#[arg(long, global = true)]
+	#[arg(long, global = true, help_heading = CONNECTION)]
 	auth_level: Option<String>,
 
-	/// Root folder for the database directory (default: `./database`).
-	#[arg(long, global = true)]
-	folder: Option<String>,
-
-	/// Seconds to wait for the database connection and sign-in (default: 30).
+	/// Seconds to wait for the connection and sign-in (default: 30).
+	///
 	/// `0` waits indefinitely, which was the behaviour through 1.0.0-beta.1.
-	#[arg(long, global = true, value_name = "SECS")]
+	#[arg(long, global = true, value_name = "SECS", help_heading = CONNECTION)]
 	connect_timeout_secs: Option<u64>,
 
-	/// Seconds to wait for a single rollout step's SQL. Unset waits
-	/// indefinitely, because a legitimate index build can take hours.
-	#[arg(long, global = true, value_name = "SECS")]
+	/// Seconds to wait for a single rollout step's SQL.
+	///
+	/// Unset waits indefinitely, because a legitimate index build can take
+	/// hours.
+	#[arg(long, global = true, value_name = "SECS", help_heading = CONNECTION)]
 	query_timeout_secs: Option<u64>,
 
+	/// Root folder for the database directory (default: `./database`).
+	#[arg(long, global = true, help_heading = PROJECT)]
+	folder: Option<String>,
+
 	/// Set a template variable (repeatable): --var KEY=VALUE
-	#[arg(long = "var", global = true, value_name = "KEY=VALUE")]
+	#[arg(long = "var", global = true, value_name = "KEY=VALUE", help_heading = PROJECT)]
 	var: Vec<String>,
+
+	/// Emit machine-readable JSON on stdout.
+	#[arg(
+		short = 'j',
+		long,
+		global = true,
+		env = output::JSON_VAR,
+		hide_env_values = true,
+		value_parser = BoolishValueParser::new(),
+		action = ArgAction::SetTrue,
+		help = output::JSON_HELP,
+		help_heading = OUTPUT
+	)]
+	json: bool,
+
+	/// Show debug output as well as progress.
+	#[arg(long, global = true, help_heading = OUTPUT)]
+	verbose: bool,
 
 	#[command(subcommand)]
 	command: Commands,
@@ -127,67 +182,98 @@ enum Commands {
 		#[arg(long)]
 		force: bool,
 	},
+	/// Redefine the metadata tables SurrealKit keeps its state in.
 	Setup,
+	/// Apply the schema folder to the database, removing what was deleted.
 	Sync {
+		/// Keep running, and sync again whenever a schema file changes.
 		#[arg(long)]
 		watch: bool,
-		#[arg(long, default_value_t = 1000)]
+		/// With --watch, how often to check for changes, in milliseconds.
+		#[arg(long, value_name = "MS", default_value_t = 1000)]
 		debounce_ms: u64,
+		/// Report what would change, and change nothing.
 		#[arg(long)]
 		dry_run: bool,
+		/// With --watch, stop at the first sync that fails.
 		#[arg(long, default_value_t = true)]
 		fail_fast: bool,
+		/// Leave objects whose schema files were deleted in the database.
 		#[arg(long)]
 		no_prune: bool,
+		/// Allow removing deleted objects from a shared database.
 		#[arg(long)]
 		allow_shared_prune: bool,
-		/// Allow filesystem sync to connect with no schema files. Required before
-		/// an intentional prune of every managed entity.
+		/// Allow a sync with no schema files.
+		///
+		/// Required before an intentional prune of every managed entity.
 		#[arg(long)]
 		allow_empty_prune: bool,
-		/// Allow non-DEFINE statements in schema files (e.g. INSERT, UPDATE, CREATE).
-		/// Disables catalog entity tracking; only file-level hashes are tracked.
+		/// Allow statements other than DEFINE in schema files.
+		///
+		/// INSERT, UPDATE, CREATE and the like. Disables catalog entity tracking;
+		/// only file-level hashes are tracked.
 		#[arg(long)]
 		allow_all_statements: bool,
 	},
+	/// Plan, run and roll back reviewed schema migrations.
+	#[command(arg_required_else_help = true)]
 	Rollout {
 		#[command(subcommand)]
 		command: RolloutCommands,
 	},
-	/// Run seed files. Each file runs only on first boot or when its content
-	/// changes (tracked in the `__seed` table). Use `--force` to re-run all.
+	/// Run the seed files that are new or changed.
+	///
+	/// Each file runs only on first boot or when its content changes (tracked
+	/// in the `__seed` table). Use `--force` to re-run all.
 	Seed {
 		/// Re-run every seed file, ignoring the `__seed` tracking table.
 		#[arg(long)]
 		force: bool,
 	},
+	/// Show the rollouts recorded in the database, and what is still pending.
 	Status,
+	/// Run one SurrealQL file against the database, with template variables.
 	Apply {
+		/// The `.surql` file to run.
 		path: PathBuf,
 	},
+	/// Run the test suites, each against a database of its own.
 	Test {
-		#[arg(long)]
+		/// Only the suites whose name matches this glob.
+		#[arg(long, value_name = "GLOB")]
 		suite: Option<String>,
-		#[arg(long)]
+		/// Only the cases whose name matches this glob.
+		#[arg(long, value_name = "GLOB")]
 		case: Option<String>,
+		/// Only the suites and cases with this tag (repeatable).
 		#[arg(long)]
 		tag: Vec<String>,
+		/// Stop at the first failing case.
 		#[arg(long)]
 		fail_fast: bool,
-		#[arg(long, default_value_t = 1)]
+		/// How many suites to run at once.
+		#[arg(long, value_name = "N", default_value_t = 1)]
 		parallel: usize,
-		#[arg(long)]
+		/// Also write the report as JSON to this file.
+		#[arg(long, value_name = "PATH")]
 		json_out: Option<PathBuf>,
+		/// Skip `setup` on each suite's database.
 		#[arg(long)]
 		no_setup: bool,
+		/// Skip `sync` on each suite's database.
 		#[arg(long)]
 		no_sync: bool,
+		/// Skip `seed` on each suite's database.
 		#[arg(long)]
 		no_seed: bool,
-		#[arg(long)]
+		/// The HTTP endpoint API cases call (default: `[defaults] base_url`).
+		#[arg(long, value_name = "URL")]
 		base_url: Option<String>,
-		#[arg(long)]
+		/// How long a single request may take, in milliseconds.
+		#[arg(long, value_name = "MS")]
 		timeout_ms: Option<u64>,
+		/// Keep each suite's database afterwards, for inspection.
 		#[arg(long)]
 		keep_db: bool,
 		/// How each suite's database gets its schema: `sync` from the schema
@@ -225,44 +311,58 @@ enum Commands {
 /// subcommands entirely. `no_subcommand_shadows_a_global_arg_id` pins it.
 #[derive(Subcommand, Debug)]
 enum RolloutCommands {
+	/// Record an existing database's schema as the starting point for rollouts.
+	///
+	/// Changes no schema. Only once, before the first rollout.
 	Baseline,
+	/// Write a manifest of the schema folder's changes since the last rollout.
 	Plan {
+		/// A name for the rollout, used in its id.
 		#[arg(long)]
 		name: Option<String>,
+		/// Print the plan, and write nothing.
 		#[arg(long)]
 		dry_run: bool,
-		/// Plan changes to entities that already exist (e.g. tightening an
-		/// ASSERT), not just additions and removals. Rollback restores the
-		/// previous definition, which reverses the schema but not any data
-		/// effect the change had.
+		/// Plan changes to entities that already exist, too.
+		///
+		/// Such as tightening an ASSERT, not just additions and removals.
+		/// Rollback restores the previous definition, which reverses the schema
+		/// but not any data effect the change had.
 		#[arg(long)]
 		allow_modified: bool,
 	},
+	/// Apply a rollout's non-destructive changes, ready for cutover.
 	Start {
 		#[arg(value_name = "ROLLOUT_ID")]
 		rollout: String,
 	},
+	/// Finish a started rollout after cutover: apply its destructive changes.
 	Complete {
 		#[arg(value_name = "ROLLOUT_ID")]
 		rollout: String,
 	},
+	/// Undo a started rollout.
 	Rollback {
 		#[arg(value_name = "ROLLOUT_ID")]
 		rollout: String,
 	},
+	/// Show the rollouts recorded in the database, or one of them.
 	Status {
 		#[arg(value_name = "ROLLOUT_ID")]
 		rollout: Option<String>,
 	},
-	/// Check manifests without connecting. With an id, that manifest; without
-	/// one, every manifest and how they chain, which suits a CI check.
+	/// Check rollout manifests without connecting.
+	///
+	/// With an id, that manifest; without one, every manifest and how they
+	/// chain, which suits a CI check.
 	Lint {
 		#[arg(value_name = "ROLLOUT_ID")]
 		rollout: Option<String>,
 	},
-	/// Run every rollout this database has not run yet, in order. Each one is
-	/// started and completed, except the newest, which is left ready to complete
-	/// so the application can cut over first.
+	/// Run every rollout this database has not run yet, in order.
+	///
+	/// Each one is started and completed, except the newest, which is left ready
+	/// to complete so the application can cut over first.
 	Up {
 		/// Complete the newest rollout too.
 		#[arg(long)]
@@ -275,15 +375,17 @@ enum RolloutCommands {
 		#[arg(long)]
 		dry_run: bool,
 	},
-	/// Give a manifest planned before 1.0.0-beta.6 its own copy of the SQL it
-	/// applies. Run it where the schema folder matches what it was planned from.
+	/// Give a manifest planned before 1.0.0-beta.6 its own copy of its SQL.
+	///
+	/// Run it where the schema folder matches what it was planned from.
 	Freeze {
 		#[arg(value_name = "ROLLOUT_ID")]
 		rollout: String,
 	},
-	/// Drop the newest rollout from the project, as if it had never been
-	/// planned: delete its manifest and directory, and put the snapshots back to
-	/// where they were before it. Only for a rollout no database has completed.
+	/// Drop the newest rollout from the project, as if it had never been planned.
+	///
+	/// Deletes its manifest and directory, and puts the snapshots back to where
+	/// they were before it. Only for a rollout no database has completed.
 	Discard {
 		#[arg(value_name = "ROLLOUT_ID")]
 		rollout: String,
@@ -292,8 +394,9 @@ enum RolloutCommands {
 		#[arg(long)]
 		keep_snapshots: bool,
 	},
-	/// Heal a rollout stuck in an intermediate state without re-running SQL
-	/// steps. Useful when `complete` was killed mid-flight (issue #55) and
+	/// Heal a rollout stuck in an intermediate state, without re-running SQL.
+	///
+	/// Useful when `complete` was killed mid-flight (issue #55) and
 	/// `__rollout.status` is still `running_complete` / `running_rollback`.
 	Repair {
 		#[arg(value_name = "ROLLOUT_ID")]
@@ -470,27 +573,28 @@ struct PairResult {
 	error: Option<String>,
 }
 
-/// Print the per-pair summary shown after a fan-out run.
+/// Print the per-pair summary shown after a fan-out run. Through the logger,
+/// like the progress around it, so `--json` moves it off stdout.
 fn report_pairs(results: &[PairResult]) {
 	let mw = results.iter().map(|r| r.module.len()).max().unwrap_or(6).max("schema".len());
 	let tw = results.iter().map(|r| r.target.len()).max().unwrap_or(6).max("target".len());
-	println!();
-	println!("  {:<mw$}  {:<tw$}  status", "schema", "target", mw = mw, tw = tw);
-	println!("  {}  {}  ------", "-".repeat(mw), "-".repeat(tw));
+	log::info!("");
+	log::info!("  {:<mw$}  {:<tw$}  status", "schema", "target", mw = mw, tw = tw);
+	log::info!("  {}  {}  ------", "-".repeat(mw), "-".repeat(tw));
 	for r in results {
 		let status = if r.error.is_some() {
 			"FAILED"
 		} else {
 			"ok"
 		};
-		println!("  {:<mw$}  {:<tw$}  {status}", r.module, r.target, mw = mw, tw = tw);
+		log::info!("  {:<mw$}  {:<tw$}  {status}", r.module, r.target, mw = mw, tw = tw);
 	}
 	let failed = results.iter().filter(|r| r.error.is_some()).count();
-	println!();
+	log::info!("");
 	if failed == 0 {
-		println!("{} ok", results.len());
+		log::info!("{} ok", results.len());
 	} else {
-		println!("{} ok, {failed} failed", results.len() - failed);
+		log::info!("{} ok, {failed} failed", results.len() - failed);
 	}
 }
 
@@ -502,15 +606,19 @@ fn report_pairs(results: &[PairResult]) {
 /// timestamp, no target**, `info` on stdout and `warn`/`error` on stderr —
 /// matching the `println!`/`eprintln!` split those calls replaced.
 ///
+/// Under `--json` stdout carries the command's JSON and nothing else, so every
+/// line goes to stderr instead.
+///
 /// `env_logger` is deliberately not used: it writes everything to stderr with a
 /// level prefix, which would be a visible CLI change.
 struct CliLogger {
 	level: log::LevelFilter,
+	json: bool,
 }
 
 impl log::Log for CliLogger {
 	fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
-		// Only SurrealKit's own output; dependencies stay quiet unless -v is given.
+		// Only SurrealKit's own output; dependencies stay quiet.
 		metadata.level() <= self.level && metadata.target().starts_with("surrealkit")
 	}
 
@@ -519,6 +627,10 @@ impl log::Log for CliLogger {
 			return;
 		}
 		match record.level() {
+			_ if self.json => {
+				let mut err = std::io::stderr().lock();
+				let _ = writeln!(err, "{}", record.args());
+			}
 			log::Level::Error | log::Level::Warn => {
 				let mut err = std::io::stderr().lock();
 				let _ = writeln!(err, "{}", record.args());
@@ -539,8 +651,9 @@ impl log::Log for CliLogger {
 	}
 }
 
-/// Install the CLI logger. `-v/--verbose` raises the level to `debug`.
-fn init_logging(verbose: bool) {
+/// Install the CLI logger. `--verbose` raises the level to `debug`, and
+/// `--json` sends everything to stderr.
+fn init_logging(verbose: bool, json: bool) {
 	let level = if verbose {
 		log::LevelFilter::Debug
 	} else {
@@ -548,6 +661,7 @@ fn init_logging(verbose: bool) {
 	};
 	let logger = Box::leak(Box::new(CliLogger {
 		level,
+		json,
 	}));
 	// Only fails if a logger is already installed, which cannot happen here.
 	let _ = log::set_logger(logger).map(|()| log::set_max_level(level));
@@ -564,15 +678,83 @@ fn load_env() -> Option<DotEnv> {
 	}
 }
 
+/// Parse the process's arguments, or leave the way every component of the
+/// `surreal` CLI leaves when they do not parse.
+fn parse_args() -> Cli {
+	let mut command = Cli::command();
+	if let Some(invoked) = output::invoked_as(std::env::var(output::INVOKED_AS_VAR).ok().as_deref())
+	{
+		command = command.bin_name(invoked);
+	}
+	let argv: Vec<OsString> = std::env::args_os().collect();
+	command
+		.try_get_matches_from_mut(&argv)
+		.and_then(|matches| Cli::from_arg_matches(&matches))
+		.unwrap_or_else(|err| parse_failure(&err, &command, &argv))
+}
+
+/// Leave after a parse that did not produce a [`Cli`].
+///
+/// Help is clap's, on stdout with exit code 0. `--version` is the line every
+/// component prints, or its document under JSON, exit code 0. A usage error is
+/// exit code 2: under JSON (read off the raw arguments, because the parse that
+/// would have decided it is the one that failed) it is the JSON error envelope
+/// on stderr, otherwise clap's text.
+fn parse_failure(err: &clap::Error, command: &clap::Command, argv: &[OsString]) -> ! {
+	let json =
+		|| output::asks_for_json(command, argv, std::env::var(output::JSON_VAR).ok().as_deref());
+	if err.kind() == clap::error::ErrorKind::DisplayVersion {
+		output::print_version(json());
+		exit(0);
+	}
+	if err.use_stderr() && json() {
+		let program = command.get_bin_name().unwrap_or_else(|| command.get_name());
+		let envelope = Envelope::usage(err, program);
+		envelope.eprint();
+		exit(i32::from(envelope.exit_code));
+	}
+	err.exit()
+}
+
+/// Flush both streams and leave.
+///
+/// Belt-and-braces (issue #55): bypass tokio runtime shutdown so the HTTP
+/// client's background connection-pool tasks can't keep the process alive
+/// after the command has finished.
+fn exit(code: i32) -> ! {
+	let _ = std::io::stdout().flush();
+	let _ = std::io::stderr().flush();
+	std::process::exit(code);
+}
+
 #[tokio::main]
-// anyhow::Result rather than Box<dyn Error>: output is identical (Rust prints a
-// failed main's Err via Debug, and Box<dyn Error> already delegated to anyhow's),
-// but it lets this function use bail!/context directly.
-async fn main() -> Result<()> {
+async fn main() {
 	let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
 
-	let args = Cli::parse();
-	init_logging(args.verbose);
+	let args = parse_args();
+	let json = args.json;
+	init_logging(args.verbose, json);
+	let code = match run(args).await {
+		Ok(code) => code,
+		// The whole context chain on one line, as every component writes a
+		// failure, or the envelope under JSON. Either way nothing more reaches
+		// stdout.
+		Err(err) if json => {
+			let envelope = Envelope::failure(&err);
+			envelope.eprint();
+			i32::from(envelope.exit_code)
+		}
+		Err(err) => {
+			eprintln!("error: {err:#}");
+			1
+		}
+	};
+	exit(code);
+}
+
+/// Run the command, returning the exit code it ends with.
+async fn run(args: Cli) -> Result<i32> {
+	let json = args.json;
 	let env = load_env();
 	let overrides = DbOverrides {
 		host: args.host,
@@ -682,7 +864,7 @@ async fn main() -> Result<()> {
 				let db = connect(target.cfg()).await?;
 				for module in modules {
 					if selection.is_fan_out() {
-						println!("→ {} → {}", module.name(), target.name());
+						log::info!("→ {} → {}", module.name(), target.name());
 					}
 					let (layout, files) =
 						filesystem_sources.get(module.name()).with_context(|| {
@@ -732,8 +914,19 @@ async fn main() -> Result<()> {
 			if selection.is_fan_out() {
 				report_pairs(&results);
 			}
-			if results.iter().any(|r| r.error.is_some()) {
-				std::process::exit(1);
+			let failed: Vec<&PairResult> = results.iter().filter(|r| r.error.is_some()).collect();
+			match failed.as_slice() {
+				[] => {}
+				// Each failure has been said already, on stderr. Under JSON the
+				// envelope says it again, as the one document a script reads.
+				_ if !json => return Ok(1),
+				[one] => bail!(
+					"{} → {}: {}",
+					one.module,
+					one.target,
+					one.error.as_deref().unwrap_or_default()
+				),
+				many => bail!("{} of {} schema/target pairs failed", many.len(), results.len()),
 			}
 		}
 		Commands::Rollout {
@@ -916,7 +1109,14 @@ async fn main() -> Result<()> {
 			keep_db,
 			schema_from,
 		} => {
-			run_test(
+			// Under --json the run's report is the document on stdout, the one
+			// `--json-out` writes, rather than the summary for a person.
+			let format = if json {
+				ReportFormat::Json
+			} else {
+				ReportFormat::Human
+			};
+			run_test_to(
 				env.as_ref(),
 				TestOpts {
 					suite,
@@ -935,6 +1135,8 @@ async fn main() -> Result<()> {
 				},
 				template_vars,
 				&overrides,
+				format,
+				&mut std::io::stdout(),
 			)
 			.await?;
 		}
@@ -956,6 +1158,18 @@ async fn main() -> Result<()> {
 			let ts_out = typegen_cfg.typescript_path()?;
 			let json_out = typegen_cfg.json_path()?;
 			let db = connect(&cfg).await?;
+			if json {
+				// The schema document is this command's data, so under --json it
+				// is what stdout carries, as with --stdout, and no file is written.
+				let doc = surrealkit::generate(&db).await?;
+				let rendered = if compact {
+					serde_json::to_string(&doc)?
+				} else {
+					output::pretty(&doc)
+				};
+				println!("{rendered}");
+				return Ok(0);
+			}
 			run_typegen(
 				&db,
 				&folder,
@@ -971,14 +1185,7 @@ async fn main() -> Result<()> {
 		}
 	}
 
-	// Belt-and-braces (issue #55): bypass tokio runtime shutdown so the HTTP
-	// client's background connection-pool tasks can't keep the process alive
-	// after a successful command. Errors bubble up via `?` above and still
-	// produce a non-zero exit code through the normal `Result` path.
-	use std::io::Write;
-	let _ = std::io::stdout().flush();
-	let _ = std::io::stderr().flush();
-	std::process::exit(0);
+	Ok(0)
 }
 
 #[cfg(test)]

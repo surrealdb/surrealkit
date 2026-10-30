@@ -1,0 +1,78 @@
+name: 'Propagate surreal-kit'
+description: 'Copy cli/kit/ from the download bucket to every regional bucket'
+
+# Adapted from the house `propagate-binaries` (surrealdb/surrealdb, via
+# surrealdb/studio, surrealdb/surrealctl and the language server's
+# `propagate-lsp`), keeping its regions, parallel fan-out and quorum rule, so it
+# fails the way the others do when a region is down. One difference,
+# deliberate:
+#
+# The sync is of `cli/kit/` alone, source and destination both, and without
+# `--delete`. The house action syncs the whole bucket with `--delete`, which
+# needs a credential that can write and delete anywhere in eleven buckets.
+# This is a public repository, so its credential is held to `cli/kit/*`, and
+# a prefix-to-prefix sync is all that credential can do. Without `--delete`
+# nothing is ever removed: the versioned keys are immutable and the pointers
+# are overwritten, so there is nothing for it to delete.
+
+inputs:
+    aws-access-key-id:
+        description: 'AWS access key ID'
+        required: true
+    aws-secret-access-key:
+        description: 'AWS secret access key'
+        required: true
+
+runs:
+    using: 'composite'
+    steps:
+        - name: Configure AWS
+          uses: aws-actions/configure-aws-credentials@ec61189d14ec14c8efccab744f656cffd0e33f37 # v6.1.0
+          with:
+              aws-region: us-east-2
+              aws-access-key-id: ${{ inputs.aws-access-key-id }}
+              aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+
+        - name: Distribute binaries
+          shell: bash
+          env:
+              PREFIX: cli/kit
+          run: |
+              regions=("af-south-1" "ap-east-1" "ap-south-1" "ap-southeast-1" "ap-southeast-2" "ca-central-1" "eu-central-1" "eu-west-2" "me-south-1" "sa-east-1" "us-west-2")
+
+              # One server-side sync per region, all at once: each destination
+              # is its own bucket with its own request-rate budget. Each job
+              # writes its own log so the parallel output does not interleave.
+              logdir="$(mktemp -d)"
+              trap 'rm -rf "${logdir}"' EXIT
+              declare -A pids
+              for region in "${regions[@]}"; do
+                  aws s3 sync --cli-connect-timeout 30 --cli-read-timeout 120 --storage-class INTELLIGENT_TIERING --source-region eu-west-2 --region "${region}" "s3://download.surrealdb.com/${PREFIX}/" "s3://download.${region}.surrealdb.com/${PREFIX}/" >"${logdir}/${region}.log" 2>&1 &
+                  pids["${region}"]=$!
+              done
+
+              # Wait on each region's PID to recover its own exit status; a bare
+              # `wait` would collapse them and break the quorum gate.
+              failed_regions=()
+              succeeded_regions=()
+              for region in "${regions[@]}"; do
+                  if wait "${pids[${region}]}"; then
+                      succeeded_regions+=("${region}")
+                  else
+                      failed_regions+=("${region}")
+                      echo "::group::Sync log for ${region} (failed)"
+                      cat "${logdir}/${region}.log"
+                      echo "::endgroup::"
+                  fi
+              done
+
+              total=${#regions[@]}
+              quorum=$(( total / 2 + 1 ))
+              if [ ${#failed_regions[@]} -gt 0 ]; then
+                  echo "::warning::Sync failed for regions: ${failed_regions[*]}"
+              fi
+              if [ ${#succeeded_regions[@]} -lt ${quorum} ]; then
+                  echo "::error::Only ${#succeeded_regions[@]}/${total} regions synced, quorum of ${quorum} not met"
+                  exit 1
+              fi
+              echo "Synced ${#succeeded_regions[@]}/${total} regions: ${succeeded_regions[*]}"

@@ -64,8 +64,8 @@ fn announce_auto_added(manifest: &TemplateManifest, requested: &[String], closed
 				.find(|f| requested.contains(&f.id) && f.requires.contains(id))
 				.map(|f| f.id.as_str());
 			match by {
-				Some(req) => println!("  + {id} (required by {req})"),
-				None => println!("  + {id} (dependency)"),
+				Some(req) => log::info!("  + {id} (required by {req})"),
+				None => log::info!("  + {id} (dependency)"),
 			}
 		}
 	}

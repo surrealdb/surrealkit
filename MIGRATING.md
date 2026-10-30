@@ -7,7 +7,8 @@ produces the same database metadata, apart from the safety refusal for an empty
 filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
-Seven things do need attention, and 1.0.0-beta.6 adds five more (8 to 12).
+Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and the
+release after it one more (13).
 Upgrading from 0.7.0 or any 1.0 beta carries existing state forward; CI checks
 that against every published release.
 
@@ -299,6 +300,18 @@ Nothing to do. `[typegen]` takes a `filename` for the file inside the
 `typescript` directory (default `index.ts`), or `typescript` can name the file
 itself, e.g. `typescript = "src/types/database.ts"` (#75).
 `surrealkit typegen --typescript <path>` overrides it for one run.
+
+### 13. `-v` is the version, and failures read `error: …` (after 1.0.0-beta.6)
+
+SurrealKit is now also `surreal kit`, a component of the `surreal` CLI, and
+reports its version and its failures the way every component does.
+
+- `-v` prints the version, `<version> for <os> on <arch>`, as `--version` and
+  `-V` do. If you passed `-v` for verbose output, pass `--verbose`.
+- A failure prints `error: <message>` on one line, with the whole cause chain,
+  instead of `Error: <message>` and a `Caused by:` list. The exit code is
+  unchanged.
+- `--json` is new: see [Version and output for scripts](README.md#version-and-output-for-scripts).
 
 ## Opting into multiple schema modules
 

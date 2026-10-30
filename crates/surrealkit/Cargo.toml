@@ -16,7 +16,7 @@ license.workspace = true
 [dependencies]
 surrealkit-macros = { workspace = true }
 anyhow = { workspace = true }
-clap = { version = '4.5.47', features = ['derive'], optional = true }
+clap = { version = '4.5.47', features = ['derive', 'env', 'wrap_help'], optional = true }
 hex = '0.4'
 log = { workspace = true }
 serde = { workspace = true }

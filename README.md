@@ -20,12 +20,26 @@ SurrealKit also includes a seeding system and a declarative testing framework fo
 | Cargo (from source)                                              | `cargo install surrealkit`                                          | Compiles locally. Works anywhere Rust does.               |
 | Prebuilt tarball                                                 | [GitHub Releases](https://github.com/surrealdb/surrealkit/releases) | Manual download. Each archive ships a matching `.sha256`. |
 | Docker                                                           | `docker pull ghcr.io/surrealdb/surrealkit:latest`                   | Multi-arch image on GHCR. Distroless base.                |
+| The `surreal` CLI                                                | `surreal install kit`                                               | Installs SurrealKit as `surreal kit`. See below.          |
 
 Prebuilt binaries are published for:
 
 - **Linux**: `x86_64-unknown-linux-gnu`, `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-gnu`, `aarch64-unknown-linux-musl`
 - **macOS**: `aarch64-apple-darwin` (Apple Silicon), `x86_64-apple-darwin` (Intel)
 - **Windows**: `x86_64-pc-windows-msvc`
+
+### Through the `surreal` CLI
+
+SurrealKit is also the `kit` component of the [`surreal` CLI](https://github.com/surrealdb/cli),
+which installs and upgrades it with the database and the other components:
+
+```sh
+surreal install kit
+surreal kit sync
+```
+
+`surreal kit` is the same program as `surrealkit`; every command and flag below
+works in either form.
 
 ### Docker
 
@@ -100,6 +114,24 @@ surrealkit --host http://localhost:8000 --ns my_ns --db my_db --user root --pass
 | `--user`       | Database user                                                          | `root`                  |
 | `--pass`       | Database password                                                      | `root`                  |
 | `--auth-level` | Authentication level: `root`, `namespace` / `ns`, `database` / `db`, or `none` | `root`                  |
+
+### Version and output for scripts
+
+Like every component of the `surreal` CLI:
+
+- `-v`, `--version` prints `<version> for <os> on <arch>`.
+- `-j`, `--json` (or `SURREAL_KIT_JSON=1`) keeps stdout for JSON alone. `typegen`
+  writes its schema document there and `test` its report; other commands write
+  nothing there, and their progress goes to stderr. `--version --json` prints
+  `{"arch", "os", "version"}`.
+- A failure prints `error: <message>` on stderr and exits 1, or 2 for a usage
+  error. Under `--json` it is one JSON object on stderr instead, with `kind`,
+  `message`, `hint`, `command` and `exit_code` among its keys.
+
+```sh
+surrealkit --json typegen > schema.json
+surrealkit --json test > report.json
+```
 
 ### Embedded databases
 
@@ -1043,4 +1075,5 @@ Generate machine-readable output:
 surrealkit test --json-out database/tests/report.json
 ```
 
-The command exits non-zero if any case fails.
+The command exits non-zero if any case fails. `surrealkit --json test` writes
+the same report to stdout instead of the summary.

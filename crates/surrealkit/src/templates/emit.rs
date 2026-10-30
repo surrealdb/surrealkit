@@ -84,7 +84,7 @@ impl EmitPlan {
 			}
 
 			if file.dest.exists() && !force {
-				println!("  skipped (exists): {}", display_rel(&file.dest));
+				log::info!("  skipped (exists): {}", display_rel(&file.dest));
 				continue;
 			}
 
@@ -94,7 +94,7 @@ impl EmitPlan {
 			}
 			std::fs::write(&file.dest, &file.contents)
 				.with_context(|| format!("writing {}", file.dest.display()))?;
-			println!("  + {}", display_rel(&file.dest));
+			log::info!("  + {}", display_rel(&file.dest));
 			written.insert(&file.dest, &file.contents);
 		}
 		Ok(())

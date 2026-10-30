@@ -1,0 +1,223 @@
+name: 'Publish surreal-kit'
+description: 'Stage, verify and publish one surreal-kit release to download.surrealdb.com'
+
+# A copy-and-adapt of surrealdb/surrealctl's `publish-cloud`, by way of the
+# language server's `publish-lsp`, itself mirroring surrealdb/surrealdb's
+# `publish-binaries`:
+#
+#   - Everything is written under `cli/kit/`, which is written into every step
+#     rather than passed in. The bucket root belongs to the database and every
+#     other prefix to another product; no input reaches a key outside
+#     `cli/kit/`.
+#   - Within the prefix the layout is the database's, exactly: the same pointer
+#     names, the same `v<version>/<executable>-v<version>.<platform>.tgz` assets
+#     and `.txt` SHA-256 sidecars, and nothing else beside them. One reader in
+#     the launcher fetches every component.
+#   - Every asset is staged and re-verified against its sidecar before the
+#     first upload, so a malformed release fails with nothing written.
+
+inputs:
+    name:
+        description: 'Release name used in keys and file names, e.g. v1.0.0'
+        required: true
+    version:
+        description: 'Version number without a leading v'
+        required: true
+    channel:
+        description: 'latest, beta or alpha'
+        required: true
+    pre-release:
+        description: 'Whether this version is a pre-release'
+        required: true
+    latest:
+        description: 'Whether to move latest.txt to this version'
+        required: true
+    major:
+        description: 'Whether to move v<major>.txt to this version'
+        required: true
+    publish:
+        description: "'true' to upload; 'false' stages, verifies and prints the keys a publish would write"
+        required: true
+    aws-access-key-id:
+        description: 'AWS access key ID; unused in a rehearsal'
+        required: false
+        default: ''
+    aws-secret-access-key:
+        description: 'AWS secret access key; unused in a rehearsal'
+        required: false
+        default: ''
+
+runs:
+    using: composite
+    steps:
+        - name: Download artifacts
+          uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+          with:
+              # The artifact names are `surreal-kit-<name>.<platform>`, so this
+              # is an exact prefix. Unfiltered, any other artifact in the run
+              # would be flattened in.
+              pattern: 'surreal-kit-${{ inputs.name }}.*'
+              path: artifacts/surreal-kit
+
+        - name: Stage and verify
+          shell: bash
+          env:
+              EXECUTABLE: surreal-kit
+              NAME: ${{ inputs.name }}
+          run: |
+              set -euo pipefail
+              staging="staging/${EXECUTABLE}"
+              mkdir -p "${staging}"
+              find "artifacts/${EXECUTABLE}" -type f -exec cp {} "${staging}/" \;
+
+              echo "Staged:"
+              ls -l "${staging}/"
+
+              # The exact set the five build legs must have produced. A silently
+              # absent platform has to fail here, before any pointer moves.
+              expected=(
+                "${EXECUTABLE}-${NAME}.linux-amd64.tgz"
+                "${EXECUTABLE}-${NAME}.linux-arm64.tgz"
+                "${EXECUTABLE}-${NAME}.darwin-amd64.tgz"
+                "${EXECUTABLE}-${NAME}.darwin-arm64.tgz"
+                "${EXECUTABLE}-${NAME}.windows-amd64.exe"
+              )
+
+              missing=()
+              for asset in "${expected[@]}"; do
+                [ -f "${staging}/${asset}" ] || missing+=("${asset}")
+                sidecar="${staging}/${asset%.*}.txt"
+                [ -f "${sidecar}" ] || missing+=("${sidecar##*/}")
+              done
+              if [ ${#missing[@]} -gt 0 ]; then
+                echo "::error::the ${EXECUTABLE} release is incomplete, missing: ${missing[*]}"
+                exit 1
+              fi
+
+              # And nothing beyond it: a stray file would be uploaded under the
+              # immutable prefix, which the layout has no room for.
+              count=$(find "${staging}" -type f | wc -l | tr -d ' ')
+              if [ "${count}" -ne $(( ${#expected[@]} * 2 )) ]; then
+                echo "::error::${staging} holds files beyond the expected assets and sidecars"
+                exit 1
+              fi
+
+              # Re-verify every asset against its own sidecar, and the sidecar's
+              # shape: the clients read exactly 64 lowercase hex.
+              for asset in "${expected[@]}"; do
+                expect=$(cat "${staging}/${asset%.*}.txt")
+                if ! [[ "${expect}" =~ ^[0-9a-f]{64}$ ]]; then
+                  echo "::error::${asset%.*}.txt is not a hex SHA-256: ${expect}"
+                  exit 1
+                fi
+                actual=$(sha256sum "${staging}/${asset}" | cut -f1 -d' ')
+                if [ "${expect}" != "${actual}" ]; then
+                  echo "::error::${asset} does not match its sidecar (${expect} vs ${actual})"
+                  exit 1
+                fi
+                echo "ok  ${asset}  ${actual}"
+              done
+
+              # The archives hold what the client contract says they hold.
+              for asset in "${staging}"/*.tgz; do
+                members=$(tar -tzf "${asset}")
+                if [ "${members}" != "${EXECUTABLE}" ]; then
+                  echo "::error::${asset} should hold exactly one member named ${EXECUTABLE}, holds: ${members}"
+                  exit 1
+                fi
+              done
+              echo "every archive holds exactly one member named ${EXECUTABLE}"
+
+        # What a publish writes, in the order it writes it. A rehearsal stops
+        # here, with no credential in reach.
+        - name: List the keys
+          shell: bash
+          env:
+              PREFIX: cli/kit
+              EXECUTABLE: surreal-kit
+              NAME: ${{ inputs.name }}
+              VERSION: ${{ inputs.version }}
+              CHANNEL: ${{ inputs.channel }}
+              PRE_RELEASE: ${{ inputs.pre-release }}
+              LATEST: ${{ inputs.latest }}
+              MAJOR: ${{ inputs.major }}
+          run: |
+              set -euo pipefail
+              for file in "staging/${EXECUTABLE}"/*; do
+                case "${file}" in *.txt) ;; *) echo "${PREFIX}/${NAME}/${file##*/}" ;; esac
+              done
+              for file in "staging/${EXECUTABLE}"/*.txt; do
+                echo "${PREFIX}/${NAME}/${file##*/}"
+              done
+              if [ "${LATEST}" = "true" ]; then echo "${PREFIX}/latest.txt -> v${VERSION}"; fi
+              if [ "${MAJOR}" = "true" ]; then echo "${PREFIX}/v${VERSION%%.*}.txt -> v${VERSION}"; fi
+              if [ "${PRE_RELEASE}" = "true" ]; then echo "${PREFIX}/${CHANNEL}.txt -> v${VERSION}"; fi
+
+        - name: Configure AWS
+          if: ${{ inputs.publish == 'true' }}
+          uses: aws-actions/configure-aws-credentials@ec61189d14ec14c8efccab744f656cffd0e33f37 # v6.1.0
+          with:
+              aws-region: us-east-2
+              aws-access-key-id: ${{ inputs.aws-access-key-id }}
+              aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+
+        # Assets, then sidecars, then the pointers. A client that reads a
+        # pointer must find the files it names already in place, so nothing is
+        # announced before it exists. The sidecars go after every asset because
+        # a sidecar is what the republish check probes: one being present has
+        # to mean its asset is too.
+        - name: Publish artifacts
+          if: ${{ inputs.publish == 'true' }}
+          shell: bash
+          env:
+              PREFIX: cli/kit
+              EXECUTABLE: surreal-kit
+              NAME: ${{ inputs.name }}
+          run: |
+              set -euo pipefail
+              # No `--cache-control`: these keys are immutable.
+              dest="s3://download.surrealdb.com/${PREFIX}/${NAME}/"
+              aws s3 cp --recursive --storage-class INTELLIGENT_TIERING \
+                --exclude '*.txt' "staging/${EXECUTABLE}/" "${dest}"
+              aws s3 cp --recursive --storage-class INTELLIGENT_TIERING \
+                --exclude '*' --include '*.txt' "staging/${EXECUTABLE}/" "${dest}"
+
+        # Every mutable key gets `no-store`, because a cached pointer is a
+        # release nobody is offered.
+        - name: Set the latest stable pointer
+          if: ${{ inputs.publish == 'true' && inputs.latest == 'true' }}
+          shell: bash
+          env:
+              PREFIX: cli/kit
+              VERSION: ${{ inputs.version }}
+          run: |
+              set -euo pipefail
+              echo "v${VERSION}" > latest.txt
+              aws s3 cp --cache-control 'no-store' latest.txt \
+                "s3://download.surrealdb.com/${PREFIX}/latest.txt"
+
+        - name: Set the major-version pointer
+          if: ${{ inputs.publish == 'true' && inputs.major == 'true' }}
+          shell: bash
+          env:
+              PREFIX: cli/kit
+              VERSION: ${{ inputs.version }}
+          run: |
+              set -euo pipefail
+              major="${VERSION%%.*}"
+              echo "v${VERSION}" > "v${major}.txt"
+              aws s3 cp --cache-control 'no-store' "v${major}.txt" \
+                "s3://download.surrealdb.com/${PREFIX}/v${major}.txt"
+
+        - name: Set the pre-release channel pointer
+          if: ${{ inputs.publish == 'true' && inputs.pre-release == 'true' }}
+          shell: bash
+          env:
+              PREFIX: cli/kit
+              VERSION: ${{ inputs.version }}
+              CHANNEL: ${{ inputs.channel }}
+          run: |
+              set -euo pipefail
+              echo "v${VERSION}" > "${CHANNEL}.txt"
+              aws s3 cp --cache-control 'no-store' "${CHANNEL}.txt" \
+                "s3://download.surrealdb.com/${PREFIX}/${CHANNEL}.txt"

@@ -9,7 +9,7 @@ fn indent_block(s: &str) -> String {
 	s.lines().map(|line| format!("  {line}")).collect::<Vec<_>>().join("\n")
 }
 
-pub fn print_human_report<W: Write>(out: &mut W, report: &RunReport) -> Result<()> {
+pub fn print_human_report<W: Write + ?Sized>(out: &mut W, report: &RunReport) -> Result<()> {
 	let has_failure = report.suites_failed > 0 || report.cases_failed > 0;
 	writedoc!(
 		out,
