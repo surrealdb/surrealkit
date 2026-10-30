@@ -144,6 +144,7 @@ async fn run_typegen_writes_valid_json_file() {
 			pretty: true,
 			ts_out: None,
 			ts_format: None,
+			..TypegenOpts::default()
 		},
 	)
 	.await
@@ -199,6 +200,7 @@ async fn run_typegen_writes_typescript_file_when_configured() {
 			pretty: true,
 			ts_out: Some(ts_dir.clone()),
 			ts_format: None,
+			..TypegenOpts::default()
 		},
 	)
 	.await
@@ -227,6 +229,7 @@ async fn run_typegen_writes_to_a_named_typescript_file() {
 			pretty: true,
 			ts_out: Some(ts_file.clone()),
 			ts_format: None,
+			..TypegenOpts::default()
 		},
 	)
 	.await
@@ -237,6 +240,131 @@ async fn run_typegen_writes_to_a_named_typescript_file() {
 		!tmp.path().join("libs/database/types/index.ts").exists(),
 		"index.ts must be left to the project"
 	);
+}
+
+#[tokio::test]
+async fn run_typegen_to_stdout_still_writes_configured_typescript() {
+	// `--stdout` replaces the JSON file only; it used to return before the
+	// TypeScript step, leaving configured types stale without a word.
+	let db = mem_db().await;
+	define_schema(&db).await;
+	let tmp = tempfile::TempDir::new().expect("temp dir");
+	let folder = tmp.path().join("database");
+	let ts_file = tmp.path().join("types/database.ts");
+	run_typegen(
+		&db,
+		folder.to_str().unwrap(),
+		TypegenOpts {
+			out: None,
+			stdout: true,
+			pretty: true,
+			ts_out: Some(ts_file.clone()),
+			ts_format: None,
+			..TypegenOpts::default()
+		},
+	)
+	.await
+	.expect("run_typegen");
+	let ts = std::fs::read_to_string(&ts_file).expect("TypeScript written");
+	assert!(ts.contains("export interface User {"), "got:\n{ts}");
+	assert!(!folder.join("types/schema.json").exists(), "stdout replaces the JSON file");
+}
+
+fn outputs_in(dir: &std::path::Path) -> TypegenOpts {
+	TypegenOpts {
+		out: Some(dir.join("schema.json")),
+		pretty: true,
+		ts_out: Some(dir.join("types")),
+		..TypegenOpts::default()
+	}
+}
+
+#[tokio::test]
+async fn omitting_generated_at_makes_typegen_reproducible() {
+	let db = mem_db().await;
+	define_schema(&db).await;
+	let tmp = tempfile::TempDir::new().expect("temp dir");
+	let opts = TypegenOpts {
+		omit_generated_at: true,
+		..outputs_in(tmp.path())
+	};
+	run_typegen(&db, "./database", opts.clone()).await.expect("first run");
+	let first = std::fs::read(tmp.path().join("schema.json")).unwrap();
+	assert!(!String::from_utf8_lossy(&first).contains("generatedAt"));
+	run_typegen(&db, "./database", opts).await.expect("second run");
+	assert_eq!(std::fs::read(tmp.path().join("schema.json")).unwrap(), first);
+}
+
+#[tokio::test]
+async fn check_reports_drift_without_writing() {
+	let db = mem_db().await;
+	define_schema(&db).await;
+	let tmp = tempfile::TempDir::new().expect("temp dir");
+	let check = TypegenOpts {
+		check: true,
+		..outputs_in(tmp.path())
+	};
+
+	// Nothing generated yet: both files are missing, and still are afterwards.
+	let err = run_typegen(&db, "./database", check.clone()).await.unwrap_err().to_string();
+	assert!(err.contains("2 of 2 generated file(s) out of date"), "{err}");
+	assert!(!tmp.path().join("schema.json").exists());
+	assert!(!tmp.path().join("types").exists());
+
+	// Generated (with the default timestamp), a check passes: it compares content,
+	// reusing the timestamp on disk rather than failing on the clock.
+	run_typegen(&db, "./database", outputs_in(tmp.path())).await.expect("generate");
+	run_typegen(&db, "./database", check.clone()).await.expect("up to date");
+
+	// A schema change makes both stale; a hand edit makes one stale. Neither is
+	// rewritten by the check.
+	db.query("DEFINE FIELD age ON user TYPE int;").await.unwrap().check().unwrap();
+	let err = run_typegen(&db, "./database", check.clone()).await.unwrap_err().to_string();
+	assert!(err.contains("stale:"), "{err}");
+	assert!(!std::fs::read_to_string(tmp.path().join("types/index.ts")).unwrap().contains("age"));
+
+	run_typegen(&db, "./database", outputs_in(tmp.path())).await.expect("regenerate");
+	std::fs::write(tmp.path().join("types/index.ts"), "// hand edited\n").unwrap();
+	let err = run_typegen(&db, "./database", check).await.unwrap_err().to_string();
+	assert!(err.contains("1 of 2"), "{err}");
+	assert!(err.contains("index.ts"), "{err}");
+	assert_eq!(
+		std::fs::read_to_string(tmp.path().join("types/index.ts")).unwrap(),
+		"// hand edited\n"
+	);
+}
+
+#[tokio::test]
+async fn strict_typegen_fails_on_a_broken_formatter_and_writes_nothing() {
+	let db = mem_db().await;
+	define_schema(&db).await;
+	let tmp = tempfile::TempDir::new().expect("temp dir");
+	let broken = TypegenOpts {
+		ts_format: Some("surrealkit-no-such-formatter-xyz --write".into()),
+		..outputs_in(tmp.path())
+	};
+
+	// Lenient (the default): a warning, and the unformatted types are written.
+	run_typegen(&db, "./database", broken.clone()).await.expect("lenient");
+	let ts = std::fs::read_to_string(tmp.path().join("types/index.ts")).unwrap();
+	assert!(ts.contains("export interface User {"), "got:\n{ts}");
+
+	// Strict: an error, and neither output is touched.
+	std::fs::remove_dir_all(tmp.path().join("types")).unwrap();
+	std::fs::remove_file(tmp.path().join("schema.json")).unwrap();
+	let err = run_typegen(
+		&db,
+		"./database",
+		TypegenOpts {
+			strict: true,
+			..broken
+		},
+	)
+	.await
+	.unwrap_err();
+	assert!(format!("{err:#}").contains("surrealkit-no-such-formatter-xyz"), "{err:#}");
+	assert!(!tmp.path().join("schema.json").exists());
+	assert!(!tmp.path().join("types/index.ts").exists());
 }
 
 #[test]

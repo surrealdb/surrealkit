@@ -1,9 +1,11 @@
-import { spawn } from 'node:child_process';
+import { type ChildProcess, spawn } from 'node:child_process';
 import { existsSync, readdirSync, statSync } from 'node:fs';
 import path from 'node:path';
 
 import picomatch from 'picomatch';
 import type { Plugin, ResolvedConfig, ViteDevServer } from 'vite';
+
+import { killTree, stopOnExit } from './process.js';
 
 // Inlined from Vite so that nothing is imported from `vite` at runtime: the
 // plugin only depends on Vite's types, never on its export surface.
@@ -21,80 +23,170 @@ const DEFAULT_SCHEMA_GLOBS = [
 	'database/modules/*/schema/**/*.surql',
 ];
 
+/** How long a generation child gets to exit after SIGTERM on close. */
+const KILL_GRACE_MS = 3000;
+
 type RunMode = 'serve' | 'build';
 type LogLevel = 'silent' | 'error' | 'info' | 'debug';
 
+/**
+ * - `'sync'` runs `surrealkit sync`, which applies the schema to the
+ *   configured database.
+ * - `'generate'` runs `surrealkit compile`, which builds the schema document
+ *   in a throwaway embedded engine and runs the configured `[typegen]`
+ *   emitters. It never connects to or changes a database.
+ */
+type PluginMode = 'sync' | 'generate';
+
 export interface SurrealkitPluginOptions {
+	/** What a schema change runs. Default: `'sync'`. */
+	mode?: PluginMode;
 	/** SurrealKit binary (or executable path). */
 	binary?: string;
 	/** Working directory for the SurrealKit process. Defaults to Vite root. */
 	cwd?: string;
 	/** Extra env vars merged with process.env. */
 	env?: Record<string, string>;
-	/** Additional args appended after `surrealkit sync`. */
+	/** Additional args appended after `surrealkit sync` (sync mode). */
 	syncArgs?: string[];
-	/** Schema modules to sync. Default: whatever `surrealkit sync` selects. */
+	/** Additional args appended after `surrealkit compile` (generate mode). */
+	generateArgs?: string[];
+	/** Schema modules to sync or compile. Default: SurrealKit's selection. */
 	schemas?: string[];
-	/** Database targets to sync to. Default: the primary/only target. */
+	/** Database targets to sync to (sync mode). Default: the primary/only target. */
 	targets?: string[];
-	/** Sync every declared module against every declared target. */
+	/** Sync every declared module against every declared target (sync mode). */
 	all?: boolean;
-	/** Globs (relative to Vite root) that trigger sync in dev. */
+	/** Globs (relative to Vite root) that trigger a run in dev. */
 	schemaGlobs?: string[];
+	/**
+	 * Directories (relative to Vite root) the generation writes (generate
+	 * mode). Vite's per-file updates for them are suppressed while the plugin
+	 * is active; one full reload follows a successful generation that changed
+	 * them, so the browser never sees a half-written module set.
+	 */
+	generatedDirs?: string[];
 	/** Where the plugin runs. Default: ['serve']. */
 	include?: RunMode[];
-	/** Run an initial sync when dev server starts or build begins. Default: true. */
+	/** Run when dev server starts or build begins. Default: true. */
 	runOnStartup?: boolean;
 	/** Send full-reload after a successful schema-triggered sync in dev. Default: false. */
 	reloadOnSync?: boolean;
+	/** Send full-reload after a successful generation in dev (generate mode). Default: true. */
+	reloadOnGenerate?: boolean;
 	/** Debounce window for dev file changes in ms. Default: 150. */
 	debounceMs?: number;
 	/** Logging verbosity. Default: 'info'. */
 	logLevel?: LogLevel;
-	/** Fail Vite build if sync exits non-zero. Default: true. */
+	/** Fail Vite build if the run exits non-zero. Default: true. */
 	failBuildOnError?: boolean;
 }
 
 interface ResolvedOptions {
+	mode: PluginMode;
 	binary: string;
 	cwd?: string;
 	env?: Record<string, string>;
 	syncArgs: string[];
+	generateArgs: string[];
 	schemas: string[];
 	targets: string[];
 	all: boolean;
 	schemaGlobs: string[];
+	generatedDirs: string[];
 	include: Set<RunMode>;
 	runOnStartup: boolean;
 	reloadOnSync: boolean;
+	reloadOnGenerate: boolean;
 	debounceMs: number;
 	logLevel: LogLevel;
 	failBuildOnError: boolean;
 }
 
 function resolveOptions(options: SurrealkitPluginOptions): ResolvedOptions {
+	const mode = options.mode ?? 'sync';
+	if (mode !== 'sync' && mode !== 'generate') {
+		throw new Error(
+			`[vite-plugin-surrealkit] unknown mode ${JSON.stringify(mode)}; expected 'sync' or 'generate'`,
+		);
+	}
+	if (mode === 'generate') {
+		// Generation never connects to a database, so database options are
+		// mistakes, not no-ops.
+		const misplaced = [
+			options.targets !== undefined && 'targets',
+			options.all !== undefined && 'all',
+			options.syncArgs !== undefined && 'syncArgs',
+			options.reloadOnSync !== undefined && 'reloadOnSync',
+		].filter(Boolean);
+		if (misplaced.length > 0) {
+			throw new Error(
+				`[vite-plugin-surrealkit] ${misplaced.join(', ')} only apply to mode 'sync'; mode 'generate' never connects to a database`,
+			);
+		}
+	} else {
+		const misplaced = [
+			options.generateArgs !== undefined && 'generateArgs',
+			options.generatedDirs !== undefined && 'generatedDirs',
+			options.reloadOnGenerate !== undefined && 'reloadOnGenerate',
+		].filter(Boolean);
+		if (misplaced.length > 0) {
+			throw new Error(
+				`[vite-plugin-surrealkit] ${misplaced.join(', ')} only apply to mode 'generate'`,
+			);
+		}
+	}
+
 	return {
+		mode,
 		binary: options.binary ?? 'surrealkit',
 		cwd: options.cwd,
 		env: options.env,
 		syncArgs: options.syncArgs ?? [],
+		generateArgs: options.generateArgs ?? [],
 		schemas: options.schemas ?? [],
 		targets: options.targets ?? [],
 		all: options.all ?? false,
 		schemaGlobs: options.schemaGlobs ?? DEFAULT_SCHEMA_GLOBS,
+		generatedDirs: options.generatedDirs ?? [],
 		include: new Set(options.include ?? ['serve']),
 		runOnStartup: options.runOnStartup ?? true,
 		reloadOnSync: options.reloadOnSync ?? false,
+		reloadOnGenerate: options.reloadOnGenerate ?? true,
 		debounceMs: options.debounceMs ?? 150,
 		logLevel: options.logLevel ?? 'info',
 		failBuildOnError: options.failBuildOnError ?? true,
 	};
 }
 
+/** The SurrealKit argv for one run. `generate` is never `sync`. */
+function commandArgs(options: ResolvedOptions): string[] {
+	const schemas = options.schemas.flatMap((name) => ['--schema', name]);
+	if (options.mode === 'generate') {
+		return ['compile', ...schemas, ...options.generateArgs];
+	}
+	return [
+		'sync',
+		...schemas,
+		...options.targets.flatMap((name) => ['--target', name]),
+		...(options.all ? ['--all'] : []),
+		...options.syncArgs,
+	];
+}
+
 interface CommandResult {
 	code: number | null;
 	signal: NodeJS.Signals | null;
 	output: string;
+}
+
+interface RunningCommand {
+	child: ChildProcess;
+	/** Settles when the process exits, even if a grandchild keeps stdio open. */
+	exited: Promise<void>;
+	/** Spawned as the leader of its own process group (POSIX generate mode). */
+	group: boolean;
+	result: Promise<CommandResult>;
 }
 
 function truncateOutput(value: string, maxChars = 4000): string {
@@ -106,29 +198,30 @@ function truncateOutput(value: string, maxChars = 4000): string {
 	return `...${sliced}`;
 }
 
-function runSyncCommand(
+function startCommand(
 	options: ResolvedOptions,
 	root: string,
 	onDebugLine?: (line: string) => void,
-): Promise<CommandResult> {
-	return new Promise((resolve, reject) => {
-		const commandArgs = [
-			'sync',
-			...options.schemas.flatMap((name) => ['--schema', name]),
-			...options.targets.flatMap((name) => ['--target', name]),
-			...(options.all ? ['--all'] : []),
-			...options.syncArgs,
-		];
-		const child = spawn(options.binary, commandArgs, {
-			cwd: options.cwd ?? root,
-			env: {
-				...process.env,
-				...options.env,
-			},
-			shell: process.platform === 'win32',
-			stdio: ['ignore', 'pipe', 'pipe'],
-		});
+): RunningCommand {
+	// A generation runs in its own process group so that closing the dev
+	// server stops it together with the emitters it spawned.
+	const group = options.mode === 'generate' && !isWindows;
+	const child = spawn(options.binary, commandArgs(options), {
+		cwd: options.cwd ?? root,
+		env: {
+			...process.env,
+			...options.env,
+		},
+		shell: process.platform === 'win32',
+		stdio: ['ignore', 'pipe', 'pipe'],
+		detached: group,
+	});
+	const exited = new Promise<void>((resolve) => {
+		child.once('exit', () => resolve());
+		child.once('error', () => resolve());
+	});
 
+	const result = new Promise<CommandResult>((resolve, reject) => {
 		let output = '';
 
 		const consume = (chunk: string): void => {
@@ -160,6 +253,32 @@ function runSyncCommand(
 			});
 		});
 	});
+
+	// Ctrl-C and SIGHUP do not reach a generation in its own process group.
+	if (options.mode === 'generate') stopOnExit({ child, group }, exited);
+
+	return { child, exited, group, result };
+}
+
+/** Stops a child process: SIGTERM, then SIGKILL after a grace period. */
+async function terminate(running: RunningCommand): Promise<void> {
+	const { child, exited, group } = running;
+	if (child.exitCode !== null || child.signalCode !== null) return;
+
+	const signal = (name: NodeJS.Signals): void =>
+		killTree({ child, group }, name);
+
+	signal('SIGTERM');
+	const timer = setTimeout(() => {
+		if (child.exitCode === null && child.signalCode === null) {
+			signal('SIGKILL');
+		}
+	}, KILL_GRACE_MS);
+	try {
+		await exited;
+	} finally {
+		clearTimeout(timer);
+	}
 }
 
 /**
@@ -241,6 +360,15 @@ function snapshotExisting(
 	return files;
 }
 
+/** One string describing every file under `dirs`, for change detection. */
+function snapshotKey(dirs: string[]): string {
+	const files = snapshotExisting(dirs, () => true);
+	return [...files.entries()]
+		.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
+		.map(([file, print]) => `${file}=${print}`)
+		.join('\n');
+}
+
 function createMatcher(
 	root: string,
 	globs: string[],
@@ -253,21 +381,35 @@ function createMatcher(
 	};
 }
 
+function isInside(dir: string, file: string): boolean {
+	const relative = path.relative(dir, file);
+	return (
+		relative === '' ||
+		(!relative.startsWith('..') && !path.isAbsolute(relative))
+	);
+}
+
 export function surrealkitPlugin(
 	rawOptions: SurrealkitPluginOptions = {},
 ): Plugin {
 	const options = resolveOptions(rawOptions);
+	const generating = options.mode === 'generate';
+	const verb = generating ? 'compile' : 'sync';
 
 	let config: ResolvedConfig | undefined;
 	let server: ViteDevServer | undefined;
 	let matchesSchemaFile: ((filePath: string) => boolean) | undefined;
+	let generatedDirs: string[] = [];
+	// Files whose per-file update was held back while a generation ran.
+	const heldBack = new Set<string>();
 
 	let queued = false;
 	let queuedReason: string | undefined;
 	let running = false;
+	let current: RunningCommand | undefined;
 	let timer: NodeJS.Timeout | undefined;
 	let disposed = false;
-	let dispose: (() => void) | undefined;
+	let dispose: (() => Promise<void>) | undefined;
 
 	const log = {
 		error: (message: string): void => {
@@ -299,7 +441,95 @@ export function surrealkitPlugin(
 		},
 	};
 
-	const runSync = async (reason: string): Promise<void> => {
+	const reloadAfter = (reason: string, before: string | undefined): void => {
+		if (!server || reason === 'startup') return;
+
+		if (!generating) {
+			if (options.reloadOnSync) {
+				server.hot.send({ type: 'full-reload' });
+				log.debug('sent full-reload to browser');
+			}
+			return;
+		}
+
+		// Updates held back while the generation ran reach the browser only this way.
+		const held = heldBack.size;
+		heldBack.clear();
+		if (held > 0) {
+			server.hot.send({ type: 'full-reload' });
+			log.debug(
+				`sent full-reload to browser (${held} held-back updates)`,
+			);
+			return;
+		}
+		if (!options.reloadOnGenerate) return;
+		// Only after a successful run, and only when the published output moved.
+		if (before !== undefined && snapshotKey(generatedDirs) === before) {
+			log.debug('generated files unchanged; no reload');
+			return;
+		}
+		server.hot.send({ type: 'full-reload' });
+		log.debug('sent full-reload to browser');
+	};
+
+	const runOnce = async (reason: string): Promise<void> => {
+		if (!config) return;
+
+		log.info(`running \`surrealkit ${verb}\` (${reason})`);
+		const before =
+			generating && generatedDirs.length > 0
+				? snapshotKey(generatedDirs)
+				: undefined;
+
+		let result: CommandResult;
+		try {
+			current = startCommand(options, config.root, (line) => {
+				log.debug(line);
+			});
+			result = await current.result;
+		} catch (err: unknown) {
+			const message = err instanceof Error ? err.message : String(err);
+			log.error(`failed to start SurrealKit process: ${message}`);
+			result = { code: 1, signal: null, output: '' };
+		} finally {
+			current = undefined;
+		}
+
+		// Closed while running: the child was terminated on purpose.
+		if (disposed) return;
+
+		if (result.code === 0) {
+			log.info(
+				generating
+					? 'Schema compile and type generation completed successfully'
+					: 'Database schema sync completed successfully',
+			);
+			reloadAfter(reason, before);
+			return;
+		}
+
+		const exit =
+			result.code === null
+				? `signal ${result.signal ?? 'unknown'}`
+				: `exit code ${result.code}`;
+		const detail = result.output ? `\n${result.output}` : '';
+		const message = `${verb} failed (${exit})${detail}`;
+
+		log.error(message);
+		if (heldBack.size > 0) {
+			// A failed generation never reloads: its output may be half published.
+			log.info(
+				`${heldBack.size} file update(s) arrived during the failed generation and were held back; reload the page to apply them`,
+			);
+			heldBack.clear();
+		}
+
+		if (config.command === 'build' && options.failBuildOnError) {
+			throw new Error(message);
+		}
+	};
+
+	const run = async (reason: string): Promise<void> => {
 		if (!config || disposed) return;
 
 		if (running) {
@@ -314,71 +544,25 @@ export function surrealkitPlugin(
 			do {
 				queued = false;
 				queuedReason = undefined;
-				log.info(`running \`surrealkit sync\` (${currentReason})`);
-
-				const result = await runSyncCommand(
-					options,
-					config.root,
-					(line) => {
-						log.debug(line);
-					},
-				).catch((err: unknown) => {
-					const message =
-						err instanceof Error ? err.message : String(err);
-					log.error(`failed to start SurrealKit process: ${message}`);
-					return {
-						code: 1,
-						signal: null,
-						output: '',
-					} satisfies CommandResult;
-				});
-
-				if (result.code === 0) {
-					log.info('Database schema sync completed successfully');
-
-					if (
-						options.reloadOnSync &&
-						currentReason !== 'startup' &&
-						server
-					) {
-						server.hot.send({ type: 'full-reload' });
-						log.debug('sent full-reload to browser');
-					}
-				} else {
-					const exit =
-						result.code === null
-							? `signal ${result.signal ?? 'unknown'}`
-							: `exit code ${result.code}`;
-					const detail = result.output ? `\n${result.output}` : '';
-					const message = `sync failed (${exit})${detail}`;
-
-					log.error(message);
-
-					if (
-						config.command === 'build' &&
-						options.failBuildOnError
-					) {
-						throw new Error(message);
-					}
-				}
+				await runOnce(currentReason);
 
 				if (queued) {
 					currentReason = queuedReason ?? 'queued';
 				}
-			} while (queued);
+			} while (queued && !disposed);
 		} finally {
 			running = false;
 			queuedReason = undefined;
 		}
 	};
 
-	const scheduleSync = (reason: string): void => {
+	const schedule = (reason: string): void => {
 		if (disposed) return;
 
 		if (timer) clearTimeout(timer);
 
 		timer = setTimeout(() => {
-			void runSync(reason);
+			void run(reason);
 		}, options.debounceMs);
 	};
 
@@ -390,6 +574,9 @@ export function surrealkitPlugin(
 			matchesSchemaFile = createMatcher(
 				resolved.root,
 				options.schemaGlobs,
+			);
+			generatedDirs = options.generatedDirs.map((dir) =>
+				path.resolve(resolved.root, dir),
 			);
 
 			if (options.include.size === 0) {
@@ -409,11 +596,11 @@ export function surrealkitPlugin(
 			}
 
 			if (options.runOnStartup) {
-				await runSync('build-start');
+				await run('build-start');
 			}
 		},
 
-		configureServer(devServer) {
+		async configureServer(devServer) {
 			if (!options.include.has('serve')) {
 				return;
 			}
@@ -452,7 +639,7 @@ export function surrealkitPlugin(
 					log.debug(
 						`${event}: ${normalizePath(path.relative(devServer.config.root, filePath))}`,
 					);
-					scheduleSync(`${event}`);
+					schedule(`${event}`);
 				};
 
 			const onAdd = onSchemaEvent('add');
@@ -465,7 +652,7 @@ export function surrealkitPlugin(
 
 			// `httpServer` is null in middleware mode, so teardown hangs off the
 			// `closeBundle` hook below, which fires on close in both modes.
-			dispose = (): void => {
+			dispose = async (): Promise<void> => {
 				if (disposed) return;
 				disposed = true;
 
@@ -477,17 +664,44 @@ export function surrealkitPlugin(
 					clearTimeout(timer);
 					timer = undefined;
 				}
+
+				// A generation half-way through is safe to stop: emitters write
+				// atomically per file and the next run regenerates everything.
+				// A sync is left to finish against its database.
+				if (generating && current) {
+					log.debug('terminating the running generation');
+					await terminate(current);
+				}
 			};
 
-			if (options.runOnStartup) {
-				scheduleSync('startup');
+			if (!options.runOnStartup) return;
+
+			if (generating) {
+				// Modules importing generated contracts must not be served
+				// before the first generation has published them.
+				await run('startup');
+			} else {
+				schedule('startup');
+			}
+		},
+
+		// Per-file updates of generated output are replaced by one full reload
+		// after a successful generation. While a generation runs, its module set
+		// may be half published, so no per-file update goes out at all, whether
+		// or not `generatedDirs` names where it lands: the run ends with a reload.
+		hotUpdate({ file }) {
+			if (!generating || !server) return;
+			if (generatedDirs.some((dir) => isInside(dir, file))) return [];
+			if (running) {
+				heldBack.add(file);
+				return [];
 			}
 		},
 
 		// Fires when the dev server closes, in both standalone and middleware
 		// mode, and may fire more than once - `dispose` is idempotent.
-		closeBundle() {
-			dispose?.();
+		async closeBundle() {
+			await dispose?.();
 		},
 	};
 }

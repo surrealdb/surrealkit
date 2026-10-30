@@ -1,0 +1,4615 @@
+{
+  "version": 2,
+  "semanticDigest": "sha256:2f9e281988f2a7eb4efc7d9a1b07924e3b269d53e8c1945b1d5a474b949605b6",
+  "provenance": {
+    "generator": {
+      "name": "surrealkit",
+      "version": "1.0.0-beta.6"
+    },
+    "engine": {
+      "version": "3.3.0",
+      "build": "surrealdb-3.3.0",
+      "mode": "embedded"
+    },
+    "adapter": "structure-3.3",
+    "source": {
+      "kind": "compile",
+      "modules": [
+        "schema-gated/20_experimental_files.surql",
+        "schema-gated/30_relations.v3.3.surql",
+        "schema-gated/31_module.v3.3.surql",
+        "schema/01_tables.surql",
+        "schema/02_kinds.surql",
+        "schema/03_ids.surql",
+        "schema/04_fields.surql",
+        "schema/05_nested.surql",
+        "schema/06_references.surql",
+        "schema/07_functions_params.surql",
+        "schema/08_indexes_events.surql",
+        "schema/09_access_sequences.surql",
+        "schema/10_api_config.surql"
+      ],
+      "files": [
+        {
+          "path": "schema-gated/20_experimental_files.surql",
+          "sha256": "8a08c443a2f82b6384d02e7fac3166117c9a1aa0dc425826bfd9b8330b2710bf"
+        },
+        {
+          "path": "schema-gated/30_relations.v3.3.surql",
+          "sha256": "5ffe85842402973ebe5f7973be87489bb6acbb73b0e0fd51d8ed3191800647ed"
+        },
+        {
+          "path": "schema-gated/31_module.v3.3.surql",
+          "sha256": "0d17cbec19b9e57eb150f9ce5d624e17316459b02cc056fd72b598781ab73864"
+        },
+        {
+          "path": "schema/01_tables.surql",
+          "sha256": "703fb8d51e56246b2da86b71259e8fd44177eda0512055c366533bc1da2a8c5d"
+        },
+        {
+          "path": "schema/02_kinds.surql",
+          "sha256": "ef65cdb43e975c216b85046c97ad126652366513f5c5d13a5a109197552fc8bf"
+        },
+        {
+          "path": "schema/03_ids.surql",
+          "sha256": "e20f6cecc6b1ac7b6f09ca2125c8c2f039e3ffd8e2bef9c6029b7dcbbdb155a8"
+        },
+        {
+          "path": "schema/04_fields.surql",
+          "sha256": "8d122e76ef2588a173eadf1448ab73b0f09662f94abb956e35ad7e4a216ddda9"
+        },
+        {
+          "path": "schema/05_nested.surql",
+          "sha256": "73f3c6fd2b44fbaf3779b7bd40d2e53330b998ae6cc7f071ed8088d008b90968"
+        },
+        {
+          "path": "schema/06_references.surql",
+          "sha256": "895febb394a2c1d5f722071de1f8038727f710de6931786a7d111c7c9b514a35"
+        },
+        {
+          "path": "schema/07_functions_params.surql",
+          "sha256": "131480fc9574642c1c95062911de093c761ec6492f2d06fbe63faaa50f31aa1f"
+        },
+        {
+          "path": "schema/08_indexes_events.surql",
+          "sha256": "6eb9b4391438cd4d593fc6a17e810546a189fc1d96517a652d551a5afe55dde5"
+        },
+        {
+          "path": "schema/09_access_sequences.surql",
+          "sha256": "ab4d0df21605b5215588ce03e9e0b295d47e339fe7666023c1bbf229067fbd94"
+        },
+        {
+          "path": "schema/10_api_config.surql",
+          "sha256": "2acf7cb8e175ad4c6a4bb728c558e29ec81bbdbb0f70931ab8d440f3b548a73b"
+        }
+      ]
+    },
+    "capabilities": {
+      "experimental": [
+        "files",
+        "surrealism"
+      ],
+      "network": false
+    }
+  },
+  "tables": [
+    {
+      "name": "adults",
+      "type": {
+        "kind": "any"
+      },
+      "schemafull": false,
+      "drop": false,
+      "view": {
+        "select": "SELECT name, age FROM person WHERE age >= 18"
+      },
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE adults TYPE ANY SCHEMALESS AS SELECT name, age FROM person WHERE age >= 18 PERMISSIONS NONE"
+    },
+    {
+      "name": "anything",
+      "type": {
+        "kind": "any"
+      },
+      "schemafull": false,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE anything TYPE ANY SCHEMALESS PERMISSIONS NONE"
+    },
+    {
+      "name": "attachment",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "any_file"
+          ],
+          "kind": {
+            "kind": "file",
+            "buckets": []
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD any_file ON attachment TYPE none | file PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "avatar"
+          ],
+          "kind": {
+            "kind": "file",
+            "buckets": [
+              "avatars"
+            ]
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD avatar ON attachment TYPE none | file<avatars> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "files"
+          ],
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "file",
+              "buckets": [
+                "avatars",
+                "docs"
+              ]
+            }
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "[]"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD files ON attachment TYPE array<file<avatars | docs>> DEFAULT [] PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "files",
+            "*"
+          ],
+          "kind": {
+            "kind": "file",
+            "buckets": [
+              "avatars",
+              "docs"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD files.* ON attachment TYPE file<avatars | docs> PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE attachment TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "audit_log",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "changefeed": {
+        "expiry": "1d",
+        "includeOriginal": true
+      },
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "doc"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "doc"
+            ]
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD doc ON audit_log TYPE none | record<doc> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "note"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD note ON audit_log TYPE none | string PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE audit_log TYPE NORMAL SCHEMAFULL CHANGEFEED 1d INCLUDE ORIGINAL PERMISSIONS NONE"
+    },
+    {
+      "name": "bag",
+      "type": {
+        "kind": "any"
+      },
+      "schemafull": false,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "label"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD label ON bag TYPE none | string PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE bag TYPE ANY SCHEMALESS PERMISSIONS NONE"
+    },
+    {
+      "name": "doc",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "body"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD body ON doc TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "code"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD code ON doc TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "embedding"
+          ],
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "float"
+            },
+            "length": 4
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD embedding ON doc TYPE array<float, 4> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "embedding",
+            "*"
+          ],
+          "kind": {
+            "kind": "float"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD embedding.* ON doc TYPE float PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "owner"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD owner ON doc TYPE record<person> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "status"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "closed"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "open"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "'open'"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD status ON doc TYPE 'open' | 'closed' DEFAULT 'open' PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "title"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD title ON doc TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "touched"
+          ],
+          "kind": {
+            "kind": "bool"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "false"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD touched ON doc TYPE bool DEFAULT false PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "cnt_all",
+          "columns": [],
+          "type": "count",
+          "clause": "COUNT"
+        },
+        {
+          "name": "cnt_open",
+          "columns": [],
+          "type": "count",
+          "clause": "COUNT WHERE status = 'open'",
+          "where": "status = 'open'"
+        },
+        {
+          "name": "diskann_embedding",
+          "columns": [
+            [
+              "embedding"
+            ]
+          ],
+          "type": "diskann",
+          "clause": "DISKANN DIMENSION 4 DIST EUCLIDEAN TYPE F32 DEGREE 64 L_BUILD 100 ALPHA 1.2f",
+          "vector": {
+            "dimension": 4,
+            "distance": "EUCLIDEAN",
+            "elementType": "F32"
+          }
+        },
+        {
+          "name": "ft_body",
+          "columns": [
+            [
+              "body"
+            ]
+          ],
+          "type": "fulltext",
+          "clause": "FULLTEXT ANALYZER simple BM25(1.2,0.75) HIGHLIGHTS",
+          "fulltext": {
+            "analyzer": "simple",
+            "highlights": true
+          }
+        },
+        {
+          "name": "hnsw_embedding",
+          "columns": [
+            [
+              "embedding"
+            ]
+          ],
+          "type": "hnsw",
+          "clause": "HNSW DIMENSION 4 DIST COSINE TYPE F32 EFC 150 M 12 M0 24 LM 0.40242960438184466f",
+          "vector": {
+            "dimension": 4,
+            "distance": "COSINE",
+            "elementType": "F32"
+          }
+        },
+        {
+          "name": "idx_owner_status",
+          "columns": [
+            [
+              "owner"
+            ],
+            [
+              "status"
+            ]
+          ],
+          "type": "standard",
+          "clause": ""
+        },
+        {
+          "name": "idx_title",
+          "columns": [
+            [
+              "title"
+            ]
+          ],
+          "type": "standard",
+          "clause": ""
+        },
+        {
+          "name": "idx_title_concurrent",
+          "columns": [
+            [
+              "title"
+            ]
+          ],
+          "type": "standard",
+          "clause": ""
+        },
+        {
+          "name": "uniq_code",
+          "columns": [
+            [
+              "code"
+            ]
+          ],
+          "type": "unique",
+          "clause": "UNIQUE",
+          "comment": "one doc per code"
+        }
+      ],
+      "events": [
+        {
+          "name": "on_any",
+          "when": "true",
+          "then": [
+            "UPDATE $after.id SET touched = true",
+            "CREATE audit_log SET note = 'any'"
+          ],
+          "async": false
+        },
+        {
+          "name": "on_create",
+          "when": "$event = 'CREATE'",
+          "then": [
+            "CREATE audit_log SET doc = $after.id"
+          ],
+          "async": false
+        },
+        {
+          "name": "on_status",
+          "when": "$before.status != $after.status",
+          "then": [
+            "{ CREATE audit_log SET doc = $after.id, note = string::concat($before.status, ' -> ', $after.status) }"
+          ],
+          "async": true,
+          "retry": 3,
+          "maxDepth": 2,
+          "comment": "status transitions"
+        }
+      ],
+      "define": "DEFINE TABLE doc TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "follows",
+      "type": {
+        "kind": "relation",
+        "in": [
+          "person"
+        ],
+        "out": [
+          "person"
+        ],
+        "enforced": false,
+        "lightweight": false
+      },
+      "schemafull": false,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "in"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD in ON follows TYPE record<person> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "out"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD out ON follows TYPE record<person> PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE follows TYPE RELATION IN person OUT person SCHEMALESS PERMISSIONS NONE"
+    },
+    {
+      "name": "id_array",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "idKey": {
+        "kind": "tuple",
+        "items": [
+          {
+            "kind": "string"
+          },
+          {
+            "kind": "datetime"
+          }
+        ]
+      },
+      "fields": [],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE id_array TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "id_implicit",
+      "type": {
+        "kind": "any"
+      },
+      "schemafull": false,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "idKey": {
+        "kind": "int"
+      },
+      "fields": [],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE id_implicit TYPE ANY SCHEMALESS PERMISSIONS NONE"
+    },
+    {
+      "name": "id_int",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "idKey": {
+        "kind": "int"
+      },
+      "fields": [],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE id_int TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "id_object",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "idKey": {
+        "kind": "objectLiteral",
+        "fields": [
+          {
+            "name": "n",
+            "kind": {
+              "kind": "int"
+            },
+            "optional": false
+          },
+          {
+            "name": "region",
+            "kind": {
+              "kind": "string"
+            },
+            "optional": false
+          }
+        ]
+      },
+      "fields": [],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE id_object TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "id_string",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "idKey": {
+        "kind": "string"
+      },
+      "fields": [],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE id_string TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "id_union",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "idKey": {
+        "kind": "union",
+        "variants": [
+          {
+            "kind": "int"
+          },
+          {
+            "kind": "string"
+          }
+        ]
+      },
+      "fields": [],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE id_union TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "id_uuid",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "idKey": {
+        "kind": "uuid"
+      },
+      "fields": [],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE id_uuid TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "kinds",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "comment": "one field per value kind",
+      "fields": [
+        {
+          "path": [
+            "k_any"
+          ],
+          "kind": {
+            "kind": "any"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_any ON kinds TYPE any PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_array"
+          ],
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "any"
+            }
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_array ON kinds TYPE array PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_array_bounded"
+          ],
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "int"
+            },
+            "length": 3
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_array_bounded ON kinds TYPE array<int, 3> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_array_bounded",
+            "*"
+          ],
+          "kind": {
+            "kind": "int"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_array_bounded.* ON kinds TYPE int PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_array_nested"
+          ],
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "array",
+              "item": {
+                "kind": "float"
+              }
+            }
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_array_nested ON kinds TYPE array<array<float>> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_array_nested",
+            "*"
+          ],
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "float"
+            }
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_array_nested.* ON kinds TYPE array<float> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_array_nested",
+            "*",
+            "*"
+          ],
+          "kind": {
+            "kind": "float"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_array_nested.*.* ON kinds TYPE float PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_array_of"
+          ],
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "string"
+            }
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_array_of ON kinds TYPE array<string> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_array_of",
+            "*"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_array_of.* ON kinds TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_array_or_set"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "array",
+                "item": {
+                  "kind": "int"
+                },
+                "length": 2
+              },
+              {
+                "kind": "set",
+                "item": {
+                  "kind": "string"
+                }
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_array_or_set ON kinds TYPE array<int, 2> | set<string> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_array_or_set",
+            "*"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "int"
+              },
+              {
+                "kind": "string"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_array_or_set.* ON kinds TYPE int | string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_bool"
+          ],
+          "kind": {
+            "kind": "bool"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_bool ON kinds TYPE bool PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_bytes"
+          ],
+          "kind": {
+            "kind": "bytes"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_bytes ON kinds TYPE bytes PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_datetime"
+          ],
+          "kind": {
+            "kind": "datetime"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_datetime ON kinds TYPE datetime PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_decimal"
+          ],
+          "kind": {
+            "kind": "decimal"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_decimal ON kinds TYPE decimal PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_duration"
+          ],
+          "kind": {
+            "kind": "duration"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_duration ON kinds TYPE duration PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_file"
+          ],
+          "kind": {
+            "kind": "file",
+            "buckets": []
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_file ON kinds TYPE file PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_file_bucket"
+          ],
+          "kind": {
+            "kind": "file",
+            "buckets": [
+              "avatars"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_file_bucket ON kinds TYPE file<avatars> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_file_buckets"
+          ],
+          "kind": {
+            "kind": "file",
+            "buckets": [
+              "avatars",
+              "docs"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_file_buckets ON kinds TYPE file<avatars | docs> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_float"
+          ],
+          "kind": {
+            "kind": "float"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_float ON kinds TYPE float PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_function"
+          ],
+          "kind": {
+            "kind": "function"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_function ON kinds TYPE function PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_geometry"
+          ],
+          "kind": {
+            "kind": "geometry",
+            "types": []
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_geometry ON kinds TYPE geometry PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_geometry_all"
+          ],
+          "kind": {
+            "kind": "geometry",
+            "types": [
+              "collection",
+              "line",
+              "multiline",
+              "multipoint",
+              "multipolygon",
+              "point",
+              "polygon"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_geometry_all ON kinds TYPE geometry<point | line | polygon | multipoint | multiline | multipolygon | collection> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_geometry_point"
+          ],
+          "kind": {
+            "kind": "geometry",
+            "types": [
+              "point"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_geometry_point ON kinds TYPE geometry<point> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_int"
+          ],
+          "kind": {
+            "kind": "int"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_int ON kinds TYPE int PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_literal_double_quoted"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "a"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "b"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_literal_double_quoted ON kinds TYPE 'a' | 'b' PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_literal_mixed"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "type": "bool",
+                "value": true
+              },
+              {
+                "kind": "literal",
+                "type": "duration",
+                "value": "1d"
+              },
+              {
+                "kind": "literal",
+                "type": "int",
+                "value": "1"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "auto"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_literal_mixed ON kinds TYPE 'auto' | 1 | true | 1d PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_literal_numbers"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "type": "decimal",
+                "value": "10"
+              },
+              {
+                "kind": "literal",
+                "type": "float",
+                "value": "1.5"
+              },
+              {
+                "kind": "literal",
+                "type": "int",
+                "value": "-5"
+              },
+              {
+                "kind": "literal",
+                "type": "int",
+                "value": "0"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_literal_numbers ON kinds TYPE -5 | 0 |  1.5f |  10dec PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_literal_strings"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "archived"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "draft"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "published"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_literal_strings ON kinds TYPE 'draft' | 'published' | 'archived' PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_none"
+          ],
+          "kind": {
+            "kind": "none"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_none ON kinds TYPE none PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_null"
+          ],
+          "kind": {
+            "kind": "null"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_null ON kinds TYPE null PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_nullable"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "null"
+              },
+              {
+                "kind": "string"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_nullable ON kinds TYPE string | null PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_number"
+          ],
+          "kind": {
+            "kind": "number"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_number ON kinds TYPE number PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_object"
+          ],
+          "kind": {
+            "kind": "object"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_object ON kinds TYPE object PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_object_flexible"
+          ],
+          "kind": {
+            "kind": "object"
+          },
+          "optional": false,
+          "flexible": true,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_object_flexible ON kinds TYPE object FLEXIBLE PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_object_literal"
+          ],
+          "kind": {
+            "kind": "objectLiteral",
+            "fields": [
+              {
+                "name": "a",
+                "kind": {
+                  "kind": "int"
+                },
+                "optional": false
+              },
+              {
+                "name": "b",
+                "kind": {
+                  "kind": "string"
+                },
+                "optional": true
+              },
+              {
+                "name": "c",
+                "kind": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "d",
+                      "kind": {
+                        "kind": "bool"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "optional": false
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_object_literal ON kinds TYPE { a: int, b: none | string, c: { d: bool } } PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_object_union"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "h",
+                    "kind": {
+                      "kind": "float"
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "kind",
+                    "kind": {
+                      "kind": "literal",
+                      "type": "string",
+                      "value": "rect"
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "w",
+                    "kind": {
+                      "kind": "float"
+                    },
+                    "optional": false
+                  }
+                ]
+              },
+              {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "kind",
+                    "kind": {
+                      "kind": "literal",
+                      "type": "string",
+                      "value": "circle"
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "r",
+                    "kind": {
+                      "kind": "float"
+                    },
+                    "optional": false
+                  }
+                ]
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_object_union ON kinds TYPE { kind: 'circle', r: float } | { h: float, kind: 'rect', w: float } PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_option"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_option ON kinds TYPE none | string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_option_array"
+          ],
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "record",
+              "tables": [
+                "team"
+              ]
+            }
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_option_array ON kinds TYPE none | array<record<team>> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_option_array",
+            "*"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "team"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_option_array.* ON kinds TYPE record<team> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_option_nullable"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "null"
+              },
+              {
+                "kind": "string"
+              }
+            ]
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_option_nullable ON kinds TYPE none | string | null PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_option_record"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_option_record ON kinds TYPE none | record<person> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_primitive_union"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "datetime"
+              },
+              {
+                "kind": "int"
+              },
+              {
+                "kind": "string"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_primitive_union ON kinds TYPE int | string | datetime PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_range"
+          ],
+          "kind": {
+            "kind": "range"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_range ON kinds TYPE range PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_record"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_record ON kinds TYPE record<person> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_record_any"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": []
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_record_any ON kinds TYPE record PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_record_union"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person",
+              "team"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_record_union ON kinds TYPE record<person | team> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_regex"
+          ],
+          "kind": {
+            "kind": "regex"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_regex ON kinds TYPE regex PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_set"
+          ],
+          "kind": {
+            "kind": "set",
+            "item": {
+              "kind": "any"
+            }
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_set ON kinds TYPE set PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_set_bounded"
+          ],
+          "kind": {
+            "kind": "set",
+            "item": {
+              "kind": "int"
+            },
+            "length": 5
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_set_bounded ON kinds TYPE set<int, 5> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_set_bounded",
+            "*"
+          ],
+          "kind": {
+            "kind": "int"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_set_bounded.* ON kinds TYPE int PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_set_of"
+          ],
+          "kind": {
+            "kind": "set",
+            "item": {
+              "kind": "string"
+            }
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_set_of ON kinds TYPE set<string> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_set_of",
+            "*"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_set_of.* ON kinds TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_string"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_string ON kinds TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_table"
+          ],
+          "kind": {
+            "kind": "table",
+            "tables": [
+              "person",
+              "team"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_table ON kinds TYPE table<person | team> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_table_any"
+          ],
+          "kind": {
+            "kind": "table",
+            "tables": []
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_table_any ON kinds TYPE table PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_tuple"
+          ],
+          "kind": {
+            "kind": "tuple",
+            "items": [
+              {
+                "kind": "string"
+              },
+              {
+                "kind": "int"
+              },
+              {
+                "kind": "option",
+                "item": {
+                  "kind": "bool"
+                }
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_tuple ON kinds TYPE [string, int, none | bool] PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "k_uuid"
+          ],
+          "kind": {
+            "kind": "uuid"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD k_uuid ON kinds TYPE uuid PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE kinds TYPE NORMAL SCHEMAFULL COMMENT 'one field per value kind' PERMISSIONS NONE"
+    },
+    {
+      "name": "knows",
+      "type": {
+        "kind": "relation",
+        "in": [
+          "person"
+        ],
+        "out": [
+          "person"
+        ],
+        "enforced": true,
+        "lightweight": true
+      },
+      "schemafull": false,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "in"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD in ON knows TYPE record<person> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "out"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD out ON knows TYPE record<person> PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE knows TYPE RELATION IN person OUT person ENFORCED LIGHTWEIGHT SCHEMALESS PERMISSIONS NONE"
+    },
+    {
+      "name": "ledger",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "changefeed": {
+        "expiry": "1w",
+        "includeOriginal": false
+      },
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "amount"
+          ],
+          "kind": {
+            "kind": "decimal"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD amount ON ledger TYPE decimal PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE ledger TYPE NORMAL SCHEMAFULL CHANGEFEED 1w PERMISSIONS NONE"
+    },
+    {
+      "name": "likes",
+      "type": {
+        "kind": "relation",
+        "in": [],
+        "out": [],
+        "enforced": false,
+        "lightweight": false
+      },
+      "schemafull": false,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "in"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": []
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD in ON likes TYPE record PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "out"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": []
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD out ON likes TYPE record PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE likes TYPE RELATION SCHEMALESS PERMISSIONS NONE"
+    },
+    {
+      "name": "member_of",
+      "type": {
+        "kind": "relation",
+        "in": [
+          "person"
+        ],
+        "out": [
+          "org",
+          "team"
+        ],
+        "enforced": true,
+        "lightweight": false
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "in"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD in ON member_of TYPE record<person> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "out"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "org",
+              "team"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD out ON member_of TYPE record<team | org> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "role"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "lead"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "member"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "'member'"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD role ON member_of TYPE 'member' | 'lead' DEFAULT 'member' PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "since"
+          ],
+          "kind": {
+            "kind": "datetime"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": true,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "time::now()"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD since ON member_of TYPE datetime DEFAULT time::now() READONLY PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE member_of TYPE RELATION IN person OUT team | org ENFORCED SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "org",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "comment": "it's an \"organisation\"",
+      "fields": [
+        {
+          "path": [
+            "name"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD name ON org TYPE string PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE org TYPE NORMAL SCHEMAFULL COMMENT \"it's an \\\"organisation\\\"\" PERMISSIONS NONE"
+    },
+    {
+      "name": "person",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": true,
+        "create": "$auth.id = id",
+        "update": "$auth.id = id",
+        "delete": false
+      },
+      "comment": "people who can sign in",
+      "fields": [
+        {
+          "path": [
+            "address"
+          ],
+          "kind": {
+            "kind": "object"
+          },
+          "optional": false,
+          "flexible": true,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD address ON person TYPE object FLEXIBLE PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "address",
+            "city"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD address.city ON person TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "address",
+            "geo"
+          ],
+          "kind": {
+            "kind": "geometry",
+            "types": [
+              "point"
+            ]
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD address.geo ON person TYPE none | geometry<point> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "address",
+            "zip"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD address.zip ON person TYPE none | string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "age"
+          ],
+          "kind": {
+            "kind": "int"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "assert": {
+            "expr": "$value = NONE OR $value >= 0 AND $value <= 150",
+            "recognized": [
+              {
+                "type": "range",
+                "valueKind": "int",
+                "min": {
+                  "value": "0",
+                  "inclusive": true
+                },
+                "max": {
+                  "value": "150",
+                  "inclusive": true
+                }
+              }
+            ]
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD age ON person TYPE none | int ASSERT $value = NONE OR $value >= 0 AND $value <= 150 PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "bio"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "null"
+              },
+              {
+                "kind": "string"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD bio ON person TYPE string | null PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "buddy"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "reference": {
+            "onDelete": "ignore"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD buddy ON person TYPE none | record<person> REFERENCE ON DELETE IGNORE PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "created_at"
+          ],
+          "kind": {
+            "kind": "datetime"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": true,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "time::now()"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD created_at ON person TYPE datetime DEFAULT time::now() READONLY PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "display"
+          ],
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "computed": {
+            "expr": "string::concat(name, ' <', email, '>')"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD display ON person COMPUTED string::concat(name, ' <', email, '>') PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "display_typed"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "computed": {
+            "expr": "string::concat(name, '!')"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD display_typed ON person TYPE string COMPUTED string::concat(name, '!') PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "email"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "value": {
+            "expr": "string::lowercase($value)",
+            "readsInput": true
+          },
+          "assert": {
+            "expr": "string::is_email($value)",
+            "recognized": [
+              {
+                "type": "email"
+              }
+            ]
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD email ON person TYPE string VALUE string::lowercase($value) ASSERT string::is_email($value) PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "flagged"
+          ],
+          "kind": {
+            "kind": "bool"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "false"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "comment": "overwritten once",
+          "define": "DEFINE FIELD flagged ON person TYPE bool DEFAULT false COMMENT 'overwritten once' PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "handle"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "always",
+            "expr": "'anon'"
+          },
+          "value": {
+            "expr": "string::trim($value)",
+            "readsInput": true
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD handle ON person TYPE string DEFAULT ALWAYS 'anon' VALUE string::trim($value) PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "manager"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "reference": {
+            "onDelete": "unset"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD manager ON person TYPE none | record<person> REFERENCE ON DELETE UNSET PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "mentor"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "reference": {
+            "onDelete": "then",
+            "expr": "(UPDATE $this SET flagged = true)"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD mentor ON person TYPE none | record<person> REFERENCE ON DELETE THEN (UPDATE $this SET flagged = true) PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "motto"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "\"TYPE; VALUE 'quoted' DEFAULT\""
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "comment": "semi; colon \"and\" 'quotes'",
+          "define": "DEFINE FIELD motto ON person TYPE string DEFAULT \"TYPE; VALUE 'quoted' DEFAULT\" COMMENT \"semi; colon \\\"and\\\" 'quotes'\" PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "name"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "assert": {
+            "expr": "string::len($value) >= 1 AND string::len($value) <= 80",
+            "recognized": [
+              {
+                "type": "length",
+                "target": "string",
+                "min": 1,
+                "max": 80
+              }
+            ]
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD name ON person TYPE string ASSERT string::len($value) >= 1 AND string::len($value) <= 80 PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "nickname"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD nickname ON person TYPE none | string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "notes"
+          ],
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD notes ON person PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "odd.name"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD `odd.name` ON person TYPE none | string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "org"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "org"
+            ]
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "reference": {
+            "onDelete": "cascade"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD org ON person TYPE none | record<org> REFERENCE ON DELETE CASCADE PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "pattern"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "assert": {
+            "expr": "$value = NONE OR $value = /^[a-z]+$/"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD pattern ON person TYPE none | string ASSERT $value = NONE OR $value = /^[a-z]+$/ PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "phones"
+          ],
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "object"
+            }
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "[]"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD phones ON person TYPE array<object> DEFAULT [] PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "phones",
+            "*"
+          ],
+          "kind": {
+            "kind": "object"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD phones.* ON person TYPE object PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "phones",
+            "*",
+            "kind"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "home"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "mobile"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "work"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD phones.*.kind ON person TYPE 'home' | 'work' | 'mobile' PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "phones",
+            "*",
+            "number"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD phones.*.number ON person TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "pins"
+          ],
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "string"
+            }
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "[]"
+          },
+          "assert": {
+            "expr": "array::len($value) <= 3",
+            "recognized": [
+              {
+                "type": "length",
+                "target": "array",
+                "max": 3
+              }
+            ]
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD pins ON person TYPE array<string> DEFAULT [] ASSERT array::len($value) <= 3 PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "pins",
+            "*"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD pins.* ON person TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "prefs",
+            "locale"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD prefs.locale ON person TYPE none | string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "referenced_by"
+          ],
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "computed": {
+            "expr": "<~person"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD referenced_by ON person COMPUTED <~person PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "role"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "'member'"
+          },
+          "assert": {
+            "expr": "$value INSIDE ['member', 'admin', 'owner']",
+            "recognized": [
+              {
+                "type": "literals",
+                "values": [
+                  {
+                    "kind": "literal",
+                    "type": "string",
+                    "value": "admin"
+                  },
+                  {
+                    "kind": "literal",
+                    "type": "string",
+                    "value": "member"
+                  },
+                  {
+                    "kind": "literal",
+                    "type": "string",
+                    "value": "owner"
+                  }
+                ]
+              }
+            ]
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD role ON person TYPE string DEFAULT 'member' ASSERT $value INSIDE ['member', 'admin', 'owner'] PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "score"
+          ],
+          "kind": {
+            "kind": "float"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "assert": {
+            "expr": "$value > 0f AND $value < 100f",
+            "recognized": [
+              {
+                "type": "range",
+                "valueKind": "float",
+                "min": {
+                  "value": "0",
+                  "inclusive": false
+                },
+                "max": {
+                  "value": "100",
+                  "inclusive": false
+                }
+              }
+            ]
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD score ON person TYPE float ASSERT $value > 0f AND $value < 100f PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "session_ttl"
+          ],
+          "kind": {
+            "kind": "duration"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "1h"
+          },
+          "assert": {
+            "expr": "$value >= 1m AND $value <= 1d",
+            "recognized": [
+              {
+                "type": "range",
+                "valueKind": "duration",
+                "min": {
+                  "value": "1m",
+                  "inclusive": true
+                },
+                "max": {
+                  "value": "1d",
+                  "inclusive": true
+                }
+              }
+            ]
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD session_ttl ON person TYPE duration DEFAULT 1h ASSERT $value >= 1m AND $value <= 1d PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "settings"
+          ],
+          "kind": {
+            "kind": "object"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "{  }"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD settings ON person TYPE object DEFAULT {  } PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "settings",
+            "notify"
+          ],
+          "kind": {
+            "kind": "object"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "{  }"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD settings.notify ON person TYPE object DEFAULT {  } PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "settings",
+            "notify",
+            "email"
+          ],
+          "kind": {
+            "kind": "bool"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "true"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD settings.notify.email ON person TYPE bool DEFAULT true PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "settings",
+            "theme"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "dark"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "light"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "'light'"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD settings.theme ON person TYPE 'light' | 'dark' DEFAULT 'light' PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "shout"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "'HI'"
+          },
+          "assert": {
+            "expr": "$value = string::uppercase($value) OR $value CONTAINS '!'"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD shout ON person TYPE string DEFAULT 'HI' ASSERT $value = string::uppercase($value) OR $value CONTAINS '!' PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "slug"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "value": {
+            "expr": "string::slug(name)",
+            "readsInput": false
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD slug ON person TYPE string VALUE string::slug(name) PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "ssn"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": "$auth.admin = true",
+            "create": true,
+            "update": false
+          },
+          "comment": "@acme:policy {\"classification\":\"restricted\",\"archive\":\"encrypt\"}",
+          "define": "DEFINE FIELD ssn ON person TYPE none | string COMMENT '@acme:policy {\"classification\":\"restricted\",\"archive\":\"encrypt\"}' PERMISSIONS FOR select WHERE $auth.admin = true, FOR create FULL, FOR update NONE"
+        },
+        {
+          "path": [
+            "tags"
+          ],
+          "kind": {
+            "kind": "set",
+            "item": {
+              "kind": "string"
+            }
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "<set<string>> []"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD tags ON person TYPE set<string> DEFAULT <set<string>> [] PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "tags",
+            "*"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD tags.* ON person TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "team"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "team"
+            ]
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "reference": {
+            "onDelete": "reject"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD team ON person TYPE none | record<team> REFERENCE ON DELETE REJECT PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "tier"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "'free'"
+          },
+          "assert": {
+            "expr": "$value INSIDE ['free', 'pro']",
+            "recognized": [
+              {
+                "type": "literals",
+                "values": [
+                  {
+                    "kind": "literal",
+                    "type": "string",
+                    "value": "free"
+                  },
+                  {
+                    "kind": "literal",
+                    "type": "string",
+                    "value": "pro"
+                  }
+                ]
+              }
+            ]
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD tier ON person TYPE string DEFAULT 'free' ASSERT $value INSIDE ['free', 'pro'] PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "touched_at"
+          ],
+          "kind": {
+            "kind": "datetime"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "value": {
+            "expr": "time::now()",
+            "readsInput": false
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD touched_at ON person TYPE datetime VALUE time::now() PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "updated_at"
+          ],
+          "kind": {
+            "kind": "datetime"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "always",
+            "expr": "time::now()"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD updated_at ON person TYPE datetime DEFAULT ALWAYS time::now() PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "watchers"
+          ],
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "record",
+              "tables": [
+                "person"
+              ]
+            }
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "[]"
+          },
+          "reference": {
+            "onDelete": "ignore"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD watchers ON person TYPE array<record<person>> DEFAULT [] REFERENCE ON DELETE IGNORE PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "watchers",
+            "*"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD watchers.* ON person TYPE record<person> PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "uniq_email",
+          "columns": [
+            [
+              "email"
+            ]
+          ],
+          "type": "unique",
+          "clause": "UNIQUE"
+        }
+      ],
+      "events": [],
+      "define": "DEFINE TABLE person TYPE NORMAL SCHEMAFULL COMMENT 'people who can sign in' PERMISSIONS FOR select FULL, FOR create, update WHERE $auth.id = id, FOR delete NONE"
+    },
+    {
+      "name": "purchase",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "buyer"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD buyer ON purchase TYPE record<person> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "number"
+          ],
+          "kind": {
+            "kind": "int"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": true,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "`sequence`::nextval('order_number')"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD number ON purchase TYPE int DEFAULT `sequence`::nextval('order_number') READONLY PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "total"
+          ],
+          "kind": {
+            "kind": "decimal"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "assert": {
+            "expr": "$value >= 0dec",
+            "recognized": [
+              {
+                "type": "range",
+                "valueKind": "decimal",
+                "min": {
+                  "value": "0",
+                  "inclusive": true
+                }
+              }
+            ]
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD total ON purchase TYPE decimal ASSERT $value >= 0dec PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE purchase TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "rates",
+      "type": {
+        "kind": "relation",
+        "in": [
+          "person"
+        ],
+        "out": [
+          "doc"
+        ],
+        "enforced": false,
+        "lightweight": false
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "in"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD in ON rates TYPE record<person> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "out"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "doc"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD out ON rates TYPE record<doc> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "weight"
+          ],
+          "kind": {
+            "kind": "float"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": true,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD weight ON rates TYPE none | float INLINE PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE rates TYPE RELATION IN person OUT doc SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "sink",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": true,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE sink TYPE NORMAL DROP SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "team",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": true,
+        "create": true,
+        "update": true,
+        "delete": true
+      },
+      "fields": [
+        {
+          "path": [
+            "members"
+          ],
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "computed": {
+            "expr": "<~(person FIELD team)"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD members ON team COMPUTED <~(person FIELD team) PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "meta"
+          ],
+          "kind": {
+            "kind": "object"
+          },
+          "optional": true,
+          "flexible": true,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD meta ON team TYPE none | object FLEXIBLE PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "name"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD name ON team TYPE string PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE team TYPE NORMAL SCHEMAFULL PERMISSIONS FULL"
+    },
+    {
+      "name": "team_size",
+      "type": {
+        "kind": "any"
+      },
+      "schemafull": false,
+      "drop": false,
+      "view": {
+        "select": "SELECT count() AS total, team FROM person GROUP BY team"
+      },
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE team_size TYPE ANY SCHEMALESS AS SELECT count() AS total, team FROM person GROUP BY team PERMISSIONS NONE"
+    }
+  ],
+  "functions": [
+    {
+      "name": "fn::doc::related",
+      "args": [
+        {
+          "name": "d",
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "doc"
+            ]
+          },
+          "optional": false,
+          "omittable": false
+        },
+        {
+          "name": "tags",
+          "kind": {
+            "kind": "set",
+            "item": {
+              "kind": "string"
+            }
+          },
+          "optional": false,
+          "omittable": false
+        }
+      ],
+      "returns": {
+        "kind": "array",
+        "item": {
+          "kind": "record",
+          "tables": [
+            "doc"
+          ]
+        }
+      },
+      "block": "{ RETURN [$d] }",
+      "permissions": false
+    },
+    {
+      "name": "fn::double",
+      "args": [
+        {
+          "name": "x",
+          "kind": {
+            "kind": "int"
+          },
+          "optional": false,
+          "omittable": false
+        }
+      ],
+      "block": "{ RETURN $x * 2 }",
+      "permissions": true
+    },
+    {
+      "name": "fn::greet",
+      "args": [
+        {
+          "name": "name",
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "omittable": false
+        },
+        {
+          "name": "greeting",
+          "kind": {
+            "kind": "string"
+          },
+          "optional": true,
+          "omittable": true
+        },
+        {
+          "name": "times",
+          "kind": {
+            "kind": "int"
+          },
+          "optional": true,
+          "omittable": true
+        }
+      ],
+      "returns": {
+        "kind": "string"
+      },
+      "block": "{ RETURN ($greeting ?? 'hello') + ' ' + $name }",
+      "permissions": true,
+      "comment": "greets someone"
+    },
+    {
+      "name": "fn::now",
+      "args": [],
+      "returns": {
+        "kind": "datetime"
+      },
+      "block": "{ RETURN time::now() }",
+      "permissions": "$auth.admin = true"
+    },
+    {
+      "name": "fn::optional_first",
+      "args": [
+        {
+          "name": "a",
+          "kind": {
+            "kind": "int"
+          },
+          "optional": true,
+          "omittable": false
+        },
+        {
+          "name": "b",
+          "kind": {
+            "kind": "int"
+          },
+          "optional": false,
+          "omittable": false
+        }
+      ],
+      "returns": {
+        "kind": "int"
+      },
+      "block": "{ RETURN $b }",
+      "permissions": true
+    },
+    {
+      "name": "fn::prep",
+      "args": [
+        {
+          "name": "s",
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "omittable": false
+        }
+      ],
+      "returns": {
+        "kind": "string"
+      },
+      "block": "{ RETURN string::lowercase($s) }",
+      "permissions": true
+    }
+  ],
+  "params": [
+    {
+      "name": "app_name",
+      "value": "'corpus'",
+      "permissions": true,
+      "comment": "application name"
+    },
+    {
+      "name": "derived",
+      "value": "3",
+      "permissions": true
+    },
+    {
+      "name": "limits",
+      "value": "{ max: 10, ratio: 0.5dec }",
+      "permissions": false
+    }
+  ],
+  "accesses": [
+    {
+      "name": "account",
+      "method": "record",
+      "signup": "CREATE person SET email = $email, name = $name",
+      "signin": "SELECT * FROM person WHERE email = $email",
+      "refresh": true,
+      "verify": {
+        "alg": "HS512"
+      },
+      "durations": {
+        "grant": "4w2d",
+        "token": "15m",
+        "session": "12h"
+      },
+      "comment": "record users"
+    },
+    {
+      "name": "operators",
+      "method": "bearer",
+      "subject": "user",
+      "durations": {
+        "grant": "4w2d",
+        "token": "1h"
+      }
+    },
+    {
+      "name": "remote_jwt",
+      "method": "jwt",
+      "verify": {
+        "url": "https://example.com/.well-known/jwks.json"
+      },
+      "durations": {
+        "session": "2h"
+      }
+    },
+    {
+      "name": "service",
+      "method": "bearer",
+      "subject": "record",
+      "durations": {
+        "grant": "4w2d",
+        "token": "15m"
+      }
+    },
+    {
+      "name": "shared_jwt",
+      "method": "jwt",
+      "verify": {
+        "alg": "HS256"
+      },
+      "durations": {
+        "token": "1h"
+      }
+    }
+  ],
+  "analyzers": [
+    {
+      "name": "prepped",
+      "function": "fn::prep",
+      "tokenizers": [
+        "BLANK"
+      ],
+      "filters": [
+        "LOWERCASE",
+        "EDGENGRAM(2,10)"
+      ]
+    },
+    {
+      "name": "simple",
+      "tokenizers": [
+        "BLANK",
+        "CLASS"
+      ],
+      "filters": [
+        "LOWERCASE",
+        "ASCII",
+        "SNOWBALL(ENGLISH)"
+      ],
+      "comment": "plain text"
+    }
+  ],
+  "sequences": [
+    {
+      "name": "order_number",
+      "batch": "100",
+      "start": "1000",
+      "timeout": "5s"
+    },
+    {
+      "name": "plain_seq",
+      "batch": "1000",
+      "start": "0"
+    }
+  ],
+  "buckets": [
+    {
+      "name": "avatars",
+      "backend": "memory",
+      "readonly": false,
+      "permissions": true,
+      "comment": "profile images"
+    },
+    {
+      "name": "docs",
+      "backend": "memory",
+      "readonly": true,
+      "permissions": true
+    }
+  ],
+  "apis": [
+    {
+      "path": "/docs",
+      "actions": [
+        {
+          "methods": [
+            "get",
+            "post"
+          ],
+          "middleware": [
+            {
+              "name": "api::timeout",
+              "args": [
+                "1s"
+              ]
+            }
+          ],
+          "permissions": true,
+          "action": "{ RETURN { status: 200 } }"
+        }
+      ],
+      "middleware": [],
+      "permissions": true
+    },
+    {
+      "path": "/greet/:name",
+      "actions": [
+        {
+          "methods": [
+            "get"
+          ],
+          "middleware": [],
+          "permissions": true,
+          "action": "{ RETURN { status: 200, body: fn::greet($request.params.name) } }"
+        }
+      ],
+      "middleware": [],
+      "permissions": true
+    }
+  ],
+  "modules": [
+    {
+      "name": "mod::demo",
+      "executable": {
+        "type": "surrealism",
+        "bucket": "avatars",
+        "key": "/demo.wasm"
+      },
+      "permissions": true
+    }
+  ],
+  "configs": [
+    {
+      "type": "api",
+      "middleware": [
+        {
+          "name": "api::timeout",
+          "args": [
+            "5s"
+          ]
+        }
+      ],
+      "permissions": true
+    },
+    {
+      "type": "graphql",
+      "tables": "AUTO",
+      "functions": "AUTO"
+    }
+  ],
+  "users": [
+    {
+      "name": "reader",
+      "roles": [
+        "VIEWER"
+      ],
+      "durations": {
+        "token": "1h",
+        "session": "1h"
+      },
+      "comment": "read only"
+    }
+  ],
+  "diagnostics": [
+    {
+      "severity": "info",
+      "code": "assert-unrecognized",
+      "table": "person",
+      "field": [
+        "pattern"
+      ],
+      "source": "$value = NONE OR $value = /^[a-z]+$/",
+      "reason": "ASSERT is outside the recognised subset (membership, numeric range, string/array length, email); kept as an expression only."
+    },
+    {
+      "severity": "info",
+      "code": "assert-unrecognized",
+      "table": "person",
+      "field": [
+        "shout"
+      ],
+      "source": "$value = string::uppercase($value) OR $value CONTAINS '!'",
+      "reason": "ASSERT is outside the recognised subset (membership, numeric range, string/array length, email); kept as an expression only."
+    },
+    {
+      "severity": "warning",
+      "code": "definition-duplicate",
+      "table": "person",
+      "field": [
+        "flagged"
+      ],
+      "source": "field flagged ON person",
+      "reason": "defined 2 times (schema/04_fields.surql, schema/04_fields.surql); SurrealKit applies every DEFINE but a sequence as OVERWRITE, so the last one wins, which raw SurrealQL would not do for IF NOT EXISTS"
+    },
+    {
+      "severity": "warning",
+      "code": "field-computed-kind-undeclared",
+      "table": "person",
+      "field": [
+        "display"
+      ],
+      "source": "string::concat(name, ' <', email, '>')",
+      "reason": "COMPUTED field has no TYPE clause; its value kind is unknown and is typed as `any`."
+    },
+    {
+      "severity": "warning",
+      "code": "field-computed-kind-undeclared",
+      "table": "team",
+      "field": [
+        "members"
+      ],
+      "source": "<~(person FIELD team)",
+      "reason": "COMPUTED field has no TYPE clause; its value kind is unknown and is typed as `any`."
+    },
+    {
+      "severity": "warning",
+      "code": "field-computed-kind-undeclared",
+      "table": "person",
+      "field": [
+        "referenced_by"
+      ],
+      "source": "<~person",
+      "reason": "COMPUTED field has no TYPE clause; its value kind is unknown and is typed as `any`."
+    },
+    {
+      "severity": "info",
+      "code": "field-kind-undeclared",
+      "table": "person",
+      "field": [
+        "notes"
+      ],
+      "source": "DEFINE FIELD notes ON person PERMISSIONS FULL",
+      "reason": "Field has no TYPE clause; it holds any value."
+    },
+    {
+      "severity": "info",
+      "code": "field-parent-implicit",
+      "table": "person",
+      "field": [
+        "prefs",
+        "locale"
+      ],
+      "source": "prefs",
+      "reason": "The parent path is not declared; it is an implicit object, required when any child is required."
+    },
+    {
+      "severity": "warning",
+      "code": "function-optional-arg-not-trailing",
+      "function": "fn::optional_first",
+      "source": "a",
+      "reason": "Optional argument `$a` precedes the required argument `$b`; callers cannot omit it and must pass NONE explicitly."
+    },
+    {
+      "severity": "info",
+      "code": "function-return-undeclared",
+      "function": "fn::double",
+      "source": "{ RETURN $x * 2 }",
+      "reason": "Function declares no return kind; its result is typed as unknown."
+    },
+    {
+      "severity": "error",
+      "code": "object-without-fields",
+      "table": "kinds",
+      "field": [
+        "k_object"
+      ],
+      "source": "k_object",
+      "reason": "On a SCHEMAFULL table an object that is not FLEXIBLE holds only {}: SurrealDB refuses every undeclared key of it (`Found field 'k_object.<key>', but no such field exists`). Declare its fields, make it FLEXIBLE, or acknowledge this code with a reason."
+    },
+    {
+      "severity": "info",
+      "code": "table-lightweight-relation",
+      "table": "knows",
+      "source": "knows",
+      "reason": "A lightweight relation stores no edge content: no content schemas, `relate` only."
+    },
+    {
+      "severity": "info",
+      "code": "table-view-shape",
+      "table": "team_size",
+      "source": "SELECT count() AS total, team FROM person GROUP BY team",
+      "reason": "A view's row shape comes from its SELECT and is not derived; it has no write contracts."
+    },
+    {
+      "severity": "info",
+      "code": "table-view-shape",
+      "table": "adults",
+      "source": "SELECT name, age FROM person WHERE age >= 18",
+      "reason": "A view's row shape comes from its SELECT and is not derived; it has no write contracts."
+    }
+  ]
+}

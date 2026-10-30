@@ -387,6 +387,13 @@ mod tests {
 	}
 
 	#[test]
+	fn an_unknown_typegen_key_is_rejected() {
+		let err =
+			format!("{:#}", ProjectConfig::parse("[typegen]\njsn = \"types\"\n").unwrap_err());
+		assert!(err.contains("unknown field `jsn`"), "{err}");
+	}
+
+	#[test]
 	fn parses_modules_and_targets() {
 		let c = cfg(r#"
 [schema.core]

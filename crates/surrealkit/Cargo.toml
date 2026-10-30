@@ -5,6 +5,9 @@ readme = 'README.md'
 documentation = 'https://docs.rs/surrealkit'
 keywords = ['surrealdb', 'migrations', 'seed', 'testing', 'manage']
 categories = ['database', 'command-line-utilities', 'development-tools']
+# Test-only data: the typegen golden corpus and insta snapshots stay in the repository and
+# out of the published crate. The tests that read them run from a checkout.
+exclude = ['tests/fixtures/typegen_corpus/**', 'tests/snapshots/**', 'src/**/snapshots/**']
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

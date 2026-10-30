@@ -2,6 +2,10 @@ use super::types::{FilterInput, LoadedSuite};
 
 pub fn apply_filters(mut suites: Vec<LoadedSuite>, filters: &FilterInput) -> Vec<LoadedSuite> {
 	suites.retain(|suite| match_suite(suite, filters.suite_pattern.as_deref().unwrap_or("*")));
+	// With --exec, a suite that never had cases exists to run the command; one whose cases
+	// were all filtered out was not selected.
+	let exec_only: Vec<bool> =
+		suites.iter().map(|suite| filters.exec && suite.spec.cases.is_empty()).collect();
 
 	for suite in &mut suites {
 		suite.spec.cases.retain(|case| {
@@ -18,7 +22,8 @@ pub fn apply_filters(mut suites: Vec<LoadedSuite>, filters: &FilterInput) -> Vec
 		}
 	}
 
-	suites.retain(|suite| !suite.spec.cases.is_empty());
+	let mut exec_only = exec_only.into_iter();
+	suites.retain(|suite| exec_only.next().unwrap_or(false) || !suite.spec.cases.is_empty());
 	suites
 }
 
@@ -60,7 +65,37 @@ pub fn glob_match(pattern: &str, text: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-	use super::glob_match;
+	use std::path::PathBuf;
+
+	use super::{apply_filters, glob_match};
+	use crate::tester::types::{FilterInput, LoadedSuite};
+
+	fn suite(name: &str, raw: &str) -> LoadedSuite {
+		LoadedSuite {
+			path: PathBuf::from(format!("{name}.toml")),
+			spec: toml::from_str(&format!("name = \"{name}\"\n{raw}")).expect("suite"),
+		}
+	}
+
+	#[test]
+	fn with_exec_a_suite_without_cases_still_runs_but_a_filtered_out_one_does_not() {
+		let case = "[[cases]]\nname = \"c\"\nkind = \"sql_expect\"\nsql = \"RETURN 1;\"\n";
+		let suites = || vec![suite("bare", ""), suite("full", case)];
+		let names = |kept: Vec<LoadedSuite>| -> Vec<String> {
+			kept.into_iter().map(|s: LoadedSuite| s.spec.name.unwrap_or_default()).collect()
+		};
+		let mut filters = FilterInput {
+			suite_pattern: None,
+			case_pattern: None,
+			tags: Vec::new(),
+			exec: false,
+		};
+		assert_eq!(names(apply_filters(suites(), &filters)), ["full"]);
+		filters.exec = true;
+		assert_eq!(names(apply_filters(suites(), &filters)), ["bare", "full"]);
+		filters.case_pattern = Some("nothing".into());
+		assert_eq!(names(apply_filters(suites(), &filters)), ["bare"]);
+	}
 
 	#[test]
 	fn glob_match_handles_wildcards() {

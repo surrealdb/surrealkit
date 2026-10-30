@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Instant;
 
 use anyhow::{Context, Result, anyhow, bail};
@@ -18,9 +19,10 @@ use super::actors::{
 };
 use super::api::execute_api_case;
 use super::assertions::{JsonAssertionContext, assert_json_value_with_context};
+use super::exec::{ExecTarget, run_exec};
 use super::types::{
 	AssertionReport, CaseKind, CaseReport, GlobalTestConfig, JsonAssertionSpec, LoadedSuite,
-	PermissionAction, RunReport, SchemaSource, SuiteReport, TestOpts,
+	PermissionAction, RunReport, SchemaSource, SuiteReport, TestOpts, effective_schema_source,
 };
 use crate::config::{AuthLevel, DbCfg};
 use crate::core::create_surreal_client;
@@ -37,6 +39,8 @@ pub struct RunnerContext {
 	pub timeout_ms: u64,
 	pub vars: TemplateVars,
 	run_id: String,
+	/// Set by Ctrl-C while an --exec run is in progress: stop, tear down, fail.
+	interrupted: Arc<AtomicBool>,
 }
 
 impl RunnerContext {
@@ -56,6 +60,7 @@ impl RunnerContext {
 			timeout_ms,
 			vars,
 			run_id: unique_run_id(),
+			interrupted: Arc::new(AtomicBool::new(false)),
 		}
 	}
 
@@ -63,20 +68,24 @@ impl RunnerContext {
 		let started_at = OffsetDateTime::now_utc();
 		let run_start = Instant::now();
 
-		let jobs = self.jobs(suites);
-		let mut suite_reports = Vec::new();
-		let replays = jobs.iter().any(|job| job.source == SchemaSource::Rollouts);
-		if replays && !self.opts.no_sync && self.global.rollouts.parity.unwrap_or(true) {
-			suite_reports.push(self.rollout_parity().await);
+		// With --exec, Ctrl-C must not kill the runner before it has stopped the command and
+		// removed the suite databases: take the signal and let the suites wind down.
+		let watcher = (!self.opts.exec.is_empty()).then(|| {
+			let interrupted = self.interrupted.clone();
+			tokio::spawn(async move {
+				if tokio::signal::ctrl_c().await.is_ok() {
+					log::warn!(
+						"interrupted: stopping the --exec command and removing test databases"
+					);
+					interrupted.store(true, Ordering::SeqCst);
+				}
+			})
+		});
+		let result = self.run_jobs(self.jobs(suites)).await;
+		if let Some(watcher) = watcher {
+			watcher.abort();
 		}
-		let parity_failed = suite_reports.iter().any(|report| report.cases_failed > 0);
-		if !(self.opts.fail_fast && parity_failed) {
-			suite_reports.extend(if self.opts.parallel <= 1 {
-				self.run_sequential(jobs).await?
-			} else {
-				self.run_parallel(jobs).await?
-			});
-		}
+		let suite_reports = result?;
 
 		let suites_total = suite_reports.len();
 		let suites_failed = suite_reports.iter().filter(|s| s.cases_failed > 0).count();
@@ -98,16 +107,33 @@ impl RunnerContext {
 		})
 	}
 
+	/// The rollout parity check when any suite replays rollouts, then every job.
+	async fn run_jobs(&self, jobs: Vec<SuiteJob>) -> Result<Vec<SuiteReport>> {
+		let mut suite_reports = Vec::new();
+		let replays = jobs.iter().any(|job| job.source == SchemaSource::Rollouts);
+		if replays && !self.opts.no_sync && self.global.rollouts.parity.unwrap_or(true) {
+			suite_reports.push(self.rollout_parity().await);
+		}
+		let parity_failed = suite_reports.iter().any(|report| report.cases_failed > 0);
+		if !(self.opts.fail_fast && parity_failed) {
+			suite_reports.extend(if self.opts.parallel <= 1 {
+				self.run_sequential(jobs).await?
+			} else {
+				self.run_parallel(jobs).await?
+			});
+		}
+		Ok(suite_reports)
+	}
+
 	/// Each suite once per schema source it runs against.
 	fn jobs(&self, suites: Vec<LoadedSuite>) -> Vec<SuiteJob> {
 		let mut jobs = Vec::new();
 		for suite in suites {
-			let source = suite
-				.spec
-				.schema_from
-				.or(self.opts.schema_from)
-				.or(self.global.defaults.schema_from)
-				.unwrap_or(SchemaSource::Sync);
+			let source = effective_schema_source(
+				self.opts.schema_from,
+				suite.spec.schema_from,
+				self.global.defaults.schema_from,
+			);
 			let labelled = source == SchemaSource::Both;
 			for &single in source.sources() {
 				jobs.push(SuiteJob {
@@ -183,6 +209,7 @@ impl RunnerContext {
 			timeout_ms: self.timeout_ms,
 			vars: self.vars.clone(),
 			run_id: self.run_id.clone(),
+			interrupted: self.interrupted.clone(),
 		}
 	}
 
@@ -222,12 +249,57 @@ impl RunnerContext {
 		let host = self.cfg.host().to_string();
 		let base_url =
 			self.base_url.as_ref().map(|url| format!("{}/api/{}/{}", url, namespace, database));
-		let actors = self.prepare_suite(&suite, &host, &namespace, &database, source).await?;
-		let mut cases = Vec::new();
+		let target = ExecTarget {
+			host: &host,
+			namespace: &namespace,
+			database: &database,
+			suite: &suite_name,
+			source,
+			api_url: base_url.as_deref(),
+			root_token: self.opts.exec_root_token,
+		};
+		let outcome = self.exercise_suite(&suite, &target).await;
 
+		// Teardown does not depend on how the suite went: a failed preparation, a failed case,
+		// a failed or interrupted --exec command all leave a database that must go.
+		if !self.opts.keep_db
+			&& let Err(err) = cleanup_suite_db(&self.cfg, &host, &namespace, &database).await
+		{
+			log::warn!("failed to clean up test db {}/{}: {:#}", namespace, database, err);
+		}
+		let cases = outcome?;
+
+		let cases_total = cases.len();
+		let cases_failed = cases.iter().filter(|c| !c.passed).count();
+		let cases_passed = cases_total.saturating_sub(cases_failed);
+
+		Ok(SuiteReport {
+			suite_file: suite.path.to_string_lossy().replace('\\', "/"),
+			suite_name,
+			namespace,
+			database,
+			duration_ms: started.elapsed().as_millis(),
+			cases_total,
+			cases_passed,
+			cases_failed,
+			cases,
+		})
+	}
+
+	/// Prepare the suite's database, run its cases, then its --exec command.
+	async fn exercise_suite(
+		&self,
+		suite: &LoadedSuite,
+		target: &ExecTarget<'_>,
+	) -> Result<Vec<CaseReport>> {
+		let actors = self
+			.prepare_suite(suite, target.host, target.namespace, target.database, target.source)
+			.await?;
+		let mut cases = Vec::new();
 		for case in &suite.spec.cases {
+			self.check_interrupted()?;
 			let case_start = Instant::now();
-			let case_result = run_case(case, &actors, base_url.as_deref(), self.timeout_ms).await;
+			let case_result = run_case(case, &actors, target.api_url, self.timeout_ms).await;
 
 			let report = match case_result {
 				Ok(mut report) => {
@@ -247,31 +319,22 @@ impl RunnerContext {
 			let failed = !report.passed;
 			cases.push(report);
 			if self.opts.fail_fast && failed {
-				break;
+				return Ok(cases);
 			}
 		}
-
-		let cases_total = cases.len();
-		let cases_failed = cases.iter().filter(|c| !c.passed).count();
-		let cases_passed = cases_total.saturating_sub(cases_failed);
-
-		if !self.opts.keep_db
-			&& let Err(err) = cleanup_suite_db(&self.cfg, &host, &namespace, &database).await
-		{
-			log::warn!("failed to clean up test db {}/{}: {:#}", namespace, database, err);
+		if !self.opts.exec.is_empty() {
+			self.check_interrupted()?;
+			cases.push(run_exec(&self.opts.exec, target, &actors, &self.interrupted).await?);
 		}
+		Ok(cases)
+	}
 
-		Ok(SuiteReport {
-			suite_file: suite.path.to_string_lossy().replace('\\', "/"),
-			suite_name,
-			namespace,
-			database,
-			duration_ms: started.elapsed().as_millis(),
-			cases_total,
-			cases_passed,
-			cases_failed,
-			cases,
-		})
+	/// Fail once the runner has been interrupted, so the caller tears down and stops.
+	fn check_interrupted(&self) -> Result<()> {
+		if self.interrupted.load(Ordering::SeqCst) {
+			bail!("interrupted");
+		}
+		Ok(())
 	}
 
 	async fn prepare_suite(
@@ -344,6 +407,11 @@ impl RunnerContext {
 						typegen_ts_out: None,
 						typegen_ts_format: None,
 						typegen_json_out: None,
+						typegen_strict: false,
+						typegen_omit_generated_at: false,
+						typegen_schema_version: crate::typegen::SchemaVersion::V1,
+						typegen_emitters: Vec::new(),
+						typegen_acknowledge: Default::default(),
 					},
 				)
 				.await
@@ -1456,6 +1524,7 @@ mod tests {
 				headers: BTreeMap::new(),
 				auth: None,
 				auth_record: None,
+				token: None,
 			},
 		);
 
@@ -1504,6 +1573,7 @@ mod tests {
 				headers: BTreeMap::new(),
 				auth: None,
 				auth_record: None,
+				token: None,
 			},
 		);
 

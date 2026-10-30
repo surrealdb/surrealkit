@@ -8,6 +8,7 @@ filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
 Seven things do need attention, and 1.0.0-beta.6 adds five more (8 to 12).
+Unreleased changes are 13 to 15.
 Upgrading from 0.7.0 or any 1.0 beta carries existing state forward; CI checks
 that against every published release.
 
@@ -300,6 +301,90 @@ Nothing to do. `[typegen]` takes a `filename` for the file inside the
 itself, e.g. `typescript = "src/types/database.ts"` (#75).
 `surrealkit typegen --typescript <path>` overrides it for one run.
 
+### 13. Typegen reads the selected target and writes atomically (unreleased)
+
+`surrealkit typegen` used to connect through the ambient connection even when
+`surrealkit.toml` declared targets, so `--target` and `primary = true` were
+ignored. It now resolves its database like the other single-target commands:
+`--target`, else the `primary` target, else the only declared target, else the
+ambient connection. A project with exactly one declared target therefore
+introspects that target now; pass nothing extra if that is the database you
+meant, or remove the `[target.*]` section if it is not.
+
+Unknown keys in `[typegen]` are now an error instead of being ignored. Fix the
+key the error names. `typegen --stdout` now still writes configured TypeScript.
+
+Generated files are now written atomically and left untouched when their bytes
+would not change, and the formatter runs on a temporary sibling
+(`index.surrealkit-tmp-<pid>-<n>.ts`) instead of the file itself. If your
+formatter only accepts files matching a pattern, make sure that name matches
+too. New opt-ins: `[typegen] strict`, `[typegen] generated_at = false`, and
+`surrealkit typegen --check`.
+
+### 14. Typegen parses every SurrealDB 3.x kind (unreleased)
+
+These are changes to v1 output that need no opt-in: they are parser fixes.
+`schema.json` and the generated TypeScript change only where the old parser was
+wrong; a schema it already understood produces the same bytes (CI pins that).
+Where it was wrong, the output is now correct:
+
+- Fields rendered `TYPE object FLEXIBLE` (every FLEXIBLE field on 3.x), or with
+  `COMPUTED` or `INLINE` after the kind, used to get an `unknown` type whose
+  `rawType` included the keyword. They now have their real kind.
+- `regex`, `range`, `table<…>`, `file<…>`, tuples `[A, B]`, object literals
+  `{ a: int }` and float, decimal and duration literals were `unknown`. They are
+  now the primitives `regex` and `range`, and the kinds `table`, `file`,
+  `tuple` and `object`; float, decimal and duration literals carry a `type`
+  beside their `value` (decimals and durations as exact strings). TypeScript maps
+  them to `Table`, `FileRef`, `Range`, tuple and object types.
+- A backtick-quoted field name containing a dot is one TypeScript key rather
+  than a nested object.
+
+A field without `TYPE` is unchanged: still `{"kind":"unknown","source":""}`
+and `unknown` in TypeScript, now with an info diagnostic. (Schema document v2
+calls it `any`.)
+
+Library users matching on `FieldType` or `PrimitiveType` have new variants to
+handle, and `FieldType::Literal` has a `literal_type` field. Anything typegen
+still cannot represent is reported as a `Diagnostic`
+(`typegen::generate_with_diagnostics`), and `strict` fails on errors.
+
+### 15. Effect-native typegen (unreleased)
+
+Nothing to change. Relative to the parser fixes in entry 14 (and the behaviour
+changes in entry 13), every part is opt-in: with no new configuration,
+`schema.json` and the generated TypeScript interfaces are what entry 14 describes.
+
+What changes **without** opting in, across entries 13 and 14 and the tester
+section (everything else below is opt-in):
+
+- Unknown keys in `[typegen]` are an error, and `typegen` connects to the
+  selected (or only declared) target instead of the ambient connection (entry 13).
+- The formatter runs on a temporary sibling file, not the output file (entry 13).
+- v1 `schema.json` and the TypeScript interfaces change where the old parser was
+  wrong (entry 14), including a field whose VALUE, ASSERT or PERMISSIONS reads a
+  field named like a clause keyword (`type`, `value`, `comment`), which used to
+  be retyped; `FieldType` and `PrimitiveType` gain variants for library users.
+- `surrealkit test --schema-from` wins over a suite's `schema_from`, and a suite
+  whose preparation fails has its database removed (tester section).
+
+- `[typegen] schema_version = 2` writes [schema document v2](docs/typegen/schema-document-v2.md)
+  instead of the v1 JSON (the TypeScript interfaces do not change).
+- `surrealkit compile` builds that document from the schema files in an embedded,
+  network-free engine (it writes `[typegen] json` only with `schema_version = 2`,
+  since `sync` and `typegen` write that file too); `typegen --from <schema.json>`
+  works from a document on disk.
+- `[typegen.emit.<name>]` runs external emitters such as `effect-surrealkit`
+  ([protocol](docs/typegen/external-emitters.md)). A failing emitter fails every
+  `--check` and `compile`, even `compile --lenient`.
+- `[typegen] acknowledge = { "<code>" = "<reason>" }` lets an error diagnostic
+  through a strict run without turning strictness off; `[typegen] engine` names
+  the SurrealDB minor you deploy to, which `compile` compares with its embedded
+  engine.
+- `vite-plugin-surrealkit` gains `mode: 'generate'`, which compiles instead of syncing.
+- `surrealkit test --exec <cmd>` runs a command against each prepared suite database
+  (and `--schema-from` now wins over a suite's `schema_from`; see the tester section).
+
 ## Opting into multiple schema modules
 
 Adopting modules is additive. Your existing schema stays in the default module
@@ -425,6 +510,21 @@ Two behaviour changes:
   `allow = false` create rule on such a table passed exactly when the actor was
   allowed to create. Test those creates with a `sql_expect` case that sets its
   own unique values.
+
+### `--schema-from` wins over the suite, and `--exec` (unreleased)
+
+- `surrealkit test --schema-from <source>` now overrides a suite's own
+  `schema_from`, as the documentation always said. Before, a suite that set
+  `schema_from` ignored the flag. If you relied on that, drop the flag for those
+  runs or select the suites with `--suite`.
+- A suite whose preparation fails (setup, sync, seed or fixtures) now has its
+  database removed like any other; before, it was left on the server.
+- New: `surrealkit test --exec <cmd>` runs a command against each prepared suite
+  database before teardown (see the README); it gets a token scoped to that
+  database, and the root token only with `--exec-root-token`. Library users
+  constructing `tester::TestOpts` with a struct literal add `exec: Vec::new()` and
+  `exec_root_token: false` (or use `..Default::default()`, which `TestOpts` now
+  implements).
 
 ## If you use the Rust library
 

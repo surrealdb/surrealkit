@@ -1,0 +1,33 @@
+{
+	"description": "Typegen golden corpus. Apply `modules` in order, skipping entries whose `engines` exclude the target engine minor; entries with `experimental` need those capabilities. See docs/typegen/schema-document-v2.md section 17.",
+	"modules": [
+		{ "path": "schema/01_tables.surql" },
+		{ "path": "schema/02_kinds.surql" },
+		{ "path": "schema/03_ids.surql" },
+		{ "path": "schema/04_fields.surql" },
+		{ "path": "schema/05_nested.surql" },
+		{ "path": "schema/06_references.surql" },
+		{ "path": "schema/07_functions_params.surql" },
+		{ "path": "schema/08_indexes_events.surql" },
+		{ "path": "schema/09_access_sequences.surql" },
+		{ "path": "schema/10_api_config.surql" },
+		{ "path": "schema-gated/20_experimental_files.surql", "experimental": ["files"] },
+		{ "path": "schema-gated/30_relations.v3.3.surql", "engines": ["3.3"] },
+		{ "path": "schema-gated/31_module.v3.2.surql", "engines": ["3.2"], "experimental": ["surrealism"] },
+		{ "path": "schema-gated/31_module.v3.3.surql", "engines": ["3.3"], "experimental": ["surrealism"] }
+	],
+	"introspection": {
+		"3.2.4": "introspection/3.2.4",
+		"3.3.0": "introspection/3.3.0"
+	},
+	"semantics": ["semantics/field_presence.surql", "semantics/collections.surql", "semantics/access.v3.3.surql"],
+	"rejected": [
+		"rejected/id-record-kind.surql",
+		"rejected/references-kind.surql",
+		"rejected/syntax.surql"
+	],
+	"acknowledge": {
+		"object-without-fields": "kinds.k_object is the corpus's bare object kind: on a SCHEMAFULL table it holds only {} by design, which this error reports"
+	},
+	"hazards": ["rejected/poison-array-set-union.v3.3.surql", "rejected/crash-option-bounded-set.v3.3.surql"]
+}

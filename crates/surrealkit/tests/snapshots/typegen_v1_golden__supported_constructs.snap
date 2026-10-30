@@ -1,0 +1,650 @@
+---
+source: crates/surrealkit/tests/typegen_v1_golden.rs
+expression: v1_outputs(SUPPORTED_SCHEMA).await
+---
+--- schema.json
+{
+  "version": 1,
+  "namespace": "golden",
+  "database": "golden",
+  "tables": [
+    {
+      "name": "thing",
+      "define": "DEFINE TABLE thing TYPE NORMAL SCHEMAFULL PERMISSIONS FOR select FULL, FOR create, update, delete NONE",
+      "schemafull": true,
+      "kind": "NORMAL",
+      "fields": [
+        {
+          "name": "a",
+          "define": "DEFINE FIELD a ON thing TYPE any PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "any"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "any"
+        },
+        {
+          "name": "arr",
+          "define": "DEFINE FIELD arr ON thing TYPE array<int> PERMISSIONS FULL",
+          "type": {
+            "kind": "array",
+            "inner": {
+              "kind": "primitive",
+              "name": "int"
+            },
+            "max": null
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "array<int>"
+        },
+        {
+          "name": "arr.*",
+          "define": "DEFINE FIELD arr.* ON thing TYPE int PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "int"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "int"
+        },
+        {
+          "name": "arr_n",
+          "define": "DEFINE FIELD arr_n ON thing TYPE array<string, 3> PERMISSIONS FULL",
+          "type": {
+            "kind": "array",
+            "inner": {
+              "kind": "primitive",
+              "name": "string"
+            },
+            "max": 3
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "array<string, 3>"
+        },
+        {
+          "name": "arr_n.*",
+          "define": "DEFINE FIELD arr_n.* ON thing TYPE string PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "string"
+        },
+        {
+          "name": "b",
+          "define": "DEFINE FIELD b ON thing TYPE bool PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "bool"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "bool"
+        },
+        {
+          "name": "bs",
+          "define": "DEFINE FIELD bs ON thing TYPE bytes PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "bytes"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "bytes"
+        },
+        {
+          "name": "code",
+          "define": "DEFINE FIELD code ON thing TYPE 200 | 404 PERMISSIONS FULL",
+          "type": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "value": 200
+              },
+              {
+                "kind": "literal",
+                "value": 404
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "200 | 404"
+        },
+        {
+          "name": "d",
+          "define": "DEFINE FIELD d ON thing TYPE decimal PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "decimal"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "decimal"
+        },
+        {
+          "name": "dt",
+          "define": "DEFINE FIELD dt ON thing TYPE datetime DEFAULT time::now() READONLY PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "datetime"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": true,
+          "hasDefault": true,
+          "rawType": "datetime"
+        },
+        {
+          "name": "du",
+          "define": "DEFINE FIELD du ON thing TYPE duration PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "duration"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "duration"
+        },
+        {
+          "name": "f",
+          "define": "DEFINE FIELD f ON thing TYPE float PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "float"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "float"
+        },
+        {
+          "name": "flag",
+          "define": "DEFINE FIELD flag ON thing TYPE true | false PERMISSIONS FULL",
+          "type": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "value": true
+              },
+              {
+                "kind": "literal",
+                "value": false
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "true | false"
+        },
+        {
+          "name": "geo",
+          "define": "DEFINE FIELD geo ON thing TYPE geometry<point | polygon> PERMISSIONS FULL",
+          "type": {
+            "kind": "geometry",
+            "kinds": [
+              "point",
+              "polygon"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "geometry<point | polygon>"
+        },
+        {
+          "name": "guarded",
+          "define": "DEFINE FIELD guarded ON thing TYPE string ASSERT $value != 'DEFAULT' PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "string"
+        },
+        {
+          "name": "i",
+          "define": "DEFINE FIELD i ON thing TYPE int DEFAULT 0 PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "int"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": true,
+          "rawType": "int"
+        },
+        {
+          "name": "items",
+          "define": "DEFINE FIELD items ON thing TYPE array<object> DEFAULT [] PERMISSIONS FULL",
+          "type": {
+            "kind": "array",
+            "inner": {
+              "kind": "primitive",
+              "name": "object"
+            },
+            "max": null
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": true,
+          "rawType": "array<object>"
+        },
+        {
+          "name": "items.*",
+          "define": "DEFINE FIELD items.* ON thing TYPE object PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "object"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "object"
+        },
+        {
+          "name": "items.*.label",
+          "define": "DEFINE FIELD items.*.label ON thing TYPE string PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "string"
+        },
+        {
+          "name": "n",
+          "define": "DEFINE FIELD n ON thing TYPE number PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "number"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "number"
+        },
+        {
+          "name": "nested",
+          "define": "DEFINE FIELD nested ON thing TYPE object PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "object"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "object"
+        },
+        {
+          "name": "nested.inner",
+          "define": "DEFINE FIELD nested.inner ON thing TYPE object PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "object"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "object"
+        },
+        {
+          "name": "nested.inner.leaf",
+          "define": "DEFINE FIELD nested.inner.leaf ON thing TYPE none | int PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "int"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "none | int"
+        },
+        {
+          "name": "nul",
+          "define": "DEFINE FIELD nul ON thing TYPE string | null PERMISSIONS FULL",
+          "type": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "primitive",
+                "name": "string"
+              },
+              {
+                "kind": "primitive",
+                "name": "null"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "string | null"
+        },
+        {
+          "name": "o",
+          "define": "DEFINE FIELD o ON thing TYPE object PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "object"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "object"
+        },
+        {
+          "name": "opt",
+          "define": "DEFINE FIELD opt ON thing TYPE none | string PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "string"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "none | string"
+        },
+        {
+          "name": "rec",
+          "define": "DEFINE FIELD rec ON thing TYPE record<user> PERMISSIONS FULL",
+          "type": {
+            "kind": "record",
+            "tables": [
+              "user"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "record<user>"
+        },
+        {
+          "name": "recs",
+          "define": "DEFINE FIELD recs ON thing TYPE none | array<record<user | thing>> PERMISSIONS FULL",
+          "type": {
+            "kind": "array",
+            "inner": {
+              "kind": "record",
+              "tables": [
+                "user",
+                "thing"
+              ]
+            },
+            "max": null
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "none | array<record<user | thing>>"
+        },
+        {
+          "name": "recs.*",
+          "define": "DEFINE FIELD recs.* ON thing TYPE record<user | thing> PERMISSIONS FULL",
+          "type": {
+            "kind": "record",
+            "tables": [
+              "user",
+              "thing"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "record<user | thing>"
+        },
+        {
+          "name": "s",
+          "define": "DEFINE FIELD s ON thing TYPE string PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "string"
+        },
+        {
+          "name": "st",
+          "define": "DEFINE FIELD st ON thing TYPE set<string> PERMISSIONS FULL",
+          "type": {
+            "kind": "set",
+            "inner": {
+              "kind": "primitive",
+              "name": "string"
+            },
+            "max": null
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "set<string>"
+        },
+        {
+          "name": "st.*",
+          "define": "DEFINE FIELD st.* ON thing TYPE string PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "string"
+        },
+        {
+          "name": "status",
+          "define": "DEFINE FIELD status ON thing TYPE 'open' | 'closed' DEFAULT 'open' PERMISSIONS FULL",
+          "type": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "value": "open"
+              },
+              {
+                "kind": "literal",
+                "value": "closed"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": true,
+          "rawType": "'open' | 'closed'"
+        },
+        {
+          "name": "u",
+          "define": "DEFINE FIELD u ON thing TYPE uuid PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "uuid"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "uuid"
+        },
+        {
+          "name": "untyped",
+          "define": "DEFINE FIELD untyped ON thing PERMISSIONS FULL",
+          "type": {
+            "kind": "unknown",
+            "source": ""
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false
+        }
+      ],
+      "events": [],
+      "indexes": []
+    },
+    {
+      "name": "user",
+      "define": "DEFINE TABLE user TYPE NORMAL SCHEMAFULL PERMISSIONS NONE",
+      "schemafull": true,
+      "kind": "NORMAL",
+      "fields": [
+        {
+          "name": "name",
+          "define": "DEFINE FIELD name ON user TYPE string PERMISSIONS FULL",
+          "type": {
+            "kind": "primitive",
+            "name": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "hasDefault": false,
+          "rawType": "string"
+        }
+      ],
+      "events": [],
+      "indexes": []
+    }
+  ],
+  "functions": [
+    {
+      "name": "fn::add",
+      "define": "DEFINE FUNCTION fn::add($a: int, $b: none | int) -> int { RETURN $a + ($b ?? 0) } PERMISSIONS FULL",
+      "args": [
+        {
+          "name": "a",
+          "type": {
+            "kind": "primitive",
+            "name": "int"
+          },
+          "optional": false
+        },
+        {
+          "name": "b",
+          "type": {
+            "kind": "primitive",
+            "name": "int"
+          },
+          "optional": true
+        }
+      ],
+      "returns": {
+        "kind": "primitive",
+        "name": "int"
+      }
+    }
+  ],
+  "params": [],
+  "analyzers": [],
+  "accesses": [],
+  "apis": [],
+  "buckets": [],
+  "sequences": [],
+  "configs": [],
+  "models": [],
+  "users": []
+}
+--- index.ts
+// Generated by SurrealKit — do not edit.
+// Run `surrealkit typegen` to regenerate.
+
+import type { Decimal, Duration, GeometryPoint, GeometryPolygon, RecordId, Uuid } from 'surrealdb';
+
+export interface Thing {
+  id: RecordId<'thing'>;
+  a: any;
+  arr: number[];
+  arr_n: string[];
+  b: boolean;
+  bs: Uint8Array;
+  code: 200 | 404;
+  d: Decimal;
+  dt: Date;
+  du: Duration;
+  f: number;
+  flag: true | false;
+  geo: GeometryPoint | GeometryPolygon;
+  guarded: string;
+  i: number;
+  items: ({
+    label: string;
+  })[];
+  n: number;
+  nested: {
+    inner: {
+      leaf?: number;
+    };
+  };
+  nul: string | null;
+  o: { [key: string]: unknown };
+  opt?: string;
+  rec: RecordId<'user'>;
+  recs?: (RecordId<'user'> | RecordId<'thing'>)[];
+  s: string;
+  st: string[];
+  status: "open" | "closed";
+  u: Uuid;
+  untyped: unknown;
+}
+
+export interface User {
+  id: RecordId<'user'>;
+  name: string;
+}

@@ -1,0 +1,12 @@
+# `surrealkit compile` builds schema document v2 from database/schema in an
+# embedded in-memory engine and hands it to the Effect emitter, which SurrealKit
+# runs as an external emitter (docs/typegen/external-emitters.md).
+
+[typegen]
+schema_version = 2
+json = "src/generated/schema.json"
+generated_at = false
+
+[typegen.emit.effect]
+command = "effect-surrealkit --store app"
+out = "src/generated/surreal"

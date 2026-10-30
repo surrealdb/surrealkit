@@ -1,0 +1,75 @@
+{
+	"accesses": {
+		"account": "DEFINE ACCESS account ON DATABASE TYPE RECORD SIGNUP (CREATE person SET email = $email, name = $name) SIGNIN (SELECT * FROM person WHERE email = $email) WITH REFRESH WITH JWT ALGORITHM HS512 KEY '[REDACTED]' WITH ISSUER KEY '[REDACTED]' DURATION FOR GRANT 4w2d, FOR TOKEN 15m, FOR SESSION 12h COMMENT 'record users'",
+		"operators": "DEFINE ACCESS operators ON DATABASE TYPE BEARER FOR USER DURATION FOR GRANT 4w2d, FOR TOKEN 1h, FOR SESSION NONE",
+		"remote_jwt": "DEFINE ACCESS remote_jwt ON DATABASE TYPE JWT URL 'https://example.com/.well-known/jwks.json' DURATION FOR SESSION 2h",
+		"service": "DEFINE ACCESS service ON DATABASE TYPE BEARER FOR RECORD DURATION FOR GRANT 4w2d, FOR TOKEN 15m, FOR SESSION NONE",
+		"shared_jwt": "DEFINE ACCESS shared_jwt ON DATABASE TYPE JWT ALGORITHM HS256 KEY '[REDACTED]' WITH ISSUER KEY '[REDACTED]' DURATION FOR TOKEN 1h, FOR SESSION NONE"
+	},
+	"analyzers": {
+		"prepped": "DEFINE ANALYZER prepped FUNCTION fn::prep TOKENIZERS BLANK FILTERS LOWERCASE, EDGENGRAM(2,10)",
+		"simple": "DEFINE ANALYZER simple TOKENIZERS BLANK,CLASS FILTERS LOWERCASE, ASCII, SNOWBALL(ENGLISH) COMMENT 'plain text'"
+	},
+	"apis": {
+		"/docs": "DEFINE API '/docs' FOR any PERMISSIONS FULL FOR get, post MIDDLEWARE api::timeout(1s) PERMISSIONS FULL THEN { RETURN { status: 200 } }",
+		"/greet/:name": "DEFINE API '/greet/:name' FOR any PERMISSIONS FULL FOR get PERMISSIONS FULL THEN { RETURN { status: 200, body: fn::greet($request.params.name) } }"
+	},
+	"buckets": {
+		"avatars": "DEFINE BUCKET avatars BACKEND 'memory' PERMISSIONS FULL COMMENT 'profile images'",
+		"docs": "DEFINE BUCKET docs READONLY BACKEND 'memory' PERMISSIONS FULL"
+	},
+	"configs": {
+		"API": "API MIDDLEWARE api::timeout(5s) PERMISSIONS FULL",
+		"GraphQL": "GRAPHQL TABLES AUTO FUNCTIONS AUTO"
+	},
+	"functions": {
+		"doc::related": "DEFINE FUNCTION fn::doc::related($d: record<doc>, $tags: set<string>) -> array<record<doc>> { RETURN [$d] } PERMISSIONS NONE",
+		"double": "DEFINE FUNCTION fn::double($x: int) { RETURN $x * 2 } PERMISSIONS FULL",
+		"greet": "DEFINE FUNCTION fn::greet($name: string, $greeting: none | string, $times: none | int) -> string { RETURN ($greeting ?? 'hello') + ' ' + $name } COMMENT 'greets someone' PERMISSIONS FULL",
+		"now": "DEFINE FUNCTION fn::now() -> datetime { RETURN time::now() } PERMISSIONS WHERE $auth.admin = true",
+		"optional_first": "DEFINE FUNCTION fn::optional_first($a: none | int, $b: int) -> int { RETURN $b } PERMISSIONS FULL",
+		"prep": "DEFINE FUNCTION fn::prep($s: string) -> string { RETURN string::lowercase($s) } PERMISSIONS FULL"
+	},
+	"models": {},
+	"modules": {
+		"mod::demo": "DEFINE MODULE mod::demo AS f\"avatars:/demo.wasm\" PERMISSIONS FULL"
+	},
+	"params": {
+		"app_name": "DEFINE PARAM $app_name VALUE 'corpus' COMMENT 'application name' PERMISSIONS FULL",
+		"derived": "DEFINE PARAM $derived VALUE 3 PERMISSIONS FULL",
+		"limits": "DEFINE PARAM $limits VALUE { max: 10, ratio: 0.5dec } PERMISSIONS NONE"
+	},
+	"sequences": {
+		"order_number": "DEFINE SEQUENCE order_number BATCH 100 START 1000 TIMEOUT 5s",
+		"plain_seq": "DEFINE SEQUENCE plain_seq BATCH 1000 START 0"
+	},
+	"tables": {
+		"adults": "DEFINE TABLE adults TYPE ANY SCHEMALESS AS SELECT name, age FROM person WHERE age >= 18 PERMISSIONS NONE",
+		"anything": "DEFINE TABLE anything TYPE ANY SCHEMALESS PERMISSIONS NONE",
+		"attachment": "DEFINE TABLE attachment TYPE NORMAL SCHEMAFULL PERMISSIONS NONE",
+		"audit_log": "DEFINE TABLE audit_log TYPE NORMAL SCHEMAFULL CHANGEFEED 1d INCLUDE ORIGINAL PERMISSIONS NONE",
+		"bag": "DEFINE TABLE bag TYPE ANY SCHEMALESS PERMISSIONS NONE",
+		"doc": "DEFINE TABLE doc TYPE NORMAL SCHEMAFULL PERMISSIONS NONE",
+		"follows": "DEFINE TABLE follows TYPE RELATION IN person OUT person SCHEMALESS PERMISSIONS NONE",
+		"id_array": "DEFINE TABLE id_array TYPE NORMAL SCHEMAFULL PERMISSIONS NONE",
+		"id_implicit": "DEFINE TABLE id_implicit TYPE ANY SCHEMALESS PERMISSIONS NONE",
+		"id_int": "DEFINE TABLE id_int TYPE NORMAL SCHEMAFULL PERMISSIONS NONE",
+		"id_object": "DEFINE TABLE id_object TYPE NORMAL SCHEMAFULL PERMISSIONS NONE",
+		"id_string": "DEFINE TABLE id_string TYPE NORMAL SCHEMAFULL PERMISSIONS NONE",
+		"id_union": "DEFINE TABLE id_union TYPE NORMAL SCHEMAFULL PERMISSIONS NONE",
+		"id_uuid": "DEFINE TABLE id_uuid TYPE NORMAL SCHEMAFULL PERMISSIONS NONE",
+		"kinds": "DEFINE TABLE kinds TYPE NORMAL SCHEMAFULL COMMENT 'one field per value kind' PERMISSIONS NONE",
+		"ledger": "DEFINE TABLE ledger TYPE NORMAL SCHEMAFULL CHANGEFEED 1w PERMISSIONS NONE",
+		"likes": "DEFINE TABLE likes TYPE RELATION SCHEMALESS PERMISSIONS NONE",
+		"member_of": "DEFINE TABLE member_of TYPE RELATION IN person OUT team | org ENFORCED SCHEMAFULL PERMISSIONS NONE",
+		"org": "DEFINE TABLE org TYPE NORMAL SCHEMAFULL COMMENT \"it's an \\\"organisation\\\"\" PERMISSIONS NONE",
+		"person": "DEFINE TABLE person TYPE NORMAL SCHEMAFULL COMMENT 'people who can sign in' PERMISSIONS FOR select FULL, FOR create, update WHERE $auth.id = id, FOR delete NONE",
+		"purchase": "DEFINE TABLE purchase TYPE NORMAL SCHEMAFULL PERMISSIONS NONE",
+		"sink": "DEFINE TABLE sink TYPE NORMAL DROP SCHEMAFULL PERMISSIONS NONE",
+		"team": "DEFINE TABLE team TYPE NORMAL SCHEMAFULL PERMISSIONS FULL",
+		"team_size": "DEFINE TABLE team_size TYPE ANY SCHEMALESS AS SELECT count() AS total, team FROM person GROUP BY team PERMISSIONS NONE"
+	},
+	"users": {
+		"reader": "DEFINE USER reader ON DATABASE PASSHASH '[REDACTED]' ROLES VIEWER DURATION FOR TOKEN 1h, FOR SESSION 1h COMMENT 'read only'"
+	}
+}

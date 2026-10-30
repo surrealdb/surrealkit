@@ -1,0 +1,28 @@
+{
+	"engine": "surrealdb-3.2.4+20260803.93ab219",
+	"statements": 187,
+	"accepted": 184,
+	"rejected": [
+		{
+			"file": "20_experimental_files.surql",
+			"index": 0,
+			"statement": "DEFINE BUCKET avatars BACKEND \"memory\" PERMISSIONS FULL COMMENT 'profile images'",
+			"status": "PARSE_ERR",
+			"error": "Parse error: Unexpected token `BUCKET`, expected the experimental files feature to be enabled\n --> [1:8]\n  |\n1 | DEFINE BUCKET avatars BACKEND \"memory\" PERMISSIONS FULL COMMENT 'profile imag...\n  |        ^^^^^^\n"
+		},
+		{
+			"file": "20_experimental_files.surql",
+			"index": 1,
+			"statement": "DEFINE BUCKET docs READONLY BACKEND \"memory\"",
+			"status": "PARSE_ERR",
+			"error": "Parse error: Unexpected token `BUCKET`, expected the experimental files feature to be enabled\n --> [1:8]\n  |\n1 | DEFINE BUCKET docs READONLY BACKEND \"memory\";\n  |        ^^^^^^\n"
+		},
+		{
+			"file": "31_module.v3.2.surql",
+			"index": 0,
+			"statement": "DEFINE MODULE mod::demo AS f\"avatars:/demo.wasm\"",
+			"status": "PARSE_ERR",
+			"error": "Parse error: Experimental capability `surrealism` is not enabled\n --> [1:8]\n  |\n1 | DEFINE MODULE mod::demo AS f\"avatars:/demo.wasm\";\n  |        ^^^^^^ Use of `DEFINE MODULE` is still experimental\n"
+		}
+	]
+}

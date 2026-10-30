@@ -1,0 +1,742 @@
+{
+	"accesses": [
+		{
+			"comment": "record users",
+			"duration": {
+				"grant": "4w2d",
+				"session": "12h",
+				"token": "15m"
+			},
+			"kind": {
+				"jwt": {
+					"issuer": {
+						"alg": "HS512",
+						"key": "[REDACTED]"
+					},
+					"verify": {
+						"alg": "HS512",
+						"key": "[REDACTED]"
+					}
+				},
+				"kind": "RECORD",
+				"refresh": true,
+				"signin": "SELECT * FROM person WHERE email = $email",
+				"signup": "CREATE person SET email = $email, name = $name"
+			},
+			"name": "account"
+		},
+		{
+			"duration": {
+				"grant": "4w2d",
+				"session": null,
+				"token": "1h"
+			},
+			"kind": {
+				"jwt": {
+					"issuer": {
+						"alg": "HS512",
+						"key": "[REDACTED]"
+					},
+					"verify": {
+						"alg": "HS512",
+						"key": "[REDACTED]"
+					}
+				},
+				"kind": "BEARER",
+				"subject": "USER"
+			},
+			"name": "operators"
+		},
+		{
+			"duration": {
+				"session": "2h"
+			},
+			"kind": {
+				"jwt": {
+					"verify": {
+						"url": "https://example.com/.well-known/jwks.json"
+					}
+				},
+				"kind": "JWT"
+			},
+			"name": "remote_jwt"
+		},
+		{
+			"duration": {
+				"grant": "4w2d",
+				"session": null,
+				"token": "15m"
+			},
+			"kind": {
+				"jwt": {
+					"issuer": {
+						"alg": "HS512",
+						"key": "[REDACTED]"
+					},
+					"verify": {
+						"alg": "HS512",
+						"key": "[REDACTED]"
+					}
+				},
+				"kind": "BEARER",
+				"subject": "RECORD"
+			},
+			"name": "service"
+		},
+		{
+			"duration": {
+				"session": null,
+				"token": "1h"
+			},
+			"kind": {
+				"jwt": {
+					"issuer": {
+						"alg": "HS256",
+						"key": "[REDACTED]"
+					},
+					"verify": {
+						"alg": "HS256",
+						"key": "[REDACTED]"
+					}
+				},
+				"kind": "JWT"
+			},
+			"name": "shared_jwt"
+		}
+	],
+	"analyzers": [
+		{
+			"filters": [
+				"LOWERCASE",
+				"EDGENGRAM(2,10)"
+			],
+			"function": "prep",
+			"name": "prepped",
+			"tokenizers": [
+				"BLANK"
+			]
+		},
+		{
+			"comment": "plain text",
+			"filters": [
+				"LOWERCASE",
+				"ASCII",
+				"SNOWBALL(ENGLISH)"
+			],
+			"name": "simple",
+			"tokenizers": [
+				"BLANK",
+				"CLASS"
+			]
+		}
+	],
+	"apis": [
+		{
+			"actions": [
+				{
+					"action": "{ RETURN { status: 200 } }",
+					"config": {
+						"middleware": {
+							"api::timeout": [
+								"1s"
+							]
+						},
+						"permissions": true
+					},
+					"methods": [
+						"get",
+						"post"
+					]
+				}
+			],
+			"config": {
+				"permissions": true
+			},
+			"path": "/docs"
+		},
+		{
+			"actions": [
+				{
+					"action": "{ RETURN { status: 200, body: fn::greet($request.params.name) } }",
+					"config": {
+						"permissions": true
+					},
+					"methods": [
+						"get"
+					]
+				}
+			],
+			"config": {
+				"permissions": true
+			},
+			"path": "/greet/:name"
+		}
+	],
+	"buckets": [
+		{
+			"backend": "memory",
+			"comment": "profile images",
+			"name": "avatars",
+			"permissions": true,
+			"readonly": false
+		},
+		{
+			"backend": "memory",
+			"name": "docs",
+			"permissions": true,
+			"readonly": true
+		}
+	],
+	"configs": [
+		{
+			"api": {
+				"middleware": {
+					"api::timeout": [
+						"5s"
+					]
+				},
+				"permissions": true
+			}
+		},
+		{
+			"graphql": {
+				"functions": "AUTO",
+				"tables": "AUTO"
+			}
+		}
+	],
+	"functions": [
+		{
+			"args": [
+				[
+					"d",
+					"record<doc>"
+				],
+				[
+					"tags",
+					"set<string>"
+				]
+			],
+			"block": "{ RETURN [$d] }",
+			"name": "doc::related",
+			"permissions": false,
+			"returns": "array<record<doc>>"
+		},
+		{
+			"args": [
+				[
+					"x",
+					"int"
+				]
+			],
+			"block": "{ RETURN $x * 2 }",
+			"name": "double",
+			"permissions": true
+		},
+		{
+			"args": [
+				[
+					"name",
+					"string"
+				],
+				[
+					"greeting",
+					"none | string"
+				],
+				[
+					"times",
+					"none | int"
+				]
+			],
+			"block": "{ RETURN ($greeting ?? 'hello') + ' ' + $name }",
+			"comment": "greets someone",
+			"name": "greet",
+			"permissions": true,
+			"returns": "string"
+		},
+		{
+			"args": [],
+			"block": "{ RETURN time::now() }",
+			"name": "now",
+			"permissions": "$auth.admin = true",
+			"returns": "datetime"
+		},
+		{
+			"args": [
+				[
+					"a",
+					"none | int"
+				],
+				[
+					"b",
+					"int"
+				]
+			],
+			"block": "{ RETURN $b }",
+			"name": "optional_first",
+			"permissions": true,
+			"returns": "int"
+		},
+		{
+			"args": [
+				[
+					"s",
+					"string"
+				]
+			],
+			"block": "{ RETURN string::lowercase($s) }",
+			"name": "prep",
+			"permissions": true,
+			"returns": "string"
+		}
+	],
+	"models": [],
+	"modules": [
+		{
+			"executable": {
+				"bucket": "avatars",
+				"key": "/demo.wasm",
+				"type": "surrealism"
+			},
+			"name": "demo",
+			"permissions": true
+		}
+	],
+	"params": [
+		{
+			"comment": "application name",
+			"name": "app_name",
+			"permissions": true,
+			"value": "'corpus'"
+		},
+		{
+			"name": "derived",
+			"permissions": true,
+			"value": "3"
+		},
+		{
+			"name": "limits",
+			"permissions": false,
+			"value": "{ max: 10, ratio: 0.5dec }"
+		}
+	],
+	"sequences": [
+		{
+			"batch": "100",
+			"name": "order_number",
+			"start": "1000",
+			"timeout": "5s"
+		},
+		{
+			"batch": "1000",
+			"name": "plain_seq",
+			"start": "0",
+			"timeout": null
+		}
+	],
+	"tables": [
+		{
+			"drop": false,
+			"id": 12,
+			"kind": {
+				"kind": "ANY"
+			},
+			"name": "adults",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": false,
+			"view": "AS SELECT name, age FROM person WHERE age >= 18"
+		},
+		{
+			"drop": false,
+			"id": 6,
+			"kind": {
+				"kind": "ANY"
+			},
+			"name": "anything",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": false
+		},
+		{
+			"drop": false,
+			"id": 23,
+			"kind": {
+				"kind": "NORMAL"
+			},
+			"name": "attachment",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": true
+		},
+		{
+			"changefeed": {
+				"expiry": "1d",
+				"original": true
+			},
+			"drop": false,
+			"id": 8,
+			"kind": {
+				"kind": "NORMAL"
+			},
+			"name": "audit_log",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": true
+		},
+		{
+			"drop": false,
+			"id": 7,
+			"kind": {
+				"kind": "ANY"
+			},
+			"name": "bag",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": false
+		},
+		{
+			"drop": false,
+			"id": 21,
+			"kind": {
+				"kind": "NORMAL"
+			},
+			"name": "doc",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": true
+		},
+		{
+			"drop": false,
+			"id": 4,
+			"kind": {
+				"enforced": false,
+				"in": [
+					"person"
+				],
+				"kind": "RELATION",
+				"out": [
+					"person"
+				]
+			},
+			"name": "follows",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": false
+		},
+		{
+			"drop": false,
+			"id": 17,
+			"kind": {
+				"kind": "NORMAL"
+			},
+			"name": "id_array",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": true
+		},
+		{
+			"drop": false,
+			"id": 20,
+			"kind": {
+				"kind": "ANY"
+			},
+			"name": "id_implicit",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": false
+		},
+		{
+			"drop": false,
+			"id": 14,
+			"kind": {
+				"kind": "NORMAL"
+			},
+			"name": "id_int",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": true
+		},
+		{
+			"drop": false,
+			"id": 18,
+			"kind": {
+				"kind": "NORMAL"
+			},
+			"name": "id_object",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": true
+		},
+		{
+			"drop": false,
+			"id": 15,
+			"kind": {
+				"kind": "NORMAL"
+			},
+			"name": "id_string",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": true
+		},
+		{
+			"drop": false,
+			"id": 19,
+			"kind": {
+				"kind": "NORMAL"
+			},
+			"name": "id_union",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": true
+		},
+		{
+			"drop": false,
+			"id": 16,
+			"kind": {
+				"kind": "NORMAL"
+			},
+			"name": "id_uuid",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": true
+		},
+		{
+			"comment": "one field per value kind",
+			"drop": false,
+			"id": 13,
+			"kind": {
+				"kind": "NORMAL"
+			},
+			"name": "kinds",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": true
+		},
+		{
+			"changefeed": {
+				"expiry": "1w",
+				"original": false
+			},
+			"drop": false,
+			"id": 9,
+			"kind": {
+				"kind": "NORMAL"
+			},
+			"name": "ledger",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": true
+		},
+		{
+			"drop": false,
+			"id": 5,
+			"kind": {
+				"enforced": false,
+				"kind": "RELATION"
+			},
+			"name": "likes",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": false
+		},
+		{
+			"drop": false,
+			"id": 3,
+			"kind": {
+				"enforced": true,
+				"in": [
+					"person"
+				],
+				"kind": "RELATION",
+				"out": [
+					"team",
+					"org"
+				]
+			},
+			"name": "member_of",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": true
+		},
+		{
+			"comment": "it's an \"organisation\"",
+			"drop": false,
+			"id": 2,
+			"kind": {
+				"kind": "NORMAL"
+			},
+			"name": "org",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": true
+		},
+		{
+			"comment": "people who can sign in",
+			"drop": false,
+			"id": 0,
+			"kind": {
+				"kind": "NORMAL"
+			},
+			"name": "person",
+			"permissions": {
+				"create": "$auth.id = id",
+				"delete": false,
+				"select": true,
+				"update": "$auth.id = id"
+			},
+			"schemafull": true
+		},
+		{
+			"drop": false,
+			"id": 22,
+			"kind": {
+				"kind": "NORMAL"
+			},
+			"name": "purchase",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": true
+		},
+		{
+			"drop": true,
+			"id": 10,
+			"kind": {
+				"kind": "NORMAL"
+			},
+			"name": "sink",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": true
+		},
+		{
+			"drop": false,
+			"id": 1,
+			"kind": {
+				"kind": "NORMAL"
+			},
+			"name": "team",
+			"permissions": {
+				"create": true,
+				"delete": true,
+				"select": true,
+				"update": true
+			},
+			"schemafull": true
+		},
+		{
+			"drop": false,
+			"id": 11,
+			"kind": {
+				"kind": "ANY"
+			},
+			"name": "team_size",
+			"permissions": {
+				"create": false,
+				"delete": false,
+				"select": false,
+				"update": false
+			},
+			"schemafull": false,
+			"view": "AS SELECT count() AS total, team FROM person GROUP BY team"
+		}
+	],
+	"users": [
+		{
+			"comment": "read only",
+			"duration": {
+				"session": "1h",
+				"token": "1h"
+			},
+			"hash": "[REDACTED]",
+			"name": "reader",
+			"roles": [
+				"VIEWER"
+			]
+		}
+	]
+}

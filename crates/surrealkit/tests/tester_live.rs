@@ -72,16 +72,44 @@ impl Project {
 
 	/// Run the suites, returning the error (if any) and the JSON report.
 	async fn test(&self, url: &str, schema_from: Option<SchemaSource>) -> (Option<String>, Value) {
+		self.test_with(url, schema_from, Vec::new(), None).await
+	}
+
+	/// [`Project::test`] with an `--exec` command, and a namespace of its own when `ns` is
+	/// given (suite namespaces then start with `<ns>_sk_test_`).
+	async fn test_with(
+		&self,
+		url: &str,
+		schema_from: Option<SchemaSource>,
+		exec: Vec<String>,
+		ns: Option<&str>,
+	) -> (Option<String>, Value) {
+		self.test_custom(url, ns, |opts| {
+			opts.schema_from = schema_from;
+			opts.exec = exec;
+		})
+		.await
+	}
+
+	/// Run the suites with options `customize` adjusts, in a namespace of their own when `ns`
+	/// is given.
+	async fn test_custom(
+		&self,
+		url: &str,
+		ns: Option<&str>,
+		customize: impl FnOnce(&mut TestOpts),
+	) -> (Option<String>, Value) {
 		let report_path = self.root.join("report.json");
 		let overrides = DbOverrides {
 			host: Some(url.to_string()),
+			ns: ns.map(str::to_string),
 			user: Some(std::env::var("SURREALKIT_TEST_USER").unwrap_or_else(|_| "root".into())),
 			pass: Some(std::env::var("SURREALKIT_TEST_PASS").unwrap_or_else(|_| "secret".into())),
 			auth_level: Some("root".into()),
 			folder: Some(self.root.to_string_lossy().into_owned()),
 			..Default::default()
 		};
-		let opts = TestOpts {
+		let mut opts = TestOpts {
 			suite: None,
 			case: None,
 			tags: Vec::new(),
@@ -94,8 +122,11 @@ impl Project {
 			base_url: None,
 			timeout_ms: None,
 			keep_db: false,
-			schema_from,
+			schema_from: None,
+			exec: Vec::new(),
+			exec_root_token: false,
 		};
+		customize(&mut opts);
 		let result = run_test(None, opts, TemplateVars::default(), &overrides).await;
 		let report = fs::read_to_string(&report_path)
 			.ok()
@@ -602,4 +633,235 @@ fn only_manifest(root: &Path) -> PathBuf {
 		.map(|e| e.path())
 		.find(|p| p.is_file())
 		.unwrap()
+}
+
+/// The suite namespaces left on the server whose name starts with `<ns>_sk_test_`.
+async fn leftover_namespaces(url: &str, ns: &str) -> Vec<String> {
+	let db = surrealdb::engine::any::connect(url).await.unwrap();
+	db.signin(surrealdb::opt::auth::Root {
+		username: std::env::var("SURREALKIT_TEST_USER").unwrap_or_else(|_| "root".into()),
+		password: std::env::var("SURREALKIT_TEST_PASS").unwrap_or_else(|_| "secret".into()),
+	})
+	.await
+	.unwrap();
+	let mut response = db.query("INFO FOR ROOT").await.unwrap().check().unwrap();
+	let info: Option<Value> = response.take(0).unwrap();
+	let prefix = format!("{ns}_sk_test_");
+	info.unwrap()["namespaces"]
+		.as_object()
+		.map(|names| names.keys().filter(|n| n.starts_with(&prefix)).cloned().collect())
+		.unwrap_or_default()
+}
+
+fn unique_ns(label: &str) -> String {
+	format!("{label}_{}", surrealdb_types::uuid::Uuid::new_v4().simple())
+}
+
+const PROBE_SCHEMA: &str = "DEFINE TABLE probe SCHEMAFULL;\nDEFINE FIELD n ON probe TYPE int;\n";
+
+const SMOKE_SUITE: &str = r#"name = "smoke"
+
+[[cases]]
+name = "probe exists"
+kind = "schema_metadata"
+actor = "root"
+sql = "INFO FOR DB;"
+contains = ["probe"]
+"#;
+
+/// A script that records the `SURREALKIT_EXEC_*` variables it was given in its first
+/// argument, then exits with its second.
+#[cfg(unix)]
+fn probe_script(project: &Project) -> (String, PathBuf) {
+	let script = project.root.join("probe.sh");
+	fs::write(&script, "#!/bin/sh\nenv | grep ^SURREALKIT_EXEC_ | sort > \"$1\"\nexit \"$2\"\n")
+		.unwrap();
+	(script.to_string_lossy().into_owned(), project.root.join("exec.env"))
+}
+
+#[cfg(unix)]
+fn recorded(path: &Path) -> std::collections::BTreeMap<String, String> {
+	fs::read_to_string(path)
+		.unwrap()
+		.lines()
+		.filter_map(|l| l.split_once('='))
+		.map(|(k, v)| (k.to_string(), v.to_string()))
+		.collect()
+}
+
+#[cfg(unix)]
+fn exec_case(report: &Value) -> &Value {
+	report["suites"][0]["cases"]
+		.as_array()
+		.unwrap()
+		.iter()
+		.find(|c| c["kind"] == "exec")
+		.unwrap_or_else(|| panic!("no exec case:\n{report:#}"))
+}
+
+/// `--exec` without suite files: one implicit suite prepares the database, the command gets
+/// its coordinates, a token scoped to it (no root token) and the schema digest, and the
+/// database is gone afterwards.
+#[cfg(unix)]
+#[tokio::test]
+async fn exec_runs_against_the_prepared_database_before_teardown() {
+	let url = require_server!();
+	let project = Project::new();
+	project.write("schema/probe.surql", PROBE_SCHEMA);
+	let (script, out) = probe_script(&project);
+	let ns = unique_ns("exec_ok");
+	let exec = vec!["sh".into(), script, out.to_string_lossy().into_owned(), "0".into()];
+	let (err, report) = project.test_with(&url, None, exec, Some(&ns)).await;
+	assert_eq!(err, None, "{report:#}");
+	assert_eq!(report["suites"][0]["suite_name"], "exec");
+	assert_eq!(exec_case(&report)["passed"], true);
+
+	let env = recorded(&out);
+	assert_eq!(env["SURREALKIT_EXEC_ENDPOINT"], url);
+	assert!(env["SURREALKIT_EXEC_NAMESPACE"].starts_with(&format!("{ns}_sk_test_")), "{env:?}");
+	assert_eq!(env["SURREALKIT_EXEC_NAMESPACE"], report["suites"][0]["namespace"]);
+	assert_eq!(env["SURREALKIT_EXEC_DATABASE"], report["suites"][0]["database"]);
+	assert_eq!(env["SURREALKIT_EXEC_SUITE"], "exec");
+	assert_eq!(env["SURREALKIT_EXEC_SCHEMA_FROM"], "sync");
+	// The root actor's token is server-wide; it is passed only with --exec-root-token.
+	assert_eq!(env.get("SURREALKIT_EXEC_ACTORS").map(String::as_str), Some(""), "{env:?}");
+	assert!(!env.contains_key("SURREALKIT_EXEC_TOKEN_ROOT"), "{env:?}");
+	assert_eq!(env["SURREALKIT_EXEC_TOKEN"].split('.').count(), 3, "a JWT: {env:?}");
+	let digest = &env["SURREALKIT_EXEC_SCHEMA_DIGEST"];
+	assert!(digest.starts_with("sha256:") && digest.len() == 71, "{digest}");
+
+	// The digest is the schema the files describe: the same files compiled agree.
+	#[cfg(feature = "kv-mem")]
+	{
+		use surrealkit::compile::{CompileModule, CompileOpts, compile};
+		use surrealkit::schema_state::SchemaFile;
+		let compiled = compile(
+			&[CompileModule {
+				name: "schema".into(),
+				files: vec![SchemaFile {
+					path: "schema/probe.surql".into(),
+					sql: PROBE_SCHEMA.into(),
+					hash: String::new(),
+				}],
+			}],
+			&CompileOpts::default(),
+		)
+		.await
+		.unwrap();
+		assert_eq!(&compiled.document.semantic_digest, digest);
+	}
+
+	assert_eq!(leftover_namespaces(&url, &ns).await, Vec::<String>::new());
+}
+
+/// `SURREALKIT_EXEC_TOKEN` reaches the suite database and nothing else; the root token is
+/// passed only on request.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_exec_token_is_scoped_to_the_suite_database() {
+	let url = require_server!();
+	let project = Project::new();
+	project.write("schema/probe.surql", PROBE_SCHEMA);
+	let (script, out) = probe_script(&project);
+	let ns = unique_ns("exec_scope");
+	let exec = vec!["sh".into(), script, out.to_string_lossy().into_owned(), "0".into()];
+	let (err, report) = project
+		.test_custom(&url, Some(&ns), |opts| {
+			opts.exec = exec;
+			opts.exec_root_token = true;
+			opts.keep_db = true;
+		})
+		.await;
+	assert_eq!(err, None, "{report:#}");
+	let env = recorded(&out);
+	assert_eq!(env["SURREALKIT_EXEC_ACTORS"], "root");
+	assert_eq!(env["SURREALKIT_EXEC_TOKEN_ROOT"].split('.').count(), 3, "a JWT: {env:?}");
+	let (suite_ns, suite_db) =
+		(&env["SURREALKIT_EXEC_NAMESPACE"], &env["SURREALKIT_EXEC_DATABASE"]);
+
+	let db = surrealdb::engine::any::connect(url.as_str()).await.unwrap();
+	db.authenticate(env["SURREALKIT_EXEC_TOKEN"].clone()).await.unwrap();
+	db.use_ns(suite_ns.as_str()).use_db(suite_db.as_str()).await.unwrap();
+	db.query("CREATE probe:9 SET n = 9")
+		.await
+		.and_then(|r| r.check())
+		.expect("the token owns the suite database");
+	// 3.3 refuses the switch itself, 3.2 the first statement after it.
+	let other = async {
+		db.use_ns(suite_ns.as_str()).use_db("elsewhere").await?;
+		db.query("CREATE probe:1 SET n = 1").await?.check()?;
+		Ok::<_, surrealdb::Error>(())
+	}
+	.await;
+	assert!(other.is_err(), "another database is out of reach: {other:?}");
+	let info = db.query("INFO FOR ROOT").await.and_then(|r| r.check());
+	assert!(info.is_err(), "the root level is out of reach: {info:?}");
+
+	// --keep-db left the namespace; remove it.
+	let root = surrealdb::engine::any::connect(url.as_str()).await.unwrap();
+	root.signin(surrealdb::opt::auth::Root {
+		username: std::env::var("SURREALKIT_TEST_USER").unwrap_or_else(|_| "root".into()),
+		password: std::env::var("SURREALKIT_TEST_PASS").unwrap_or_else(|_| "secret".into()),
+	})
+	.await
+	.unwrap();
+	root.query(format!("REMOVE NAMESPACE `{suite_ns}`")).await.unwrap().check().unwrap();
+	assert_eq!(leftover_namespaces(&url, &ns).await, Vec::<String>::new());
+}
+
+/// A failing command is a failed case, the run fails, and teardown still happens.
+#[cfg(unix)]
+#[tokio::test]
+async fn a_failing_exec_fails_the_run_and_the_database_is_still_removed() {
+	let url = require_server!();
+	let project = Project::new();
+	project.write("schema/probe.surql", PROBE_SCHEMA);
+	project.write("tests/suites/smoke.toml", SMOKE_SUITE);
+	let (script, out) = probe_script(&project);
+	let ns = unique_ns("exec_fail");
+	let exec = vec!["sh".into(), script, out.to_string_lossy().into_owned(), "3".into()];
+	let (err, report) = project.test_with(&url, None, exec, Some(&ns)).await;
+	assert_eq!(err.as_deref(), Some("1 test cases failed"), "{report:#}");
+	assert_eq!(case(&report, "smoke", "probe exists")["passed"], true);
+	let failed = exec_case(&report);
+	assert_eq!(failed["passed"], false);
+	assert!(failed["message"].as_str().unwrap().contains("exited with status 3"), "{failed}");
+	assert_eq!(recorded(&out)["SURREALKIT_EXEC_SUITE"], "smoke");
+	assert_eq!(leftover_namespaces(&url, &ns).await, Vec::<String>::new());
+}
+
+/// A suite whose preparation fails (here: a schema the server rejects) used to leave its
+/// database behind; teardown no longer depends on preparation succeeding.
+#[tokio::test]
+async fn a_failed_preparation_still_removes_the_database() {
+	let url = require_server!();
+	let project = Project::new();
+	project.write(
+		"schema/bad.surql",
+		"DEFINE TABLE probe SCHEMAFULL;\nDEFINE FIELD n ON probe TYPE nonsense<;\n",
+	);
+	project.write("tests/suites/smoke.toml", "name = \"smoke\"\n");
+	let ns = unique_ns("prep_fail");
+	let (err, _) = project.test_with(&url, None, Vec::new(), Some(&ns)).await;
+	assert!(err.is_some(), "the broken schema must fail the run");
+	assert_eq!(leftover_namespaces(&url, &ns).await, Vec::<String>::new());
+}
+
+/// `--schema-from` on the command line overrides a suite's own `schema_from`, as documented.
+#[tokio::test]
+async fn the_command_line_schema_source_overrides_the_suite() {
+	let url = require_server!();
+	let project = Project::new();
+	project.write("schema/probe.surql", PROBE_SCHEMA);
+	// No rollouts exist, so a suite that really replayed them would fail.
+	project.write(
+		"tests/suites/smoke.toml",
+		&SMOKE_SUITE
+			.replace("name = \"smoke\"\n", "name = \"smoke\"\nschema_from = \"rollouts\"\n"),
+	);
+	let (err, report) = project.test(&url, Some(SchemaSource::Sync)).await;
+	assert_eq!(err, None, "{report:#}");
+	assert_eq!(case(&report, "smoke", "probe exists")["passed"], true);
+	let (err, _) = project.test(&url, None).await;
+	assert!(err.unwrap().contains("rollouts"), "without the flag the suite replays rollouts");
 }

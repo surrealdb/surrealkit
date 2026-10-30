@@ -355,9 +355,16 @@ types.
 
 ```bash
 surrealkit typegen                 # writes database/types/schema.json
-surrealkit typegen --stdout        # print instead
+surrealkit typegen --stdout        # print the JSON instead (TypeScript is still written)
 surrealkit typegen --out types.json
+surrealkit typegen --target staging
 ```
+
+Typegen reads one database: the `--target` you name, else the target marked
+`primary = true`, else the only declared target, else the ambient connection.
+With `--schema`, that target must accept the module (its `schemas` list).
+Unknown keys in `[typegen]` are an error, so a misspelt key cannot silently turn
+an output off.
 
 Configure the outputs in `surrealkit.toml`:
 
@@ -372,14 +379,53 @@ typescript = "src/types"
 filename = "schema.generated.ts"
 
 # Optional formatter run on the generated file. The path is appended as the
-# final argument. Failures are warnings, not errors.
+# final argument. Failures are warnings, not errors, unless `strict` is set.
 format = "biome check --write"
 
 # Where the JSON schema document goes (written as schema.json in that
 # directory). Setting this makes `surrealkit sync` write it too, and
 # `surrealkit typegen` writes it here instead of database/types.
 json = "src/types"
+
+# Fail instead of warning when an output cannot be produced exactly as
+# configured: a failing formatter, a kind typegen cannot parse, and in
+# `surrealkit sync`, any typegen failure after the schema was applied
+# (default: false).
+strict = true
+
+# Leave the `generatedAt` timestamp out of the JSON, so the same schema always
+# produces the same bytes (default: true).
+generated_at = false
+
+# Which schema document the JSON is: 1 (the default, unchanged) or 2, the
+# semantic interchange format described below. TypeScript output is the same
+# either way.
+schema_version = 2
 ```
+
+Generated files are written atomically (to a temporary sibling, then renamed),
+so a bundler or `tsc --watch` never reads half a file and a failure leaves the
+previous version in place. A file whose bytes would not change is not rewritten.
+The formatter runs on that temporary sibling, which has the same extension and
+directory as the real file, so it finds the project's own configuration.
+
+`surrealkit typegen --check` writes nothing and exits non-zero when any
+configured output is missing or differs from what would be generated, which
+suits a CI freshness check. It compares content: an unchanged schema passes even
+though `generatedAt` would be a new time. `--strict` and `--no-generated-at`
+turn on `strict` and `generated_at = false` for one run.
+
+Typegen understands every SurrealDB 3.x kind: primitives (including `regex` and
+`range`), `option`, `array` and `set` with their exact length, `record`, `table`,
+`file` and `geometry` with their name lists, tuples `[A, B]`, object literals
+`{ a: int }`, and literal strings, numbers, floats (`1.5f`), decimals (`10dec`),
+durations (`1d`) and booleans. Anything it cannot represent is reported as a
+diagnostic rather than typed `unknown` without a word: an unparseable kind is an
+error (it fails a `strict` run), a `COMPUTED` field without `TYPE` or an `INFO`
+category the document does not model (such as `DEFINE MODULE`) is a warning, and
+a field without `TYPE` (still `unknown` in `schema.json` and TypeScript) is an
+info logged with `--verbose`. The
+codes are those of [schema document v2](docs/typegen/schema-document-v2.md#14-diagnostics).
 
 `typescript` can also name the file itself, as in
 `typescript = "src/types/database.ts"` (any `.ts`, `.mts` or `.cts` path), in
@@ -393,6 +439,163 @@ path for one run.
 With `typescript` or `json` set, `surrealkit sync` regenerates them after
 applying schema changes, so the generated types never drift from the database.
 Use `json` when you generate your own types from the schema document.
+
+### Schema document v2
+
+With `schema_version = 2` the JSON is [schema document v2](docs/typegen/schema-document-v2.md),
+the format code generators read instead of SurrealQL. It describes what the
+engine stored, clause by clause: kinds as trees, `DEFAULT`/`VALUE`/`COMPUTED`/
+`ASSERT` (with the recognisable assertions structured), `REFERENCE`, permissions,
+relation endpoints, record-id key kinds, indexes, events, functions and every
+other `DEFINE` family, plus a diagnostic for anything not understood. It carries
+no timestamp; `semanticDigest` is a SHA-256 over its semantic content, so the
+same schema gives the same digest on every machine, and `provenance` records the
+engine and adapter that read it.
+
+Database access definitions carry their optional `AUTHENTICATE` expression, so
+changing that policy changes the semantic digest. Older v2 documents without
+the property still decode with their existing digest; regenerate them to
+include any authentication expressions their schema declares.
+
+The document is read through `INFO … STRUCTURE`, by an adapter for each
+supported engine minor (SurrealDB 3.2.x and 3.3.x). Any other minor is read from
+plain `INFO` instead, with the error diagnostic `structure-unsupported-engine`,
+so a `strict` run refuses it.
+
+### Compiling without a database
+
+`surrealkit compile` produces schema document v2 from the schema files alone. It
+applies the selected modules, in `depends_on` order and the way `sync` would, to
+a throwaway embedded in-memory engine, then reads that engine back:
+
+```bash
+surrealkit compile                       # writes [typegen] json (schema_version = 2), else database/types/schema.json
+surrealkit compile --check               # CI: fail when the committed outputs are stale
+surrealkit --schema billing compile      # billing and the modules it depends on
+surrealkit compile --allow-experimental files,surrealism
+```
+
+It needs no server and reads no connection settings (`SURREALDB_*`, `.env`,
+targets), so it runs in a build with no credentials and no network. Template
+variables come from `surrealkit.toml [variables]` and `--var` only; compile
+ignores `SURREALKIT_VAR_*` in the environment, so a checkout compiles to the same
+bytes everywhere. The engine itself has no network access (`http::*` is refused)
+and no scripting. It is strict by default: an error diagnostic fails the command
+(`--lenient` logs it instead). A configured `[typegen] typescript` is written too, from the same
+engine, and what it cannot represent fails a strict compile as well. Because `sync` and `typegen`
+write `[typegen] json` in the configured version, compile writes that file only when the project
+sets `schema_version = 2` (otherwise use `--out` or `--stdout`). Accesses and users defined `ON
+NAMESPACE` or `ON ROOT` are not part of the document, and each is reported as a warning. Schemas that use `DEFINE BUCKET` or `DEFINE MODULE` need the matching
+capability, from `--allow-experimental` or:
+
+```toml
+[typegen]
+experimental = ["files", "surrealism"]
+```
+
+The compiled document equals what `surrealkit typegen` reads from a database
+synced from the same files on the same engine minor: SurrealKit's test suite
+checks it against live SurrealDB 3.2.4 and 3.3.0 servers. The embedded engine is
+always SurrealKit's own `surrealdb` version (3.3), so a project deploying to 3.2
+gets a document shaped by 3.3, and 3.2-only spellings are refused. Name the minor
+you deploy to and compile reports the error `compile-engine-mismatch` when it
+differs:
+
+```toml
+[typegen]
+engine = "3.2"
+```
+
+A module that defines the same entity twice gets the warning
+`definition-duplicate`, since raw SurrealQL and SurrealKit's `OVERWRITE` would
+deploy it differently. A `DEFINE PARAM` whose `VALUE` changes every time it is
+evaluated (`time::now()`, `rand::uuid()`) gets the error
+`param-value-nondeterministic`: its stored value would make every compile
+different.
+
+`surrealkit typegen --from <schema.json>` produces the configured outputs from a
+document on disk instead of a database. A v2 document is decoded strictly and
+its `semanticDigest` recomputed, so a hand-edited document is refused. The
+TypeScript interfaces are generated from v1 documents only.
+
+The machine-readable contract is the JSON Schema (draft 2020-12)
+[`crates/surrealkit/schema/schema-document-v2.schema.json`](crates/surrealkit/schema/schema-document-v2.schema.json),
+also exported as `surrealkit::typegen::SCHEMA_DOCUMENT_V2_JSON_SCHEMA`. Every
+document SurrealKit generates for its golden corpus is validated against it in
+the test suite.
+
+### External emitters
+
+Other generators plug in as external emitters: commands that read schema
+document v2 on stdin and print the files they generate.
+
+```toml
+[typegen.emit.effect]
+command = "effect-surrealkit --store app"
+out = "src/generated/surreal"
+```
+
+`typegen`, `typegen --from`, `compile` and `sync` (each `sync --watch` change
+included) run every configured emitter, then write its files into `out` with the
+same guarantees as SurrealKit's own outputs: nothing is written unless every
+output rendered, each file is replaced atomically and left alone when
+unchanged, files an emitter stops producing are removed, and `--check` reports
+missing, stale and extra files without writing. SurrealKit owns `out` and
+records what it wrote in `out/.surrealkit-emit.json`; it never overwrites a file
+it did not write. A failing emitter fails a strict run, `compile` (even with
+`--lenient`, which tolerates diagnostics only) and any `--check`; otherwise it is
+skipped with its files untouched. The protocol is specified in
+[docs/typegen/external-emitters.md](docs/typegen/external-emitters.md).
+
+An error diagnostic fails `compile` and every strict run. When one is expected and
+acceptable, acknowledge its code, with the reason, instead of turning strictness
+off; the diagnostic stays in the document, and emitters receive the list too
+(`SURREALKIT_EMIT_ACKNOWLEDGE`):
+
+```toml
+[typegen]
+acknowledge = { "param-value-nondeterministic" = "$started is informational only" }
+```
+
+### Effect schemas
+
+[`effect-surrealkit`](packages/effect-surrealkit) is the reference emitter: it
+turns schema document v2 into [Effect](https://effect.website) v4 schemas whose
+`Type` and `Encoded` match what the JavaScript SDK (`surrealdb` 2.x) returns
+and accepts, plus runtime codecs for every SurrealDB value.
+
+`effect-surrealkit` is not published to npm yet. Build it from this repository
+(`packages/effect-surrealkit`: `npm install && npm run build`) and depend on that
+directory, or on the package from a Git checkout (its `prepare` script builds it),
+with `effect` 4 (4.0.6 or later) and `surrealdb` 2 (2.1.1 or later) as peers.
+
+```toml
+# surrealkit.toml
+[typegen.emit.effect]
+command = "effect-surrealkit --store app"   # store: the brand of this schema's record ids
+out = "src/generated/surreal"
+```
+
+`surrealkit compile` (or `typegen`, or a `sync` that changed something) then
+writes, per table, a select schema for a stored row and one input schema per write
+operation — `PersonCreate`, `PersonMerge`, `PersonContent` — derived from the
+field-presence matrix of the contract, so a `READONLY` or `COMPUTED` field in a
+merge, a missing required field on create, a record id of the wrong table, a
+relation endpoint of the wrong table or a wrong function argument tuple are
+compile-time errors. Record ids are branded per store, relations get endpoint
+descriptors, `record<a | b>` a tagged representation, functions their argument
+tuples, and `manifest.ts` the `semanticDigest` the modules came from.
+Integers are safe JavaScript numbers by default and fail loudly beyond ±(2^53 − 1);
+`--int bigint` switches to exact int64. See the
+[package README](packages/effect-surrealkit/README.md) and the
+[example project](examples/effect-typegen).
+
+To test generated code against a real database, let `surrealkit test` prepare
+one: `surrealkit test --exec "<your test command>"` syncs the schema into a
+disposable database, hands the command its coordinates, a token scoped to that
+database and the schema digest, and removes the database afterwards (see
+[Running your own tests against the suite database](#running-your-own-tests-against-the-suite-database)).
+effect-surrealkit's own round-trip properties run that way.
 
 ## Vite Plugin
 
@@ -416,6 +619,10 @@ export default defineConfig({
     ],
 });
 ```
+
+With `mode: 'generate'` it runs `surrealkit compile` instead, never `sync`: generated
+modules (for example the Effect schemas above) are rebuilt as you edit `.surql`
+files, without a database.
 
 Requires Vite 8. See the
 [plugin README](packages/vite-plugin-surrealkit/README.md) for all options.
@@ -845,7 +1052,50 @@ See [examples/rollout-testing](examples/rollout-testing).
 - `--base-url <url>`
 - `--timeout-ms <ms>`
 - `--keep-db`
-- `--schema-from <sync|rollouts|both>`
+- `--schema-from <sync|rollouts|both>` (wins over `schema_from` in a suite and in `[defaults]`)
+- `--exec <cmd>` (see below)
+- `--exec-root-token` (pass the server-wide root token to `--exec` too)
+
+### Running your own tests against the suite database
+
+`--exec <cmd>` runs a command against each suite's prepared database — set up,
+synced (or replayed) and seeded, after the suite's own cases — and before it is
+removed. Test code in any language can then run against exactly the schema
+SurrealKit prepared, with no credentials of its own:
+
+```bash
+surrealkit test --exec "npm run test:db"
+```
+
+The command is split on whitespace, with no quoting, so no argument can contain
+a space: put such a command in a script. It runs from the current directory, with
+the runner's stdin, stdout and stderr. On Windows the program is started
+directly, so an npm shim (`name.cmd`) must be named with its extension. It gets the
+parent environment without SurrealKit's credentials (`SURREALDB_USER` and
+`SURREALDB_PASSWORD`, and their `DATABASE_*` forms), and:
+
+| Variable | Value |
+| --- | --- |
+| `SURREALKIT_EXEC_ENDPOINT` | the server, as configured (`ws://127.0.0.1:8000`) |
+| `SURREALKIT_EXEC_NAMESPACE`, `SURREALKIT_EXEC_DATABASE` | the suite's disposable database |
+| `SURREALKIT_EXEC_TOKEN` | a token for `__surrealkit_exec`, a user SurrealKit defines as owner of that database only (valid for an hour) |
+| `SURREALKIT_EXEC_TOKEN_<ACTOR>` | an access token per actor of the suite (name upper-cased, other characters as `_`); the root actor's only with `--exec-root-token` |
+| `SURREALKIT_EXEC_ACTORS` | the names of those actors, comma-separated |
+| `SURREALKIT_EXEC_SCHEMA_DIGEST` | the `semanticDigest` of the database's [schema document v2](docs/typegen/schema-document-v2.md), equal to what `surrealkit compile` reports for the same files |
+| `SURREALKIT_EXEC_SUITE`, `SURREALKIT_EXEC_SCHEMA_FROM` | the suite name; `sync` or `rollouts` |
+| `SURREALKIT_EXEC_API_URL` | the suite's `/api/<ns>/<db>` base, when `--base-url` is set |
+
+The root actor's token (`SURREALKIT_EXEC_TOKEN_ROOT`) is valid for the whole
+server for its lifetime, not just the suite database, so it is passed only with
+`--exec-root-token`; prefer `SURREALKIT_EXEC_TOKEN`, especially against a shared
+server. The `__surrealkit_exec` user is defined after the schema digest is taken
+and goes away with the database.
+
+Its exit status is reported as one more case (`exec: <cmd>`). Without suite files,
+one implicit suite named `exec` runs it; a suite with no cases of its own still
+runs it. Teardown is unconditional: the database is removed (unless `--keep-db`)
+whether preparation, a case or the command failed, and Ctrl-C stops the command
+first, then removes the databases before exiting.
 
 ### Global Config
 

@@ -1,6 +1,7 @@
 mod actors;
 mod api;
 mod assertions;
+mod exec;
 mod filters;
 mod loader;
 mod report;
@@ -40,7 +41,7 @@ pub async fn run_test(
 			 use a server endpoint with auth level 'root' or 'namespace'/'ns'."
 		);
 	}
-	let loaded = loader::load_specs(cfg.folder())?;
+	let loaded = loader::load_specs(cfg.folder(), !opts.exec.is_empty())?;
 	let filter_input = types::FilterInput::from_opts(&opts);
 	let suites = filters::apply_filters(loaded.suites, &filter_input);
 	if suites.is_empty() {

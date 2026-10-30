@@ -67,6 +67,25 @@ pub fn build_vars(
 	cli_vars: &[(String, String)],
 	toml_path: Option<&Path>,
 ) -> Result<HashMap<String, String>> {
+	merge_vars(cli_vars, toml_path, true)
+}
+
+/// [`build_vars`] without the environment: `cli_vars` > `surrealkit.toml [variables]`.
+/// `surrealkit compile` uses it, so its output depends only on files and flags, never on a
+/// `SURREALKIT_VAR_*` left in a shell or CI job.
+#[doc(hidden)]
+pub fn build_project_vars(
+	cli_vars: &[(String, String)],
+	toml_path: Option<&Path>,
+) -> Result<HashMap<String, String>> {
+	merge_vars(cli_vars, toml_path, false)
+}
+
+fn merge_vars(
+	cli_vars: &[(String, String)],
+	toml_path: Option<&Path>,
+	from_env: bool,
+) -> Result<HashMap<String, String>> {
 	let mut map: HashMap<String, String> = HashMap::new();
 
 	// Lowest priority: surrealkit.toml [variables]
@@ -80,7 +99,7 @@ pub fn build_vars(
 	}
 
 	// Middle priority: SURREALKIT_VAR_* environment variables
-	for (key, value) in std::env::vars() {
+	for (key, value) in std::env::vars().filter(|_| from_env) {
 		if let Some(stripped) = key.strip_prefix("SURREALKIT_VAR_")
 			&& !stripped.is_empty()
 		{
@@ -140,7 +159,12 @@ struct ProjectConfig {
 }
 
 /// The `[typegen]` section of `surrealkit.toml`.
+///
+/// Unknown keys are rejected rather than ignored: a misspelt `typescrpt` used to
+/// turn TypeScript generation off without a word, which is indistinguishable from
+/// a schema with nothing to generate.
 #[derive(Debug, Default, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TypegenConfig {
 	/// Where generated TypeScript types go. When set, TS generation is enabled:
 	/// `surrealkit typegen` and `sync --watch` write them here. A path ending in
@@ -161,9 +185,163 @@ pub struct TypegenConfig {
 	/// `.json` is the file itself; anything else is a directory, and the file in
 	/// it is `schema.json`.
 	pub json: Option<PathBuf>,
+	/// Fail instead of warning when generated output cannot be produced exactly
+	/// as configured: a formatter that fails, a kind typegen could not parse
+	/// (an error diagnostic), and in `sync`, any typegen failure after the schema
+	/// was applied. Off by default, which keeps those failures as log lines.
+	/// `surrealkit typegen --strict` turns it on for one run.
+	#[serde(default)]
+	pub strict: bool,
+	/// Whether the JSON carries a `generatedAt` timestamp (default `true`).
+	/// `false` leaves it out, so the same schema always produces the same bytes.
+	pub generated_at: Option<bool>,
+	/// Which schema document the JSON output is: `1` (the default, unchanged) or `2`
+	/// (schema document v2, `docs/typegen/schema-document-v2.md`). TypeScript output is the
+	/// same either way.
+	pub schema_version: Option<u32>,
+	/// Experimental capabilities the `surrealkit compile` engine allows (`files`,
+	/// `surrealism`, `gql`), for schemas that use `DEFINE BUCKET` or `DEFINE MODULE`.
+	#[serde(default)]
+	pub experimental: Vec<String>,
+	/// The SurrealDB minor the project deploys to (`"3.2"`). `surrealkit compile` runs the
+	/// embedded engine whatever this says, and reports the error `compile-engine-mismatch`
+	/// when it is a different minor, since the document then describes the embedded engine.
+	pub engine: Option<String>,
+	/// External emitters, `[typegen.emit.<name>]`: commands that read schema document v2 on
+	/// stdin and return the files to write in their `out` directory
+	/// (`docs/typegen/external-emitters.md`).
+	#[serde(default)]
+	pub emit: std::collections::BTreeMap<String, EmitterConfig>,
+	/// Error diagnostic codes that do not fail generation, each with the reason it is
+	/// acceptable: `acknowledge = { "kind-unrecognized" = "…" }`. The diagnostics stay in the
+	/// document, and external emitters receive the list.
+	#[serde(default)]
+	pub acknowledge: std::collections::BTreeMap<String, String>,
+}
+
+/// One `[typegen.emit.<name>]` section.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmitterConfig {
+	/// The command: a string split on whitespace, or an array of the program and its
+	/// arguments (for arguments containing spaces).
+	pub command: EmitterCommand,
+	/// The directory the emitter's files go to. SurrealKit owns it.
+	pub out: PathBuf,
+}
+
+/// An emitter command as written in `surrealkit.toml`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(untagged)]
+pub enum EmitterCommand {
+	Line(String),
+	Argv(Vec<String>),
+}
+
+impl EmitterCommand {
+	fn argv(&self) -> Vec<String> {
+		match self {
+			EmitterCommand::Line(line) => line.split_whitespace().map(str::to_string).collect(),
+			EmitterCommand::Argv(argv) => argv.clone(),
+		}
+	}
 }
 
 impl TypegenConfig {
+	/// `[typegen] acknowledge`, validated: every code and every reason is non-empty.
+	pub fn acknowledgements(&self) -> Result<std::collections::BTreeMap<String, String>> {
+		for (code, reason) in &self.acknowledge {
+			if code.trim().is_empty() {
+				bail!("[typegen] acknowledge: a diagnostic code is empty");
+			}
+			if reason.trim().is_empty() {
+				bail!(
+					"[typegen] acknowledge: {code:?} has no reason; say why this diagnostic is \
+					 acceptable"
+				);
+			}
+		}
+		Ok(self.acknowledge.clone())
+	}
+
+	/// The configured external emitters, validated: names are `[A-Za-z0-9_-]+`, commands
+	/// are not empty, and no two emitters share (or nest) an `out` directory, which each owns.
+	pub fn emitters(&self) -> Result<Vec<crate::typegen::Emitter>> {
+		let mut out = Vec::new();
+		for (name, cfg) in &self.emit {
+			if name.is_empty()
+				|| !name.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+			{
+				bail!(
+					"[typegen.emit.{name}]: an emitter name may use only letters, digits, - and _"
+				);
+			}
+			let command = cfg.command.argv();
+			if command.first().is_none_or(|p| p.trim().is_empty()) {
+				bail!("[typegen.emit.{name}] command is empty");
+			}
+			if cfg.out.as_os_str().is_empty() {
+				bail!("[typegen.emit.{name}] out must name a directory");
+			}
+			out.push(crate::typegen::Emitter {
+				name: name.clone(),
+				command,
+				out: cfg.out.clone(),
+			});
+		}
+		// An emitter owns its `out` and removes what it did not write there, so SurrealKit's own
+		// outputs cannot live inside one: the second run would find them stale.
+		let lexical = |p: &Path| -> PathBuf {
+			p.components().filter(|c| !matches!(c, std::path::Component::CurDir)).collect()
+		};
+		let own: Vec<PathBuf> = [self.json_path()?, self.typescript_path()?]
+			.into_iter()
+			.flatten()
+			.map(|p| lexical(&p))
+			.collect();
+		for emitter in &out {
+			let dir = lexical(&emitter.out);
+			if let Some(inside) = own.iter().find(|p| p.starts_with(&dir)) {
+				bail!(
+					"[typegen.emit.{}] out ({}) contains {}, which SurrealKit writes itself; each \
+					 emitter owns its `out`, so give it a directory of its own",
+					emitter.name,
+					emitter.out.display(),
+					inside.display()
+				);
+			}
+		}
+		for (i, a) in out.iter().enumerate() {
+			for b in &out[i + 1..] {
+				if a.out.starts_with(&b.out) || b.out.starts_with(&a.out) {
+					bail!(
+						"[typegen.emit.{}] and [typegen.emit.{}] share an output directory ({} and \
+						 {}); each emitter owns its `out`",
+						a.name,
+						b.name,
+						a.out.display(),
+						b.out.display()
+					);
+				}
+			}
+		}
+		Ok(out)
+	}
+
+	/// The configured schema document version. Anything but 1 or 2 is an error.
+	pub fn schema_version(&self) -> Result<crate::typegen::SchemaVersion> {
+		match self.schema_version {
+			None | Some(1) => Ok(crate::typegen::SchemaVersion::V1),
+			Some(2) => Ok(crate::typegen::SchemaVersion::V2),
+			Some(other) => bail!("[typegen] schema_version = {other} is not supported; use 1 or 2"),
+		}
+	}
+
+	/// Whether to stamp `generatedAt` into the JSON (`generated_at`, default true).
+	pub fn stamps_generated_at(&self) -> bool {
+		self.generated_at.unwrap_or(true)
+	}
+
 	/// The JSON schema file to write, if JSON output is configured.
 	pub fn json_path(&self) -> Result<Option<PathBuf>> {
 		let Some(json) = &self.json else {
@@ -512,9 +690,90 @@ mod tests {
 		TypegenConfig {
 			typescript: typescript.map(PathBuf::from),
 			filename: filename.map(str::to_string),
-			format: None,
-			json: None,
+			..TypegenConfig::default()
 		}
+	}
+
+	#[test]
+	fn load_typegen_config_reads_strict_and_generated_at() {
+		let tmp = TempDir::new().unwrap();
+		let cfg = tmp.path().join("surrealkit.toml");
+		std::fs::write(&cfg, "[typegen]\nstrict = true\ngenerated_at = false\n").unwrap();
+		let parsed = load_typegen_config(Some(&cfg)).unwrap();
+		assert!(parsed.strict);
+		assert!(!parsed.stamps_generated_at());
+
+		// Both default to today's behaviour: lenient, and stamped.
+		let defaults = TypegenConfig::default();
+		assert!(!defaults.strict);
+		assert!(defaults.stamps_generated_at());
+	}
+
+	#[test]
+	fn emitters_parse_and_validate() {
+		let parse = |raw: &str| toml::from_str::<ProjectConfig>(raw).map(|c| c.typegen);
+		let cfg = parse(
+			"[typegen.emit.effect]\ncommand = \"effect-surrealkit --profile safe\"\nout = \
+			 \"src/gen\"\n\n[typegen.emit.docs]\ncommand = [\"bun\", \"x\", \"my emitter\"]\nout \
+			 = \"docs/gen\"\n",
+		)
+		.unwrap();
+		let emitters = cfg.emitters().unwrap();
+		assert_eq!(emitters.len(), 2);
+		assert_eq!(emitters[0].name, "docs");
+		assert_eq!(emitters[0].command, vec!["bun", "x", "my emitter"]);
+		assert_eq!(emitters[1].command, vec!["effect-surrealkit", "--profile", "safe"]);
+		assert_eq!(emitters[1].out, PathBuf::from("src/gen"));
+
+		assert!(parse("[typegen.emit.e]\ncommand = \"x\"\nout = \"a\"\nwat = 1\n").is_err());
+		assert!(parse("[typegen.emit.e]\nout = \"a\"\n").is_err(), "command is required");
+		let err = |raw: &str| parse(raw).unwrap().emitters().unwrap_err().to_string();
+		assert!(
+			err("[typegen.emit.e]\ncommand = \"\"\nout = \"a\"\n").contains("command is empty")
+		);
+		assert!(
+			err("[typegen.emit.\"a b\"]\ncommand = \"x\"\nout = \"a\"\n").contains("emitter name")
+		);
+		assert!(
+			err("[typegen.emit.a]\ncommand = \"x\"\nout = \"gen\"\n[typegen.emit.b]\ncommand = \
+			     \"y\"\nout = \"gen/sub\"\n")
+			.contains("share an output directory")
+		);
+		// SurrealKit's own JSON or TypeScript inside an emitter's `out`.
+		assert!(
+			err("[typegen]\njson = \"src/generated/schema.json\"\n[typegen.emit.e]\ncommand = \
+			     \"x\"\nout = \"./src/generated\"\n")
+			.contains("which SurrealKit writes itself")
+		);
+		assert!(
+			err("[typegen]\ntypescript = \"gen/types\"\n[typegen.emit.e]\ncommand = \"x\"\nout = \
+			     \"gen\"\n")
+			.contains("gen/types/index.ts")
+		);
+		// Beside it is fine.
+		let ok = parse(
+			"[typegen]\njson = \"src/generated/schema.json\"\n[typegen.emit.e]\ncommand = \
+			 \"x\"\nout = \"src/generated/surreal\"\n",
+		)
+		.unwrap();
+		assert_eq!(ok.emitters().unwrap().len(), 1);
+	}
+
+	#[test]
+	fn schema_version_is_1_by_default_and_only_1_or_2() {
+		use crate::typegen::SchemaVersion;
+		let parse = |raw: &str| toml::from_str::<ProjectConfig>(raw).unwrap().typegen;
+		assert_eq!(TypegenConfig::default().schema_version().unwrap(), SchemaVersion::V1);
+		assert_eq!(
+			parse("[typegen]\nschema_version = 2\n").schema_version().unwrap(),
+			SchemaVersion::V2
+		);
+		assert_eq!(
+			parse("[typegen]\nschema_version = 1\n").schema_version().unwrap(),
+			SchemaVersion::V1
+		);
+		let err = parse("[typegen]\nschema_version = 3\n").schema_version().unwrap_err();
+		assert!(err.to_string().contains("use 1 or 2"), "{err}");
 	}
 
 	#[test_case::test_case(Some("libs/db/types"), None, Some("libs/db/types/index.ts") ; "directory keeps index ts")]
@@ -593,6 +852,17 @@ mod tests {
 		};
 		let err = cfg.json_path().unwrap_err().to_string();
 		assert!(err.contains("[typegen] json"), "{err}");
+	}
+
+	#[test]
+	fn load_typegen_config_rejects_unknown_keys() {
+		let tmp = TempDir::new().unwrap();
+		let cfg = tmp.path().join("surrealkit.toml");
+		std::fs::write(&cfg, "[typegen]\ntypescrpt = \"src/types\"\n").unwrap();
+		let err = format!("{:#}", load_typegen_config(Some(&cfg)).unwrap_err());
+		assert!(err.contains("unknown field `typescrpt`"), "{err}");
+		// The error names the keys that do exist, so the typo is obvious.
+		assert!(err.contains("typescript"), "{err}");
 	}
 
 	#[test]

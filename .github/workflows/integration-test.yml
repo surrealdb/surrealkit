@@ -31,7 +31,8 @@ jobs:
     integration_test:
         name: Surrealkit integration tests (SurrealDB ${{ matrix.surrealdb }})
         runs-on: ubuntu-22.04
-        timeout-minutes: 15
+        # The last step also builds the embedded engine (kv-mem).
+        timeout-minutes: 30
         strategy:
             fail-fast: false
             matrix:
@@ -159,15 +160,43 @@ jobs:
               run: ./target/debug/surrealkit --folder examples/rollout-testing/database rollout lint
 
             # Library unit tests, rollout catch-up and the tester's live cases, on
-            # this server rather than the embedded engine.
+            # this server rather than the embedded engine. `kv-mem` as well: the
+            # checks that compare this server with `surrealkit compile` (which
+            # runs the embedded engine) only exist with it; without it they are
+            # compiled out and this step passes without running them.
             - name: Library and rollout tests against this server
               run: |
                 cargo test \
                     --manifest-path crates/surrealkit/Cargo.toml \
                     --lib --test rollout_catchup --test tester_live \
                     --no-default-features \
-                    --features cli \
+                    --features cli,kv-mem \
                     --locked
+
+            # A feature dropped from the step above compiles those checks out, and
+            # the step still passes; a live test that finds no server returns
+            # early and passes too. So list the tests that build, and fail unless
+            # the compile-versus-server checks are among them and
+            # SURREALKIT_TEST_URL points at this job's server. (Features are
+            # package-wide: with kv-mem built here, the exec test also compares
+            # its digest with `surrealkit compile`.)
+            - name: The compile-versus-server checks are built and have a server
+              shell: bash
+              run: |
+                set -euo pipefail
+                test -n "${SURREALKIT_TEST_URL:-}"
+                cargo test \
+                    --manifest-path crates/surrealkit/Cargo.toml \
+                    --lib --test tester_live \
+                    --no-default-features \
+                    --features cli,kv-mem \
+                    --locked \
+                    -- --list > /tmp/tests.txt
+                for t in a_hermetic_compile_equals_live_introspection \
+                    exec_runs_against_the_prepared_database_before_teardown; do
+                    grep -q "$t: test" /tmp/tests.txt \
+                        || { echo "::error::$t is not built"; exit 1; }
+                done
 
             - name: Upload integration test report
               if: always()

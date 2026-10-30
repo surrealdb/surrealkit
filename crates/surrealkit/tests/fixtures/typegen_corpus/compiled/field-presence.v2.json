@@ -1,0 +1,696 @@
+{
+  "version": 2,
+  "semanticDigest": "sha256:527262a64ab7f7c89506f2d104d32b0ef3086d303606ff20977b625f2c6a3309",
+  "provenance": {
+    "generator": {
+      "name": "surrealkit",
+      "version": "1.0.0-beta.6"
+    },
+    "engine": {
+      "version": "3.3.0",
+      "build": "surrealdb-3.3.0",
+      "mode": "embedded"
+    },
+    "adapter": "structure-3.3",
+    "source": {
+      "kind": "compile",
+      "modules": [
+        "field_presence"
+      ],
+      "files": [
+        {
+          "path": "semantics/field_presence.defines.surql",
+          "sha256": "3b14b3fe519f58b61e36177564f47ca3125cf4609aac036fe4594282f05e1930"
+        }
+      ]
+    },
+    "capabilities": {
+      "experimental": [],
+      "network": false
+    }
+  },
+  "tables": [
+    {
+      "name": "e",
+      "type": {
+        "kind": "relation",
+        "in": [
+          "p"
+        ],
+        "out": [
+          "p"
+        ],
+        "enforced": false,
+        "lightweight": false
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "in"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "p"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD in ON e TYPE record<p> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "out"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "p"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD out ON e TYPE record<p> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "w"
+          ],
+          "kind": {
+            "kind": "int"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "0"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD w ON e TYPE int DEFAULT 0 PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE e TYPE RELATION IN p OUT p SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "ip",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "need",
+            "x"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD need.x ON ip TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "pref",
+            "locale"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD pref.locale ON ip TYPE none | string PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE ip TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "m",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "comp"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "computed": {
+            "expr": "string::concat(req, '!')"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD comp ON m TYPE string COMPUTED string::concat(req, '!') PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "dalw"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "always",
+            "expr": "'a'"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD dalw ON m TYPE string DEFAULT ALWAYS 'a' PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "dflt"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "'d'"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD dflt ON m TYPE string DEFAULT 'd' PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "flex"
+          ],
+          "kind": {
+            "kind": "object"
+          },
+          "optional": true,
+          "flexible": true,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD flex ON m TYPE none | object FLEXIBLE PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "flex",
+            "a"
+          ],
+          "kind": {
+            "kind": "int"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD flex.a ON m TYPE none | int PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "nul"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "null"
+              },
+              {
+                "kind": "string"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD nul ON m TYPE string | null PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "obj"
+          ],
+          "kind": {
+            "kind": "object"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD obj ON m TYPE none | object PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "obj",
+            "a"
+          ],
+          "kind": {
+            "kind": "int"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD obj.a ON m TYPE none | int PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "opt"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD opt ON m TYPE none | string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "optd"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "'od'"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD optd ON m TYPE none | string DEFAULT 'od' PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "req"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD req ON m TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "ro"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": true,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "'r'"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD ro ON m TYPE string DEFAULT 'r' READONLY PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "roopt"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": true,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD roopt ON m TYPE none | string READONLY PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "vfall"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "value": {
+            "expr": "string::lowercase($value ?? 'X')",
+            "readsInput": true
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD vfall ON m TYPE string VALUE string::lowercase($value ?? 'X') PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "vin"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "value": {
+            "expr": "string::lowercase($value)",
+            "readsInput": true
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD vin ON m TYPE string VALUE string::lowercase($value) PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "vout"
+          ],
+          "kind": {
+            "kind": "datetime"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "value": {
+            "expr": "d'2020-01-01T00:00:00Z'",
+            "readsInput": false
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD vout ON m TYPE datetime VALUE d'2020-01-01T00:00:00Z' PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE m TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "oa",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "x"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "always",
+            "expr": "'z'"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD x ON oa TYPE none | string DEFAULT ALWAYS 'z' PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE oa TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "p",
+      "type": {
+        "kind": "any"
+      },
+      "schemafull": false,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE p TYPE ANY SCHEMALESS PERMISSIONS NONE"
+    },
+    {
+      "name": "up",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "obj"
+          ],
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD obj ON up PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "obj",
+            "a"
+          ],
+          "kind": {
+            "kind": "int"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD obj.a ON up TYPE int PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE up TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    }
+  ],
+  "functions": [],
+  "params": [],
+  "accesses": [],
+  "analyzers": [],
+  "sequences": [],
+  "buckets": [],
+  "apis": [],
+  "modules": [],
+  "configs": [],
+  "users": [],
+  "diagnostics": [
+    {
+      "severity": "info",
+      "code": "field-kind-undeclared",
+      "table": "up",
+      "field": [
+        "obj"
+      ],
+      "source": "DEFINE FIELD obj ON up PERMISSIONS FULL",
+      "reason": "Field has no TYPE clause; it holds any value."
+    },
+    {
+      "severity": "info",
+      "code": "field-parent-implicit",
+      "table": "ip",
+      "field": [
+        "need",
+        "x"
+      ],
+      "source": "need",
+      "reason": "The parent path is not declared; it is an implicit object, required when any child is required."
+    },
+    {
+      "severity": "info",
+      "code": "field-parent-implicit",
+      "table": "ip",
+      "field": [
+        "pref",
+        "locale"
+      ],
+      "source": "pref",
+      "reason": "The parent path is not declared; it is an implicit object, required when any child is required."
+    },
+    {
+      "severity": "warning",
+      "code": "field-value-input-conditional",
+      "table": "m",
+      "field": [
+        "vfall"
+      ],
+      "source": "string::lowercase($value ?? 'X')",
+      "reason": "VALUE reads its input but supplies its own fallback; the conservative contract (required) applies unless the project overrides it."
+    }
+  ]
+}

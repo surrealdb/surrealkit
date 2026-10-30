@@ -53,6 +53,9 @@ pub struct ActorSession {
 	/// The record a record user is signed in as, kept typed so a case can act on
 	/// it with `record_id = "$auth"`.
 	pub auth_record: Option<surrealdb_types::RecordId>,
+	/// The access token the session signed in or authenticated with, if any. `surrealkit
+	/// test --exec` hands it to the command.
+	pub token: Option<String>,
 }
 
 pub fn merged_actor_specs(
@@ -95,36 +98,40 @@ async fn build_default_bootstrap_session(
 	let db = create_surreal_client(&host.to_string())
 		.await
 		.with_context(|| format!("connecting bootstrap actor to {host}"))?;
-	match cfg.auth_level() {
+	let token = match cfg.auth_level() {
 		AuthLevel::Root => {
-			db.signin(Root {
-				username: cfg.user().to_string(),
-				password: cfg.pass().to_string(),
-			})
-			.await
-			.context("bootstrap signin failed (auth_level=root)")?;
+			let token = db
+				.signin(Root {
+					username: cfg.user().to_string(),
+					password: cfg.pass().to_string(),
+				})
+				.await
+				.context("bootstrap signin failed (auth_level=root)")?;
 			db.use_ns(namespace).use_db(database).await.with_context(|| {
 				format!("switching bootstrap actor to ns={namespace} db={database}")
 			})?;
+			token
 		}
 		AuthLevel::Namespace => {
-			db.signin(Namespace {
-				namespace: namespace.to_string(),
-				username: cfg.user().to_string(),
-				password: cfg.pass().to_string(),
-			})
-			.await
-			.context("bootstrap signin failed (auth_level=namespace)")?;
+			let token = db
+				.signin(Namespace {
+					namespace: namespace.to_string(),
+					username: cfg.user().to_string(),
+					password: cfg.pass().to_string(),
+				})
+				.await
+				.context("bootstrap signin failed (auth_level=namespace)")?;
 			db.use_db(database)
 				.await
 				.with_context(|| format!("switching bootstrap actor to db={database}"))?;
+			token
 		}
 		AuthLevel::Database | AuthLevel::None => {
 			unreachable!(
 				"AuthLevel::Database/None are rejected by tester::run_test before reaching here"
 			)
 		}
-	}
+	};
 
 	let (auth, auth_record) = fetch_auth(&db).await?;
 	Ok(ActorSession {
@@ -132,6 +139,7 @@ async fn build_default_bootstrap_session(
 		auth_record,
 		db,
 		headers: BTreeMap::new(),
+		token: Some(token.access.as_insecure_token().to_string()),
 	})
 }
 
@@ -294,6 +302,7 @@ async fn build_session(
 		auth_record,
 		db,
 		headers: session_headers,
+		token: access_token,
 	})
 }
 
