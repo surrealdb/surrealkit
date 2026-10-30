@@ -340,20 +340,14 @@ jobs:
                   generate_release_notes: true
                   fail_on_unmatched_files: true
 
-    # The only job that holds the bucket's credentials, and it runs no
-    # compiler. The `release` environment holds them, so they reach this job and
-    # nothing else, after one of its reviewers approves; see doc/publishing.md.
-    #
-    # Propagation is a step here rather than a job of its own: a second job in
-    # the environment would ask for a second approval after the release is
-    # already live, and an approver who walked away would leave the regions
-    # without it.
+    # The only job that names the bucket's credentials, the organisation's
+    # AMAZON_ACCESS_KEY and AMAZON_SECRET_KEY, and it runs no compiler; see
+    # doc/publishing.md.
     kit-publish:
         name: Publish surreal-kit to download.surrealdb.com
         if: startsWith(github.ref, 'refs/tags/')
         needs: [kit-prepare, build]
         runs-on: ubuntu-22.04
-        environment: release
         steps:
             - name: Checkout
               uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd

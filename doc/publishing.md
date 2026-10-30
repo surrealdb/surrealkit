@@ -30,10 +30,8 @@ the launcher says that is how it was typed.
 1. Bump `version` in the root `Cargo.toml` (and `surrealkit-macros`'s in
    `[workspace.dependencies]`), run `cargo build` so `Cargo.lock` follows, and
    merge.
-2. Push the tag `v<version>`.
-3. The workflow builds every target. A reviewer of the `release` environment
-   approves its *Publish surreal-kit to download.surrealdb.com* job once the
-   builds are green; the GitHub release proceeds without approval.
+2. Push the tag `v<version>`. The workflow builds every target, then writes
+   the GitHub release and publishes to `cli/kit/`.
 
 The run refuses to publish anything if the tag is not `v<version>`, where
 `<version>` is what `Cargo.toml` says at that tag.
@@ -122,33 +120,18 @@ below.
 
 ## Security and prerequisites
 
-The repository is public, so the bucket's credentials live in a GitHub
-**environment**, not in repository or organisation secrets, and only the one
-job that uploads names that environment. That job runs no compiler: the builds
-run `build.rs` for the whole dependency graph, which is arbitrary code from
-crates.io, and hold no credential. The workflow's token is read-only except in
-the job that writes the GitHub release.
+The bucket's credentials are the organisation secrets `AMAZON_ACCESS_KEY` and
+`AMAZON_SECRET_KEY`, shared with this repository. Only the one job that
+uploads names them, and it runs no compiler: the builds run `build.rs` for the
+whole dependency graph, which is arbitrary code from crates.io, and hold no
+credential. The workflow's token is read-only except in the job that writes the
+GitHub release.
 
-Before the first publish, a repository admin has to set up the following.
-None of it can be checked short of a real release.
+The key behind those secrets must be able to write `download.surrealdb.com/cli/kit/*`,
+and list and read that prefix and write the same prefix in each of the eleven
+regional buckets `propagate-kit` syncs to. A rehearsal cannot check this; a
+publish that is refused part-way through its uploads leaves the version
+needing its partial keys deleted (see republish protection above).
 
-1. **An environment named `release`**, exactly. A misspelt environment in a
-   workflow is created empty rather than refused.
-   - *Required reviewers*: the people who may release.
-   - *Deployment branches and tags*: **selected tags only, `v*`**.
-   - Do not allow administrators to bypass the protection rules.
-2. **Two environment secrets in `release`**, `AMAZON_ACCESS_KEY` and
-   `AMAZON_SECRET_KEY`: the key pair of an IAM user (or role) dedicated to this
-   repository, able to write `cli/kit/*` and nothing else.
-3. **That identity's IAM policy**, allowing, and only on the `cli/kit/` prefix:
-   - `s3:PutObject` on `download.surrealdb.com/cli/kit/*`;
-   - `s3:GetObject` on `download.surrealdb.com/cli/kit/*` and `s3:ListBucket`
-     on `download.surrealdb.com` conditioned on the `cli/kit/` prefix, for the
-     sync's source;
-   - `s3:PutObject` on `download.<region>.surrealdb.com/cli/kit/*` and
-     `s3:ListBucket` on each regional bucket conditioned on the same prefix,
-     for each of the eleven regions in `propagate-kit`.
-
-Nothing short of a release detects a policy that is too narrow; the first one
-will, part-way through its uploads, and leaves the version needing its partial
-keys deleted (see republish protection above).
+If either secret stops reaching this repository, the publish fails at its
+first upload, after the GitHub release has been written.
