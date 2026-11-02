@@ -363,7 +363,6 @@ export interface TableInput {
 	readonly table: Table;
 	readonly scope: ModuleScope;
 	readonly options: EmitterOptions;
-	readonly digest: string;
 	/** Relation tables using this table as `in` / `out`. */
 	readonly relations: {
 		readonly in: ReadonlyArray<string>;
@@ -391,7 +390,7 @@ const SUFFIX: Readonly<Record<Operation, string>> = {
 
 /** Prints the module of one table, view or relation. */
 export const printTable = (input: TableInput): string => {
-	const { table, scope, options, digest } = input;
+	const { table, scope, options } = input;
 	const registry = scope.registry;
 	const pascal = registry.pascal(table.name);
 	const idName = scope.useId(registry.table(table.name));
@@ -410,7 +409,6 @@ export const printTable = (input: TableInput): string => {
 			`\tid: ${idName},`,
 			`\tview: ${json(table.view.select)},`,
 			`\tpermissions: ${printPermissions(table.permissions)},`,
-			`\tdigest: ${json(digest)},`,
 			'});',
 		);
 		return lines.join('\n');
@@ -645,7 +643,6 @@ export const printTable = (input: TableInput): string => {
 		`\trelations: { in: ${jsonList(input.relations.in)}, out: ${jsonList(input.relations.out)} },`,
 		`\tpermissions: ${printPermissions(table.permissions)},`,
 		...(relationType === undefined ? [] : [`\tedge: ${pascal}Edge,`]),
-		`\tdigest: ${json(digest)},`,
 		'});',
 	);
 	lines.push('', ...printJsonWorld(input, fields, endpoint, relationType));

@@ -113,7 +113,7 @@ matrix of the contract (section 7):
 | `PersonCreate` | `CREATE … CONTENT` / `INSERT`; the id is an operation argument. |
 | `PersonMerge` | `UPDATE … MERGE`: omission keeps a value, `undefined` (NONE) removes an `option<T>` field and re-applies a `DEFAULT ALWAYS` one (an `option<T>` included). |
 | `PersonContent` | `UPDATE … CONTENT`: a full replacement. |
-| `PersonTable` | The descriptor: `{ name, type, id, select, create, merge, content, fields, presence, relations, permissions, edge?, digest }`. |
+| `PersonTable` | The descriptor: `{ name, type, id, select, create, merge, content, fields, presence, relations, permissions, edge? }`. |
 | `PersonFromJson` | The same selected row as SurrealDB's HTTP `/sql` renders it, decoding to the same types as `Person`; `PersonJsonFields` holds its field schemas for `Struct.pick` and field maps, and `PersonJsonEncoded` its JSON shape. Never the default; see [Two codec worlds](#two-codec-worlds). |
 
 `Merge` is never `Partial<Create>`: READONLY, COMPUTED, `id` and relation

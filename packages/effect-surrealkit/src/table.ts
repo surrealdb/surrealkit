@@ -84,8 +84,6 @@ export interface TableDescriptor {
 	};
 	readonly permissions: TablePermissions;
 	readonly edge?: EdgeDescriptor;
-	/** The schema document's semanticDigest. */
-	readonly digest: string;
 }
 
 /** A view: an id and its query; its row shape is not derived. */
@@ -95,7 +93,6 @@ export interface ViewDescriptor {
 	readonly id: Schema.Top;
 	readonly view: string;
 	readonly permissions: TablePermissions;
-	readonly digest: string;
 }
 
 export interface FunctionDescriptor {

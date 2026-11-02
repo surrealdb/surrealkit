@@ -100,10 +100,15 @@ describe('access authentication policy', () => {
 			const generated = await run(
 				generate(document, { ...corpusOptions }, { sha256 }),
 			);
+			// The manifest is the digest's only home in generated code, so a schema
+			// change leaves every module whose own output did not change untouched.
 			expect(
-				generated.files.find((file) => file.path === 'manifest.ts')
-					?.content,
-			).toContain(document.semanticDigest);
+				generated.files
+					.filter((file) =>
+						file.content.includes(document.semanticDigest),
+					)
+					.map((file) => file.path),
+			).toEqual(['manifest.ts']);
 			digests.push(document.semanticDigest);
 		}
 		expect(digests[0]).not.toBe(digests[1]);
