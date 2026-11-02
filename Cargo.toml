@@ -13,7 +13,7 @@ license = 'Apache-2.0'
 
 [workspace.dependencies]
 surrealkit-macros = { path = 'crates/surrealkit-macros', version = '1.0.0-beta.6' }
-surrealdb = { version = '3.3.0', features = ['protocol-http', 'jwks'] }
+surrealdb = { version = '3.3.0', features = ['protocol-http'] }
 surrealdb-types = { version = '3.3.0' }
 anyhow = '1'
 serde = { version = '1.0.225', features = ['derive'] }

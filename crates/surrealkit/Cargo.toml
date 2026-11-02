@@ -52,7 +52,7 @@ default = ['kv-mem', 'cli']
 # `default-features = false` drops clap, inquire, rustls (and its aws-lc-rs
 # backend) and tempfile from a library consumer's dependency tree -- none of them
 # are used by the library itself.
-cli = ['dep:clap', 'dep:inquire', 'dep:rustls', 'dep:tempfile']
+cli = ['dep:clap', 'dep:inquire', 'dep:rustls', 'dep:tempfile', 'surrealdb/jwks']
 kv-mem = ['surrealdb/kv-mem']
 kv-surrealkv = ['surrealdb/kv-surrealkv']
 kv-rocksdb = ['surrealdb/kv-rocksdb']
