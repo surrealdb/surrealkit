@@ -142,6 +142,8 @@ returns (`"none | array<record<team>>"`) into this tree.
 | SurrealQL | v2 kind |
 | --- | --- |
 | `any`, `null`, `bool`, `int`, `float`, `decimal`, `number`, `string`, `datetime`, `duration`, `uuid`, `bytes`, `regex`, `range`, `function`, `object` | `{ "kind": "<name>" }` |
+| SurrealDB 4.0 `i8`, `i16`, `i32`, `i64`, `u8`, `u16`, `u32`, `u64` | `{ "kind": "int" }` — the width is not represented: every `iN`/`uN` value is an int |
+| SurrealDB 4.0 `f16`, `f32`, `f64` | `{ "kind": "float" }` — the width is not represented: every `fN` value is a float |
 | `none` (alone) | `{ "kind": "none" }` |
 | `record`, `record<a \| b>` | `{ "kind": "record", "tables": ["a", "b"] }` — empty = any table |
 | `table`, `table<a \| b>` | `{ "kind": "table", "tables": [...] }` |
