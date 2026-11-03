@@ -18,9 +18,10 @@ use super::document::{
 	Access, Analyzer, Api, AssertClause, Bucket, Changefeed, Config, DefaultClause, DefaultMode,
 	Event, ExprClause, Field, FieldPermissions, Fulltext, Function, FunctionArg, Index, IndexType,
 	Kind, ModuleDef, OnDelete, Param, Permission, Provenance, Reference, SCHEMA_DOCUMENT_VERSION,
-	SchemaDocument, Sequence, Table, TablePermissions, TableType, User, ValueClause, Vector, View,
+	SchemaDocument, Sequence, Table, TablePermissions, TableType, TypeDef, User, ValueClause,
+	Vector, View,
 };
-use super::kind_v2::{ParsedKind, parse_top};
+use super::kind_v2::{ParsedKind, parse_top, parse_value};
 use super::refine::{has_fallback, reads_input, recognize};
 use super::scan::{field_path, tokenize};
 
@@ -88,6 +89,15 @@ pub(super) struct RawFunction {
 	pub comment: Option<String>,
 }
 
+/// A `DEFINE TYPE` as an adapter read it.
+#[derive(Debug, Clone, PartialEq)]
+pub(super) struct RawType {
+	pub name: String,
+	/// The kind text, as the engine renders it.
+	pub kind: String,
+	pub comment: Option<String>,
+}
+
 /// Everything an adapter read.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub(super) struct RawSchema {
@@ -102,6 +112,7 @@ pub(super) struct RawSchema {
 	pub modules: Vec<ModuleDef>,
 	pub configs: Vec<Config>,
 	pub users: Vec<User>,
+	pub types: Vec<RawType>,
 	/// What the adapter itself could not read.
 	pub diagnostics: Vec<Diagnostic>,
 }
@@ -161,6 +172,11 @@ pub(super) fn build(raw: RawSchema, provenance: Provenance) -> Result<SchemaDocu
 		user.roles.dedup();
 	}
 
+	let types = sorted_by_name(
+		raw.types.into_iter().map(|t| build_type(t, &mut diagnostics)).collect(),
+		|t| &t.name,
+	);
+
 	let mut doc = SchemaDocument {
 		version: SCHEMA_DOCUMENT_VERSION,
 		semantic_digest: String::new(),
@@ -176,11 +192,27 @@ pub(super) fn build(raw: RawSchema, provenance: Provenance) -> Result<SchemaDocu
 		modules: sorted_by_name(raw.modules, |m| &m.name),
 		configs,
 		users: sorted_by_name(users, |u| &u.name),
+		types,
 		diagnostics: Vec::new(),
 	};
 	doc.diagnostics = sort_diagnostics(diagnostics);
 	doc.semantic_digest = semantic_digest(&serde_json::to_value(&doc)?)?;
 	Ok(doc)
+}
+
+fn build_type(raw: RawType, diagnostics: &mut Vec<Diagnostic>) -> TypeDef {
+	let parsed = parse_value(&raw.kind);
+	// A diagnostic has no locator for a type; its name goes in the reason.
+	for problem in &parsed.problems {
+		let mut diagnostic = problem.diagnostic(&raw.kind);
+		diagnostic.reason = format!("DEFINE TYPE {}: {}", raw.name, diagnostic.reason);
+		diagnostics.push(diagnostic);
+	}
+	TypeDef {
+		name: raw.name,
+		kind: parsed.kind,
+		comment: raw.comment,
+	}
 }
 
 fn sorted_by_name<T>(mut items: Vec<T>, name: impl Fn(&T) -> &String) -> Vec<T> {

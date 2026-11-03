@@ -4,6 +4,10 @@
 //! - [`parse_type_checked`] turns a kind (the body of a `TYPE` clause, a function argument or
 //!   return type) into a structured [`FieldType`] and reports every part it could not understand.
 //! - `parse_type` (tests only) is the same without the report.
+//! - [`parse_type_v2`] is [`parse_type_checked`] for schema document v2: the SurrealDB 4.0 kinds
+//!   it has nodes for (sized numbers, and the kinds of [`v2_extension`]) are left as
+//!   [`FieldType::Unknown`] for [`super::kind_v2`] to read, which [`parse_type_checked`] reports
+//!   as a warning instead.
 //! - [`parse_type_prefix`] parses one kind at the start of a longer text.
 //! - `extract_type_clause` (tests only) pulls the `TYPE …` body out of a `DEFINE FIELD` statement.
 //!
@@ -72,7 +76,21 @@ pub fn parse_type(src: &str) -> FieldType {
 /// Parse a kind, with a [`KindProblem`] for every [`FieldType::Unknown`] in the
 /// result. Spans are byte ranges within `src`.
 pub(super) fn parse_type_checked(src: &str) -> (FieldType, Vec<KindProblem>) {
-	let mut p = KindParser::new(src);
+	parse_checked(src, false)
+}
+
+/// [`parse_type_checked`] for schema document v2. The kinds the v2 document has a node for
+/// but [`FieldType`] does not (`i8`…`u64` and `f16`…`f64` with their widths, `date`, `time`,
+/// `timestamp`, `interval`, `bigdecimal`, `enum<…>` and a `DEFINE TYPE` name) come back as
+/// [`FieldType::Unknown`] holding their exact text, each with a problem whose `understood` is
+/// `true`, so [`super::kind_v2`] can lower them to their nodes. v1 never sees them this way:
+/// the public [`FieldType`] has no place for a width, a label list or a type name.
+pub(super) fn parse_type_v2(src: &str) -> (FieldType, Vec<KindProblem>) {
+	parse_checked(src, true)
+}
+
+fn parse_checked(src: &str, v2: bool) -> (FieldType, Vec<KindProblem>) {
+	let mut p = KindParser::new(src, v2);
 	p.skip_ws();
 	match p.union() {
 		Ok(kind) => {
@@ -101,7 +119,7 @@ pub(super) fn parse_type_checked(src: &str) -> (FieldType, Vec<KindProblem>) {
 /// followed by its body). On a syntax error the kind is unknown and nothing is
 /// consumed.
 pub(super) fn parse_type_prefix(src: &str) -> (FieldType, usize, Vec<KindProblem>) {
-	let mut p = KindParser::new(src);
+	let mut p = KindParser::new(src, false);
 	p.skip_ws();
 	match p.union() {
 		Ok(kind) => (kind, p.pos, p.problems),
@@ -196,16 +214,19 @@ struct KindParser<'a> {
 	src: &'a str,
 	pos: usize,
 	problems: Vec<KindProblem>,
+	/// Parsing for schema document v2: see [`parse_type_v2`].
+	v2: bool,
 }
 
 type Parsed = Result<FieldType, KindProblem>;
 
 impl<'a> KindParser<'a> {
-	fn new(src: &'a str) -> Self {
+	fn new(src: &'a str, v2: bool) -> Self {
 		Self {
 			src,
 			pos: 0,
 			problems: Vec::new(),
+			v2,
 		}
 	}
 
@@ -392,6 +413,11 @@ impl<'a> KindParser<'a> {
 					},
 				})
 			}
+			_ if self.v2 && sized_number(&lower).is_some() && !self.next_is_generic() => {
+				let reason =
+					format!("`{name}` is a sized number, which schema document v2 carries");
+				Ok(self.not_represented(start, reason))
+			}
 			"date" | "time" | "timestamp" | "interval" | "bigdecimal"
 				if !self.next_is_generic() =>
 			{
@@ -453,14 +479,16 @@ impl<'a> KindParser<'a> {
 		Ok(self.not_represented(start, reason))
 	}
 
-	/// With the `<` of `enum<` consumed, skip its labels and the closing `>`: one or more
-	/// quoted strings, comma-separated.
-	fn enum_labels(&mut self, start: usize) -> Result<(), KindProblem> {
+	/// With the `<` of `enum<` consumed, read its labels and the closing `>`: one or more
+	/// quoted strings, comma-separated, in declaration order.
+	fn enum_labels(&mut self, start: usize) -> Result<Vec<String>, KindProblem> {
+		let mut labels = Vec::new();
 		loop {
 			self.skip_ws();
 			match self.peek() {
 				Some(q @ (b'\'' | b'"')) => {
-					self.string_body(q)?;
+					let body = self.string_body(q)?;
+					labels.push(super::scan::unescape(body));
 				}
 				_ => {
 					let at = self.pos;
@@ -473,7 +501,7 @@ impl<'a> KindParser<'a> {
 				Some(b',') => self.pos += 1,
 				Some(b'>') => {
 					self.pos += 1;
-					return Ok(());
+					return Ok(labels);
 				}
 				_ => {
 					let at = self.pos.max(start);
@@ -863,16 +891,114 @@ fn unknown_name_reason(name: &str) -> String {
 	}
 }
 
+/// A SurrealDB 4.0 sized number, as the engine spells it (any case).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct SizedNumber {
+	/// `fN` rather than `iN`/`uN`.
+	pub float: bool,
+	/// Bits: 8, 16, 32 or 64.
+	pub width: u8,
+	/// `false` for `uN`.
+	pub signed: bool,
+}
+
+/// The sized number `name` spells, if it spells one.
+pub(super) fn sized_number(name: &str) -> Option<SizedNumber> {
+	let lower = name.to_ascii_lowercase();
+	let (float, signed, bits) = match lower.as_bytes().first()? {
+		b'i' => (false, true, &lower[1..]),
+		b'u' => (false, false, &lower[1..]),
+		b'f' => (true, true, &lower[1..]),
+		_ => return None,
+	};
+	let width: u8 = match (float, bits) {
+		(false, "8") => 8,
+		(false, "16") | (true, "16") => 16,
+		(false, "32") | (true, "32") => 32,
+		(false, "64") | (true, "64") => 64,
+		_ => return None,
+	};
+	Some(SizedNumber {
+		float,
+		width,
+		signed,
+	})
+}
+
+/// What the text [`parse_type_v2`] leaves as [`FieldType::Unknown`] for v2 to read is: a sized
+/// number, one of the kinds without a [`FieldType`], an `enum<…>` or a type name. `None` for
+/// anything else, which is a kind the document cannot structure.
+pub(super) fn v2_extension(source: &str) -> Option<V2Extension> {
+	let source = source.trim();
+	if let Some(number) = sized_number(source) {
+		return Some(V2Extension::Sized(number));
+	}
+	let mut p = KindParser::new(source, true);
+	if source.starts_with('`') || source.starts_with('\u{27E8}') {
+		let name = p.name().ok()?;
+		return p.at_end().then_some(V2Extension::Named(name));
+	}
+	let word = p.read_word();
+	let lower = word.to_ascii_lowercase();
+	match lower.as_str() {
+		"" => None,
+		"date" | "time" | "timestamp" | "interval" | "bigdecimal" => {
+			p.at_end().then_some(V2Extension::Plain(lower))
+		}
+		"enum" => {
+			if !p.open_generic() {
+				return None;
+			}
+			let labels = p.enum_labels(0).ok()?;
+			p.at_end().then_some(V2Extension::Enum(labels))
+		}
+		_ if p.at_end() && !is_reserved(&lower) => Some(V2Extension::Named(word.to_string())),
+		_ => None,
+	}
+}
+
+/// Words that name a kind or a literal, which a `DEFINE TYPE` name cannot be.
+fn is_reserved(lower: &str) -> bool {
+	primitive(lower).is_some()
+		|| is_known_wrong(lower)
+		|| matches!(
+			lower,
+			"option"
+				| "array" | "set"
+				| "record" | "table"
+				| "file" | "geometry"
+				| "true" | "false"
+				| "nan" | "infinity"
+				| "enum"
+		)
+}
+
+/// What [`v2_extension`] found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum V2Extension {
+	Sized(SizedNumber),
+	/// `date`, `time`, `timestamp`, `interval` or `bigdecimal`, lowercased.
+	Plain(String),
+	/// The labels of `enum<…>`, unescaped, in declaration order.
+	Enum(Vec<String>),
+	/// A `DEFINE TYPE` name, unquoted.
+	Named(String),
+}
+
 fn primitive(name: &str) -> Option<PrimitiveType> {
+	// SurrealDB 4.0 sized numbers. v1 does not represent the width: every `iN`/`uN` value is an
+	// `int` and every `fN` value a `float`. (Schema document v2 does; see [`parse_type_v2`].)
+	if let Some(number) = sized_number(name) {
+		return Some(if number.float {
+			PrimitiveType::Float
+		} else {
+			PrimitiveType::Int
+		});
+	}
 	Some(match name {
 		"string" => PrimitiveType::String,
 		"int" => PrimitiveType::Int,
 		"float" => PrimitiveType::Float,
-		// SurrealDB 4.0 sized numbers. The width is not represented, in v1 or in schema
-		// document v2: every `iN`/`uN` value is an `int` and every `fN` value a `float`. (The
-		// engine itself renders `i64` and `f64` as `int` and `float`.)
-		"i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => PrimitiveType::Int,
-		"f16" | "f32" | "f64" => PrimitiveType::Float,
 		"bool" | "boolean" => PrimitiveType::Bool,
 		"number" => PrimitiveType::Number,
 		"decimal" => PrimitiveType::Decimal,
@@ -1450,6 +1576,81 @@ mod tests {
 			}
 		);
 		assert_eq!(problems.len(), 3);
+	}
+
+	/// The v2 parse leaves a sized number, and every 4.x kind, as `unknown` text for v2 to lower;
+	/// the v1 parse reads the sized numbers as plain `int` and `float`.
+	#[test]
+	fn the_v2_parse_leaves_widths_and_4x_kinds_for_lowering() {
+		for src in ["i8", "u64", "f16", "date", "enum<'a', 'b'>", "mood", "`my type`"] {
+			let (kind, problems) = parse_type_v2(src);
+			assert_eq!(kind, unknown(src), "{src}");
+			assert_eq!(problems.len(), 1, "{src}: {problems:?}");
+			assert!(problems[0].understood, "{src}");
+			assert_eq!(&src[problems[0].span.clone()], src);
+		}
+		assert_eq!(parse_type_checked("i8").0, prim(PrimitiveType::Int));
+		let src = "array<u8, 2> | f32";
+		let (kind, problems) = parse_type_v2(src);
+		assert_eq!(
+			kind,
+			FieldType::Union {
+				variants: vec![
+					FieldType::Array {
+						inner: Box::new(unknown("u8")),
+						max: Some(2)
+					},
+					unknown("f32"),
+				]
+			}
+		);
+		assert_eq!(problems.len(), 2);
+		// A width is not a type parameter, in either parse.
+		assert!(!parse_type_v2("i32<int>").1.iter().any(|p| p.understood));
+	}
+
+	#[test]
+	fn the_text_v2_reads_is_recognised() {
+		use V2Extension::*;
+		let number = |float, width, signed| {
+			Sized(SizedNumber {
+				float,
+				width,
+				signed,
+			})
+		};
+		assert_eq!(v2_extension("i8"), Some(number(false, 8, true)));
+		assert_eq!(v2_extension("U64"), Some(number(false, 64, false)));
+		assert_eq!(v2_extension("f16"), Some(number(true, 16, true)));
+		// Not a sized number, so a name.
+		assert_eq!(v2_extension("f8"), Some(Named("f8".into())));
+		assert_eq!(v2_extension("date"), Some(Plain("date".into())));
+		assert_eq!(v2_extension(" BigDecimal "), Some(Plain("bigdecimal".into())));
+		assert_eq!(v2_extension("enum<'z', \"a'b\">"), Some(Enum(vec!["z".into(), "a'b".into()])));
+		assert_eq!(v2_extension("enum<'a'> | int"), None);
+		assert_eq!(v2_extension("mood"), Some(Named("mood".into())));
+		assert_eq!(v2_extension("`my type`"), Some(Named("my type".into())));
+		// Not 4.x kinds, and never a type name.
+		for src in [
+			"",
+			"int",
+			"array",
+			"record",
+			"option",
+			"true",
+			"NaN",
+			"either",
+			"references",
+			"literal",
+			"mood<int>",
+			"mood int",
+			"date<int>",
+			"enum",
+			"enum<>",
+			"i8<int>",
+		] {
+			assert_eq!(v2_extension(src), None, "{src:?}");
+		}
 	}
 
 	/// An enum's label list is parsed, so a `>` or a comma inside a label does not end it, and

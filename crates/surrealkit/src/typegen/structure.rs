@@ -14,7 +14,7 @@
 //! event `THEN` lists and access `SIGNUP`/`SIGNIN`/`AUTHENTICATE`, which `structure-3.3` removes.
 //! 4.0 reads as 3.3 does and renames modules to extensions (`extensions`, which also carry
 //! `digest` and `capabilities`, both reported as `definition-unsupported`), adds `DEFINE TYPE`
-//! (`types`, reported as `definition-unsupported`) and the bookkeeping `compatibility`, a bucket's
+//! (`types`, read into the document's `types`) and the bookkeeping `compatibility`, a bucket's
 //! `presign_nonce` and a table's `migrations`, none of which is schema.
 //!
 //! Plain `INFO` text, when the caller has it, is attached to tables and fields as `define`
@@ -22,7 +22,7 @@
 
 use serde_json::{Map, Value};
 
-use super::build_v2::{RawField, RawFunction, RawIndex, RawSchema, RawTable};
+use super::build_v2::{RawField, RawFunction, RawIndex, RawSchema, RawTable, RawType};
 use super::diagnostics::{Diagnostic, Severity, codes};
 use super::document::{
 	Access, AccessMethod, Analyzer, Api, ApiAction, BearerSubject, Bucket, Changefeed, Config,
@@ -457,19 +457,67 @@ pub(super) fn read(adapter: Adapter, input: &StructureInput<'_>) -> RawSchema {
 			});
 		}
 	}
-	for category in ["models", "types"] {
-		for m in r.array(db, category, "db", None).to_vec() {
-			r.diagnostics.push(Diagnostic::new(
-				Severity::Warning,
-				codes::DEFINITION_UNSUPPORTED,
-				m.to_string(),
-				format!("INFO FOR DB category `{category}` is not part of schema document v2"),
-			));
+	for t in r.array(db, "types", "db", None).to_vec() {
+		if let Some(t) = read_type(&mut r, &t) {
+			raw.types.push(t);
 		}
+	}
+	for m in r.array(db, "models", "db", None).to_vec() {
+		r.diagnostics.push(Diagnostic::new(
+			Severity::Warning,
+			codes::DEFINITION_UNSUPPORTED,
+			m.to_string(),
+			"INFO FOR DB category `models` is not part of schema document v2",
+		));
 	}
 
 	raw.diagnostics = r.diagnostics;
 	raw
+}
+
+/// A `DEFINE TYPE` (4.0) from its structure object. Its `ASSERT` clauses, its permissions when
+/// they are not `FULL`, and the declaration order of a string-literal union (`labels`, which
+/// the engine ranks by) are known and not carried: each is a `definition-unsupported` warning.
+fn read_type(r: &mut Reader, value: &Value) -> Option<RawType> {
+	let map = r.object(
+		value,
+		"type",
+		&["name", "kind", "comment", "asserts", "permissions", "labels"],
+		&[],
+		None,
+	)?;
+	let name = r.string(map, "name", "type", None).unwrap_or_default();
+	let kind = r.string(map, "kind", "type", None).unwrap_or_default();
+	let not_carried = |r: &mut Reader, reason: String| {
+		r.diagnostics.push(Diagnostic::new(
+			Severity::Warning,
+			codes::DEFINITION_UNSUPPORTED,
+			format!("type {name}"),
+			reason,
+		));
+	};
+	if !r.array(map, "asserts", "type", None).is_empty() {
+		not_carried(r, "ASSERT on a DEFINE TYPE is not carried by schema document v2".to_string());
+	}
+	if r.permission(map, "permissions", "type", None, true) != Permission::Bool(true) {
+		not_carried(
+			r,
+			"PERMISSIONS on a DEFINE TYPE are not carried by schema document v2".to_string(),
+		);
+	}
+	if map.contains_key("labels") {
+		not_carried(
+			r,
+			"the declaration order of this type's labels, by which the engine ranks its values, is \
+			 not carried by schema document v2 (its kind is the union of them)"
+				.to_string(),
+		);
+	}
+	Some(RawType {
+		name,
+		kind,
+		comment: r.string(map, "comment", "type", None),
+	})
 }
 
 /// A module (4.0: an extension) from its structure object, which `what` names in diagnostics.
@@ -1170,10 +1218,11 @@ mod tests {
 			vec![
 				"DIGEST is not carried by schema document v2",
 				"CAPABILITIES is not carried by schema document v2",
-				"INFO FOR DB category `types` is not part of schema document v2",
 			]
 		);
 		assert_eq!(on_40.modules.len(), 1);
+		assert_eq!(on_40.types.len(), 1);
+		assert_eq!(on_40.types[0].name, "mood");
 		assert_eq!(on_40.modules[0].name, "mod::demo");
 		assert_eq!(on_40.modules[0].executable.bucket.as_deref(), Some("avatars"));
 		assert_eq!(on_40.buckets.len(), 1);
@@ -1189,5 +1238,73 @@ mod tests {
 			unknown,
 			vec!["db.compatibility", "db.extensions", "db.types", "bucket.presign_nonce"]
 		);
+	}
+	/// 4.0's `DEFINE TYPE` entries, as probed on the engine: the name, kind text and comment are
+	/// read; ASSERT, non-FULL permissions and a literal union's `labels` are known keys that the
+	/// document does not carry, each reported once; an unknown key is an error.
+	#[test]
+	fn types_are_read_and_what_is_not_carried_is_warned() {
+		let db = serde_json::json!({
+			"types": [
+				{ "asserts": [], "kind": "date", "name": "d", "permissions": true },
+				{ "asserts": [], "comment": "hi", "kind": "int", "name": "my type", "permissions": true },
+				{ "asserts": [{ "check": "$value > 0" }, { "check": "$value < 10" }],
+				  "kind": "int", "name": "pos", "permissions": true },
+				{ "asserts": [], "comment": "c", "kind": "int", "name": "priv", "permissions": false },
+				{ "asserts": [], "kind": "'sad' | 'ok' | 'meh'", "labels": ["sad", "ok", "meh"],
+				  "name": "mood", "permissions": true },
+			],
+		});
+		let input = StructureInput {
+			db: &db,
+			tables: &[],
+			db_info: None,
+			tables_info: &[],
+		};
+		let raw = read(Adapter::Structure40, &input);
+		let types: Vec<(&str, &str, Option<&str>)> = raw
+			.types
+			.iter()
+			.map(|t| (t.name.as_str(), t.kind.as_str(), t.comment.as_deref()))
+			.collect();
+		assert_eq!(
+			types,
+			vec![
+				("d", "date", None),
+				("my type", "int", Some("hi")),
+				("pos", "int", None),
+				("priv", "int", Some("c")),
+				("mood", "'sad' | 'ok' | 'meh'", None),
+			]
+		);
+		let warned: Vec<(&str, &str)> = raw
+			.diagnostics
+			.iter()
+			.inspect(|d| {
+				assert_eq!(d.code, codes::DEFINITION_UNSUPPORTED);
+				assert_eq!(d.severity, Severity::Warning);
+			})
+			.map(|d| (d.source.as_str(), d.reason.split(' ').next().unwrap_or_default()))
+			.collect();
+		assert_eq!(
+			warned,
+			vec![("type pos", "ASSERT"), ("type priv", "PERMISSIONS"), ("type mood", "the")]
+		);
+
+		let db = serde_json::json!({ "types": [{ "kind": "int", "name": "t", "extra": 1 }] });
+		let input = StructureInput {
+			db: &db,
+			tables: &[],
+			db_info: None,
+			tables_info: &[],
+		};
+		let raw = read(Adapter::Structure40, &input);
+		let unknown: Vec<&str> = raw
+			.diagnostics
+			.iter()
+			.filter(|d| d.code == codes::STRUCTURE_UNKNOWN_KEY)
+			.map(|d| d.source.as_str())
+			.collect();
+		assert_eq!(unknown, vec!["type.extra"]);
 	}
 }
