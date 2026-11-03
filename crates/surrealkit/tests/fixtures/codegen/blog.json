@@ -1,0 +1,1014 @@
+{
+  "format": "surrealdb.types",
+  "version": 1,
+  "engine": "4.1.0",
+  "namespace": "app",
+  "database": "main",
+  "tables": [
+    {
+      "name": "__entity",
+      "schemafull": true,
+      "drop": false,
+      "view": false,
+      "relation": null,
+      "fields": [
+        {
+          "path": [
+            "name"
+          ],
+          "steps": [
+            {
+              "field": "name"
+            }
+          ],
+          "kind": "string",
+          "kind_value": "String",
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        }
+      ]
+    },
+    {
+      "name": "event",
+      "schemafull": false,
+      "drop": false,
+      "view": false,
+      "relation": null,
+      "fields": [
+        {
+          "path": [
+            "kind"
+          ],
+          "steps": [
+            {
+              "field": "kind"
+            }
+          ],
+          "kind": "string",
+          "kind_value": "String",
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "payload"
+          ],
+          "steps": [
+            {
+              "field": "payload"
+            }
+          ],
+          "kind": "any",
+          "kind_value": "Any",
+          "certainty": "hint",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        }
+      ]
+    },
+    {
+      "name": "post",
+      "schemafull": true,
+      "drop": false,
+      "view": false,
+      "relation": null,
+      "fields": [
+        {
+          "path": [
+            "title"
+          ],
+          "steps": [
+            {
+              "field": "title"
+            }
+          ],
+          "kind": "string",
+          "kind_value": "String",
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "author"
+          ],
+          "steps": [
+            {
+              "field": "author"
+            }
+          ],
+          "kind": "record<user>",
+          "kind_value": {
+            "Record": [
+              "user"
+            ]
+          },
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "published_at"
+          ],
+          "steps": [
+            {
+              "field": "published_at"
+            }
+          ],
+          "kind": "option<datetime>",
+          "kind_value": {
+            "Either": [
+              "None",
+              "Datetime"
+            ]
+          },
+          "certainty": "fact",
+          "optional": true,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        }
+      ]
+    },
+    {
+      "name": "user",
+      "schemafull": true,
+      "drop": false,
+      "view": false,
+      "relation": null,
+      "fields": [
+        {
+          "path": [
+            "name"
+          ],
+          "steps": [
+            {
+              "field": "name"
+            }
+          ],
+          "kind": "string",
+          "kind_value": "String",
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "email"
+          ],
+          "steps": [
+            {
+              "field": "email"
+            }
+          ],
+          "kind": "string",
+          "kind_value": "String",
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "bio"
+          ],
+          "steps": [
+            {
+              "field": "bio"
+            }
+          ],
+          "kind": "option<string>",
+          "kind_value": {
+            "Either": [
+              "None",
+              "String"
+            ]
+          },
+          "certainty": "fact",
+          "optional": true,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "joined"
+          ],
+          "steps": [
+            {
+              "field": "joined"
+            }
+          ],
+          "kind": "datetime",
+          "kind_value": "Datetime",
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "balance"
+          ],
+          "steps": [
+            {
+              "field": "balance"
+            }
+          ],
+          "kind": "decimal",
+          "kind_value": "Decimal",
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "session_ttl"
+          ],
+          "steps": [
+            {
+              "field": "session_ttl"
+            }
+          ],
+          "kind": "duration",
+          "kind_value": "Duration",
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "token"
+          ],
+          "steps": [
+            {
+              "field": "token"
+            }
+          ],
+          "kind": "uuid",
+          "kind_value": "Uuid",
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "team"
+          ],
+          "steps": [
+            {
+              "field": "team"
+            }
+          ],
+          "kind": "record<team | org>",
+          "kind_value": {
+            "Record": [
+              "team",
+              "org"
+            ]
+          },
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "friends"
+          ],
+          "steps": [
+            {
+              "field": "friends"
+            }
+          ],
+          "kind": "array<record<user>>",
+          "kind_value": {
+            "Array": [
+              {
+                "Record": [
+                  "user"
+                ]
+              },
+              null
+            ]
+          },
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "status"
+          ],
+          "steps": [
+            {
+              "field": "status"
+            }
+          ],
+          "kind": "'active' | 'pending' | 'banned'",
+          "kind_value": {
+            "Either": [
+              {
+                "Literal": {
+                  "String": "active"
+                }
+              },
+              {
+                "Literal": {
+                  "String": "pending"
+                }
+              },
+              {
+                "Literal": {
+                  "String": "banned"
+                }
+              }
+            ]
+          },
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "tags"
+          ],
+          "steps": [
+            {
+              "field": "tags"
+            }
+          ],
+          "kind": "set<string>",
+          "kind_value": {
+            "Set": [
+              "String",
+              null
+            ]
+          },
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "location"
+          ],
+          "steps": [
+            {
+              "field": "location"
+            }
+          ],
+          "kind": "geometry<point>",
+          "kind_value": {
+            "Geometry": [
+              "Point"
+            ]
+          },
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "address"
+          ],
+          "steps": [
+            {
+              "field": "address"
+            }
+          ],
+          "kind": "object",
+          "kind_value": "Object",
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "address",
+            "street"
+          ],
+          "steps": [
+            {
+              "field": "address"
+            },
+            {
+              "field": "street"
+            }
+          ],
+          "kind": "string",
+          "kind_value": "String",
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "address",
+            "city"
+          ],
+          "steps": [
+            {
+              "field": "address"
+            },
+            {
+              "field": "city"
+            }
+          ],
+          "kind": "option<string>",
+          "kind_value": {
+            "Either": [
+              "None",
+              "String"
+            ]
+          },
+          "certainty": "fact",
+          "optional": true,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "address",
+            "geo"
+          ],
+          "steps": [
+            {
+              "field": "address"
+            },
+            {
+              "field": "geo"
+            }
+          ],
+          "kind": "geometry<point>",
+          "kind_value": {
+            "Geometry": [
+              "Point"
+            ]
+          },
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "scores"
+          ],
+          "steps": [
+            {
+              "field": "scores"
+            }
+          ],
+          "kind": "array<object>",
+          "kind_value": {
+            "Array": [
+              "Object",
+              null
+            ]
+          },
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "scores",
+            "value"
+          ],
+          "steps": [
+            {
+              "field": "scores"
+            },
+            {
+              "element": true
+            },
+            {
+              "field": "value"
+            }
+          ],
+          "kind": "int",
+          "kind_value": "Int",
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "scores",
+            "label"
+          ],
+          "steps": [
+            {
+              "field": "scores"
+            },
+            {
+              "element": true
+            },
+            {
+              "field": "label"
+            }
+          ],
+          "kind": "option<string>",
+          "kind_value": {
+            "Either": [
+              "None",
+              "String"
+            ]
+          },
+          "certainty": "fact",
+          "optional": true,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "meta"
+          ],
+          "steps": [
+            {
+              "field": "meta"
+            }
+          ],
+          "kind": "object",
+          "kind_value": "Object",
+          "certainty": "hint",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": true
+        },
+        {
+          "path": [
+            "nickname"
+          ],
+          "steps": [
+            {
+              "field": "nickname"
+            }
+          ],
+          "kind": "option<string>",
+          "kind_value": {
+            "Either": [
+              "None",
+              "String"
+            ]
+          },
+          "certainty": "fact",
+          "optional": true,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "avatar"
+          ],
+          "steps": [
+            {
+              "field": "avatar"
+            }
+          ],
+          "kind": "file<avatars>",
+          "kind_value": {
+            "File": [
+              "avatars"
+            ]
+          },
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "plan"
+          ],
+          "steps": [
+            {
+              "field": "plan"
+            }
+          ],
+          "kind": "money",
+          "kind_value": {
+            "Named": "money"
+          },
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        }
+      ]
+    },
+    {
+      "name": "wrote",
+      "schemafull": true,
+      "drop": false,
+      "view": false,
+      "relation": {
+        "in": [
+          "user"
+        ],
+        "out": [
+          "post"
+        ]
+      },
+      "fields": [
+        {
+          "path": [
+            "at"
+          ],
+          "steps": [
+            {
+              "field": "at"
+            }
+          ],
+          "kind": "datetime",
+          "kind_value": "Datetime",
+          "certainty": "fact",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        }
+      ]
+    }
+  ],
+  "functions": [
+    {
+      "name": "fn::add",
+      "args": [
+        {
+          "name": "a",
+          "kind": "int",
+          "kind_value": "Int"
+        },
+        {
+          "name": "b",
+          "kind": "int",
+          "kind_value": "Int"
+        }
+      ],
+      "returns": "int",
+      "returns_value": "Int",
+      "returns_certainty": "fact",
+      "returns_declared": true
+    },
+    {
+      "name": "fn::greet",
+      "args": [
+        {
+          "name": "who",
+          "kind": "string",
+          "kind_value": "String"
+        }
+      ],
+      "returns": "string",
+      "returns_value": "String",
+      "returns_certainty": "fact",
+      "returns_declared": false
+    },
+    {
+      "name": "fn::untyped",
+      "args": [],
+      "returns": null,
+      "returns_value": null,
+      "returns_certainty": null,
+      "returns_declared": false
+    }
+  ],
+  "types": [
+    {
+      "name": "money",
+      "kind": "decimal",
+      "kind_value": "Decimal"
+    }
+  ],
+  "params": [
+    {
+      "name": "tax_rate",
+      "kind": "float",
+      "kind_value": "Float"
+    }
+  ],
+  "queries": [
+    {
+      "name": "usersByName",
+      "text": "SELECT name, email FROM user WHERE name = $name LIMIT $limit",
+      "statements": [
+        {
+          "kind": "array<{ name: string, email: string }>",
+          "kind_value": {
+            "Array": [
+              {
+                "Literal": {
+                  "Object": {
+                    "name": "String",
+                    "email": "String"
+                  }
+                }
+              },
+              null
+            ]
+          },
+          "certainty": "fact",
+          "support": {
+            "exact": true
+          },
+          "open": [],
+          "span": {
+            "start": 0,
+            "end": 1,
+            "line": 1,
+            "column": 1,
+            "end_line": 1,
+            "end_column": 2
+          }
+        }
+      ],
+      "params": [
+        {
+          "name": "name",
+          "kind": "string",
+          "kind_value": "String",
+          "certainty": "hint",
+          "required": true
+        },
+        {
+          "name": "limit",
+          "kind": "int",
+          "kind_value": "Int",
+          "certainty": "hint",
+          "required": false
+        }
+      ]
+    },
+    {
+      "name": null,
+      "text": "SELECT * FROM ONLY user:alice",
+      "statements": [
+        {
+          "kind": "option<{ ... }>",
+          "kind_value": {
+            "Either": [
+              "None",
+              {
+                "Literal": {
+                  "Object": {
+                    "id": {
+                      "Record": [
+                        "user"
+                      ]
+                    },
+                    "name": "String",
+                    "bio": {
+                      "Either": [
+                        "None",
+                        "String"
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "certainty": "fact",
+          "support": {
+            "exact": true
+          },
+          "open": [],
+          "span": {
+            "start": 0,
+            "end": 1,
+            "line": 1,
+            "column": 1,
+            "end_line": 1,
+            "end_column": 2
+          }
+        }
+      ],
+      "params": []
+    },
+    {
+      "name": null,
+      "text": "BEGIN; LET $n = 1; SELECT count() FROM post GROUP ALL; SELECT * FROM $__host0; COMMIT;",
+      "statements": [
+        {
+          "kind": null,
+          "kind_value": null,
+          "certainty": "fact",
+          "support": {
+            "exact": true
+          },
+          "open": [],
+          "span": {
+            "start": 0,
+            "end": 1,
+            "line": 1,
+            "column": 1,
+            "end_line": 1,
+            "end_column": 2
+          }
+        },
+        {
+          "kind": "none",
+          "kind_value": "None",
+          "certainty": "fact",
+          "support": {
+            "exact": true
+          },
+          "open": [],
+          "span": {
+            "start": 0,
+            "end": 1,
+            "line": 1,
+            "column": 1,
+            "end_line": 1,
+            "end_column": 2
+          }
+        },
+        {
+          "kind": "array<{ count: int }>",
+          "kind_value": {
+            "Array": [
+              {
+                "Literal": {
+                  "Object": {
+                    "count": "Int"
+                  }
+                }
+              },
+              null
+            ]
+          },
+          "certainty": "fact",
+          "support": {
+            "exact": true
+          },
+          "open": [],
+          "span": {
+            "start": 0,
+            "end": 1,
+            "line": 1,
+            "column": 1,
+            "end_line": 1,
+            "end_column": 2
+          }
+        },
+        {
+          "kind": "array<any>",
+          "kind_value": {
+            "Array": [
+              "Any",
+              null
+            ]
+          },
+          "certainty": "hint",
+          "support": {
+            "exact": true
+          },
+          "open": [],
+          "span": {
+            "start": 0,
+            "end": 1,
+            "line": 1,
+            "column": 1,
+            "end_line": 1,
+            "end_column": 2
+          }
+        },
+        {
+          "kind": null,
+          "kind_value": null,
+          "certainty": "fact",
+          "support": {
+            "exact": true
+          },
+          "open": [],
+          "span": {
+            "start": 0,
+            "end": 1,
+            "line": 1,
+            "column": 1,
+            "end_line": 1,
+            "end_column": 2
+          }
+        }
+      ],
+      "params": [
+        {
+          "name": "__host0",
+          "kind": null,
+          "kind_value": null,
+          "certainty": "hint",
+          "required": true
+        }
+      ]
+    }
+  ]
+}

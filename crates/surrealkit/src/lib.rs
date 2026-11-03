@@ -1,5 +1,8 @@
 #![doc = include_str!("../README.md")]
 
+// `generate`: TypeScript from the engine's `TypesDocument`, plus per-query types
+// for the queries host code sends.
+pub mod codegen;
 pub mod config;
 pub mod constants;
 pub mod core;
