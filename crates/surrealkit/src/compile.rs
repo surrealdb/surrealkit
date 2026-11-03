@@ -887,6 +887,49 @@ mod corpus {
 		);
 	}
 
+	/// SurrealDB 4.0's sized numbers compile clean, in v2 and in v1: an `iN`/`uN` field is an
+	/// `int` and an `fN` field a `float`, in a nested position as at the top.
+	#[tokio::test]
+	async fn sized_numbers_compile_clean() {
+		let widths = ["i8", "i16", "i32", "u8", "u16", "u32", "u64", "f16", "f32"];
+		let mut sql = String::from("DEFINE TABLE t SCHEMAFULL;\n");
+		for width in widths {
+			sql.push_str(&format!("DEFINE FIELD w_{width} ON t TYPE {width};\n"));
+		}
+		sql.push_str("DEFINE FIELD nested ON t TYPE array<option<i32>, 3>;\n");
+		sql.push_str("DEFINE FIELD maybe ON t TYPE option<u8>;\n");
+		sql.push_str("DEFINE FUNCTION fn::f($a: i16, $b: f32) -> u32 { RETURN 1 };\n");
+		let compiled = compile(&one_file(&sql), &CompileOpts::default()).await.expect("compile");
+		let doc = &compiled.document;
+		assert!(doc.diagnostics.is_empty(), "{:?}", doc.diagnostics);
+		assert!(compiled.v1_diagnostics.is_empty(), "{:?}", compiled.v1_diagnostics);
+		let kind = |name: &str| {
+			let field = doc.tables[0].fields.iter().find(|f| f.path == [name]).expect(name);
+			(serde_json::to_value(&field.kind).expect("json"), field.optional)
+		};
+		for width in widths {
+			let plain = if width.starts_with('f') {
+				"float"
+			} else {
+				"int"
+			};
+			assert_eq!(kind(&format!("w_{width}")), (serde_json::json!({"kind": plain}), false));
+		}
+		assert_eq!(
+			kind("nested"),
+			(
+				serde_json::json!({"kind": "array", "length": 3,
+					"item": {"kind": "option", "item": {"kind": "int"}}}),
+				false
+			)
+		);
+		assert_eq!(kind("maybe"), (serde_json::json!({"kind": "int"}), true));
+		let function = &doc.functions[0];
+		assert_eq!(serde_json::to_value(&function.args[0].kind).unwrap()["kind"], "int");
+		assert_eq!(serde_json::to_value(&function.args[1].kind).unwrap()["kind"], "float");
+		assert_eq!(serde_json::to_value(&function.returns).unwrap()["kind"], "int");
+	}
+
 	#[tokio::test]
 	async fn a_param_with_a_changing_value_is_an_error() {
 		let doc = compile(

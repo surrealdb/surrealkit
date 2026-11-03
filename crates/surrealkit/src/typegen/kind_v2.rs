@@ -12,6 +12,8 @@
 //! 4. Name lists are sorted and deduplicated; literal-object fields are sorted by name.
 //! 5. Literal values are strings (booleans excepted) in their SurrealQL spelling without the
 //!    type suffix.
+//! 6. SurrealDB 4.0's sized numbers lower to the plain number: `iN` and `uN` are `int`, `fN` is
+//!    `float`. The width is not represented; every `iN`/`uN` value is an int, every `fN` a float.
 
 use super::canonical::canonical_of;
 use super::document::{Kind, LiteralType, LiteralValue, ObjectLiteralField};
@@ -361,6 +363,59 @@ mod tests {
 				]}),
 				false
 			)
+		);
+	}
+
+	#[test]
+	fn sized_numbers_lower_to_int_and_float_everywhere() {
+		for (text, plain) in [
+			("i8", "int"),
+			("i16", "int"),
+			("i32", "int"),
+			("i64", "int"),
+			("u8", "int"),
+			("u16", "int"),
+			("u32", "int"),
+			("u64", "int"),
+			("f16", "float"),
+			("f32", "float"),
+			("f64", "float"),
+		] {
+			let want = json!({"kind": plain});
+			assert_eq!(kind(text), (want.clone(), false), "{text}");
+			assert_eq!(kind(&format!("option<{text}>")), (want.clone(), true), "{text}");
+			assert_eq!(
+				kind(&format!("array<{text}, 2>")),
+				(json!({"kind": "array", "item": want.clone(), "length": 2}), false),
+				"{text}"
+			);
+			assert_eq!(
+				kind(&format!("set<none | {text}>")),
+				(json!({"kind": "set", "item": {"kind": "option", "item": want.clone()}}), false),
+				"{text}"
+			);
+			assert_eq!(
+				kind(&format!("[{text}, string]")),
+				(json!({"kind": "tuple", "items": [want.clone(), {"kind": "string"}]}), false),
+				"{text}"
+			);
+			assert_eq!(
+				kind(&format!("{{ a: {text}, b: none | {text} }}")),
+				(
+					json!({"kind": "objectLiteral", "fields": [
+						{"name": "a", "kind": want.clone(), "optional": false},
+						{"name": "b", "kind": want.clone(), "optional": true},
+					]}),
+					false
+				),
+				"{text}"
+			);
+		}
+		// They collapse into the plain number inside a union: one survivor, not two variants.
+		assert_eq!(kind("i8 | u64 | int"), (json!({"kind": "int"}), false));
+		assert_eq!(
+			kind("f32 | f64 | i16"),
+			(json!({"kind": "union", "variants": [{"kind": "float"}, {"kind": "int"}]}), false)
 		);
 	}
 
