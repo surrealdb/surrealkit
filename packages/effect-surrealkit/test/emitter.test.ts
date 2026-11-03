@@ -371,6 +371,162 @@ describe('generation rules', () => {
 		]);
 	});
 
+	describe('SurrealDB 4.0 kinds', () => {
+		/** `team` with one field per 4.0 kind, and the types some of them name. */
+		const withKinds = () => {
+			const document = example();
+			const team = document.tables.find((t) => t.name === 'team') as {
+				fields: Array<Record<string, unknown>>;
+			};
+			const name = team.fields.find(
+				(f) => (f.path as string[])[0] === 'name',
+			) as Record<string, unknown>;
+			const kinds: Record<string, unknown> = {
+				k_i8: { kind: 'int', width: 8 },
+				k_u64: { kind: 'int', width: 64, signed: false },
+				k_f16: { kind: 'float', width: 16 },
+				k_date: { kind: 'date' },
+				k_time: { kind: 'time' },
+				k_timestamp: { kind: 'timestamp' },
+				k_interval: { kind: 'interval' },
+				k_bigdecimal: { kind: 'bigdecimal' },
+				k_enum: { kind: 'enum', labels: ['z', 'a', "it's", 'a'] },
+				k_mood: { kind: 'named', name: 'mood' },
+				k_moods: {
+					kind: 'array',
+					item: {
+						kind: 'option',
+						item: { kind: 'named', name: 'tag' },
+					},
+				},
+				k_loop: { kind: 'named', name: 'loop' },
+				k_missing: { kind: 'named', name: 'nope' },
+			};
+			for (const [path, kind] of Object.entries(kinds)) {
+				team.fields.push({
+					...structuredClone(name),
+					path: [path],
+					kind,
+				});
+			}
+			team.fields.sort((x, y) =>
+				JSON.stringify(x.path) < JSON.stringify(y.path) ? -1 : 1,
+			);
+			document.types = [
+				{
+					name: 'loop',
+					kind: {
+						kind: 'array',
+						item: { kind: 'named', name: 'loop' },
+					},
+				},
+				{
+					name: 'mood',
+					kind: { kind: 'enum', labels: ['sad', 'ok', 'meh'] },
+				},
+				{
+					name: 'tag',
+					kind: { kind: 'named', name: 'mood' },
+					comment: 'a mood',
+				},
+			];
+			return withDigest(document);
+		};
+
+		it('validates against the published JSON Schema and decodes strictly', async () => {
+			const document = withKinds();
+			const validate = new Ajv2020({
+				allErrors: true,
+				strict: false,
+			}).compile(readJson(jsonSchemaPath));
+			expect(validate(document)).toBe(true);
+			expect(validate.errors ?? []).toEqual([]);
+			await run(decodeDocument(document));
+			// An older document, without `types`, still decodes.
+			await run(decodeDocument(example()));
+		});
+
+		it('rejects what the contract does not allow', async () => {
+			for (const kind of [
+				{ kind: 'int', width: 7 },
+				{ kind: 'int', signed: true },
+				{ kind: 'float', width: 8 },
+				{ kind: 'enum', labels: [] },
+				{ kind: 'enum', labels: [1] },
+				{ kind: 'named' },
+				{ kind: 'string', width: 8 },
+			]) {
+				const document = example();
+				at(
+					at(document.tables, 0).fields as Array<
+						Record<string, unknown>
+					>,
+					0,
+				).kind = kind;
+				await failure(decodeDocument(document));
+			}
+		});
+
+		it('prints the new kinds, expanding names from `types`', async () => {
+			const result = await run(
+				generate(withKinds(), { store: 'corpus' }),
+			);
+			const module =
+				result.files.find((f) => f.path === 'team.ts')?.content ?? '';
+			// Sized numbers read as the plain number, as the SDK has no width.
+			expect(module).toMatch(/k_i8: SurrealSchema\.Int,/);
+			expect(module).toMatch(/k_u64: SurrealSchema\.Int,/);
+			expect(module).toMatch(/k_f16: Schema\.Number,/);
+			// Kinds with no Effect schema of their own are `Schema.Unknown`.
+			for (const field of [
+				'k_date',
+				'k_time',
+				'k_timestamp',
+				'k_interval',
+				'k_bigdecimal',
+			]) {
+				expect(module).toMatch(
+					new RegExp(`${field}: Schema\\.Unknown,`),
+				);
+			}
+			// An enum is the union of its labels in declaration order, and a
+			// repeated label is the same value.
+			expect(module).toContain(
+				'k_enum: Schema.Literals(["z", "a", "it\'s"]),',
+			);
+			// A name is expanded inline, through other names.
+			expect(module).toContain(
+				'k_mood: Schema.Literals(["sad", "ok", "meh"]),',
+			);
+			expect(module).toMatch(
+				/k_moods: Schema\.Array\(Schema\.UndefinedOr\(Schema\.Literals\(\["sad", "ok", "meh"\]\)\)\),/,
+			);
+			// A cycle and an undefined name are `Schema.Unknown` with a warning.
+			expect(module).toMatch(/k_loop: Schema\.Array\(Schema\.Unknown\),/);
+			expect(module).toMatch(/k_missing: Schema\.Unknown,/);
+			const kindWarnings = result.warnings.filter((w) =>
+				w.startsWith('team.'),
+			);
+			expect(kindWarnings).toEqual([
+				'team.k_bigdecimal: kind `bigdecimal` has no Effect schema of its own; generated as Schema.Unknown',
+				'team.k_date: kind `date` has no Effect schema of its own; generated as Schema.Unknown',
+				'team.k_interval: kind `interval` has no Effect schema of its own; generated as Schema.Unknown',
+				'team.k_loop: type `loop` leads back to itself; generated as Schema.Unknown',
+				'team.k_missing: type `nope` is not defined in the document; generated as Schema.Unknown',
+				'team.k_time: kind `time` has no Effect schema of its own; generated as Schema.Unknown',
+				'team.k_timestamp: kind `timestamp` has no Effect schema of its own; generated as Schema.Unknown',
+			]);
+		});
+
+		it('is deterministic with types present', async () => {
+			const first = await run(generate(withKinds(), { store: 'corpus' }));
+			const second = await run(
+				generate(withKinds(), { store: 'corpus' }),
+			);
+			expect(second.files).toEqual(first.files);
+		});
+	});
+
 	it('refuses an id of a referenced table that collides with a defined table', async () => {
 		// `org` is referenced by record<org | team> but not defined: its id
 		// `OrgId` lives in ids.ts, and table `org_id` would export `OrgId` too.

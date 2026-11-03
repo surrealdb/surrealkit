@@ -887,8 +887,8 @@ mod corpus {
 		);
 	}
 
-	/// SurrealDB 4.0's sized numbers compile clean, in v2 and in v1: an `iN`/`uN` field is an
-	/// `int` and an `fN` field a `float`, in a nested position as at the top.
+	/// SurrealDB 4.0's sized numbers compile clean. v2 carries the width (`int`/`float` with
+	/// `width`, and `signed: false` for `uN`); v1 reads them as plain `int` and `float`.
 	#[tokio::test]
 	async fn sized_numbers_compile_clean() {
 		let widths = ["i8", "i16", "i32", "u8", "u16", "u32", "u64", "f16", "f32"];
@@ -898,6 +898,7 @@ mod corpus {
 		}
 		sql.push_str("DEFINE FIELD nested ON t TYPE array<option<i32>, 3>;\n");
 		sql.push_str("DEFINE FIELD maybe ON t TYPE option<u8>;\n");
+		sql.push_str("DEFINE FIELD plain ON t TYPE i64;\n");
 		sql.push_str("DEFINE FUNCTION fn::f($a: i16, $b: f32) -> u32 { RETURN 1 };\n");
 		let compiled = compile(&one_file(&sql), &CompileOpts::default()).await.expect("compile");
 		let doc = &compiled.document;
@@ -908,32 +909,53 @@ mod corpus {
 			(serde_json::to_value(&field.kind).expect("json"), field.optional)
 		};
 		for width in widths {
-			let plain = if width.starts_with('f') {
-				"float"
-			} else {
-				"int"
-			};
-			assert_eq!(kind(&format!("w_{width}")), (serde_json::json!({"kind": plain}), false));
+			let bits: u64 = width[1..].parse().unwrap();
+			let mut node = serde_json::json!({"kind": if width.starts_with('f') { "float" } else { "int" }, "width": bits});
+			if width.starts_with('u') {
+				node["signed"] = false.into();
+			}
+			assert_eq!(kind(&format!("w_{width}")), (node, false), "{width}");
 		}
 		assert_eq!(
 			kind("nested"),
 			(
 				serde_json::json!({"kind": "array", "length": 3,
-					"item": {"kind": "option", "item": {"kind": "int"}}}),
+					"item": {"kind": "option", "item": {"kind": "int", "width": 32}}}),
 				false
 			)
 		);
-		assert_eq!(kind("maybe"), (serde_json::json!({"kind": "int"}), true));
+		assert_eq!(
+			kind("maybe"),
+			(serde_json::json!({"kind": "int", "width": 8, "signed": false}), true)
+		);
+		// The engine renders `i64` as `int`: no width.
+		assert_eq!(kind("plain"), (serde_json::json!({"kind": "int"}), false));
 		let function = &doc.functions[0];
-		assert_eq!(serde_json::to_value(&function.args[0].kind).unwrap()["kind"], "int");
-		assert_eq!(serde_json::to_value(&function.args[1].kind).unwrap()["kind"], "float");
-		assert_eq!(serde_json::to_value(&function.returns).unwrap()["kind"], "int");
+		assert_eq!(
+			serde_json::to_value(&function.args[0].kind).unwrap(),
+			serde_json::json!({"kind": "int", "width": 16})
+		);
+		assert_eq!(
+			serde_json::to_value(&function.args[1].kind).unwrap(),
+			serde_json::json!({"kind": "float", "width": 32})
+		);
+		assert_eq!(
+			serde_json::to_value(&function.returns).unwrap(),
+			serde_json::json!({"kind": "int", "width": 32, "signed": false})
+		);
+		// v1 has no place for a width.
+		let v1 = &compiled.v1.tables[0].fields;
+		let v1_kind = |name: &str| {
+			serde_json::to_value(&v1.iter().find(|f| f.name == name).unwrap().r#type).unwrap()
+		};
+		assert_eq!(v1_kind("w_i8"), serde_json::json!({"kind": "primitive", "name": "int"}));
+		assert_eq!(v1_kind("w_f16"), serde_json::json!({"kind": "primitive", "name": "float"}));
 	}
 
-	/// The 4.0 kinds with no node in the document read as `unknown` with a warning, so a schema
-	/// that uses them compiles under strict; the warning names each field and its exact text.
+	/// The 4.0 kinds beyond the sized numbers compile to nodes of their own: no diagnostics in v2.
+	/// v1 has no such nodes: it reads each as `unknown` with a `kind-not-represented` warning.
 	#[tokio::test]
-	async fn the_four_oh_kinds_compile_as_unknown_with_warnings() {
+	async fn the_four_oh_kinds_compile_to_nodes() {
 		let compiled = compile(
 			&one_file(
 				"DEFINE TABLE t SCHEMAFULL;\n\
@@ -942,7 +964,7 @@ mod corpus {
 				 DEFINE FIELD ts ON t TYPE timestamp;\n\
 				 DEFINE FIELD iv ON t TYPE interval;\n\
 				 DEFINE FIELD bd ON t TYPE bigdecimal;\n\
-				 DEFINE FIELD en ON t TYPE enum<'a', \"it's\", 'x,y>z'>;\n\
+				 DEFINE FIELD en ON t TYPE enum<'z', \"it's\", 'a', 'x,y>z'>;\n\
 				 DEFINE FIELD many ON t TYPE array<enum<'a'>> | none;\n\
 				 DEFINE FIELD ok ON t TYPE i8 | string;\n",
 			),
@@ -951,43 +973,53 @@ mod corpus {
 		.await
 		.expect("compile");
 		let doc = &compiled.document;
-		assert!(!doc.has_errors(), "{:?}", doc.diagnostics);
-		assert!(
-			compiled.v1_diagnostics.iter().all(|d| !d.is_error()),
-			"{:?}",
-			compiled.v1_diagnostics
+		assert!(doc.diagnostics.is_empty(), "{:?}", doc.diagnostics);
+		let kind = |name: &str| {
+			let field = doc.tables[0].fields.iter().find(|f| f.path == [name]).expect(name);
+			(serde_json::to_value(&field.kind).expect("json"), field.optional)
+		};
+		for (field, node) in [
+			("d", "date"),
+			("tm", "time"),
+			("ts", "timestamp"),
+			("iv", "interval"),
+			("bd", "bigdecimal"),
+		] {
+			assert_eq!(kind(field), (serde_json::json!({"kind": node}), false), "{field}");
+		}
+		assert_eq!(
+			kind("en"),
+			(serde_json::json!({"kind": "enum", "labels": ["z", "it's", "a", "x,y>z"]}), false)
 		);
-		let warned: Vec<(String, String)> = doc
-			.diagnostics
+		assert_eq!(
+			kind("many"),
+			(serde_json::json!({"kind": "array", "item": {"kind": "enum", "labels": ["a"]}}), true)
+		);
+		assert_eq!(
+			kind("ok"),
+			(
+				serde_json::json!({"kind": "union", "variants": [
+					{"kind": "int", "width": 8}, {"kind": "string"},
+				]}),
+				false
+			)
+		);
+
+		let mut warned: Vec<String> = compiled
+			.v1_diagnostics
 			.iter()
 			.filter(|d| d.code == codes::KIND_NOT_REPRESENTED)
 			.map(|d| {
 				assert_eq!(d.severity, Severity::Warning);
-				(d.field.clone().expect("field").join("."), d.source.clone())
+				d.field.clone().expect("field").join(".")
 			})
 			.collect();
-		assert_eq!(
-			warned,
-			[
-				("bd", "bigdecimal"),
-				("d", "date"),
-				("en", "enum<'a', \"it's\", 'x,y>z'>"),
-				("iv", "interval"),
-				("many.*", "enum<'a'>"),
-				("many", "array<enum<'a'>> | none"),
-				("tm", "time"),
-				("ts", "timestamp"),
-			]
-			.map(|(f, s)| (f.to_string(), s.to_string()))
-		);
-		let kind = |name: &str| {
-			let field = doc.tables[0].fields.iter().find(|f| f.path == [name]).expect(name);
-			serde_json::to_value(&field.kind).expect("json")
-		};
-		assert_eq!(kind("d"), serde_json::json!({"kind": "unknown", "source": "date"}));
-		assert_eq!(
-			kind("ok"),
-			serde_json::json!({"kind": "union", "variants": [{"kind": "int"}, {"kind": "string"}]})
+		warned.sort();
+		assert_eq!(warned, ["bd", "d", "en", "iv", "many", "many.*", "tm", "ts"]);
+		assert!(
+			compiled.v1_diagnostics.iter().all(|d| !d.is_error()),
+			"{:?}",
+			compiled.v1_diagnostics
 		);
 	}
 
