@@ -12,7 +12,7 @@ The library is useful when you want schema management to happen inside your proc
 
 ```toml
 [dependencies]
-surrealkit = "1.0.0-beta.7"
+surrealkit = "1.0.0-beta.8"
 ```
 
 ---
@@ -27,7 +27,7 @@ only it needs — `clap`, `inquire`, `rustls` (and its `aws-lc-rs` backend) and
 
 ```toml
 [dependencies]
-surrealkit = { version = "1.0.0-beta.7", default-features = false, features = ["kv-mem"] }
+surrealkit = { version = "1.0.0-beta.8", default-features = false, features = ["kv-mem"] }
 ```
 
 Storage engines: `kv-mem` (default), `kv-surrealkv`, `kv-rocksdb`, and `embedded`
@@ -40,7 +40,7 @@ rustls into your tree:
 
 ```toml
 [dependencies]
-surrealkit = { version = "1.0.0-beta.7", default-features = false, features = ["mcp"] }
+surrealkit = { version = "1.0.0-beta.8", default-features = false, features = ["mcp"] }
 ```
 
 ```rust,ignore
@@ -133,7 +133,7 @@ SurrealKit works against an in-process SurrealDB such as `mem://`, `surrealkv://
 
 ```toml
 [dependencies]
-surrealkit = "1.0.0-beta.7"
+surrealkit = "1.0.0-beta.8"
 surrealdb = { version = "3", features = ["kv-surrealkv"] }
 ```
 

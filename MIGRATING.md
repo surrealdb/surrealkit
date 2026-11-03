@@ -8,7 +8,7 @@ filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
 Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and
-1.0.0-beta.7 two more (13 and 14). Unreleased changes are 15 to 18.
+1.0.0-beta.7 two more (13 and 14), and 1.0.0-beta.8 four more (15 to 18).
 Upgrading from 0.7.0 or any 1.0 beta carries existing state forward; CI checks
 that against every published release.
 
@@ -322,7 +322,7 @@ discard --keep-snapshots` delete the project's `src/`. Every id `rollout plan`
 writes is already a plain name, so this only affects a manifest whose id was
 edited by hand.
 
-### 15. Typegen reads the selected target and writes atomically (unreleased)
+### 15. Typegen reads the selected target and writes atomically (1.0.0-beta.8)
 
 `surrealkit typegen` used to connect through the ambient connection even when
 `surrealkit.toml` declared targets, so `--target` and `primary = true` were
@@ -342,7 +342,7 @@ formatter only accepts files matching a pattern, make sure that name matches
 too. New opt-ins: `[typegen] strict`, `[typegen] generated_at = false`, and
 `surrealkit typegen --check`.
 
-### 16. Typegen parses every SurrealDB 3.x kind (unreleased)
+### 16. Typegen parses every SurrealDB 3.x kind (1.0.0-beta.8)
 
 These are changes to v1 output that need no opt-in: they are parser fixes.
 `schema.json` and the generated TypeScript change only where the old parser was
@@ -370,7 +370,7 @@ handle, and `FieldType::Literal` has a `literal_type` field. Anything typegen
 still cannot represent is reported as a `Diagnostic`
 (`typegen::generate_with_diagnostics`), and `strict` fails on errors.
 
-### 17. Effect-native typegen (unreleased)
+### 17. Effect-native typegen (1.0.0-beta.8)
 
 Nothing to change. Relative to the parser fixes in entry 16 (and the behaviour
 changes in entry 15), every part is opt-in: with no new configuration,
@@ -406,7 +406,7 @@ section (everything else below is opt-in):
 - `surrealkit test --exec <cmd>` runs a command against each prepared suite database
   (and `--schema-from` now wins over a suite's `schema_from`; see the tester section).
 
-### 18. Rollout bookkeeping retries transaction conflicts (unreleased)
+### 18. Rollout bookkeeping retries transaction conflicts (1.0.0-beta.8)
 
 Nothing to change. On a distributed SurrealDB, the small writes a rollout makes
 around its steps (taking and releasing the lock, recording each step, moving the
@@ -560,7 +560,7 @@ Two behaviour changes:
   allowed to create. Test those creates with a `sql_expect` case that sets its
   own unique values.
 
-### `--schema-from` wins over the suite, and `--exec` (unreleased)
+### `--schema-from` wins over the suite, and `--exec` (1.0.0-beta.8)
 
 - `surrealkit test --schema-from <source>` now overrides a suite's own
   `schema_from`, as the documentation always said. Before, a suite that set
@@ -673,9 +673,9 @@ From 1.0.0-beta.7:
 | `variables::TypegenConfig { .. }` | gains `json`; `json_path()` resolves the file |
 | `tester::run_test(..)` | unchanged; `run_test_to(.., format, out)` writes the report to any writer |
 
-Unreleased:
+From 1.0.0-beta.8:
 
-| 1.0.0-beta.7 | unreleased |
+| 1.0.0-beta.7 | 1.0.0-beta.8 |
 |---|---|
 | `Rollout::start` on a rollout that is ready to complete | returns `Ok` and writes nothing, where it ran the start phase again |
 | `Rollout::start` on a rollout that is completing, or failed while completing | fails, pointing at `complete` |
