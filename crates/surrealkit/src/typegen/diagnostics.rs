@@ -18,7 +18,8 @@ pub mod codes {
 	/// A kind string could not be parsed; the kind became `unknown`. Error.
 	pub const KIND_UNRECOGNIZED: &str = "kind-unrecognized";
 	/// A kind string parsed, but names a SurrealDB 4.x kind the document does not represent
-	/// (`date`, `enum<…>`, a `DEFINE TYPE` name, …); the kind became `unknown`. Warning.
+	/// (`date`, `enum<…>`, a `DEFINE TYPE` name, …); the kind became `unknown`. Warning. Raised
+	/// for v1 only: schema document v2 has a node for each of them.
 	pub const KIND_NOT_REPRESENTED: &str = "kind-not-represented";
 	/// `INFO` returned an entry in a category the document does not model. Warning.
 	pub const DEFINITION_UNSUPPORTED: &str = "definition-unsupported";

@@ -104,6 +104,52 @@ const unsupported = (kind: string, ctx: PrintContext): string => {
 	return `SurrealSchema.Unsupported(${json(kind)})`;
 };
 
+/**
+ * A SurrealDB 4.0 kind with no Effect schema of its own: `Schema.Unknown`, which every value
+ * satisfies. No analogue is assumed (the SDK this package targets has no value for it).
+ */
+const unrepresented = (kind: string, ctx: PrintContext): string => {
+	ctx.scope.warnings.push(
+		`${ctx.location}: kind \`${kind}\` has no Effect schema of its own; generated as Schema.Unknown`,
+	);
+	return 'Schema.Unknown';
+};
+
+/**
+ * An enum as the union of its labels, in declaration order (the order the engine ranks by).
+ * Repeated labels are the same string value, so a repeat adds nothing to the union.
+ */
+const printEnum = (labels: ReadonlyArray<string>, ctx: PrintContext): string =>
+	printLiterals(
+		[...new Set(labels)].map(
+			(value): LiteralKind => ({
+				kind: 'literal',
+				type: 'string',
+				value,
+			}),
+		),
+		ctx,
+	);
+
+/**
+ * A `DEFINE TYPE` name, expanded inline from the document's `types`: the alias adds no
+ * name of its own to the generated module. A name the document does not define, or one that
+ * leads back to itself, is `Schema.Unknown` with a warning.
+ */
+const printNamed = (name: string, ctx: PrintContext): string => {
+	const expanding = ctx.expanding ?? [];
+	const type = ctx.scope.registry.document.types?.find(
+		(candidate) => candidate.name === name,
+	);
+	if (type === undefined || expanding.includes(name)) {
+		ctx.scope.warnings.push(
+			`${ctx.location}: type \`${name}\` ${type === undefined ? 'is not defined in the document' : 'leads back to itself'}; generated as Schema.Unknown`,
+		);
+		return 'Schema.Unknown';
+	}
+	return printKind(type.kind, { ...ctx, expanding: [...expanding, name] });
+};
+
 export interface KindHooks {
 	/** Printed in place of a bare `object` at the top of the kind (declared children). */
 	readonly object?: string;
@@ -307,6 +353,16 @@ export const printKind = (
 			}
 			return `Schema.Union([${variants.join(', ')}])`;
 		}
+		case 'date':
+		case 'time':
+		case 'timestamp':
+		case 'interval':
+		case 'bigdecimal':
+			return unrepresented(kind.kind, ctx);
+		case 'enum':
+			return printEnum(kind.labels, ctx);
+		case 'named':
+			return printNamed(kind.name, ctx);
 		case 'unknown':
 			ctx.scope.warnings.push(
 				`${ctx.location}: unrecognised kind \`${kind.source}\` (acknowledged) generated as Schema.Unknown`,
