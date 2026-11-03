@@ -1,0 +1,230 @@
+name: effect-surrealkit CI
+
+# The Effect emitter and codecs, and the contract they read. A change to the
+# schema document SurrealKit produces (crates/surrealkit/src/typegen,
+# compile.rs, the corpus) runs these too, because the generated TypeScript is
+# where such a change shows.
+#
+# Branches are tested through their pull request; pushes run only on main.
+on:
+    push:
+        branches:
+            - main
+        paths: &effect_paths
+            - "Cargo.toml"
+            - "Cargo.lock"
+            # What the generated modules depend on: typegen, compile, the emitter
+            # protocol and its configuration, and test --exec (the round trips).
+            - "crates/surrealkit/src/typegen/**"
+            - "crates/surrealkit/src/compile.rs"
+            - "crates/surrealkit/src/variables.rs"
+            - "crates/surrealkit/src/tester/exec.rs"
+            - "crates/surrealkit/schema/**"
+            - "crates/surrealkit/tests/fixtures/typegen_corpus/**"
+            - "docs/typegen/**"
+            - "examples/effect-typegen/**"
+            - "packages/effect-surrealkit/**"
+            - ".github/workflows/effect-surrealkit-ci.yml"
+    pull_request:
+        paths: *effect_paths
+    workflow_dispatch:
+
+permissions:
+    contents: read
+
+jobs:
+    check:
+        name: Lint, typecheck, test, build and publish dry-run (Node ${{ matrix.node }})
+        runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                # The floor declared in `engines`, plus current.
+                node: ["20.19", "24"]
+        defaults:
+            run:
+                working-directory: packages/effect-surrealkit
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+            - name: Setup Node.js
+              uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+              with:
+                  node-version: ${{ matrix.node }}
+
+            # Like vite-plugin-ci.yml: the package commits a bun.lock, not a
+            # package-lock.json; effect and surrealdb are pinned exactly.
+            - name: Install dependencies
+              run: npm install
+
+            - name: Lint
+              run: npm run lint
+
+            # Includes test/types: the golden generated modules (the whole corpus,
+            # both integer profiles) with positive and @ts-expect-error fixtures
+            # under strict + exactOptionalPropertyTypes.
+            - name: Typecheck
+              run: npm run typecheck
+
+            # Unit, property (in-process CBOR), golden and CLI suites. The engine
+            # suites skip here and run in the `engine` job below.
+            - name: Test
+              run: npm test
+
+            - name: Build
+              run: npm run build
+
+            # `prepare` builds the package, so a Git install and a publish both
+            # carry dist/; fail if the tarball would not.
+            - name: Publish dry-run
+              run: |
+                  rm -rf dist /tmp/pack
+                  mkdir -p /tmp/pack
+                  npm run prepare
+                  # npm 10 runs `prepare` during pack even with --ignore-scripts and prints
+                  # the build to stdout, so inspect the packed tarball, not `pack --json`.
+                  npm pack --ignore-scripts --pack-destination /tmp/pack > /dev/null
+                  listing="$(tar -tzf /tmp/pack/effect-surrealkit-*.tgz)"
+                  for f in dist/index.js dist/emitter.js dist/cli.js; do
+                      grep -qx "package/$f" <<<"$listing" || { echo "::error::$f is not in the package"; exit 1; }
+                  done
+                  npm publish --dry-run
+
+    generated-ts:
+        name: Generated TypeScript compiles (examples/effect-typegen through surrealkit compile)
+        runs-on: ubuntu-latest
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+              with:
+                  toolchain: 1.95.0
+
+            - name: Cache Rust artifacts
+              uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+
+            - name: Build surrealkit (debug)
+              env:
+                  CARGO_INCREMENTAL: 0
+                  RUSTFLAGS: "-C debuginfo=0"
+              run: cargo build -p surrealkit --bin surrealkit --locked
+
+            - name: Setup Node.js
+              uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+              with:
+                  node-version: 24
+
+            - name: Build effect-surrealkit
+              working-directory: packages/effect-surrealkit
+              run: |
+                  npm install
+                  npm run build
+
+            - name: Install the example
+              working-directory: examples/effect-typegen
+              run: npm install --no-package-lock
+
+            # compile runs effect-surrealkit through the external-emitter protocol.
+            # The committed files must be what the current SurrealKit and emitter
+            # produce, except for the versions of the tools that wrote them: the
+            # SurrealKit version, commit and engine version in the document's
+            # provenance and the manifest, and the emitter's version. Those change
+            # with every release or `surrealdb` bump without changing what is
+            # generated. So: regenerate, then fail on any other difference (git
+            # ignores a hunk only when every changed line in it is one of those
+            # lines) and on a file added or removed. A project checks its own
+            # generated files with `npm run check` (`compile --check`), the strict
+            # byte comparison against the tools it pins.
+            - name: Generated files are current
+              working-directory: examples/effect-typegen
+              run: |
+                  set -euo pipefail
+                  PATH="$GITHUB_WORKSPACE/target/debug:$PATH" npm run generate
+                  git diff --exit-code \
+                      -I '^[[:space:]]*"(version|build|commit)": "[^"]*",?$' \
+                      -I '^[[:space:]]*(surrealkit|commit|engine): "[^"]*",$' \
+                      -I '^[[:space:]]*emitter: \{ name: "effect-surrealkit", version: "[^"]*" \},$' \
+                      -- src/generated
+                  added="$(git ls-files --others --exclude-standard -- src/generated)"
+                  if [ -n "$added" ]; then
+                      echo "::error::generated files not committed: $added"
+                      exit 1
+                  fi
+
+            - name: Generated files compile
+              working-directory: examples/effect-typegen
+              run: npm run typecheck
+
+    engine:
+        name: Disposable-engine round trips (SurrealDB ${{ matrix.surrealdb }})
+        runs-on: ubuntu-latest
+        timeout-minutes: 20
+        strategy:
+            fail-fast: false
+            matrix:
+                surrealdb: ["v3.2.4", "v3.3.0"]
+        services:
+            surrealdb:
+                image: surrealdb/surrealdb:${{ matrix.surrealdb }}
+                command: start --user root --pass root memory
+                ports:
+                    - 8000:8000
+        defaults:
+            run:
+                working-directory: packages/effect-surrealkit
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+            - name: Install Rust toolchain
+              uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9
+              with:
+                  toolchain: 1.95.0
+
+            - name: Cache Rust artifacts
+              uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
+
+            - name: Build surrealkit (debug)
+              working-directory: .
+              env:
+                  CARGO_INCREMENTAL: 0
+                  RUSTFLAGS: "-C debuginfo=0"
+              run: cargo build -p surrealkit --bin surrealkit --locked
+
+            - name: Setup Node.js
+              uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+              with:
+                  node-version: 24
+
+            - name: Install dependencies
+              run: npm install
+
+            - name: Wait for SurrealDB
+              run: |
+                  for _ in $(seq 1 30); do
+                      curl -sf http://127.0.0.1:8000/health && exit 0
+                      sleep 1
+                  done
+                  echo "SurrealDB never became ready"; exit 1
+
+            # Codec round trips through the server, and every cell of the
+            # field-presence matrix against generated schemas.
+            - name: Engine and field-presence suites
+              env:
+                  SURREAL_URL: ws://127.0.0.1:8000/rpc
+              run: npm test
+
+            # create → select → merge → select, relate and call for the generated
+            # corpus modules (Arbitrary.schema + Arbitrary.checkEffect, Passed), in a
+            # database `surrealkit test --exec` prepares and removes.
+            - name: Round trips through surrealkit test --exec
+              env:
+                  SURREALKIT_BIN: ${{ github.workspace }}/target/debug/surrealkit
+                  SURREALDB_HOST: ws://127.0.0.1:8000
+                  SURREALDB_USER: root
+                  SURREALDB_PASSWORD: root
+                  SURREALKIT_ROUNDTRIP_RUNS: "200"
+              run: npm run test:roundtrip

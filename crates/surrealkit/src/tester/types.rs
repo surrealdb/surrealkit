@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct TestOpts {
 	pub suite: Option<String>,
 	pub case: Option<String>,
@@ -19,6 +19,38 @@ pub struct TestOpts {
 	pub keep_db: bool,
 	/// How each suite's database gets its schema, overriding the config files.
 	pub schema_from: Option<SchemaSource>,
+	/// A command (program and arguments) run against each suite's prepared database, after
+	/// its cases and before the database is removed; empty for none. Besides the parent's
+	/// environment it receives:
+	///
+	/// - `SURREALKIT_EXEC_ENDPOINT`: the server, as configured (`ws://127.0.0.1:8000`);
+	/// - `SURREALKIT_EXEC_NAMESPACE`, `SURREALKIT_EXEC_DATABASE`: the suite's disposable database;
+	/// - `SURREALKIT_EXEC_TOKEN`: a token for a user SurrealKit defines on that database
+	///   (`__surrealkit_exec`, owner of that database only, valid for an hour);
+	/// - `SURREALKIT_EXEC_TOKEN_<ACTOR>`: an access token for every actor of the suite but the
+	///   root one, `ROOT` too with [`TestOpts::exec_root_token`] (the name upper-cased, every
+	///   character but A–Z and 0–9 as `_`), and `SURREALKIT_EXEC_ACTORS`, those actors' names,
+	///   comma-separated and sorted;
+	/// - `SURREALKIT_EXEC_SCHEMA_DIGEST`: the `semanticDigest` of the prepared database's schema
+	///   document v2, so a command can check it runs against the schema its code was generated
+	///   from;
+	/// - `SURREALKIT_EXEC_SUITE`, `SURREALKIT_EXEC_SCHEMA_FROM` (`sync` or `rollouts`);
+	/// - `SURREALKIT_EXEC_API_URL`: the suite's `/api/<ns>/<db>` base, when a base URL is set.
+	pub exec: Vec<String>,
+	/// Also pass the root actor's token, `SURREALKIT_EXEC_TOKEN_ROOT`, to [`TestOpts::exec`].
+	/// That token is valid for the whole server, not just the suite database:
+	/// `--exec-root-token`.
+	pub exec_root_token: bool,
+}
+
+/// How a suite's database gets its schema: the command line wins, then the suite, then
+/// `[defaults]`, then `sync`.
+pub fn effective_schema_source(
+	cli: Option<SchemaSource>,
+	suite: Option<SchemaSource>,
+	defaults: Option<SchemaSource>,
+) -> SchemaSource {
+	cli.or(suite).or(defaults).unwrap_or(SchemaSource::Sync)
 }
 
 /// How a suite's database gets its schema.
@@ -361,6 +393,9 @@ pub struct FilterInput {
 	pub suite_pattern: Option<String>,
 	pub case_pattern: Option<String>,
 	pub tags: Vec<String>,
+	/// An --exec command runs: a suite without cases of its own is still a suite to run it
+	/// in.
+	pub exec: bool,
 }
 
 impl FilterInput {
@@ -370,6 +405,7 @@ impl FilterInput {
 			suite_pattern: opts.suite.clone(),
 			case_pattern: opts.case.clone(),
 			tags: opts.tags.clone(),
+			exec: !opts.exec.is_empty(),
 		}
 	}
 }
@@ -384,7 +420,7 @@ fn default_get() -> String {
 
 #[cfg(test)]
 mod tests {
-	use super::{CaseKind, GlobalTestConfig, SuiteSpec};
+	use super::{CaseKind, GlobalTestConfig, SchemaSource, SuiteSpec, effective_schema_source};
 
 	#[test]
 	fn signup_params_toml_native_datetime_preserved() {
@@ -466,6 +502,16 @@ action = "select"
 		assert_eq!(matrix.rules[0].name.as_deref(), Some("reads its own record"));
 		assert_eq!(matrix.rules[1].name, None);
 		assert!(matrix.rules[1].allow, "allow defaults to true");
+	}
+
+	#[test]
+	fn the_command_line_schema_source_wins_over_the_suite_and_the_defaults() {
+		use SchemaSource::{Both, Rollouts, Sync};
+		assert_eq!(effective_schema_source(Some(Sync), Some(Rollouts), Some(Both)), Sync);
+		assert_eq!(effective_schema_source(Some(Both), Some(Sync), None), Both);
+		assert_eq!(effective_schema_source(None, Some(Rollouts), Some(Both)), Rollouts);
+		assert_eq!(effective_schema_source(None, None, Some(Both)), Both);
+		assert_eq!(effective_schema_source(None, None, None), Sync);
 	}
 
 	#[test]

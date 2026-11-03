@@ -1,0 +1,374 @@
+{
+	"adults": {
+		"events": {},
+		"fields": {},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"anything": {
+		"events": {},
+		"fields": {},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"attachment": {
+		"events": {},
+		"fields": {
+			"any_file": "DEFINE FIELD any_file ON attachment TYPE none | file PERMISSIONS FULL",
+			"avatar": "DEFINE FIELD avatar ON attachment TYPE none | file<avatars> PERMISSIONS FULL",
+			"files": "DEFINE FIELD files ON attachment TYPE array<file<avatars | docs>> DEFAULT [] PERMISSIONS FULL",
+			"files.*": "DEFINE FIELD files.* ON attachment TYPE file<avatars | docs> PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"audit_log": {
+		"events": {},
+		"fields": {
+			"doc": "DEFINE FIELD doc ON audit_log TYPE none | record<doc> PERMISSIONS FULL",
+			"note": "DEFINE FIELD note ON audit_log TYPE none | string PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"bag": {
+		"events": {},
+		"fields": {
+			"label": "DEFINE FIELD label ON bag TYPE none | string PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"doc": {
+		"events": {
+			"on_any": "DEFINE EVENT on_any ON doc WHEN true THEN (UPDATE $after.id SET touched = true), (CREATE audit_log SET note = 'any')",
+			"on_create": "DEFINE EVENT on_create ON doc WHEN $event = 'CREATE' THEN (CREATE audit_log SET doc = $after.id)",
+			"on_status": "DEFINE EVENT on_status ON doc ASYNC RETRY 3 MAXDEPTH 2 WHEN $before.status != $after.status THEN { CREATE audit_log SET doc = $after.id, note = string::concat($before.status, ' -> ', $after.status) } COMMENT 'status transitions'"
+		},
+		"fields": {
+			"body": "DEFINE FIELD body ON doc TYPE string PERMISSIONS FULL",
+			"code": "DEFINE FIELD code ON doc TYPE string PERMISSIONS FULL",
+			"embedding": "DEFINE FIELD embedding ON doc TYPE array<float, 4> PERMISSIONS FULL",
+			"embedding.*": "DEFINE FIELD embedding.* ON doc TYPE float PERMISSIONS FULL",
+			"owner": "DEFINE FIELD owner ON doc TYPE record<person> PERMISSIONS FULL",
+			"status": "DEFINE FIELD status ON doc TYPE 'open' | 'closed' DEFAULT 'open' PERMISSIONS FULL",
+			"title": "DEFINE FIELD title ON doc TYPE string PERMISSIONS FULL",
+			"touched": "DEFINE FIELD touched ON doc TYPE bool DEFAULT false PERMISSIONS FULL"
+		},
+		"indexes": {
+			"cnt_all": "DEFINE INDEX cnt_all ON doc COUNT",
+			"cnt_open": "DEFINE INDEX cnt_open ON doc COUNT WHERE status = 'open'",
+			"diskann_embedding": "DEFINE INDEX diskann_embedding ON doc FIELDS embedding DISKANN DIMENSION 4 DIST EUCLIDEAN TYPE F32 DEGREE 64 L_BUILD 100 ALPHA 1.2f",
+			"ft_body": "DEFINE INDEX ft_body ON doc FIELDS body FULLTEXT ANALYZER simple BM25(1.2,0.75) HIGHLIGHTS",
+			"hnsw_embedding": "DEFINE INDEX hnsw_embedding ON doc FIELDS embedding HNSW DIMENSION 4 DIST COSINE TYPE F32 EFC 150 M 12 M0 24 LM 0.40242960438184466f",
+			"idx_owner_status": "DEFINE INDEX idx_owner_status ON doc FIELDS owner, status",
+			"idx_title": "DEFINE INDEX idx_title ON doc FIELDS title",
+			"idx_title_concurrent": "DEFINE INDEX idx_title_concurrent ON doc FIELDS title",
+			"uniq_code": "DEFINE INDEX uniq_code ON doc FIELDS code UNIQUE COMMENT 'one doc per code'"
+		},
+		"lives": {},
+		"tables": {}
+	},
+	"follows": {
+		"events": {},
+		"fields": {
+			"in": "DEFINE FIELD in ON follows TYPE record<person> PERMISSIONS FULL",
+			"out": "DEFINE FIELD out ON follows TYPE record<person> PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"id_array": {
+		"events": {},
+		"fields": {
+			"id": "DEFINE FIELD id ON id_array TYPE [string, datetime] PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"id_implicit": {
+		"events": {},
+		"fields": {
+			"id": "DEFINE FIELD id ON id_implicit TYPE int PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"id_int": {
+		"events": {},
+		"fields": {
+			"id": "DEFINE FIELD id ON id_int TYPE int PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"id_object": {
+		"events": {},
+		"fields": {
+			"id": "DEFINE FIELD id ON id_object TYPE { n: int, region: string } PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"id_string": {
+		"events": {},
+		"fields": {
+			"id": "DEFINE FIELD id ON id_string TYPE string PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"id_union": {
+		"events": {},
+		"fields": {
+			"id": "DEFINE FIELD id ON id_union TYPE int | string PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"id_uuid": {
+		"events": {},
+		"fields": {
+			"id": "DEFINE FIELD id ON id_uuid TYPE uuid PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"kinds": {
+		"events": {},
+		"fields": {
+			"k_any": "DEFINE FIELD k_any ON kinds TYPE any PERMISSIONS FULL",
+			"k_array": "DEFINE FIELD k_array ON kinds TYPE array PERMISSIONS FULL",
+			"k_array_bounded": "DEFINE FIELD k_array_bounded ON kinds TYPE array<int, 3> PERMISSIONS FULL",
+			"k_array_bounded.*": "DEFINE FIELD k_array_bounded.* ON kinds TYPE int PERMISSIONS FULL",
+			"k_array_nested": "DEFINE FIELD k_array_nested ON kinds TYPE array<array<float>> PERMISSIONS FULL",
+			"k_array_nested.*": "DEFINE FIELD k_array_nested.* ON kinds TYPE array<float> PERMISSIONS FULL",
+			"k_array_nested.*.*": "DEFINE FIELD k_array_nested.*.* ON kinds TYPE float PERMISSIONS FULL",
+			"k_array_of": "DEFINE FIELD k_array_of ON kinds TYPE array<string> PERMISSIONS FULL",
+			"k_array_of.*": "DEFINE FIELD k_array_of.* ON kinds TYPE string PERMISSIONS FULL",
+			"k_array_or_set": "DEFINE FIELD k_array_or_set ON kinds TYPE array<int, 2> | set<string> PERMISSIONS FULL",
+			"k_array_or_set.*": "DEFINE FIELD k_array_or_set.* ON kinds TYPE int | string PERMISSIONS FULL",
+			"k_bool": "DEFINE FIELD k_bool ON kinds TYPE bool PERMISSIONS FULL",
+			"k_bytes": "DEFINE FIELD k_bytes ON kinds TYPE bytes PERMISSIONS FULL",
+			"k_datetime": "DEFINE FIELD k_datetime ON kinds TYPE datetime PERMISSIONS FULL",
+			"k_decimal": "DEFINE FIELD k_decimal ON kinds TYPE decimal PERMISSIONS FULL",
+			"k_duration": "DEFINE FIELD k_duration ON kinds TYPE duration PERMISSIONS FULL",
+			"k_file": "DEFINE FIELD k_file ON kinds TYPE file PERMISSIONS FULL",
+			"k_file_bucket": "DEFINE FIELD k_file_bucket ON kinds TYPE file<avatars> PERMISSIONS FULL",
+			"k_file_buckets": "DEFINE FIELD k_file_buckets ON kinds TYPE file<avatars | docs> PERMISSIONS FULL",
+			"k_float": "DEFINE FIELD k_float ON kinds TYPE float PERMISSIONS FULL",
+			"k_function": "DEFINE FIELD k_function ON kinds TYPE function PERMISSIONS FULL",
+			"k_geometry": "DEFINE FIELD k_geometry ON kinds TYPE geometry PERMISSIONS FULL",
+			"k_geometry_all": "DEFINE FIELD k_geometry_all ON kinds TYPE geometry<point | line | polygon | multipoint | multiline | multipolygon | collection> PERMISSIONS FULL",
+			"k_geometry_point": "DEFINE FIELD k_geometry_point ON kinds TYPE geometry<point> PERMISSIONS FULL",
+			"k_int": "DEFINE FIELD k_int ON kinds TYPE int PERMISSIONS FULL",
+			"k_literal_double_quoted": "DEFINE FIELD k_literal_double_quoted ON kinds TYPE 'a' | 'b' PERMISSIONS FULL",
+			"k_literal_mixed": "DEFINE FIELD k_literal_mixed ON kinds TYPE 'auto' | 1 | true | 1d PERMISSIONS FULL",
+			"k_literal_numbers": "DEFINE FIELD k_literal_numbers ON kinds TYPE -5 | 0 |  1.5f |  10dec PERMISSIONS FULL",
+			"k_literal_strings": "DEFINE FIELD k_literal_strings ON kinds TYPE 'draft' | 'published' | 'archived' PERMISSIONS FULL",
+			"k_none": "DEFINE FIELD k_none ON kinds TYPE none PERMISSIONS FULL",
+			"k_null": "DEFINE FIELD k_null ON kinds TYPE null PERMISSIONS FULL",
+			"k_nullable": "DEFINE FIELD k_nullable ON kinds TYPE string | null PERMISSIONS FULL",
+			"k_number": "DEFINE FIELD k_number ON kinds TYPE number PERMISSIONS FULL",
+			"k_object": "DEFINE FIELD k_object ON kinds TYPE object PERMISSIONS FULL",
+			"k_object_flexible": "DEFINE FIELD k_object_flexible ON kinds TYPE object FLEXIBLE PERMISSIONS FULL",
+			"k_object_literal": "DEFINE FIELD k_object_literal ON kinds TYPE { a: int, b: none | string, c: { d: bool } } PERMISSIONS FULL",
+			"k_object_union": "DEFINE FIELD k_object_union ON kinds TYPE { kind: 'circle', r: float } | { h: float, kind: 'rect', w: float } PERMISSIONS FULL",
+			"k_option": "DEFINE FIELD k_option ON kinds TYPE none | string PERMISSIONS FULL",
+			"k_option_array": "DEFINE FIELD k_option_array ON kinds TYPE none | array<record<team>> PERMISSIONS FULL",
+			"k_option_array.*": "DEFINE FIELD k_option_array.* ON kinds TYPE record<team> PERMISSIONS FULL",
+			"k_option_nullable": "DEFINE FIELD k_option_nullable ON kinds TYPE none | string | null PERMISSIONS FULL",
+			"k_option_record": "DEFINE FIELD k_option_record ON kinds TYPE none | record<person> PERMISSIONS FULL",
+			"k_primitive_union": "DEFINE FIELD k_primitive_union ON kinds TYPE int | string | datetime PERMISSIONS FULL",
+			"k_range": "DEFINE FIELD k_range ON kinds TYPE range PERMISSIONS FULL",
+			"k_record": "DEFINE FIELD k_record ON kinds TYPE record<person> PERMISSIONS FULL",
+			"k_record_any": "DEFINE FIELD k_record_any ON kinds TYPE record PERMISSIONS FULL",
+			"k_record_union": "DEFINE FIELD k_record_union ON kinds TYPE record<person | team> PERMISSIONS FULL",
+			"k_regex": "DEFINE FIELD k_regex ON kinds TYPE regex PERMISSIONS FULL",
+			"k_set": "DEFINE FIELD k_set ON kinds TYPE set PERMISSIONS FULL",
+			"k_set_bounded": "DEFINE FIELD k_set_bounded ON kinds TYPE set<int, 5> PERMISSIONS FULL",
+			"k_set_bounded.*": "DEFINE FIELD k_set_bounded.* ON kinds TYPE int PERMISSIONS FULL",
+			"k_set_of": "DEFINE FIELD k_set_of ON kinds TYPE set<string> PERMISSIONS FULL",
+			"k_set_of.*": "DEFINE FIELD k_set_of.* ON kinds TYPE string PERMISSIONS FULL",
+			"k_string": "DEFINE FIELD k_string ON kinds TYPE string PERMISSIONS FULL",
+			"k_table": "DEFINE FIELD k_table ON kinds TYPE table<person | team> PERMISSIONS FULL",
+			"k_table_any": "DEFINE FIELD k_table_any ON kinds TYPE table PERMISSIONS FULL",
+			"k_tuple": "DEFINE FIELD k_tuple ON kinds TYPE [string, int, none | bool] PERMISSIONS FULL",
+			"k_uuid": "DEFINE FIELD k_uuid ON kinds TYPE uuid PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"knows": {
+		"events": {},
+		"fields": {
+			"in": "DEFINE FIELD in ON knows TYPE record<person> PERMISSIONS FULL",
+			"out": "DEFINE FIELD out ON knows TYPE record<person> PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"ledger": {
+		"events": {},
+		"fields": {
+			"amount": "DEFINE FIELD amount ON ledger TYPE decimal PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"likes": {
+		"events": {},
+		"fields": {
+			"in": "DEFINE FIELD in ON likes TYPE record PERMISSIONS FULL",
+			"out": "DEFINE FIELD out ON likes TYPE record PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"member_of": {
+		"events": {},
+		"fields": {
+			"in": "DEFINE FIELD in ON member_of TYPE record<person> PERMISSIONS FULL",
+			"out": "DEFINE FIELD out ON member_of TYPE record<team | org> PERMISSIONS FULL",
+			"role": "DEFINE FIELD role ON member_of TYPE 'member' | 'lead' DEFAULT 'member' PERMISSIONS FULL",
+			"since": "DEFINE FIELD since ON member_of TYPE datetime DEFAULT time::now() READONLY PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"org": {
+		"events": {},
+		"fields": {
+			"name": "DEFINE FIELD name ON org TYPE string PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"person": {
+		"events": {},
+		"fields": {
+			"`odd.name`": "DEFINE FIELD `odd.name` ON person TYPE none | string PERMISSIONS FULL",
+			"address": "DEFINE FIELD address ON person TYPE object FLEXIBLE PERMISSIONS FULL",
+			"address.city": "DEFINE FIELD address.city ON person TYPE string PERMISSIONS FULL",
+			"address.geo": "DEFINE FIELD address.geo ON person TYPE none | geometry<point> PERMISSIONS FULL",
+			"address.zip": "DEFINE FIELD address.zip ON person TYPE none | string PERMISSIONS FULL",
+			"age": "DEFINE FIELD age ON person TYPE none | int ASSERT $value = NONE OR $value >= 0 AND $value <= 150 PERMISSIONS FULL",
+			"bio": "DEFINE FIELD bio ON person TYPE string | null PERMISSIONS FULL",
+			"buddy": "DEFINE FIELD buddy ON person TYPE none | record<person> REFERENCE ON DELETE IGNORE PERMISSIONS FULL",
+			"created_at": "DEFINE FIELD created_at ON person TYPE datetime DEFAULT time::now() READONLY PERMISSIONS FULL",
+			"display": "DEFINE FIELD display ON person COMPUTED string::concat(name, ' <', email, '>') PERMISSIONS FULL",
+			"display_typed": "DEFINE FIELD display_typed ON person TYPE string COMPUTED string::concat(name, '!') PERMISSIONS FULL",
+			"email": "DEFINE FIELD email ON person TYPE string VALUE string::lowercase($value) ASSERT string::is_email($value) PERMISSIONS FULL",
+			"flagged": "DEFINE FIELD flagged ON person TYPE bool DEFAULT false COMMENT 'overwritten once' PERMISSIONS FULL",
+			"handle": "DEFINE FIELD handle ON person TYPE string DEFAULT ALWAYS 'anon' VALUE string::trim($value) PERMISSIONS FULL",
+			"manager": "DEFINE FIELD manager ON person TYPE none | record<person> REFERENCE ON DELETE UNSET PERMISSIONS FULL",
+			"mentor": "DEFINE FIELD mentor ON person TYPE none | record<person> REFERENCE ON DELETE THEN (UPDATE $this SET flagged = true) PERMISSIONS FULL",
+			"motto": "DEFINE FIELD motto ON person TYPE string DEFAULT \"TYPE; VALUE 'quoted' DEFAULT\" COMMENT \"semi; colon \\\"and\\\" 'quotes'\" PERMISSIONS FULL",
+			"name": "DEFINE FIELD name ON person TYPE string ASSERT string::len($value) >= 1 AND string::len($value) <= 80 PERMISSIONS FULL",
+			"nickname": "DEFINE FIELD nickname ON person TYPE none | string PERMISSIONS FULL",
+			"notes": "DEFINE FIELD notes ON person PERMISSIONS FULL",
+			"org": "DEFINE FIELD org ON person TYPE none | record<org> REFERENCE ON DELETE CASCADE PERMISSIONS FULL",
+			"pattern": "DEFINE FIELD pattern ON person TYPE none | string ASSERT $value = NONE OR $value = /^[a-z]+$/ PERMISSIONS FULL",
+			"phones": "DEFINE FIELD phones ON person TYPE array<object> DEFAULT [] PERMISSIONS FULL",
+			"phones.*": "DEFINE FIELD phones.* ON person TYPE object PERMISSIONS FULL",
+			"phones.*.kind": "DEFINE FIELD phones.*.kind ON person TYPE 'home' | 'work' | 'mobile' PERMISSIONS FULL",
+			"phones.*.number": "DEFINE FIELD phones.*.number ON person TYPE string PERMISSIONS FULL",
+			"pins": "DEFINE FIELD pins ON person TYPE array<string> DEFAULT [] ASSERT array::len($value) <= 3 PERMISSIONS FULL",
+			"pins.*": "DEFINE FIELD pins.* ON person TYPE string PERMISSIONS FULL",
+			"prefs.locale": "DEFINE FIELD prefs.locale ON person TYPE none | string PERMISSIONS FULL",
+			"referenced_by": "DEFINE FIELD referenced_by ON person COMPUTED <~person PERMISSIONS FULL",
+			"role": "DEFINE FIELD role ON person TYPE string DEFAULT 'member' ASSERT $value INSIDE ['member', 'admin', 'owner'] PERMISSIONS FULL",
+			"score": "DEFINE FIELD score ON person TYPE float ASSERT $value > 0f AND $value < 100f PERMISSIONS FULL",
+			"session_ttl": "DEFINE FIELD session_ttl ON person TYPE duration DEFAULT 1h ASSERT $value >= 1m AND $value <= 1d PERMISSIONS FULL",
+			"settings": "DEFINE FIELD settings ON person TYPE object DEFAULT {  } PERMISSIONS FULL",
+			"settings.notify": "DEFINE FIELD settings.notify ON person TYPE object DEFAULT {  } PERMISSIONS FULL",
+			"settings.notify.email": "DEFINE FIELD settings.notify.email ON person TYPE bool DEFAULT true PERMISSIONS FULL",
+			"settings.theme": "DEFINE FIELD settings.theme ON person TYPE 'light' | 'dark' DEFAULT 'light' PERMISSIONS FULL",
+			"shout": "DEFINE FIELD shout ON person TYPE string DEFAULT 'HI' ASSERT $value = string::uppercase($value) OR $value CONTAINS '!' PERMISSIONS FULL",
+			"slug": "DEFINE FIELD slug ON person TYPE string VALUE string::slug(name) PERMISSIONS FULL",
+			"ssn": "DEFINE FIELD ssn ON person TYPE none | string COMMENT '@acme:policy {\"classification\":\"restricted\",\"archive\":\"encrypt\"}' PERMISSIONS FOR select WHERE $auth.admin = true, FOR create FULL, FOR update NONE",
+			"tags": "DEFINE FIELD tags ON person TYPE set<string> DEFAULT <set<string>> [] PERMISSIONS FULL",
+			"tags.*": "DEFINE FIELD tags.* ON person TYPE string PERMISSIONS FULL",
+			"team": "DEFINE FIELD team ON person TYPE none | record<team> REFERENCE ON DELETE REJECT PERMISSIONS FULL",
+			"tier": "DEFINE FIELD tier ON person TYPE string DEFAULT 'free' ASSERT $value INSIDE ['free', 'pro'] PERMISSIONS FULL",
+			"touched_at": "DEFINE FIELD touched_at ON person TYPE datetime VALUE time::now() PERMISSIONS FULL",
+			"updated_at": "DEFINE FIELD updated_at ON person TYPE datetime DEFAULT ALWAYS time::now() PERMISSIONS FULL",
+			"watchers": "DEFINE FIELD watchers ON person TYPE array<record<person>> DEFAULT [] REFERENCE ON DELETE IGNORE PERMISSIONS FULL",
+			"watchers.*": "DEFINE FIELD watchers.* ON person TYPE record<person> PERMISSIONS FULL"
+		},
+		"indexes": {
+			"uniq_email": "DEFINE INDEX uniq_email ON person FIELDS email UNIQUE"
+		},
+		"lives": {},
+		"tables": {
+			"adults": "DEFINE TABLE adults TYPE ANY SCHEMALESS AS SELECT name, age FROM person WHERE age >= 18 PERMISSIONS NONE",
+			"team_size": "DEFINE TABLE team_size TYPE ANY SCHEMALESS AS SELECT count() AS total, team FROM person GROUP BY team PERMISSIONS NONE"
+		}
+	},
+	"purchase": {
+		"events": {},
+		"fields": {
+			"buyer": "DEFINE FIELD buyer ON purchase TYPE record<person> PERMISSIONS FULL",
+			"number": "DEFINE FIELD number ON purchase TYPE int DEFAULT `sequence`::nextval('order_number') READONLY PERMISSIONS FULL",
+			"total": "DEFINE FIELD total ON purchase TYPE decimal ASSERT $value >= 0dec PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"rates": {
+		"events": {},
+		"fields": {
+			"in": "DEFINE FIELD in ON rates TYPE record<person> PERMISSIONS FULL",
+			"out": "DEFINE FIELD out ON rates TYPE record<doc> PERMISSIONS FULL",
+			"weight": "DEFINE FIELD weight ON rates TYPE none | float INLINE PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"sink": {
+		"events": {},
+		"fields": {},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"team": {
+		"events": {},
+		"fields": {
+			"members": "DEFINE FIELD members ON team COMPUTED <~(person FIELD team) PERMISSIONS FULL",
+			"meta": "DEFINE FIELD meta ON team TYPE none | object FLEXIBLE PERMISSIONS FULL",
+			"name": "DEFINE FIELD name ON team TYPE string PERMISSIONS FULL"
+		},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	},
+	"team_size": {
+		"events": {},
+		"fields": {},
+		"indexes": {},
+		"lives": {},
+		"tables": {}
+	}
+}

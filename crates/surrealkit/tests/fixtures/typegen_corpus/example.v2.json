@@ -1,0 +1,604 @@
+{
+	"version": 2,
+	"semanticDigest": "sha256:9bb3a0a15eb772d737b5dd170653655b97e4833995b53d272207288b37ee0f37",
+	"provenance": {
+		"generator": { "name": "surrealkit", "version": "1.0.0-beta.6", "commit": "fd7b075" },
+		"engine": { "version": "3.3.0", "build": "surrealdb-3.3.0", "mode": "embedded" },
+		"adapter": "structure-3.3",
+		"source": {
+			"kind": "compile",
+			"modules": ["default"],
+			"files": [
+				{ "path": "schema-gated/20_experimental_files.surql", "sha256": "8a08c443a2f82b6384d02e7fac3166117c9a1aa0dc425826bfd9b8330b2710bf" },
+				{ "path": "schema-gated/30_relations.v3.3.surql", "sha256": "5ffe85842402973ebe5f7973be87489bb6acbb73b0e0fd51d8ed3191800647ed" },
+				{ "path": "schema-gated/31_module.v3.3.surql", "sha256": "0d17cbec19b9e57eb150f9ce5d624e17316459b02cc056fd72b598781ab73864" },
+				{ "path": "schema/01_tables.surql", "sha256": "703fb8d51e56246b2da86b71259e8fd44177eda0512055c366533bc1da2a8c5d" },
+				{ "path": "schema/02_kinds.surql", "sha256": "ef65cdb43e975c216b85046c97ad126652366513f5c5d13a5a109197552fc8bf" },
+				{ "path": "schema/03_ids.surql", "sha256": "e20f6cecc6b1ac7b6f09ca2125c8c2f039e3ffd8e2bef9c6029b7dcbbdb155a8" },
+				{ "path": "schema/04_fields.surql", "sha256": "8d122e76ef2588a173eadf1448ab73b0f09662f94abb956e35ad7e4a216ddda9" },
+				{ "path": "schema/05_nested.surql", "sha256": "73f3c6fd2b44fbaf3779b7bd40d2e53330b998ae6cc7f071ed8088d008b90968" },
+				{ "path": "schema/06_references.surql", "sha256": "895febb394a2c1d5f722071de1f8038727f710de6931786a7d111c7c9b514a35" },
+				{ "path": "schema/07_functions_params.surql", "sha256": "131480fc9574642c1c95062911de093c761ec6492f2d06fbe63faaa50f31aa1f" },
+				{ "path": "schema/08_indexes_events.surql", "sha256": "6eb9b4391438cd4d593fc6a17e810546a189fc1d96517a652d551a5afe55dde5" },
+				{ "path": "schema/09_access_sequences.surql", "sha256": "ab4d0df21605b5215588ce03e9e0b295d47e339fe7666023c1bbf229067fbd94" },
+				{ "path": "schema/10_api_config.surql", "sha256": "2acf7cb8e175ad4c6a4bb728c558e29ec81bbdbb0f70931ab8d440f3b548a73b" }
+			]
+		},
+		"capabilities": { "experimental": ["files", "surrealism"], "network": false }
+	},
+	"tables": [
+		{
+			"name": "doc",
+			"type": { "kind": "normal" },
+			"schemafull": true,
+			"drop": false,
+			"permissions": { "select": false, "create": false, "update": false, "delete": false },
+			"fields": [
+				{
+					"path": ["body"],
+					"kind": { "kind": "string" },
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["status"],
+					"kind": {
+						"kind": "union",
+						"variants": [
+							{ "kind": "literal", "type": "string", "value": "closed" },
+							{ "kind": "literal", "type": "string", "value": "open" }
+						]
+					},
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"default": { "mode": "create", "expr": "'open'" },
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["title"],
+					"kind": { "kind": "string" },
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": { "select": true, "create": true, "update": true }
+				}
+			],
+			"indexes": [
+				{
+					"name": "cnt_open",
+					"columns": [],
+					"type": "count",
+					"clause": "COUNT WHERE status = 'open'",
+					"where": "status = 'open'"
+				},
+				{
+					"name": "ft_body",
+					"columns": [["body"]],
+					"type": "fulltext",
+					"clause": "FULLTEXT ANALYZER simple BM25(1.2,0.75) HIGHLIGHTS",
+					"fulltext": { "analyzer": "simple", "highlights": true }
+				}
+			],
+			"events": [
+				{
+					"name": "on_create",
+					"when": "$event = 'CREATE'",
+					"then": ["CREATE audit_log SET doc = $after.id"],
+					"async": false
+				}
+			]
+		},
+		{
+			"name": "id_object",
+			"type": { "kind": "normal" },
+			"schemafull": true,
+			"drop": false,
+			"permissions": { "select": false, "create": false, "update": false, "delete": false },
+			"idKey": {
+				"kind": "objectLiteral",
+				"fields": [
+					{ "name": "n", "kind": { "kind": "int" }, "optional": false },
+					{ "name": "region", "kind": { "kind": "string" }, "optional": false }
+				]
+			},
+			"fields": [],
+			"indexes": [],
+			"events": []
+		},
+		{
+			"name": "member_of",
+			"type": { "kind": "relation", "in": ["person"], "out": ["org", "team"], "enforced": true, "lightweight": false },
+			"schemafull": true,
+			"drop": false,
+			"permissions": { "select": false, "create": false, "update": false, "delete": false },
+			"fields": [
+				{
+					"path": ["in"],
+					"kind": { "kind": "record", "tables": ["person"] },
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["out"],
+					"kind": { "kind": "record", "tables": ["org", "team"] },
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["role"],
+					"kind": {
+						"kind": "union",
+						"variants": [
+							{ "kind": "literal", "type": "string", "value": "lead" },
+							{ "kind": "literal", "type": "string", "value": "member" }
+						]
+					},
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"default": { "mode": "create", "expr": "'member'" },
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["since"],
+					"kind": { "kind": "datetime" },
+					"optional": false,
+					"flexible": false,
+					"readonly": true,
+					"inline": false,
+					"default": { "mode": "create", "expr": "time::now()" },
+					"permissions": { "select": true, "create": true, "update": true }
+				}
+			],
+			"indexes": [],
+			"events": []
+		},
+		{
+			"name": "person",
+			"type": { "kind": "normal" },
+			"schemafull": true,
+			"drop": false,
+			"permissions": { "select": true, "create": "$auth.id = id", "update": "$auth.id = id", "delete": false },
+			"comment": "people who can sign in",
+			"fields": [
+				{
+					"path": ["address"],
+					"kind": { "kind": "object" },
+					"optional": false,
+					"flexible": true,
+					"readonly": false,
+					"inline": false,
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["address", "city"],
+					"kind": { "kind": "string" },
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["age"],
+					"kind": { "kind": "int" },
+					"optional": true,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"assert": {
+						"expr": "$value = NONE OR $value >= 0 AND $value <= 150",
+						"recognized": [
+							{
+								"type": "range",
+								"valueKind": "int",
+								"min": { "value": "0", "inclusive": true },
+								"max": { "value": "150", "inclusive": true }
+							}
+						]
+					},
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["bio"],
+					"kind": { "kind": "union", "variants": [{ "kind": "null" }, { "kind": "string" }] },
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["created_at"],
+					"kind": { "kind": "datetime" },
+					"optional": false,
+					"flexible": false,
+					"readonly": true,
+					"inline": false,
+					"default": { "mode": "create", "expr": "time::now()" },
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["display"],
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"computed": { "expr": "string::concat(name, ' <', email, '>')" },
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["email"],
+					"kind": { "kind": "string" },
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"value": { "expr": "string::lowercase($value)", "readsInput": true },
+					"assert": { "expr": "string::is_email($value)", "recognized": [{ "type": "email" }] },
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["manager"],
+					"kind": { "kind": "record", "tables": ["person"] },
+					"optional": true,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"reference": { "onDelete": "unset" },
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["mentor"],
+					"kind": { "kind": "record", "tables": ["person"] },
+					"optional": true,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"reference": { "onDelete": "then", "expr": "(UPDATE $this SET flagged = true)" },
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["name"],
+					"kind": { "kind": "string" },
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"assert": {
+						"expr": "string::len($value) >= 1 AND string::len($value) <= 80",
+						"recognized": [{ "type": "length", "target": "string", "min": 1, "max": 80 }]
+					},
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["nickname"],
+					"kind": { "kind": "string" },
+					"optional": true,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["odd.name"],
+					"kind": { "kind": "string" },
+					"optional": true,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["pattern"],
+					"kind": { "kind": "string" },
+					"optional": true,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"assert": { "expr": "$value = NONE OR $value = /^[a-z]+$/" },
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["phones"],
+					"kind": { "kind": "array", "item": { "kind": "object" } },
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"default": { "mode": "create", "expr": "[]" },
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["phones", "*"],
+					"kind": { "kind": "object" },
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["phones", "*", "kind"],
+					"kind": {
+						"kind": "union",
+						"variants": [
+							{ "kind": "literal", "type": "string", "value": "home" },
+							{ "kind": "literal", "type": "string", "value": "mobile" },
+							{ "kind": "literal", "type": "string", "value": "work" }
+						]
+					},
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["role"],
+					"kind": { "kind": "string" },
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"default": { "mode": "create", "expr": "'member'" },
+					"assert": {
+						"expr": "$value INSIDE ['member', 'admin', 'owner']",
+						"recognized": [
+							{
+								"type": "literals",
+								"values": [
+									{ "kind": "literal", "type": "string", "value": "admin" },
+									{ "kind": "literal", "type": "string", "value": "member" },
+									{ "kind": "literal", "type": "string", "value": "owner" }
+								]
+							}
+						]
+					},
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["score"],
+					"kind": { "kind": "float" },
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"assert": {
+						"expr": "$value > 0f AND $value < 100f",
+						"recognized": [
+							{
+								"type": "range",
+								"valueKind": "float",
+								"min": { "value": "0", "inclusive": false },
+								"max": { "value": "100", "inclusive": false }
+							}
+						]
+					},
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["ssn"],
+					"kind": { "kind": "string" },
+					"optional": true,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": { "select": "$auth.admin = true", "create": true, "update": false },
+					"comment": "@acme:policy {\"classification\":\"restricted\",\"archive\":\"encrypt\"}"
+				},
+				{
+					"path": ["tags"],
+					"kind": { "kind": "set", "item": { "kind": "string" } },
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"default": { "mode": "create", "expr": "<set<string>> []" },
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["tags", "*"],
+					"kind": { "kind": "string" },
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["touched_at"],
+					"kind": { "kind": "datetime" },
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"value": { "expr": "time::now()", "readsInput": false },
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["updated_at"],
+					"kind": { "kind": "datetime" },
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"default": { "mode": "always", "expr": "time::now()" },
+					"permissions": { "select": true, "create": true, "update": true }
+				}
+			],
+			"indexes": [
+				{ "name": "uniq_email", "columns": [["email"]], "type": "unique", "clause": "UNIQUE" }
+			],
+			"events": []
+		},
+		{
+			"name": "team",
+			"type": { "kind": "normal" },
+			"schemafull": true,
+			"drop": false,
+			"permissions": { "select": true, "create": true, "update": true, "delete": true },
+			"fields": [
+				{
+					"path": ["members"],
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"computed": { "expr": "<~(person FIELD team)" },
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["meta"],
+					"kind": { "kind": "object" },
+					"optional": true,
+					"flexible": true,
+					"readonly": false,
+					"inline": false,
+					"permissions": { "select": true, "create": true, "update": true }
+				},
+				{
+					"path": ["name"],
+					"kind": { "kind": "string" },
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": { "select": true, "create": true, "update": true }
+				}
+			],
+			"indexes": [],
+			"events": []
+		}
+	],
+	"functions": [
+		{
+			"name": "fn::double",
+			"args": [{ "name": "x", "kind": { "kind": "int" }, "optional": false, "omittable": false }],
+			"block": "{ RETURN $x * 2 }",
+			"permissions": true
+		},
+		{
+			"name": "fn::greet",
+			"args": [
+				{ "name": "name", "kind": { "kind": "string" }, "optional": false, "omittable": false },
+				{ "name": "greeting", "kind": { "kind": "string" }, "optional": true, "omittable": true },
+				{ "name": "times", "kind": { "kind": "int" }, "optional": true, "omittable": true }
+			],
+			"returns": { "kind": "string" },
+			"block": "{ RETURN ($greeting ?? 'hello') + ' ' + $name }",
+			"permissions": true,
+			"comment": "greets someone"
+		},
+		{
+			"name": "fn::optional_first",
+			"args": [
+				{ "name": "a", "kind": { "kind": "int" }, "optional": true, "omittable": false },
+				{ "name": "b", "kind": { "kind": "int" }, "optional": false, "omittable": false }
+			],
+			"returns": { "kind": "int" },
+			"block": "{ RETURN $b }",
+			"permissions": true
+		}
+	],
+	"params": [{ "name": "app_name", "value": "'corpus'", "permissions": true, "comment": "application name" }],
+	"accesses": [
+		{
+			"name": "account",
+			"method": "record",
+			"signup": "CREATE person SET email = $email, name = $name",
+			"signin": "SELECT * FROM person WHERE email = $email",
+			"refresh": true,
+			"verify": { "alg": "HS512" },
+			"durations": { "grant": "4w2d", "token": "15m", "session": "12h" },
+			"comment": "record users"
+		}
+	],
+	"analyzers": [
+		{
+			"name": "simple",
+			"tokenizers": ["BLANK", "CLASS"],
+			"filters": ["LOWERCASE", "ASCII", "SNOWBALL(ENGLISH)"],
+			"comment": "plain text"
+		}
+	],
+	"sequences": [{ "name": "order_number", "batch": "100", "start": "1000", "timeout": "5s" }],
+	"buckets": [{ "name": "avatars", "backend": "memory", "readonly": false, "permissions": true, "comment": "profile images" }],
+	"apis": [
+		{
+			"path": "/docs",
+			"actions": [
+				{
+					"methods": ["get", "post"],
+					"middleware": [{ "name": "api::timeout", "args": ["1s"] }],
+					"permissions": true,
+					"action": "{ RETURN { status: 200 } }"
+				}
+			],
+			"middleware": [],
+			"permissions": true
+		}
+	],
+	"modules": [
+		{
+			"name": "mod::demo",
+			"executable": { "type": "surrealism", "bucket": "avatars", "key": "/demo.wasm" },
+			"permissions": true
+		}
+	],
+	"configs": [{ "type": "graphql", "tables": "AUTO", "functions": "AUTO" }],
+	"users": [{ "name": "reader", "roles": ["VIEWER"], "durations": { "token": "1h", "session": "1h" }, "comment": "read only" }],
+	"diagnostics": [
+		{
+			"severity": "info",
+			"code": "assert-unrecognized",
+			"table": "person",
+			"field": ["pattern"],
+			"source": "$value = NONE OR $value = /^[a-z]+$/",
+			"reason": "ASSERT is outside the recognised subset (membership, numeric range, string/array length, email); kept as an expression only."
+		},
+		{
+			"severity": "warning",
+			"code": "field-computed-kind-undeclared",
+			"table": "person",
+			"field": ["display"],
+			"source": "string::concat(name, ' <', email, '>')",
+			"reason": "COMPUTED field has no TYPE clause; its value kind is unknown and is typed as `any`."
+		},
+		{
+			"severity": "warning",
+			"code": "field-computed-kind-undeclared",
+			"table": "team",
+			"field": ["members"],
+			"source": "<~(person FIELD team)",
+			"reason": "COMPUTED field has no TYPE clause; its value kind is unknown and is typed as `any`."
+		},
+		{
+			"severity": "warning",
+			"code": "function-optional-arg-not-trailing",
+			"function": "fn::optional_first",
+			"source": "a",
+			"reason": "Optional argument `$a` precedes the required argument `$b`; callers cannot omit it and must pass NONE explicitly."
+		},
+		{
+			"severity": "info",
+			"code": "function-return-undeclared",
+			"function": "fn::double",
+			"source": "{ RETURN $x * 2 }",
+			"reason": "Function declares no return kind; its result is typed as unknown."
+		}
+	]
+}

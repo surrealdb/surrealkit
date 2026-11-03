@@ -1,0 +1,19 @@
+{
+	"name": "surrealkit-example-effect-typegen",
+	"private": true,
+	"type": "module",
+	"description": "SurrealKit compile + effect-surrealkit: typed Effect schemas from .surql, without a database",
+	"scripts": {
+		"generate": "surrealkit compile",
+		"check": "surrealkit compile --check",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"effect": "4.0.6",
+		"effect-surrealkit": "file:../../packages/effect-surrealkit",
+		"surrealdb": "2.1.1"
+	},
+	"devDependencies": {
+		"typescript": "^5.9.2"
+	}
+}

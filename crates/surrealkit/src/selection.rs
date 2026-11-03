@@ -14,6 +14,49 @@ use crate::config::DbCfg;
 use crate::module::Module;
 use crate::project::{ProjectConfig, Target};
 
+/// The schema modules one invocation operates on, in dependency order: explicit
+/// `--schema`, else every declared module, else the default one.
+pub fn select_modules(
+	project: &ProjectConfig,
+	schemas: &[String],
+	all: bool,
+	no_deps: bool,
+) -> Result<Vec<Module>> {
+	let declared: Vec<String> = project.schema.keys().cloned().collect();
+	let declared_list = if declared.is_empty() {
+		"(none)".to_string()
+	} else {
+		declared.join(", ")
+	};
+	let wanted: Vec<String> = if !schemas.is_empty() {
+		for name in schemas {
+			if !project.schema.contains_key(name) && name != Module::DEFAULT_NAME {
+				bail!("unknown schema module {name:?}; declared modules are: {declared_list}");
+			}
+		}
+		schemas.to_vec()
+	} else if all || !declared.is_empty() {
+		declared
+	} else {
+		vec![Module::DEFAULT_NAME.to_string()]
+	};
+
+	// `--schema billing` pulls in `core` by default, like `cargo build -p`, so a
+	// module is never applied before what it depends on. --no-deps opts out.
+	let ordered = if no_deps {
+		let mut only = wanted;
+		only.sort();
+		only
+	} else {
+		project.module_order(&wanted)?
+	};
+	ordered
+		.into_iter()
+		.map(Module::new)
+		.collect::<Result<Vec<_>>>()
+		.context("resolving selected schema modules")
+}
+
 /// The (schema module x database target) matrix one invocation operates on.
 ///
 /// With no `[schema.*]`/`[target.*]` sections and no selection flags this is a
@@ -36,40 +79,7 @@ impl Selection {
 		all: bool,
 		no_deps: bool,
 	) -> Result<Self> {
-		// Modules: explicit --schema, else every declared module, else the default.
-		let declared: Vec<String> = project.schema.keys().cloned().collect();
-		let declared_list = if declared.is_empty() {
-			"(none)".to_string()
-		} else {
-			declared.join(", ")
-		};
-		let wanted: Vec<String> = if !schemas.is_empty() {
-			for name in schemas {
-				if !project.schema.contains_key(name) && name != Module::DEFAULT_NAME {
-					bail!("unknown schema module {name:?}; declared modules are: {declared_list}");
-				}
-			}
-			schemas.to_vec()
-		} else if all || !declared.is_empty() {
-			declared
-		} else {
-			vec![Module::DEFAULT_NAME.to_string()]
-		};
-
-		// `--schema billing` pulls in `core` by default, like `cargo build -p`, so a
-		// module is never applied before what it depends on. --no-deps opts out.
-		let ordered = if no_deps {
-			let mut only = wanted;
-			only.sort();
-			only
-		} else {
-			project.module_order(&wanted)?
-		};
-		let modules = ordered
-			.into_iter()
-			.map(Module::new)
-			.collect::<Result<Vec<_>>>()
-			.context("resolving selected schema modules")?;
+		let modules = select_modules(project, schemas, all, no_deps)?;
 
 		// Targets: explicit --target, else --all, else primary, else the ambient one.
 		let resolved = if !targets.is_empty() {
@@ -155,6 +165,27 @@ impl Selection {
 				other.len()
 			),
 		}
+	}
+
+	/// The database `typegen` introspects.
+	///
+	/// Typegen reads one database, so it resolves a target the way the other
+	/// single-target commands do: `--target`, else the `primary` target, else the
+	/// only declared one, else the ambient connection.
+	///
+	/// An explicit `--schema` must be one the target accepts: introspecting a
+	/// database the module is never applied to would describe the wrong schema.
+	pub fn typegen_target(&self, schema_selection_used: bool) -> Result<&Target> {
+		let target = self.single_target()?;
+		if schema_selection_used && self.modules_for(target).is_empty() {
+			bail!(
+				"refusing typegen: target {:?} accepts none of the selected schema modules ({}); \
+				 pick a target whose `schemas` list includes them",
+				target.name(),
+				self.modules.iter().map(Module::name).collect::<Vec<_>>().join(", ")
+			);
+		}
+		Ok(target)
 	}
 }
 
@@ -299,6 +330,38 @@ mod tests {
 		.unwrap_err()
 		.to_string();
 		assert!(err.contains("ghost") && err.contains("acme"), "got: {err}");
+	}
+
+	#[test]
+	fn typegen_introspects_the_selected_target() {
+		let raw =
+			"[target.acme]\nns = \"acme\"\n[target.globex]\nns = \"globex\"\nprimary = true\n";
+		let sel = resolve(raw, &[], &["acme"], false, false);
+		assert_eq!(sel.typegen_target(false).unwrap().cfg().ns(), "acme");
+		// Without --target, the primary one; before, the ambient connection.
+		let sel = resolve(raw, &[], &[], false, false);
+		assert_eq!(sel.typegen_target(false).unwrap().cfg().ns(), "globex");
+		// The only declared target needs no `primary`.
+		let sel = resolve("[target.acme]\nns = \"acme\"\n", &[], &[], false, false);
+		assert_eq!(sel.typegen_target(false).unwrap().cfg().ns(), "acme");
+	}
+
+	#[test]
+	fn typegen_refuses_more_than_one_target() {
+		let sel = resolve("[target.acme]\n[target.globex]\n", &[], &[], true, false);
+		let err = sel.typegen_target(false).unwrap_err().to_string();
+		assert!(err.contains("one database target at a time"), "{err}");
+	}
+
+	#[test]
+	fn typegen_refuses_a_target_that_never_receives_the_selected_schema() {
+		let raw = "[schema.core]\n[schema.billing]\n[target.acme]\nschemas = [\"core\"]\n";
+		let sel = resolve(raw, &["billing"], &["acme"], false, true);
+		let err = sel.typegen_target(true).unwrap_err().to_string();
+		assert!(err.contains("accepts none of the selected schema modules (billing)"), "{err}");
+		// A module the target does accept is fine.
+		let sel = resolve(raw, &["core"], &["acme"], false, true);
+		assert_eq!(sel.typegen_target(true).unwrap().name(), "acme");
 	}
 
 	#[test]

@@ -1,0 +1,831 @@
+{
+	"$schema": "https://json-schema.org/draft/2020-12/schema",
+	"$id": "https://github.com/surrealdb/surrealkit/blob/main/crates/surrealkit/schema/schema-document-v2.schema.json",
+	"title": "SurrealKit schema document v2",
+	"description": "Semantic description of a SurrealDB 3.x database schema, produced by `surrealkit compile` / `surrealkit typegen` when `[typegen] schema_version = 2`. Normative prose: docs/typegen/schema-document-v2.md.",
+	"type": "object",
+	"additionalProperties": false,
+	"required": [
+		"version",
+		"semanticDigest",
+		"provenance",
+		"tables",
+		"functions",
+		"params",
+		"accesses",
+		"analyzers",
+		"sequences",
+		"buckets",
+		"apis",
+		"modules",
+		"configs",
+		"users",
+		"diagnostics"
+	],
+	"properties": {
+		"version": { "const": 2 },
+		"semanticDigest": {
+			"description": "sha256 over the canonical JSON of the semantic content (see the digest section of the contract).",
+			"type": "string",
+			"pattern": "^sha256:[0-9a-f]{64}$"
+		},
+		"provenance": { "$ref": "#/$defs/provenance" },
+		"tables": { "type": "array", "items": { "$ref": "#/$defs/table" } },
+		"functions": { "type": "array", "items": { "$ref": "#/$defs/function" } },
+		"params": { "type": "array", "items": { "$ref": "#/$defs/param" } },
+		"accesses": { "type": "array", "items": { "$ref": "#/$defs/access" } },
+		"analyzers": { "type": "array", "items": { "$ref": "#/$defs/analyzer" } },
+		"sequences": { "type": "array", "items": { "$ref": "#/$defs/sequence" } },
+		"buckets": { "type": "array", "items": { "$ref": "#/$defs/bucket" } },
+		"apis": { "type": "array", "items": { "$ref": "#/$defs/api" } },
+		"modules": { "type": "array", "items": { "$ref": "#/$defs/module" } },
+		"configs": { "type": "array", "items": { "$ref": "#/$defs/config" } },
+		"users": { "type": "array", "items": { "$ref": "#/$defs/user" } },
+		"diagnostics": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } }
+	},
+	"$defs": {
+		"name": { "type": "string", "minLength": 1 },
+		"expr": {
+			"description": "A SurrealQL expression exactly as the engine renders it, after the version adapter's documented normalisation.",
+			"type": "string"
+		},
+		"permission": {
+			"description": "true = FULL, false = NONE, string = WHERE expression.",
+			"oneOf": [{ "type": "boolean" }, { "$ref": "#/$defs/expr" }]
+		},
+		"tablePermissions": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["select", "create", "update", "delete"],
+			"properties": {
+				"select": { "$ref": "#/$defs/permission" },
+				"create": { "$ref": "#/$defs/permission" },
+				"update": { "$ref": "#/$defs/permission" },
+				"delete": { "$ref": "#/$defs/permission" }
+			}
+		},
+		"fieldPermissions": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["select", "create", "update"],
+			"properties": {
+				"select": { "$ref": "#/$defs/permission" },
+				"create": { "$ref": "#/$defs/permission" },
+				"update": { "$ref": "#/$defs/permission" }
+			}
+		},
+		"path": {
+			"description": "Field path as segments. `*` is the element segment; quoting is removed.",
+			"type": "array",
+			"minItems": 1,
+			"items": { "type": "string", "minLength": 1 }
+		},
+		"sortedNames": {
+			"type": "array",
+			"items": { "$ref": "#/$defs/name" },
+			"uniqueItems": true
+		},
+		"provenance": {
+			"description": "Where the document came from. Excluded from semanticDigest.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["generator", "engine", "adapter", "source"],
+			"properties": {
+				"generator": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["name", "version"],
+					"properties": {
+						"name": { "const": "surrealkit" },
+						"version": { "type": "string", "minLength": 1 },
+						"commit": { "type": "string", "pattern": "^[0-9a-f]{7,40}$" }
+					}
+				},
+				"engine": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["version", "mode"],
+					"properties": {
+						"version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$" },
+						"build": { "type": "string", "minLength": 1 },
+						"mode": { "enum": ["embedded", "remote"] }
+					}
+				},
+				"adapter": {
+					"description": "The version-qualified INFO STRUCTURE adapter that produced the document, or `info` for the plain-INFO fallback used on an engine minor without one.",
+					"enum": ["structure-3.2", "structure-3.3", "info"]
+				},
+				"source": {
+					"oneOf": [
+						{
+							"type": "object",
+							"additionalProperties": false,
+							"required": ["kind", "modules", "files"],
+							"properties": {
+								"kind": { "const": "compile" },
+								"modules": { "$ref": "#/$defs/sortedNames" },
+								"files": {
+									"type": "array",
+									"items": {
+										"type": "object",
+										"additionalProperties": false,
+										"required": ["path", "sha256"],
+										"properties": {
+											"path": { "type": "string", "pattern": "^[^\\\\]+$" },
+											"sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+										}
+									}
+								}
+							}
+						},
+						{
+							"type": "object",
+							"additionalProperties": false,
+							"required": ["kind", "namespace", "database"],
+							"properties": {
+								"kind": { "const": "introspect" },
+								"namespace": { "type": "string" },
+								"database": { "type": "string" }
+							}
+						}
+					]
+				},
+				"capabilities": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["experimental", "network"],
+					"properties": {
+						"experimental": { "$ref": "#/$defs/sortedNames" },
+						"network": { "type": "boolean" }
+					}
+				}
+			}
+		},
+		"kind": {
+			"description": "A SurrealQL value kind. Internally tagged on `kind`.",
+			"type": "object",
+			"required": ["kind"],
+			"oneOf": [
+				{ "$ref": "#/$defs/kindPrimitive" },
+				{ "$ref": "#/$defs/kindRecord" },
+				{ "$ref": "#/$defs/kindTable" },
+				{ "$ref": "#/$defs/kindFile" },
+				{ "$ref": "#/$defs/kindGeometry" },
+				{ "$ref": "#/$defs/kindArray" },
+				{ "$ref": "#/$defs/kindSet" },
+				{ "$ref": "#/$defs/kindTuple" },
+				{ "$ref": "#/$defs/kindObjectLiteral" },
+				{ "$ref": "#/$defs/kindLiteral" },
+				{ "$ref": "#/$defs/kindOption" },
+				{ "$ref": "#/$defs/kindUnion" },
+				{ "$ref": "#/$defs/kindUnknown" }
+			]
+		},
+		"kindPrimitive": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["kind"],
+			"properties": {
+				"kind": {
+					"enum": [
+						"any",
+						"none",
+						"null",
+						"bool",
+						"int",
+						"float",
+						"decimal",
+						"number",
+						"string",
+						"datetime",
+						"duration",
+						"uuid",
+						"bytes",
+						"regex",
+						"range",
+						"function",
+						"object"
+					]
+				}
+			}
+		},
+		"kindRecord": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["kind", "tables"],
+			"properties": {
+				"kind": { "const": "record" },
+				"tables": { "$ref": "#/$defs/sortedNames", "description": "Empty = any table." }
+			}
+		},
+		"kindTable": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["kind", "tables"],
+			"properties": {
+				"kind": { "const": "table" },
+				"tables": { "$ref": "#/$defs/sortedNames", "description": "Empty = any table." }
+			}
+		},
+		"kindFile": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["kind", "buckets"],
+			"properties": {
+				"kind": { "const": "file" },
+				"buckets": { "$ref": "#/$defs/sortedNames", "description": "Empty = any bucket." }
+			}
+		},
+		"kindGeometry": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["kind", "types"],
+			"properties": {
+				"kind": { "const": "geometry" },
+				"types": {
+					"description": "Empty = any geometry.",
+					"type": "array",
+					"uniqueItems": true,
+					"items": {
+						"enum": ["collection", "line", "multiline", "multipoint", "multipolygon", "point", "polygon"]
+					}
+				}
+			}
+		},
+		"kindArray": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["kind", "item"],
+			"properties": {
+				"kind": { "const": "array" },
+				"item": { "$ref": "#/$defs/kind" },
+				"length": {
+					"description": "Exact element count (`array<T, N>`).",
+					"type": "integer",
+					"minimum": 0
+				}
+			}
+		},
+		"kindSet": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["kind", "item"],
+			"properties": {
+				"kind": { "const": "set" },
+				"item": { "$ref": "#/$defs/kind" },
+				"length": {
+					"description": "Exact distinct-element count (`set<T, N>`).",
+					"type": "integer",
+					"minimum": 0
+				}
+			}
+		},
+		"kindTuple": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["kind", "items"],
+			"properties": {
+				"kind": { "const": "tuple" },
+				"items": { "type": "array", "items": { "$ref": "#/$defs/kind" } }
+			}
+		},
+		"kindObjectLiteral": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["kind", "fields"],
+			"properties": {
+				"kind": { "const": "objectLiteral" },
+				"fields": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["name", "kind", "optional"],
+						"properties": {
+							"name": { "$ref": "#/$defs/name" },
+							"kind": { "$ref": "#/$defs/kind" },
+							"optional": { "type": "boolean" }
+						}
+					}
+				}
+			}
+		},
+		"kindLiteral": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["kind", "type", "value"],
+			"properties": {
+				"kind": { "const": "literal" },
+				"type": { "enum": ["string", "int", "float", "decimal", "bool", "duration"] },
+				"value": {
+					"description": "Boolean for `bool`; otherwise a string. Numbers and durations are their SurrealQL spelling without the `f`/`dec` suffix.",
+					"type": ["string", "boolean"]
+				}
+			},
+			"if": { "properties": { "type": { "const": "bool" } } },
+			"then": { "properties": { "value": { "type": "boolean" } } },
+			"else": { "properties": { "value": { "type": "string" } } }
+		},
+		"kindOption": {
+			"description": "`none | T` in a nested position (tuple item, array/set item, union-free context). Never at the top of a field, literal-object field or function argument, where it becomes `optional: true`.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["kind", "item"],
+			"properties": {
+				"kind": { "const": "option" },
+				"item": { "$ref": "#/$defs/kind" }
+			}
+		},
+		"kindUnion": {
+			"description": "Flattened, deduplicated, sorted by canonical JSON; never contains `none`, `option` or `union`.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["kind", "variants"],
+			"properties": {
+				"kind": { "const": "union" },
+				"variants": { "type": "array", "minItems": 2, "items": { "$ref": "#/$defs/kind" } }
+			}
+		},
+		"kindUnknown": {
+			"description": "Kind text the parser could not structure. Always paired with an error diagnostic `kind-unrecognized`.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["kind", "source"],
+			"properties": {
+				"kind": { "const": "unknown" },
+				"source": { "type": "string" }
+			}
+		},
+		"table": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["name", "type", "schemafull", "drop", "permissions", "fields", "indexes", "events"],
+			"properties": {
+				"name": { "$ref": "#/$defs/name" },
+				"type": {
+					"oneOf": [
+						{
+							"type": "object",
+							"additionalProperties": false,
+							"required": ["kind"],
+							"properties": { "kind": { "enum": ["normal", "any"] } }
+						},
+						{
+							"type": "object",
+							"additionalProperties": false,
+							"required": ["kind", "in", "out", "enforced", "lightweight"],
+							"properties": {
+								"kind": { "const": "relation" },
+								"in": { "$ref": "#/$defs/sortedNames", "description": "Empty = unconstrained." },
+								"out": { "$ref": "#/$defs/sortedNames", "description": "Empty = unconstrained." },
+								"enforced": { "type": "boolean" },
+								"lightweight": { "type": "boolean" }
+							}
+						}
+					]
+				},
+				"schemafull": { "type": "boolean" },
+				"drop": { "type": "boolean" },
+				"view": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["select"],
+					"properties": { "select": { "$ref": "#/$defs/expr" } }
+				},
+				"changefeed": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["expiry", "includeOriginal"],
+					"properties": {
+						"expiry": { "type": "string", "minLength": 1 },
+						"includeOriginal": { "type": "boolean" }
+					}
+				},
+				"permissions": { "$ref": "#/$defs/tablePermissions" },
+				"idKey": {
+					"description": "Kind of the record-id key, from `DEFINE FIELD id`. Absent = any key kind.",
+					"$ref": "#/$defs/kind"
+				},
+				"comment": { "type": "string" },
+				"fields": { "type": "array", "items": { "$ref": "#/$defs/field" } },
+				"indexes": { "type": "array", "items": { "$ref": "#/$defs/index" } },
+				"events": { "type": "array", "items": { "$ref": "#/$defs/event" } },
+				"define": { "type": "string", "description": "Raw DEFINE TABLE from plain INFO. Evidence only; excluded from semanticDigest." }
+			}
+		},
+		"field": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["path", "optional", "flexible", "readonly", "inline", "permissions"],
+			"properties": {
+				"path": { "$ref": "#/$defs/path" },
+				"kind": { "description": "Absent = no TYPE clause (any value).", "$ref": "#/$defs/kind" },
+				"optional": { "type": "boolean" },
+				"flexible": { "type": "boolean" },
+				"readonly": { "type": "boolean" },
+				"inline": { "type": "boolean" },
+				"default": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["mode", "expr"],
+					"properties": {
+						"mode": { "enum": ["create", "always"] },
+						"expr": { "$ref": "#/$defs/expr" }
+					}
+				},
+				"value": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["expr", "readsInput"],
+					"properties": {
+						"expr": { "$ref": "#/$defs/expr" },
+						"readsInput": {
+							"description": "Derived: the expression references `$value` or `$input`. Excluded from semanticDigest.",
+							"type": "boolean"
+						}
+					}
+				},
+				"computed": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["expr"],
+					"properties": { "expr": { "$ref": "#/$defs/expr" } }
+				},
+				"assert": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["expr"],
+					"properties": {
+						"expr": { "$ref": "#/$defs/expr" },
+						"recognized": {
+							"description": "Present only when every conjunct was recognised. Derived; excluded from semanticDigest.",
+							"type": "array",
+							"minItems": 1,
+							"items": { "$ref": "#/$defs/refinement" }
+						}
+					}
+				},
+				"reference": {
+					"oneOf": [
+						{
+							"type": "object",
+							"additionalProperties": false,
+							"required": ["onDelete"],
+							"properties": { "onDelete": { "enum": ["reject", "ignore", "cascade", "unset"] } }
+						},
+						{
+							"type": "object",
+							"additionalProperties": false,
+							"required": ["onDelete", "expr"],
+							"properties": {
+								"onDelete": { "const": "then" },
+								"expr": { "$ref": "#/$defs/expr" }
+							}
+						}
+					]
+				},
+				"permissions": { "$ref": "#/$defs/fieldPermissions" },
+				"comment": { "type": "string" },
+				"define": { "type": "string", "description": "Evidence only; excluded from semanticDigest." }
+			}
+		},
+		"refinement": {
+			"oneOf": [
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["type", "values"],
+					"properties": {
+						"type": { "const": "literals" },
+						"values": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/kindLiteral" } }
+					}
+				},
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["type", "valueKind"],
+					"anyOf": [{ "required": ["min"] }, { "required": ["max"] }],
+					"properties": {
+						"type": { "const": "range" },
+						"valueKind": { "enum": ["int", "float", "decimal", "duration"] },
+						"min": { "$ref": "#/$defs/bound" },
+						"max": { "$ref": "#/$defs/bound" }
+					}
+				},
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["type", "target"],
+					"anyOf": [{ "required": ["min"] }, { "required": ["max"] }],
+					"properties": {
+						"type": { "const": "length" },
+						"target": { "enum": ["string", "array"] },
+						"min": { "type": "integer", "minimum": 0 },
+						"max": { "type": "integer", "minimum": 0 }
+					}
+				},
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["type"],
+					"properties": { "type": { "const": "email" } }
+				}
+			]
+		},
+		"bound": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["value", "inclusive"],
+			"properties": {
+				"value": { "type": "string", "minLength": 1 },
+				"inclusive": { "type": "boolean" }
+			}
+		},
+		"index": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["name", "columns", "type", "clause"],
+			"properties": {
+				"name": { "$ref": "#/$defs/name" },
+				"columns": { "type": "array", "items": { "$ref": "#/$defs/path" } },
+				"type": { "enum": ["standard", "unique", "fulltext", "hnsw", "diskann", "count"] },
+				"clause": {
+					"description": "The index clause exactly as rendered by the engine (engine-filled defaults included).",
+					"type": "string"
+				},
+				"fulltext": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["analyzer", "highlights"],
+					"properties": {
+						"analyzer": { "$ref": "#/$defs/name" },
+						"highlights": { "type": "boolean" }
+					}
+				},
+				"vector": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["dimension", "distance", "elementType"],
+					"properties": {
+						"dimension": { "type": "integer", "minimum": 1 },
+						"distance": { "type": "string", "minLength": 1 },
+						"elementType": { "type": "string", "minLength": 1 }
+					}
+				},
+				"where": { "$ref": "#/$defs/expr" },
+				"comment": { "type": "string" }
+			}
+		},
+		"event": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["name", "when", "then", "async"],
+			"properties": {
+				"name": { "$ref": "#/$defs/name" },
+				"when": { "$ref": "#/$defs/expr" },
+				"then": { "type": "array", "minItems": 1, "items": { "$ref": "#/$defs/expr" } },
+				"async": { "type": "boolean" },
+				"retry": { "type": "integer", "minimum": 0 },
+				"maxDepth": { "type": "integer", "minimum": 0 },
+				"comment": { "type": "string" }
+			}
+		},
+		"function": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["name", "args", "block", "permissions"],
+			"properties": {
+				"name": { "type": "string", "pattern": "^fn::" },
+				"args": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["name", "kind", "optional", "omittable"],
+						"properties": {
+							"name": { "$ref": "#/$defs/name" },
+							"kind": { "$ref": "#/$defs/kind" },
+							"optional": { "type": "boolean" },
+							"omittable": { "type": "boolean" }
+						}
+					}
+				},
+				"returns": { "$ref": "#/$defs/kind" },
+				"block": { "$ref": "#/$defs/expr" },
+				"permissions": { "$ref": "#/$defs/permission" },
+				"comment": { "type": "string" }
+			}
+		},
+		"param": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["name", "value", "permissions"],
+			"properties": {
+				"name": { "type": "string", "pattern": "^[^$]" },
+				"value": { "description": "The value the engine evaluated at definition time, as rendered.", "type": "string" },
+				"permissions": { "$ref": "#/$defs/permission" },
+				"comment": { "type": "string" }
+			}
+		},
+		"durations": {
+			"type": "object",
+			"additionalProperties": false,
+			"properties": {
+				"grant": { "type": "string" },
+				"token": { "type": "string" },
+				"session": { "type": "string" }
+			}
+		},
+		"access": {
+			"description": "Access method metadata. Keys, secrets and issuer material are never present.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["name", "method", "durations"],
+			"properties": {
+				"name": { "$ref": "#/$defs/name" },
+				"method": { "enum": ["record", "jwt", "bearer"] },
+				"signup": { "$ref": "#/$defs/expr" },
+				"signin": { "$ref": "#/$defs/expr" },
+				"authenticate": { "$ref": "#/$defs/expr" },
+				"refresh": { "type": "boolean" },
+				"verify": {
+					"oneOf": [
+						{
+							"type": "object",
+							"additionalProperties": false,
+							"required": ["alg"],
+							"properties": { "alg": { "type": "string" } }
+						},
+						{
+							"type": "object",
+							"additionalProperties": false,
+							"required": ["url"],
+							"properties": { "url": { "type": "string" } }
+						}
+					]
+				},
+				"subject": { "enum": ["record", "user"] },
+				"durations": { "$ref": "#/$defs/durations" },
+				"comment": { "type": "string" }
+			}
+		},
+		"analyzer": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["name", "tokenizers", "filters"],
+			"properties": {
+				"name": { "$ref": "#/$defs/name" },
+				"function": { "type": "string", "pattern": "^fn::" },
+				"tokenizers": { "type": "array", "items": { "type": "string" } },
+				"filters": { "type": "array", "items": { "type": "string" } },
+				"comment": { "type": "string" }
+			}
+		},
+		"sequence": {
+			"description": "Declared sequence parameters only; allocation state is never present.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["name", "batch", "start"],
+			"properties": {
+				"name": { "$ref": "#/$defs/name" },
+				"batch": { "type": "string", "pattern": "^[0-9]+$" },
+				"start": { "type": "string", "pattern": "^-?[0-9]+$" },
+				"timeout": { "type": "string" }
+			}
+		},
+		"bucket": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["name", "backend", "readonly", "permissions"],
+			"properties": {
+				"name": { "$ref": "#/$defs/name" },
+				"backend": { "type": "string" },
+				"readonly": { "type": "boolean" },
+				"permissions": { "$ref": "#/$defs/permission" },
+				"comment": { "type": "string" }
+			}
+		},
+		"middleware": {
+			"type": "array",
+			"items": {
+				"type": "object",
+				"additionalProperties": false,
+				"required": ["name", "args"],
+				"properties": {
+					"name": { "$ref": "#/$defs/name" },
+					"args": { "type": "array", "items": { "type": "string" } }
+				}
+			}
+		},
+		"api": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["path", "actions", "middleware", "permissions"],
+			"properties": {
+				"path": { "type": "string", "pattern": "^/" },
+				"actions": {
+					"type": "array",
+					"items": {
+						"type": "object",
+						"additionalProperties": false,
+						"required": ["methods", "middleware", "permissions", "action"],
+						"properties": {
+							"methods": {
+								"type": "array",
+								"minItems": 1,
+								"uniqueItems": true,
+								"items": { "enum": ["delete", "get", "patch", "post", "put", "trace"] }
+							},
+							"middleware": { "$ref": "#/$defs/middleware" },
+							"permissions": { "$ref": "#/$defs/permission" },
+							"action": { "$ref": "#/$defs/expr" }
+						}
+					}
+				},
+				"middleware": { "$ref": "#/$defs/middleware" },
+				"permissions": { "$ref": "#/$defs/permission" },
+				"comment": { "type": "string" }
+			}
+		},
+		"module": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["name", "executable", "permissions"],
+			"properties": {
+				"name": { "type": "string", "pattern": "^mod::" },
+				"executable": {
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["type"],
+					"properties": {
+						"type": { "type": "string" },
+						"bucket": { "type": "string" },
+						"key": { "type": "string" }
+					}
+				},
+				"permissions": { "$ref": "#/$defs/permission" },
+				"comment": { "type": "string" }
+			}
+		},
+		"config": {
+			"oneOf": [
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["type", "tables", "functions"],
+					"properties": {
+						"type": { "const": "graphql" },
+						"tables": { "type": "string" },
+						"functions": { "type": "string" }
+					}
+				},
+				{
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["type", "middleware", "permissions"],
+					"properties": {
+						"type": { "const": "api" },
+						"middleware": { "$ref": "#/$defs/middleware" },
+						"permissions": { "$ref": "#/$defs/permission" }
+					}
+				}
+			]
+		},
+		"user": {
+			"description": "Database user metadata. Password hashes and SCRAM material are never present.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["name", "roles", "durations"],
+			"properties": {
+				"name": { "$ref": "#/$defs/name" },
+				"roles": { "type": "array", "items": { "type": "string" } },
+				"durations": { "$ref": "#/$defs/durations" },
+				"comment": { "type": "string" }
+			}
+		},
+		"diagnostic": {
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["severity", "code", "source", "reason"],
+			"properties": {
+				"severity": { "enum": ["error", "warning", "info"] },
+				"code": { "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$" },
+				"table": { "$ref": "#/$defs/name" },
+				"field": { "$ref": "#/$defs/path" },
+				"function": { "type": "string", "pattern": "^fn::" },
+				"source": { "description": "The exact text the diagnostic is about.", "type": "string" },
+				"span": {
+					"description": "UTF-8 byte range [start, end) within `source`.",
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["start", "end"],
+					"properties": {
+						"start": { "type": "integer", "minimum": 0 },
+						"end": { "type": "integer", "minimum": 0 }
+					}
+				},
+				"reason": { "type": "string", "minLength": 1 }
+			}
+		}
+	}
+}

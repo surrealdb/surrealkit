@@ -616,6 +616,11 @@ impl SurrealKitMcp {
 						typegen_ts_out: typegen_ts_out.clone(),
 						typegen_ts_format: ctx.typegen.format.clone(),
 						typegen_json_out: typegen_json_out.clone(),
+						typegen_strict: ctx.typegen.strict,
+						typegen_omit_generated_at: !ctx.typegen.stamps_generated_at(),
+						typegen_schema_version: ctx.typegen.schema_version()?,
+						typegen_emitters: ctx.typegen.emitters()?,
+						typegen_acknowledge: ctx.typegen.acknowledgements()?,
 					};
 					crate::sync::run_sync_with_filesystem_sources(&db, opts, layout, files)
 						.await
@@ -782,7 +787,10 @@ impl SurrealKitMcp {
 			|| async move {
 				let ctx = server.context(&input.work)?;
 				let selection = ctx.selection(&input.work)?;
-				let (db, _target) = connect_single(&selection).await?;
+				let target = selection.typegen_target(!input.work.schema.is_empty())?;
+				let db = connect(target.cfg())
+					.await
+					.with_context(|| format!("connecting to target {:?}", target.name()))?;
 				let doc = crate::typegen::generate(&db).await?;
 				if input.write {
 					let _guard = server.lock_folder(&ctx.folder).await;
@@ -796,6 +804,13 @@ impl SurrealKitMcp {
 							pretty: true,
 							ts_out: ctx.typegen.typescript_path()?,
 							ts_format: ctx.typegen.format.clone(),
+							strict: ctx.typegen.strict,
+							check: false,
+							omit_generated_at: !ctx.typegen.stamps_generated_at(),
+							schema_version: ctx.typegen.schema_version()?,
+							emitters: ctx.typegen.emitters()?,
+							acknowledge: ctx.typegen.acknowledgements()?,
+							emitter_failures_fatal: false,
 						},
 					)
 					.await?;
@@ -857,6 +872,9 @@ impl SurrealKitMcp {
 					timeout_ms: input.timeout_ms,
 					keep_db: input.keep_db,
 					schema_from: input.schema_from.map(Into::into),
+					// Never from tool input: a tool call must not choose a command to run.
+					exec: Vec::new(),
+					exec_root_token: false,
 				};
 				let _guard = server.lock_folder(&ctx.folder).await;
 				crate::tester::run_test_report(None, opts, ctx.vars.clone(), &overrides).await
