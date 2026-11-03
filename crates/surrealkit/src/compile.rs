@@ -633,16 +633,8 @@ mod corpus {
 		assert_pinned("corpus.v2.json", &compiled.document);
 	}
 
-	/// Whether `line` defines `table` or one of its fields.
-	fn defines_on(line: &str, table: &str) -> bool {
-		let words: Vec<&str> = line.trim_end_matches(';').split_whitespace().collect();
-		words.windows(2).any(|pair| matches!(pair[0], "TABLE" | "ON") && pair[1] == table)
-	}
-
 	/// The tables of the field-presence evidence (`semantics/field_presence.surql`): only its
-	/// `DEFINE` statements, which is what a project with that schema would hold. Tables `ip` and
-	/// `up` are left out: they hold nested fields whose parent is not declared (`ip`) or has no
-	/// type (`up`), which 4.0 refuses.
+	/// `DEFINE` statements, which is what a project with that schema would hold.
 	#[tokio::test]
 	async fn the_compiled_field_presence_tables_are_pinned() {
 		let evidence = std::fs::read_to_string(corpus_dir().join("semantics/field_presence.surql"))
@@ -650,7 +642,6 @@ mod corpus {
 		let sql: String = evidence
 			.lines()
 			.filter(|line| line.starts_with("DEFINE "))
-			.filter(|line| !["ip", "up"].iter().any(|table| defines_on(line, table)))
 			.map(|line| format!("{line}\n"))
 			.collect();
 		let module = CompileModule {
@@ -664,7 +655,7 @@ mod corpus {
 		let compiled =
 			compile(&[module], &CompileOpts::default()).await.expect("compile the evidence tables");
 		let names: Vec<&str> = compiled.document.tables.iter().map(|t| t.name.as_str()).collect();
-		assert_eq!(names, ["e", "m", "oa", "p"]);
+		assert_eq!(names, ["e", "ip", "m", "oa", "p", "up"]);
 		assert_pinned("field-presence.v2.json", &compiled.document);
 	}
 
