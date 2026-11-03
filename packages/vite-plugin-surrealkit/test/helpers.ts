@@ -31,11 +31,12 @@ export interface Fixture {
 
 // Logs its argv, then optionally sleeps (interruptibly, so SIGTERM lands at
 // once), fails, or "publishes" a generated file; lifecycle events go to a
-// separate log so invocation counts stay simple.
+// separate log so invocation counts stay simple. The trap comes first: tests
+// signal the process as soon as its invocation is logged.
 const FAKE_BINARY = `#!/bin/sh
+trap 'printf "terminated\\n" >> "$SURREALKIT_TEST_EVENTS"; exit 143' TERM
 echo "fake surrealkit: $*"
 printf '%s\\n' "$*" >> "$SURREALKIT_TEST_LOG"
-trap 'printf "terminated\\n" >> "$SURREALKIT_TEST_EVENTS"; exit 143' TERM
 if [ -f "$SURREALKIT_TEST_SLEEP_FILE" ]; then
 	sleep "$(cat "$SURREALKIT_TEST_SLEEP_FILE")" &
 	wait $!
@@ -56,16 +57,21 @@ exit 0
 export function createFixture(): Fixture {
 	// realpath so that macOS' /var -> /private/var symlink does not make the
 	// watcher report paths the plugin's root-relative matcher cannot match.
-	const root = fs.mkdtempSync(
+	const base = fs.mkdtempSync(
 		path.join(fs.realpathSync(os.tmpdir()), 'surrealkit-vite-'),
 	);
+	const root = path.join(base, 'project');
+	fs.mkdirSync(root);
 
-	const binary = path.join(root, 'fake-surrealkit');
-	const log = path.join(root, 'invocations.log');
-	const events = path.join(root, 'events.log');
-	const exitFile = path.join(root, 'exit-code');
-	const sleepFile = path.join(root, 'sleep-seconds');
-	const outputSource = path.join(root, 'next-output');
+	// The harness's own files stay outside the Vite root. Inside it, the watcher
+	// reports the binary's log writes as updates arriving during a generation,
+	// which the plugin holds back and turns into a reload.
+	const binary = path.join(base, 'fake-surrealkit');
+	const log = path.join(base, 'invocations.log');
+	const events = path.join(base, 'events.log');
+	const exitFile = path.join(base, 'exit-code');
+	const sleepFile = path.join(base, 'sleep-seconds');
+	const outputSource = path.join(base, 'next-output');
 	const generatedFile = 'src/generated/schema.ts';
 
 	fs.writeFileSync(binary, FAKE_BINARY, { mode: 0o755 });
@@ -124,7 +130,7 @@ export function createFixture(): Fixture {
 			fs.rmSync(path.join(root, relativePath), { force: true });
 		},
 		cleanup: () => {
-			fs.rmSync(root, { recursive: true, force: true });
+			fs.rmSync(base, { recursive: true, force: true });
 		},
 	};
 }
