@@ -269,13 +269,13 @@ pub fn collect_schema_files(folder: &str) -> Result<Vec<SchemaFile>> {
 	collect_schema_files_at(folder, &schema_dir(folder))
 }
 
-/// Collect `.surql` files from an explicit directory, recursively and in sorted
-/// order. Used by module-aware callers, which resolve the directory through
-/// [`Layout`](crate::constants::Layout) rather than the project folder.
-///
-/// `root` is the project folder. Tracking keys are relative to it, so the same
-/// file yields the same key no matter where the process runs from.
-pub fn collect_schema_files_at(root: &str, sd: &std::path::Path) -> Result<Vec<SchemaFile>> {
+/// The `.surql` files under `sd`, recursively and in sorted order, as the paths the walk
+/// found them at. `root` is the project folder: a schema directory configured to enclose it
+/// is walked without its `rollouts/`. A directory that does not exist has no files.
+pub(crate) fn schema_file_paths(
+	root: &str,
+	sd: &std::path::Path,
+) -> Result<Vec<std::path::PathBuf>> {
 	if !sd.exists() {
 		return Ok(Vec::new());
 	}
@@ -300,7 +300,17 @@ pub fn collect_schema_files_at(root: &str, sd: &std::path::Path) -> Result<Vec<S
 	}
 
 	files.sort();
+	Ok(files)
+}
 
+/// Collect `.surql` files from an explicit directory, recursively and in sorted
+/// order. Used by module-aware callers, which resolve the directory through
+/// [`Layout`](crate::constants::Layout) rather than the project folder.
+///
+/// `root` is the project folder. Tracking keys are relative to it, so the same
+/// file yields the same key no matter where the process runs from.
+pub fn collect_schema_files_at(root: &str, sd: &std::path::Path) -> Result<Vec<SchemaFile>> {
+	let files = schema_file_paths(root, sd)?;
 	let mut out = Vec::with_capacity(files.len());
 	for path in files {
 		let sql = fs::read_to_string(&path).with_context(|| format!("reading {:?}", path))?;

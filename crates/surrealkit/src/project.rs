@@ -18,6 +18,14 @@
 //! [schema.billing]
 //! depends_on = ["core"]
 //!
+//! [analyze]
+//! ignore = ["dist"]               # query files `surrealkit check` does not read
+//! warnings_as_errors = true       # a CI gate: every default-level warning fails
+//!
+//! [analyze.lints]
+//! "7xxx" = "warn"
+//! E1002 = "allow"
+//!
 //! [target.acme]
 //! ns = "acme"
 //! db = "prod"
@@ -90,6 +98,11 @@ pub struct ProjectConfig {
 	/// Declared database targets, keyed by name.
 	#[serde(default)]
 	pub target: BTreeMap<String, TargetConfig>,
+	/// `[analyze]`: how `surrealkit check` and `surrealkit watch` grade what they find. Parsed
+	/// whether or not this build has the `analyze` feature, so one config file serves every
+	/// build.
+	#[serde(default)]
+	pub analyze: crate::check::AnalyzeConfig,
 }
 
 impl ProjectConfig {

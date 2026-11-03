@@ -1,0 +1,39 @@
+---
+source: crates/surrealkit/src/check/render.rs
+expression: "human(&report(), Path::new(\"/proj\"), true).replace('\\x1b', \"<ESC>\")"
+---
+<ESC>[1;36mhint[L7005]<ESC>[0m: `prénom` is never read
+ <ESC>[1;34m--><ESC>[0m database/schema/001 user.surql:2:14
+  <ESC>[1;34m|<ESC>[0m
+<ESC>[1;34m2<ESC>[0m <ESC>[1;34m|<ESC>[0m DEFINE FIELD prénom ON user TYPE string COMMENT 'né à 日本';
+  <ESC>[1;34m|<ESC>[0m              <ESC>[1;36m^^^^^^<ESC>[0m
+
+<ESC>[1;31merror[K9003]<ESC>[0m: Parse error: unexpected token `nonsense`
+ <ESC>[1;34m--><ESC>[0m database/schema/001 user.surql:3:1
+  <ESC>[1;34m|<ESC>[0m
+<ESC>[1;34m3<ESC>[0m <ESC>[1;34m|<ESC>[0m DEFINE FIELD age ON user
+  <ESC>[1;34m|<ESC>[0m <ESC>[1;31m^^^^^^^^^^^^^^^^^^^^^^^^<ESC>[0m
+  <ESC>[1;34m=<ESC>[0m note: expected a kind such as `string` or `int`
+  <ESC>[1;34m=<ESC>[0m note: the table is defined here (at 1:1)
+  <ESC>[1;34m=<ESC>[0m help: write `TYPE string`
+
+<ESC>[1;33mwarning[L7013]<ESC>[0m: malformed suppression directive: the `)` after the code is missing
+ <ESC>[1;34m--><ESC>[0m database/schema/001 user.surql:6:1
+  <ESC>[1;34m|<ESC>[0m
+<ESC>[1;34m6<ESC>[0m <ESC>[1;34m|<ESC>[0m -- surreal: allow(
+  <ESC>[1;34m|<ESC>[0m <ESC>[1;33m^^^^^^^^^^^^^^^^^^<ESC>[0m
+
+<ESC>[1;31merror[K9001]<ESC>[0m: a finding with an empty span
+ <ESC>[1;34m--><ESC>[0m queries/list.surql:1:1
+  <ESC>[1;34m|<ESC>[0m
+<ESC>[1;34m1<ESC>[0m <ESC>[1;34m|<ESC>[0m SELECT * FROM user;
+  <ESC>[1;34m|<ESC>[0m <ESC>[1;31m^<ESC>[0m
+
+<ESC>[1;31merror[E1002]<ESC>[0m: no field `nickname` on `user`
+ <ESC>[1;34m--><ESC>[0m queries/list.surql:2:10
+  <ESC>[1;34m|<ESC>[0m
+<ESC>[1;34m2<ESC>[0m <ESC>[1;34m|<ESC>[0m         SELECT nickname FROM user;
+  <ESC>[1;34m|<ESC>[0m                <ESC>[1;31m^^^^^^^^<ESC>[0m
+
+checked 1 schema file and 2 query files: 3 errors, 1 warning, 1 hint, 2 suppressed
+note: 2 query files were found but not analyzed; query analysis needs SurrealDB 4.1
