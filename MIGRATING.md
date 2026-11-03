@@ -10,7 +10,7 @@ on an existing project re-applies nothing and prunes nothing.
 Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and
 1.0.0-beta.7 two more (13 and 14), 1.0.0-beta.8 five more (15 to 19), and
 1.0.0-rc.1 three more (20 to 22). 1.0.0-rc.1 needs SurrealDB 4.0 (20); stay on
-1.0.0-beta.8 while your servers run 3.x.
+1.0.0-beta.8 while your servers run 3.x. Unreleased changes are 23 and up.
 Upgrading from 0.7.0 or any 1.0 beta carries existing state forward; CI checks
 that against every published release, written on SurrealDB 3.3 and carried on
 after the datastore is upgraded to 4.0.
@@ -907,3 +907,19 @@ Two smaller fixes ship with it: teardown moved from `httpServer`'s `close`
 event (always `null` in middleware mode, so nothing was ever cleaned up) to the
 `closeBundle` hook, and the plugin no longer imports anything from `vite` at
 runtime — only its types.
+
+### 23. `surrealkit check` and `watch`, and the `analyze` feature (unreleased)
+
+Nothing to change. New: `surrealkit check` lints a project's SurrealQL with no database: it
+applies the schema to a throwaway in-memory engine, reports each statement the engine rejects,
+counts the other `.surql` files, and exits 1 when a finding is an error. `--format json` and
+`--format sarif` write one document on stdout; `surrealkit watch` (or `check --watch`) checks
+again on every change. A new `[analyze]` section in `surrealkit.toml` sets the policy
+(`ignore`, `warnings_as_errors`, `require_suppression_reason`, `[analyze.lints]`), and
+`-- surreal: allow(CODE) reason="..."` comments suppress one code on one line. Query type
+checking arrives with the engine's checker in SurrealDB 4.1; see the README's "Checking
+SurrealQL".
+
+`analyze` is a new default cargo feature, which adds `notify` to the dependency tree. A build
+with `default-features = false` is unchanged. Without `analyze` the CLI has no `check` or
+`watch`, and `[analyze]` still parses.
