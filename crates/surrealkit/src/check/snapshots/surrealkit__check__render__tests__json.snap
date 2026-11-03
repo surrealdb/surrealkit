@@ -1,0 +1,132 @@
+---
+source: crates/surrealkit/src/check/render.rs
+expression: "pretty(&json(&report(), Path::new(\"/proj\")))"
+---
+{
+  "summary": {
+    "passed": false,
+    "schema_files": 1,
+    "query_files": 2,
+    "queries_analyzed": false,
+    "errors": 3,
+    "warnings": 1,
+    "hints": 1,
+    "suppressed": 2,
+    "allowed": 1
+  },
+  "diagnostics": [
+    {
+      "code": "L7005",
+      "severity": "hint",
+      "message": "`prénom` is never read",
+      "path": "database/schema/001 user.surql",
+      "span": {
+        "start": 43,
+        "end": 50,
+        "line": 2,
+        "column": 14,
+        "end_line": 2,
+        "end_column": 20
+      },
+      "statement": 1,
+      "notes": [],
+      "tags": [
+        "unnecessary"
+      ]
+    },
+    {
+      "code": "K9003",
+      "severity": "error",
+      "message": "Parse error: unexpected token `nonsense`",
+      "path": "database/schema/001 user.surql",
+      "span": {
+        "start": 96,
+        "end": 146,
+        "line": 3,
+        "column": 1,
+        "end_line": 5,
+        "end_column": 11
+      },
+      "statement": 2,
+      "notes": [
+        {
+          "kind": "note",
+          "message": "expected a kind such as `string` or `int`",
+          "span": null,
+          "replacement": null
+        },
+        {
+          "kind": "note",
+          "message": "the table is defined here",
+          "span": {
+            "start": 0,
+            "end": 28,
+            "line": 1,
+            "column": 1,
+            "end_line": 1,
+            "end_column": 29
+          },
+          "replacement": null
+        },
+        {
+          "kind": "help",
+          "message": "write `TYPE string`",
+          "span": null,
+          "replacement": "TYPE string"
+        }
+      ],
+      "tags": []
+    },
+    {
+      "code": "L7013",
+      "severity": "warning",
+      "message": "malformed suppression directive: the `)` after the code is missing",
+      "path": "database/schema/001 user.surql",
+      "span": {
+        "start": 148,
+        "end": 166,
+        "line": 6,
+        "column": 1,
+        "end_line": 6,
+        "end_column": 19
+      },
+      "statement": null,
+      "notes": [],
+      "tags": []
+    },
+    {
+      "code": "K9001",
+      "severity": "error",
+      "message": "a finding with an empty span",
+      "path": "queries/list.surql",
+      "span": {
+        "start": 0,
+        "end": 0,
+        "line": 1,
+        "column": 1,
+        "end_line": 1,
+        "end_column": 1
+      },
+      "statement": null,
+      "notes": [],
+      "tags": []
+    },
+    {
+      "code": "E1002",
+      "severity": "error",
+      "message": "no field `nickname` on `user`",
+      "path": "queries/list.surql",
+      "span": {
+        "start": 29,
+        "end": 37,
+        "line": 2,
+        "column": 10,
+        "end_line": 2,
+        "end_column": 18
+      },
+      "statement": 1,
+      "notes": [],
+      "tags": []
+    }
+  ]
+}

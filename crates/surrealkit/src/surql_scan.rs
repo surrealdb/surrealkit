@@ -197,7 +197,16 @@ const SLASH_IN_REGEX_HINT: &str = "A `/` inside a regex literal ends it, even in
 
 /// Split `src` into statements.
 pub(crate) fn scan(src: &str) -> Result<Vec<Stmt>, ScanError> {
-	Scanner::new(src).run()
+	Scanner::new(src).run().map(|(stmts, _)| stmts)
+}
+
+/// Every comment in `src`, in source order, as the byte range from its opening `--`, `//`, `#`
+/// or `/*` to its end (a line comment excludes the line break). Comments between statements
+/// are listed as well as those inside them, which [`Stmt::comments`] leaves out. A `--` inside
+/// a string or a quoted identifier is not a comment.
+#[cfg(feature = "analyze")]
+pub(crate) fn scan_comments(src: &str) -> Result<Vec<Range<usize>>, ScanError> {
+	Scanner::new(src).run().map(|(_, comments)| comments)
 }
 
 /// Words after which a `/` starts a regex, when the word is used as a keyword.
@@ -357,6 +366,8 @@ struct Scanner<'a> {
 	stmts: Vec<Stmt>,
 	cur: Vec<Tok>,
 	cur_comments: Vec<Range<usize>>,
+	/// Every comment, whether or not a statement is open.
+	all_comments: Vec<Range<usize>>,
 	brackets: Vec<(char, usize)>,
 	/// A `/` in this statement that looked like a regex but had no closing `/`
 	/// on its line, kept to explain a later error.
@@ -377,6 +388,7 @@ impl<'a> Scanner<'a> {
 			stmts: Vec::new(),
 			cur: Vec::new(),
 			cur_comments: Vec::new(),
+			all_comments: Vec::new(),
 			brackets: Vec::new(),
 			abandoned_regex: None,
 			js: JsState::Idle,
@@ -419,7 +431,7 @@ impl<'a> Scanner<'a> {
 		}
 	}
 
-	fn run(mut self) -> Result<Vec<Stmt>, ScanError> {
+	fn run(mut self) -> Result<(Vec<Stmt>, Vec<Range<usize>>), ScanError> {
 		while let Some(c) = self.peek() {
 			let start = self.pos;
 			match c {
@@ -528,7 +540,7 @@ impl<'a> Scanner<'a> {
 			return Err(err);
 		}
 		self.end_statement()?;
-		Ok(self.stmts)
+		Ok((self.stmts, self.all_comments))
 	}
 
 	fn push(&mut self, kind: TokKind, start: usize) {
@@ -660,6 +672,7 @@ impl<'a> Scanner<'a> {
 	}
 
 	fn record_comment(&mut self, start: usize) {
+		self.all_comments.push(start..self.pos);
 		if !self.cur.is_empty() {
 			self.cur_comments.push(start..self.pos);
 		}
@@ -1284,5 +1297,38 @@ mod tests {
 			e.to_string(),
 			"line 1, column 28: found `)` where `]` was expected (opened at line 1, column 23)"
 		);
+	}
+
+	#[cfg(feature = "analyze")]
+	fn comment_texts(src: &str) -> Vec<&str> {
+		scan_comments(src)
+			.unwrap_or_else(|e| panic!("scan failed: {e}"))
+			.into_iter()
+			.map(|range| &src[range])
+			.collect()
+	}
+
+	#[cfg(feature = "analyze")]
+	#[test]
+	fn comments_are_listed_between_statements_and_inside_them() {
+		let src =
+			"-- head\nDEFINE TABLE a; -- trailing\n# hash\nDEFINE TABLE /* mid */ b;\n// tail";
+		assert_eq!(
+			comment_texts(src),
+			vec!["-- head", "-- trailing", "# hash", "/* mid */", "// tail"]
+		);
+	}
+
+	#[cfg(feature = "analyze")]
+	#[test]
+	fn a_comment_marker_inside_a_literal_is_not_a_comment() {
+		let src = "DEFINE FIELD a ON t DEFAULT 'x -- y';\nDEFINE FIELD `b -- c` ON t; -- real";
+		assert_eq!(comment_texts(src), vec!["-- real"]);
+	}
+
+	#[cfg(feature = "analyze")]
+	#[test]
+	fn a_file_that_does_not_scan_has_no_comment_list() {
+		assert!(scan_comments("-- c\nDEFINE FIELD a ON t DEFAULT 'open;").is_err());
 	}
 }
