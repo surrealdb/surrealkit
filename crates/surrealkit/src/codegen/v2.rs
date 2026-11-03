@@ -3,14 +3,13 @@
 //!
 //! A kind is lowered into the [`FieldType`] tree the v2 kind parser produces from kind
 //! text, and then normalised by the same code (`typegen::kind_v2`), so a kind reaches the
-//! document in one spelling whichever way it was read.
+//! document in one spelling whichever way it was read. The kinds that tree has no node for
+//! (sized numbers, `date`, `time`, `timestamp`, `interval`, `bigdecimal`, `enum` and named
+//! types) are lowered as their engine spelling, which `kind_v2` reads into their v2 nodes.
 //!
-//! v2 has no node for some engine kinds. Numeric widths widen: `f16` and `f32` are
-//! `float`, and every fixed-width integer is `int`. A function's signature is dropped,
-//! because v2's `function` is bare. `date`, `time`, `timestamp`, `interval`,
-//! `bigdecimal`, named types (`DEFINE TYPE`) and variants this build does not know become
-//! `{ kind: "unknown", source }`, with `source` the kind's SurrealQL spelling, and are
-//! listed in [`V2Kind::unrepresented`] so the caller can report them.
+//! A function's signature is dropped, because v2's `function` is bare. Variants this build
+//! does not know become `{ kind: "unknown", source }`, and are listed in
+//! [`V2Kind::unrepresented`] so the caller can report them.
 
 use surrealdb_types::ToSql;
 
@@ -25,33 +24,64 @@ pub struct V2Kind {
 	pub kind: Kind,
 	/// The kind admitted NONE, and NONE was folded into this flag (top positions only).
 	pub optional: bool,
-	/// The SurrealQL spelling of every part that became `unknown`, in the order met.
+	/// The `source` of every `unknown` in `kind`, in the order met.
 	pub unrepresented: Vec<String>,
 }
 
 /// `kind` in a top-level position (a field, a literal-object field, a function argument,
 /// a statement's result): a `none` variant becomes `optional`.
 pub fn top(kind: &KindValue) -> V2Kind {
-	let mut unrepresented = Vec::new();
-	let ty = field_type(kind, &mut unrepresented);
-	let (kind, optional) = kind_v2::top(&ty);
+	let (kind, optional) = kind_v2::top(&field_type(kind));
 	V2Kind {
+		unrepresented: unknown_sources(&kind),
 		kind,
 		optional,
-		unrepresented,
 	}
 }
 
-/// `kind` in a nested position (a tuple item, an array or set item): NONE becomes
-/// `{ kind: "option", item }`, and `optional` is always `false`.
+/// `kind` in a nested position (a tuple item, an array or set item, a `DEFINE TYPE`'s kind):
+/// NONE becomes `{ kind: "option", item }`, and `optional` is always `false`.
 pub fn nested(kind: &KindValue) -> V2Kind {
-	let mut unrepresented = Vec::new();
-	let ty = field_type(kind, &mut unrepresented);
+	let kind = kind_v2::nested(&field_type(kind));
 	V2Kind {
-		kind: kind_v2::nested(&ty),
+		unrepresented: unknown_sources(&kind),
+		kind,
 		optional: false,
-		unrepresented,
 	}
+}
+
+fn unknown_sources(kind: &Kind) -> Vec<String> {
+	fn walk(kind: &Kind, out: &mut Vec<String>) {
+		match kind {
+			Kind::Unknown {
+				source,
+			} => out.push(source.clone()),
+			Kind::Array {
+				item,
+				..
+			}
+			| Kind::Set {
+				item,
+				..
+			}
+			| Kind::Option {
+				item,
+			} => walk(item, out),
+			Kind::Tuple {
+				items: kinds,
+			}
+			| Kind::Union {
+				variants: kinds,
+			} => kinds.iter().for_each(|k| walk(k, out)),
+			Kind::ObjectLiteral {
+				fields,
+			} => fields.iter().for_each(|f| walk(&f.kind, out)),
+			_ => {}
+		}
+	}
+	let mut out = Vec::new();
+	walk(kind, &mut out);
+	out
 }
 
 fn primitive(name: PrimitiveType) -> FieldType {
@@ -60,12 +90,25 @@ fn primitive(name: PrimitiveType) -> FieldType {
 	}
 }
 
-fn unknown(source: impl Into<String>, unrepresented: &mut Vec<String>) -> FieldType {
-	let source = source.into();
-	unrepresented.push(source.clone());
+/// A kind as its SurrealQL spelling, which `kind_v2` lowers to its node, or to `unknown`.
+fn spelled(source: impl Into<String>) -> FieldType {
 	FieldType::Unknown {
-		source,
+		source: source.into(),
 	}
+}
+
+/// `text` quoted with `quote`, escaped so the kind parser reads back exactly `text`.
+fn quoted(text: &str, quote: char) -> String {
+	let mut out = String::with_capacity(text.len() + 2);
+	out.push(quote);
+	for c in text.chars() {
+		if c == '\\' || c == quote {
+			out.push('\\');
+		}
+		out.push(c);
+	}
+	out.push(quote);
+	out
 }
 
 fn literal(value: serde_json::Value, literal_type: Option<LiteralType>) -> FieldType {
@@ -75,10 +118,8 @@ fn literal(value: serde_json::Value, literal_type: Option<LiteralType>) -> Field
 	}
 }
 
-fn field_type(kind: &KindValue, unrepresented: &mut Vec<String>) -> FieldType {
-	let many = |kinds: &[KindValue], unrepresented: &mut Vec<String>| -> Vec<FieldType> {
-		kinds.iter().map(|k| field_type(k, unrepresented)).collect()
-	};
+fn field_type(kind: &KindValue) -> FieldType {
+	let many = |kinds: &[KindValue]| -> Vec<FieldType> { kinds.iter().map(field_type).collect() };
 	match kind {
 		KindValue::Any => primitive(PrimitiveType::Any),
 		KindValue::None => primitive(PrimitiveType::None),
@@ -94,22 +135,30 @@ fn field_type(kind: &KindValue, unrepresented: &mut Vec<String>) -> FieldType {
 		KindValue::Uuid => primitive(PrimitiveType::Uuid),
 		KindValue::Regex => primitive(PrimitiveType::Regex),
 		KindValue::Range => primitive(PrimitiveType::Range),
-		KindValue::F16 | KindValue::F32 | KindValue::Float => primitive(PrimitiveType::Float),
-		KindValue::I8
-		| KindValue::I16
-		| KindValue::I32
-		| KindValue::Int
-		| KindValue::U8
-		| KindValue::U16
-		| KindValue::U32
-		| KindValue::U64 => primitive(PrimitiveType::Int),
-		KindValue::Date => unknown("date", unrepresented),
-		KindValue::Time => unknown("time", unrepresented),
-		KindValue::Timestamp => unknown("timestamp", unrepresented),
-		KindValue::Interval => unknown("interval", unrepresented),
-		KindValue::BigDecimal => unknown("bigdecimal", unrepresented),
-		KindValue::Named(name) => unknown(name.clone(), unrepresented),
-		KindValue::Unknown(raw) => unknown(raw.to_string(), unrepresented),
+		KindValue::Float => primitive(PrimitiveType::Float),
+		KindValue::Int => primitive(PrimitiveType::Int),
+		KindValue::F16 => spelled("f16"),
+		KindValue::F32 => spelled("f32"),
+		KindValue::I8 => spelled("i8"),
+		KindValue::I16 => spelled("i16"),
+		KindValue::I32 => spelled("i32"),
+		KindValue::U8 => spelled("u8"),
+		KindValue::U16 => spelled("u16"),
+		KindValue::U32 => spelled("u32"),
+		KindValue::U64 => spelled("u64"),
+		KindValue::Date => spelled("date"),
+		KindValue::Time => spelled("time"),
+		KindValue::Timestamp => spelled("timestamp"),
+		KindValue::Interval => spelled("interval"),
+		KindValue::BigDecimal => spelled("bigdecimal"),
+		KindValue::Enum(labels) => spelled(format!(
+			"enum<{}>",
+			labels.iter().map(|label| quoted(label, '\'')).collect::<Vec<_>>().join(", ")
+		)),
+		// Quoted, so a name that is also a kind word (`date`) still reads as a name.
+		KindValue::Named(name) => spelled(quoted(name, '`')),
+		// JSON text is no kind spelling, so it stays unknown.
+		KindValue::Unknown(raw) => spelled(raw.to_string()),
 		KindValue::Function(..) => primitive(PrimitiveType::Function),
 		KindValue::Table(tables) => FieldType::Table {
 			tables: tables.clone(),
@@ -125,29 +174,33 @@ fn field_type(kind: &KindValue, unrepresented: &mut Vec<String>) -> FieldType {
 			kinds: kinds.iter().map(|k| k.to_ascii_lowercase()).collect(),
 		},
 		KindValue::Either(kinds) => FieldType::Union {
-			variants: many(kinds, unrepresented),
+			variants: many(kinds),
 		},
 		KindValue::Array(item, max) => FieldType::Array {
-			inner: Box::new(field_type(item, unrepresented)),
+			inner: Box::new(field_type(item)),
 			max: *max,
 		},
 		KindValue::Set(item, max) => FieldType::Set {
-			inner: Box::new(field_type(item, unrepresented)),
+			inner: Box::new(field_type(item)),
 			max: *max,
-		},
-		KindValue::Enum(labels) => FieldType::Union {
-			variants: labels
-				.iter()
-				.map(|label| literal(serde_json::Value::String(label.clone()), None))
-				.collect(),
 		},
 		KindValue::Literal(value) => match value {
 			LiteralValue::String(s) => literal(serde_json::Value::String(s.clone()), None),
 			LiteralValue::Integer(i) => literal(serde_json::Value::from(*i), None),
 			LiteralValue::Float(f) => match serde_json::Number::from_f64(*f) {
 				Some(n) => literal(serde_json::Value::Number(n), Some(LiteralType::Float)),
-				// NaN and the infinities have no JSON number; the engine spells them.
-				None => unknown(format!("{f}f"), unrepresented),
+				// NaN and the infinities have no JSON number; the parser keeps their spelling.
+				None => literal(
+					serde_json::Value::String(
+						match (f.is_nan(), f.is_sign_negative()) {
+							(true, _) => "NaN",
+							(false, false) => "Infinity",
+							(false, true) => "-Infinity",
+						}
+						.to_string(),
+					),
+					Some(LiteralType::Float),
+				),
 			},
 			LiteralValue::Decimal(text) => {
 				literal(serde_json::Value::String(text.clone()), Some(LiteralType::Decimal))
@@ -161,14 +214,14 @@ fn field_type(kind: &KindValue, unrepresented: &mut Vec<String>) -> FieldType {
 			),
 			LiteralValue::Bool(b) => literal(serde_json::Value::Bool(*b), None),
 			LiteralValue::Array(items) => FieldType::Tuple {
-				items: many(items, unrepresented),
+				items: many(items),
 			},
 			LiteralValue::Object(fields) => FieldType::Object {
 				fields: fields
 					.iter()
 					.map(|(name, kind)| ObjectField {
 						name: name.clone(),
-						r#type: field_type(kind, unrepresented),
+						r#type: field_type(kind),
 					})
 					.collect(),
 			},
@@ -211,23 +264,75 @@ mod tests {
 	}
 
 	#[test]
-	fn widths_widen_and_signatures_drop() {
-		assert_eq!(v2(json!("U64")), json!({ "kind": "int" }));
-		assert_eq!(v2(json!("F32")), json!({ "kind": "float" }));
+	fn sized_numbers_keep_their_width_and_signatures_drop() {
+		assert_eq!(v2(json!("Int")), json!({ "kind": "int" }));
+		assert_eq!(v2(json!("I8")), json!({ "kind": "int", "width": 8 }));
+		assert_eq!(v2(json!("U64")), json!({ "kind": "int", "width": 64, "signed": false }));
+		assert_eq!(v2(json!("F32")), json!({ "kind": "float", "width": 32 }));
 		assert_eq!(v2(json!({ "Function": [["Int"], "String"] })), json!({ "kind": "function" }));
+		// A width is part of the kind's identity.
+		assert_eq!(
+			v2(json!({ "Either": ["I8", "Int"] })),
+			json!({ "kind": "union", "variants": [
+				{ "kind": "int", "width": 8 },
+				{ "kind": "int" },
+			] })
+		);
 	}
 
 	#[test]
-	fn kinds_without_a_v2_node_are_unknown_and_listed() {
-		let converted = top(&value(json!({ "Either": ["Date", { "Named": "money" }] })));
-		assert_eq!(converted.unrepresented, ["date", "money"]);
+	fn the_4_x_kinds_have_nodes() {
+		let converted =
+			top(&value(json!({ "Either": ["Date", "BigDecimal", { "Named": "money" }] })));
+		assert!(converted.unrepresented.is_empty());
 		assert_eq!(
 			serde_json::to_value(converted.kind).expect("v2"),
 			json!({ "kind": "union", "variants": [
-				{ "kind": "unknown", "source": "date" },
-				{ "kind": "unknown", "source": "money" },
+				{ "kind": "bigdecimal" },
+				{ "kind": "date" },
+				{ "kind": "named", "name": "money" },
 			] })
 		);
+	}
+
+	#[test]
+	fn an_enum_keeps_its_labels_as_declared() {
+		assert_eq!(
+			v2(json!({ "Enum": ["b", "a", "b"] })),
+			json!({ "kind": "enum", "labels": ["b", "a", "b"] })
+		);
+		let awkward = ["it's", "back\\slash", "a, b>", "`tick`", "\u{e9}t\u{e9}"];
+		assert_eq!(v2(json!({ "Enum": awkward })), json!({ "kind": "enum", "labels": awkward }));
+	}
+
+	#[test]
+	fn a_name_is_a_name_whatever_it_spells() {
+		for name in ["date", "int", "my-type", "with `tick`", "back\\slash"] {
+			assert_eq!(v2(json!({ "Named": name })), json!({ "kind": "named", "name": name }));
+		}
+	}
+
+	#[test]
+	fn variants_this_build_does_not_know_are_unknown_and_listed() {
+		let converted = top(&value(json!({ "Either": ["String", { "Hologram": 3 }] })));
+		assert_eq!(converted.unrepresented, [r#"{"Hologram":3}"#]);
+		assert_eq!(
+			serde_json::to_value(converted.kind).expect("v2"),
+			json!({ "kind": "union", "variants": [
+				{ "kind": "string" },
+				{ "kind": "unknown", "source": r#"{"Hologram":3}"# },
+			] })
+		);
+	}
+
+	#[test]
+	fn non_finite_floats_are_spelled_as_the_parser_spells_them() {
+		for (f, text) in
+			[(f64::NAN, "NaN"), (f64::INFINITY, "Infinity"), (f64::NEG_INFINITY, "-Infinity")]
+		{
+			let converted = top(&KindValue::Literal(LiteralValue::Float(f)));
+			assert_eq!(Some((converted.kind, converted.optional)), kind_v2::parse_top_exact(text));
+		}
 	}
 
 	#[test]
@@ -244,13 +349,6 @@ mod tests {
 			v2(json!({ "Literal": { "Float": 1.5 } })),
 			json!({ "kind": "literal", "type": "float", "value": "1.5" })
 		);
-		assert_eq!(
-			v2(json!({ "Enum": ["b", "a"] })),
-			json!({ "kind": "union", "variants": [
-				{ "kind": "literal", "type": "string", "value": "a" },
-				{ "kind": "literal", "type": "string", "value": "b" },
-			] })
-		);
 	}
 
 	#[test]
@@ -263,8 +361,8 @@ mod tests {
 
 	/// Every engine kind in the fixture converts, and wherever the v2 kind parser can read
 	/// the engine's spelling of the same kind, both readings give the same v2 kind. The
-	/// spellings it cannot read are pinned: the 4.x kinds and numeric widths, and two engine
-	/// renderings the fixture captured (`1.25decdec`, an object literal with an unescaped key).
+	/// spellings it cannot read are pinned: two engine renderings the fixture captured
+	/// (`1.25decdec`, an object literal with an unescaped key).
 	#[test]
 	fn converting_agrees_with_parsing_the_engine_spelling() {
 		let fixture: Vec<Value> =
@@ -291,26 +389,7 @@ mod tests {
 		}
 		assert_eq!(
 			unreadable,
-			[
-				"date",
-				"time",
-				"timestamp",
-				"interval",
-				"bigdecimal",
-				"f16",
-				"f32",
-				"i8",
-				"i16",
-				"i32",
-				"u8",
-				"u16",
-				"u32",
-				"u64",
-				"1.25decdec",
-				"{name: string, nick: none | string, weird key: int}",
-				"enum<'a', 'b'>",
-				"money",
-			]
+			["1.25decdec", "{name: string, nick: none | string, weird key: int}"]
 		);
 		assert!(compared > 30, "compared only {compared} kinds");
 	}

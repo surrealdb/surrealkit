@@ -5,14 +5,15 @@
 //! [`Kind`]s, and its JSON form follows the v2 conventions: camelCase members, no
 //! user-controlled object keys, optional members omitted, never `null`.
 //!
-//! [`from_types_document`] builds the entries from the engine's [`TypesDocument`].
+//! [`from_types_document`] builds the entries, and the `types` their `named` kinds refer to,
+//! from the engine's [`TypesDocument`].
 
 use serde::{Deserialize, Serialize};
 
 pub use super::document::Certainty;
 use super::document::{FieldStep, KindValue, QueryParam, StatementType, TypesDocument};
 use super::v2;
-use crate::typegen::document::Kind;
+use crate::typegen::document::{Kind, TypeDef};
 
 /// One query and the typed result of each of its statements.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -76,11 +77,21 @@ pub struct ParamEntry {
 /// The v2 spelling of a path step into a collection's elements.
 pub const ELEMENT_SEGMENT: &str = "*";
 
-/// The entries for the queries of an engine document, and the SurrealQL spelling of every kind
-/// v2 cannot represent (deduplicated, in the order met), for the caller to report.
-///
-/// Entries carry no `sources`: the engine document does not know where host code sends a query.
-pub fn from_types_document(doc: &TypesDocument) -> (Vec<QueryEntry>, Vec<String>) {
+/// An engine document in v2's vocabulary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Converted {
+	/// One entry per query, in the engine document's order. Entries carry no `sources`: the
+	/// engine document does not know where a query comes from.
+	pub queries: Vec<QueryEntry>,
+	/// The `DEFINE TYPE`s, sorted by name.
+	pub types: Vec<TypeDef>,
+	/// The `source` of every `unknown` kind, deduplicated, in the order met, for the caller to
+	/// report.
+	pub unrepresented: Vec<String>,
+}
+
+/// Converts the queries and types of an engine document.
+pub fn from_types_document(doc: &TypesDocument) -> Converted {
 	let mut unrepresented: Vec<String> = Vec::new();
 	let mut note = |spellings: Vec<String>| {
 		for spelling in spellings {
@@ -112,7 +123,25 @@ pub fn from_types_document(doc: &TypesDocument) -> (Vec<QueryEntry>, Vec<String>
 			params,
 		});
 	}
-	(entries, unrepresented)
+	let mut types: Vec<TypeDef> = doc
+		.types
+		.iter()
+		.map(|def| {
+			let converted = v2::nested(&def.kind_value);
+			note(converted.unrepresented);
+			TypeDef {
+				name: def.name.clone(),
+				kind: converted.kind,
+				comment: None,
+			}
+		})
+		.collect();
+	types.sort_by(|a, b| a.name.cmp(&b.name));
+	Converted {
+		queries: entries,
+		types,
+		unrepresented,
+	}
 }
 
 fn statement_entry(statement: &StatementType) -> (StatementEntry, Vec<String>) {
@@ -165,7 +194,9 @@ mod tests {
 
 	fn entries(queries: Value) -> (Vec<QueryEntry>, Vec<String>) {
 		let doc = json!({ "format": "surrealdb.types", "version": 1, "queries": queries });
-		from_types_document(&TypesDocument::from_json(&doc.to_string()).expect("document"))
+		let converted =
+			from_types_document(&TypesDocument::from_json(&doc.to_string()).expect("document"));
+		(converted.queries, converted.unrepresented)
 	}
 
 	#[test]
@@ -207,17 +238,17 @@ mod tests {
 	fn params_convert_and_unrepresented_spellings_are_listed_once() {
 		let (entries, unrepresented) = entries(json!([
 			{ "text": "q1", "statements": [
-				{ "kind_value": { "Either": ["Date", "Int"] }, "certainty": "fact" }
+				{ "kind_value": { "Either": [{ "Hologram": 1 }, "Int"] }, "certainty": "fact" }
 			], "params": [
 				{ "name": "a", "kind_value": { "Either": ["None", "String"] }, "required": true },
 				{ "name": "b", "required": false },
-				{ "name": "c", "kind_value": { "Named": "money" }, "required": true },
+				{ "name": "c", "kind_value": { "Quux": [] }, "required": true },
 			] },
 			{ "text": "q2", "statements": [
-				{ "kind_value": "Date", "certainty": "fact" }
+				{ "kind_value": { "Hologram": 1 }, "certainty": "fact" }
 			] },
 		]));
-		assert_eq!(unrepresented, ["date", "money"]);
+		assert_eq!(unrepresented, [r#"{"Hologram":1}"#, r#"{"Quux":[]}"#]);
 		let params = &entries[0].params;
 		assert!(params[0].optional && params[0].required);
 		assert_eq!(params[0].kind, Some(Kind::String));

@@ -7,9 +7,12 @@ use std::process::Command;
 use surrealkit::codegen::document::TypesDocument;
 use surrealkit::codegen::queries::{QueryEntry, from_types_document};
 use surrealkit::codegen::typescript::{DateStyle, HintStyle, RenderOptions, render};
+use surrealkit::typegen::document::TypeDef;
 
 const QUERIES: &str = include_str!("fixtures/codegen/queries.json");
 const KINDS: &str = include_str!("fixtures/codegen/queries_kinds.json");
+/// The `types` the `named` kinds of `KINDS` refer to.
+const KIND_TYPES: &str = include_str!("fixtures/codegen/queries_kinds_types.json");
 const EMPTY: &str = include_str!("fixtures/codegen/queries_empty.json");
 const BLOG: &str = include_str!("fixtures/codegen/blog.json");
 const OPEN: &str = include_str!("fixtures/codegen/open.json");
@@ -18,8 +21,16 @@ fn entries(text: &str) -> Vec<QueryEntry> {
 	serde_json::from_str(text).expect("fixture entries read")
 }
 
+fn types(text: &str) -> Vec<TypeDef> {
+	serde_json::from_str(text).expect("fixture types read")
+}
+
 fn render_default(text: &str) -> String {
-	render(&entries(text), &RenderOptions::default())
+	render(&entries(text), &[], &RenderOptions::default())
+}
+
+fn render_kinds() -> String {
+	render(&entries(KINDS), &types(KIND_TYPES), &RenderOptions::default())
 }
 
 fn native_unknown() -> RenderOptions {
@@ -37,12 +48,15 @@ fn queries() {
 
 #[test]
 fn queries_with_native_dates_and_distrusted_hints() {
-	insta::assert_snapshot!("queries_native_unknown", render(&entries(QUERIES), &native_unknown()));
+	insta::assert_snapshot!(
+		"queries_native_unknown",
+		render(&entries(QUERIES), &[], &native_unknown())
+	);
 }
 
 #[test]
 fn every_v2_kind() {
-	insta::assert_snapshot!("kinds", render_default(KINDS));
+	insta::assert_snapshot!("kinds", render_kinds());
 }
 
 #[test]
@@ -65,9 +79,9 @@ fn the_engines_types_document_converts_to_entries() {
 	let mut all = Vec::new();
 	for (name, text) in [("blog", BLOG), ("open", OPEN)] {
 		let doc = TypesDocument::from_json(text).expect("fixture document reads");
-		let (entries, unrepresented) = from_types_document(&doc);
-		assert!(unrepresented.is_empty(), "{name}: {unrepresented:?}");
-		all.push((name, entries));
+		let converted = from_types_document(&doc);
+		assert!(converted.unrepresented.is_empty(), "{name}: {:?}", converted.unrepresented);
+		all.push((name, converted.queries));
 	}
 	insta::assert_json_snapshot!("engine_entries", all);
 }
@@ -89,10 +103,11 @@ fn typecheck_golden_with_tsc() {
 	std::fs::create_dir_all(&modules).expect("node_modules");
 	symlink(Path::new(&sdk), &modules.join("surrealdb"));
 
-	for (name, text) in [("queries", QUERIES), ("kinds", KINDS), ("empty", EMPTY)] {
+	for (name, text) in [("queries", QUERIES), ("empty", EMPTY)] {
 		write(&root.join(format!("{name}.ts")), &render_default(text));
 	}
-	write(&root.join("native.ts"), &render(&entries(QUERIES), &native_unknown()));
+	write(&root.join("kinds.ts"), &render_kinds());
+	write(&root.join("native.ts"), &render(&entries(QUERIES), &[], &native_unknown()));
 	write(&root.join("use.ts"), USE_TS);
 	write(
 		&root.join("tsconfig.json"),

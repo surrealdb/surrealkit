@@ -654,5 +654,132 @@
         "open": []
       }
     ]
+  },
+  {
+    "key": "sized",
+    "name": "sized",
+    "text": "RETURN sized",
+    "statements": [
+      {
+        "kind": {
+          "kind": "int",
+          "width": 8
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "int",
+          "width": 64,
+          "signed": false
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "float",
+          "width": 32
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "date"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "time"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "timestamp"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "interval"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "bigdecimal"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "enum",
+          "labels": [
+            "low",
+            "high",
+            "low"
+          ]
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "named",
+          "name": "money"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "named",
+          "name": "tree"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "named",
+          "name": "undefined_here"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      }
+    ]
   }
 ]

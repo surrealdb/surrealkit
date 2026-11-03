@@ -23,7 +23,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::queries::{Certainty, ELEMENT_SEGMENT, ParamEntry, QueryEntry, StatementEntry};
-use crate::typegen::document::{Kind, LiteralType, LiteralValue, ObjectLiteralField};
+use crate::typegen::document::{Kind, LiteralType, LiteralValue, ObjectLiteralField, TypeDef};
 
 /// Query parameters with this prefix are filled by the host-language template, not by the caller.
 const HOST_PARAM_PREFIX: &str = "__host";
@@ -91,10 +91,13 @@ impl Default for RenderOptions {
 	}
 }
 
-/// Renders the complete module.
-pub fn render(queries: &[QueryEntry], opts: &RenderOptions) -> String {
+/// Renders the complete module. `types` are the document's `DEFINE TYPE`s, which a `named` kind
+/// is expanded from.
+pub fn render(queries: &[QueryEntry], types: &[TypeDef], opts: &RenderOptions) -> String {
 	let mut emitter = Emitter {
 		opts,
+		types,
+		expanding: Vec::new(),
 		used: BTreeSet::from(["SurrealQueryable"]),
 	};
 	let registry = emitter.registry(queries);
@@ -170,6 +173,10 @@ type Open<'a> = [&'a [String]];
 
 struct Emitter<'a> {
 	opts: &'a RenderOptions,
+	types: &'a [TypeDef],
+	/// The named types being expanded, outermost first: a name already here leads back to
+	/// itself.
+	expanding: Vec<String>,
 	/// SDK names the output uses, recorded where each is produced.
 	used: BTreeSet<&'static str>,
 }
@@ -192,12 +199,6 @@ impl Emitter<'_> {
 			| Kind::Timestamp
 			| Kind::Interval
 			| Kind::BigDecimal
-			| Kind::Enum {
-				..
-			}
-			| Kind::Named {
-				..
-			}
 			| Kind::Unknown {
 				..
 			} => "unknown".to_string(),
@@ -278,6 +279,26 @@ impl Emitter<'_> {
 				let item = self.kind(item, open);
 				or_undefined(item)
 			}
+			// Repeated labels are the same string, so a repeat adds nothing to the union.
+			Kind::Enum {
+				labels,
+			} => {
+				let mut rendered: Vec<String> = Vec::new();
+				for label in labels {
+					let text = ts_string(label);
+					if !rendered.contains(&text) {
+						rendered.push(text);
+					}
+				}
+				if rendered.is_empty() {
+					"never".to_string()
+				} else {
+					rendered.join(" | ")
+				}
+			}
+			Kind::Named {
+				name,
+			} => self.named(name, open),
 			Kind::Union {
 				variants,
 			} => {
@@ -321,6 +342,22 @@ impl Emitter<'_> {
 			return self.note("Geometry").to_string();
 		}
 		members.into_iter().map(|class| self.note(class)).collect::<Vec<_>>().join(" | ")
+	}
+
+	/// A `DEFINE TYPE` name, expanded inline: the module declares no alias for it. A name `types`
+	/// does not define, or one that leads back to itself, is `unknown`.
+	fn named(&mut self, name: &str, open: &Open<'_>) -> String {
+		let types = self.types;
+		let Some(def) = types.iter().find(|def| def.name == name) else {
+			return "unknown".to_string();
+		};
+		if self.expanding.iter().any(|n| n == name) {
+			return "unknown".to_string();
+		}
+		self.expanding.push(name.to_string());
+		let text = self.kind(&def.kind, open);
+		self.expanding.pop();
+		text
 	}
 
 	fn literal(&mut self, literal_type: LiteralType, value: &LiteralValue) -> String {
@@ -533,6 +570,8 @@ mod tests {
 	fn emitter(opts: &RenderOptions) -> Emitter<'_> {
 		Emitter {
 			opts,
+			types: &[],
+			expanding: Vec::new(),
 			used: BTreeSet::new(),
 		}
 	}
@@ -550,13 +589,13 @@ mod tests {
 	}
 
 	fn render_default(raw: Value) -> String {
-		render(&entries(raw), &RenderOptions::default())
+		render(&entries(raw), &[], &RenderOptions::default())
 	}
 
 	/// A single statement entry's slot, rendered.
 	fn slot(opts: &RenderOptions, statement: Value) -> String {
 		let query = json!([{ "key": "q", "text": "q", "statements": [statement] }]);
-		render(&entries(query), opts)
+		render(&entries(query), &[], opts)
 	}
 
 	fn int() -> Value {
@@ -667,6 +706,46 @@ mod tests {
 	}
 
 	#[test]
+	fn the_4_x_kinds() {
+		assert_eq!(value(json!({ "kind": "int", "width": 64, "signed": false })), "number");
+		assert_eq!(value(json!({ "kind": "float", "width": 16 })), "number");
+		for kind in ["date", "time", "timestamp", "interval", "bigdecimal"] {
+			assert_eq!(value(json!({ "kind": kind })), "unknown", "{kind}");
+		}
+		assert_eq!(
+			value(json!({ "kind": "enum", "labels": ["low", "high", "low", "it's"] })),
+			r#""low" | "high" | "it's""#
+		);
+		assert_eq!(value(json!({ "kind": "enum", "labels": [] })), "never");
+	}
+
+	#[test]
+	fn a_named_kind_is_expanded_from_types() {
+		let types: Vec<TypeDef> = serde_json::from_value(json!([
+			{ "name": "money", "kind": { "kind": "decimal" } },
+			{ "name": "tree", "kind": { "kind": "objectLiteral", "fields": [
+				{ "name": "children", "optional": false,
+					"kind": { "kind": "array", "item": { "kind": "named", "name": "tree" } } },
+				{ "name": "price", "optional": true, "kind": { "kind": "named", "name": "money" } },
+			] } },
+		]))
+		.expect("types");
+		let opts = RenderOptions::default();
+		let mut emitter = Emitter {
+			types: &types,
+			..emitter(&opts)
+		};
+		let mut render = |raw: Value| emitter.kind(&kind_of(raw), &[]);
+		assert_eq!(render(json!({ "kind": "named", "name": "money" })), "Decimal");
+		// A name that leads back to itself stops at `unknown`.
+		assert_eq!(
+			render(json!({ "kind": "named", "name": "tree" })),
+			"{ children: Array<unknown>; price?: Decimal }"
+		);
+		assert_eq!(render(json!({ "kind": "named", "name": "absent" })), "unknown");
+	}
+
+	#[test]
 	fn literals() {
 		let literal = |literal_type: &str, raw: Value| {
 			value(json!({ "kind": "literal", "type": literal_type, "value": raw }))
@@ -773,7 +852,7 @@ mod tests {
 			hints: HintStyle::Unknown,
 			..RenderOptions::default()
 		};
-		let out = render(&entries(raw.clone()), &opts);
+		let out = render(&entries(raw.clone()), &[], &opts);
 		assert!(out.contains("result: [unknown, number]"), "{out}");
 		let out = render_default(raw);
 		assert!(out.contains("result: [string, number]"), "{out}");
@@ -888,7 +967,7 @@ mod tests {
 			sdk_package: "@scope/surrealdb".into(),
 			..RenderOptions::default()
 		};
-		let out = render(&[], &opts);
+		let out = render(&[], &[], &opts);
 		assert!(out.contains("from \"@scope/surrealdb\";"), "{out}");
 	}
 
