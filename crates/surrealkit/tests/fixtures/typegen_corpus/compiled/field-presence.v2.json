@@ -1,6 +1,6 @@
 {
   "version": 2,
-  "semanticDigest": "sha256:30d1a5dcdf5d738a7b20e91f48e140ff6309da62c875c69df4112004ab919d8b",
+  "semanticDigest": "sha256:299548cede4bcbc1040fa3f1bb9310b5cbe887ac41289c1a406faee0d35d5984",
   "provenance": {
     "generator": {
       "name": "surrealkit",
@@ -20,7 +20,7 @@
       "files": [
         {
           "path": "semantics/field_presence.defines.surql",
-          "sha256": "03d793ac72fb1c8d600b1ac64ae3db4383cb577dc16158dfa0b062f25e367d73"
+          "sha256": "12178a192db8a1c0c21d1f13968728665c9ca718c07115f65db3e4df75e4cedb"
         }
       ]
     },
@@ -120,6 +120,103 @@
       "indexes": [],
       "events": [],
       "define": "DEFINE TABLE e TYPE RELATION IN p OUT p SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "ip",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "need"
+          ],
+          "kind": {
+            "kind": "object"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD need ON ip TYPE object PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "need",
+            "x"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD need.x ON ip TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "pref"
+          ],
+          "kind": {
+            "kind": "object"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "always",
+            "expr": "{  }"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD pref ON ip TYPE object DEFAULT ALWAYS {  } PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "pref",
+            "locale"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD pref.locale ON ip TYPE none | string PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE ip TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
     },
     {
       "name": "m",
@@ -527,6 +624,62 @@
       "indexes": [],
       "events": [],
       "define": "DEFINE TABLE p TYPE ANY SCHEMALESS PERMISSIONS NONE"
+    },
+    {
+      "name": "up",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "obj"
+          ],
+          "kind": {
+            "kind": "object"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD obj ON up TYPE object PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "obj",
+            "a"
+          ],
+          "kind": {
+            "kind": "int"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD obj.a ON up TYPE int PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE up TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
     }
   ],
   "functions": [],
