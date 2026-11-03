@@ -14,6 +14,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
         --manifest-path crates/surrealkit/Cargo.toml \
         --locked \
         --release \
+        --features mcp \
     && cp target/release/surrealkit /surrealkit
 
 FROM gcr.io/distroless/cc-debian12:nonroot

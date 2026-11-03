@@ -218,7 +218,9 @@ jobs:
                   # VC++ redistributable. Must not be set for linux-gnu, where it
                   # attempts a static glibc.
                   RUSTFLAGS: ${{ runner.os == 'Windows' && '-C target-feature=+crt-static' || '' }}
-              run: cargo build --manifest-path crates/surrealkit/Cargo.toml --locked --release --target ${{ matrix.target }}
+              # `--features mcp` is additive to the default set, so the published binary
+              # is kv-mem + cli + mcp and `surrealkit mcp` works straight after install.
+              run: cargo build --manifest-path crates/surrealkit/Cargo.toml --locked --release --features mcp --target ${{ matrix.target }}
 
             # The only place that proves a release-profile binary for this
             # target starts and answers the launcher's probe: the launcher

@@ -142,10 +142,13 @@ impl RunnerContext {
 		for job in jobs {
 			let permit = semaphore.clone().acquire_owned().await?;
 			let ctx = self.clone_for_task();
-			joinset.spawn(async move {
+			// `propagate`: task-locals are not inherited across a spawn, so
+			// without it every line a parallel suite logs would be dropped by a
+			// caller capturing progress (the MCP server does exactly that).
+			joinset.spawn(crate::progress::propagate(async move {
 				let _permit = permit;
 				ctx.run_suite(job).await
-			});
+			}));
 		}
 
 		while let Some(joined) = joinset.join_next().await {
