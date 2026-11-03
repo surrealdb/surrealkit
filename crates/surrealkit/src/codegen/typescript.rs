@@ -421,26 +421,29 @@ impl Emitter<'_> {
 		out
 	}
 
-	/// One element per statement that has a slot in the response, in source order. A statement
-	/// without a kind (`BEGIN`, `COMMIT`, `CANCEL`) has none, so the SDK response skips it.
+	/// One element per statement, in source order: every statement, `BEGIN` and `COMMIT`
+	/// included, has a slot in the response.
 	fn result_tuple(&mut self, statements: &[QueryStatement]) -> String {
 		let slots: Vec<String> =
-			statements.iter().filter_map(|statement| self.statement(statement)).collect();
+			statements.iter().map(|statement| self.statement(statement)).collect();
 		format!("[{}]", slots.join(", "))
 	}
 
-	fn statement(&mut self, statement: &QueryStatement) -> Option<String> {
-		let kind = statement.kind.as_ref()?;
+	/// A statement's slot. One the engine did not type is `unknown`.
+	fn statement(&mut self, statement: &QueryStatement) -> String {
+		let Some(kind) = statement.kind.as_ref() else {
+			return "unknown".to_string();
+		};
 		if statement.certainty == Certainty::Hint && self.opts.hints == HintStyle::Unknown {
-			return Some("unknown".to_string());
+			return "unknown".to_string();
 		}
 		let open: Vec<&[String]> = statement.open.iter().map(Vec::as_slice).collect();
 		let text = self.kind(kind, &open);
-		Some(if statement.optional {
+		if statement.optional {
 			or_undefined(text)
 		} else {
 			text
-		})
+		}
 	}
 
 	/// The named-parameter object. This is not a property position: the `?` answers whether the
@@ -903,16 +906,21 @@ mod tests {
 	}
 
 	#[test]
-	fn statements_without_a_slot_are_dropped_from_the_tuple() {
+	fn every_statement_has_a_slot_and_an_untyped_one_is_unknown() {
+		let none = json!({ "kind": "none" });
 		let out = render_default(json!([{
-			"key": "k", "text": "BEGIN; LET $x = 1; RETURN $x; COMMIT", "statements": [
-				{ "optional": false, "certainty": "fact", "exact": true },
-				{ "kind": { "kind": "none" }, "optional": false, "certainty": "fact", "exact": true },
+			"key": "k", "text": "BEGIN; LET $x = 1; RETURN $x; RETURN $y; COMMIT", "statements": [
+				{ "kind": none, "optional": false, "certainty": "fact", "exact": true },
+				{ "kind": none, "optional": false, "certainty": "fact", "exact": true },
 				{ "kind": int(), "optional": false, "certainty": "fact", "exact": true },
-				{ "optional": false, "certainty": "fact", "exact": true },
+				{ "optional": false, "certainty": "hint", "exact": false },
+				{ "kind": none, "optional": false, "certainty": "fact", "exact": true },
 			]
 		}]));
-		assert!(out.contains("result: [undefined, number]"), "{out}");
+		assert!(
+			out.contains("result: [undefined, undefined, number, unknown, undefined]"),
+			"{out}"
+		);
 	}
 
 	#[test]

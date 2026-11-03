@@ -173,11 +173,15 @@ export async function main() {
     void bio;
   }
 
-  const [, counted] = await db.query(
+  // One slot per statement: BEGIN and LET first, COMMIT last.
+  const [begun, , counted, , committed] = await db.query(
     "BEGIN; LET $n = 1; SELECT count() FROM post GROUP ALL; SELECT * FROM $__host0; COMMIT;",
   );
   const n: number = counted[0].count;
+  const done: undefined = committed;
+  void begun;
   void n;
+  void done;
 
   const [events] = await db.query("SELECT * FROM event");
   const extra: unknown = events[0].anything;

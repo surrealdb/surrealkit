@@ -216,10 +216,10 @@ pub struct QueryTypes {
 	pub params: Vec<QueryParam>,
 }
 
-/// The type of one top-level statement's slot in the response.
+/// The type of one top-level statement's slot in the response. Every statement has one.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StatementType {
-	/// `None` for a statement with no slot in the response (`BEGIN`, `COMMIT`, `CANCEL`).
+	/// `None` when the engine did not type the statement; it is then approximate.
 	#[serde(default)]
 	pub kind: Option<String>,
 	#[serde(default)]

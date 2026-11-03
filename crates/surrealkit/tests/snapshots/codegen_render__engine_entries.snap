@@ -105,7 +105,10 @@ expression: all
         "text": "BEGIN; LET $n = 1; SELECT count() FROM post GROUP ALL; SELECT * FROM $__host0; COMMIT;",
         "statements": [
           {
-            "optional": false,
+            "kind": {
+              "kind": "none"
+            },
+            "optional": true,
             "certainty": "fact",
             "exact": true,
             "open": []
@@ -153,7 +156,10 @@ expression: all
             "open": []
           },
           {
-            "optional": false,
+            "kind": {
+              "kind": "none"
+            },
+            "optional": true,
             "certainty": "fact",
             "exact": true,
             "open": []

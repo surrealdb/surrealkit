@@ -111,6 +111,9 @@
     "text": "BEGIN; LET $n = 1; SELECT count() FROM post GROUP ALL; SELECT * FROM $__host0; COMMIT;",
     "statements": [
       {
+        "kind": {
+          "kind": "none"
+        },
         "optional": false,
         "certainty": "fact",
         "exact": true,
@@ -159,6 +162,9 @@
         "open": []
       },
       {
+        "kind": {
+          "kind": "none"
+        },
         "optional": false,
         "certainty": "fact",
         "exact": true,

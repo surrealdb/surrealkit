@@ -899,8 +899,8 @@
       "text": "BEGIN; LET $n = 1; SELECT count() FROM post GROUP ALL; SELECT * FROM $__host0; COMMIT;",
       "statements": [
         {
-          "kind": null,
-          "kind_value": null,
+          "kind": "none",
+          "kind_value": "None",
           "certainty": "fact",
           "support": {
             "exact": true
@@ -983,8 +983,8 @@
           }
         },
         {
-          "kind": null,
-          "kind_value": null,
+          "kind": "none",
+          "kind_value": "None",
           "certainty": "fact",
           "support": {
             "exact": true
