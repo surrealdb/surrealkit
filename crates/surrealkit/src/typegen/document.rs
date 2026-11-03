@@ -206,7 +206,9 @@ pub enum Kind {
 	Union {
 		variants: Vec<Kind>,
 	},
-	/// Kind text that could not be structured; always with a `kind-unrecognized` error.
+	/// Kind text the document does not structure; always with a diagnostic: a
+	/// `kind-unrecognized` error when it could not be parsed, a `kind-not-represented` warning
+	/// when it parsed but names a SurrealDB 4.x kind with no node (`date`, `enum<…>`, …).
 	Unknown {
 		source: String,
 	},

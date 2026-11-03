@@ -939,6 +939,67 @@ mod corpus {
 		assert_eq!(serde_json::to_value(&function.returns).unwrap()["kind"], "int");
 	}
 
+	/// The 4.0 kinds with no node in the document read as `unknown` with a warning, so a schema
+	/// that uses them compiles under strict; the warning names each field and its exact text.
+	#[tokio::test]
+	async fn the_four_oh_kinds_compile_as_unknown_with_warnings() {
+		let compiled = compile(
+			&one_file(
+				"DEFINE TABLE t SCHEMAFULL;\n\
+				 DEFINE FIELD d ON t TYPE date;\n\
+				 DEFINE FIELD tm ON t TYPE time;\n\
+				 DEFINE FIELD ts ON t TYPE timestamp;\n\
+				 DEFINE FIELD iv ON t TYPE interval;\n\
+				 DEFINE FIELD bd ON t TYPE bigdecimal;\n\
+				 DEFINE FIELD en ON t TYPE enum<'a', \"it's\", 'x,y>z'>;\n\
+				 DEFINE FIELD many ON t TYPE array<enum<'a'>> | none;\n\
+				 DEFINE FIELD ok ON t TYPE i8 | string;\n",
+			),
+			&CompileOpts::default(),
+		)
+		.await
+		.expect("compile");
+		let doc = &compiled.document;
+		assert!(!doc.has_errors(), "{:?}", doc.diagnostics);
+		assert!(
+			compiled.v1_diagnostics.iter().all(|d| !d.is_error()),
+			"{:?}",
+			compiled.v1_diagnostics
+		);
+		let warned: Vec<(String, String)> = doc
+			.diagnostics
+			.iter()
+			.filter(|d| d.code == codes::KIND_NOT_REPRESENTED)
+			.map(|d| {
+				assert_eq!(d.severity, Severity::Warning);
+				(d.field.clone().expect("field").join("."), d.source.clone())
+			})
+			.collect();
+		assert_eq!(
+			warned,
+			[
+				("bd", "bigdecimal"),
+				("d", "date"),
+				("en", "enum<'a', \"it's\", 'x,y>z'>"),
+				("iv", "interval"),
+				("many.*", "enum<'a'>"),
+				("many", "array<enum<'a'>> | none"),
+				("tm", "time"),
+				("ts", "timestamp"),
+			]
+			.map(|(f, s)| (f.to_string(), s.to_string()))
+		);
+		let kind = |name: &str| {
+			let field = doc.tables[0].fields.iter().find(|f| f.path == [name]).expect(name);
+			serde_json::to_value(&field.kind).expect("json")
+		};
+		assert_eq!(kind("d"), serde_json::json!({"kind": "unknown", "source": "date"}));
+		assert_eq!(
+			kind("ok"),
+			serde_json::json!({"kind": "union", "variants": [{"kind": "int"}, {"kind": "string"}]})
+		);
+	}
+
 	#[tokio::test]
 	async fn a_param_with_a_changing_value_is_an_error() {
 		let doc = compile(

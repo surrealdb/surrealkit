@@ -187,6 +187,9 @@ fn lower(ty: &FieldType) -> Kind {
 				fields,
 			}
 		}
+		// Also what the SurrealDB 4.x kinds without a node (`date`, `enum<…>`, a `DEFINE TYPE`
+		// name) lower to. That is sound: every value fits `unknown`, so a consumer that treats
+		// the field as unknown never rejects a value the engine accepts.
 		FieldType::Unknown {
 			source,
 		} => Kind::Unknown {
@@ -420,12 +423,41 @@ mod tests {
 	}
 
 	#[test]
+	fn four_oh_kinds_without_a_node_are_unknown_with_a_warning() {
+		for text in
+			["date", "time", "timestamp", "interval", "bigdecimal", "enum<'a', 'b'>", "mood"]
+		{
+			let parsed = parse_top(text);
+			assert_eq!(
+				serde_json::to_value(&parsed.kind).unwrap(),
+				json!({"kind": "unknown", "source": text})
+			);
+			assert!(!parsed.optional);
+			assert_eq!(parsed.problems.len(), 1, "{text}");
+			let diagnostic = parsed.problems[0].diagnostic(text);
+			assert_eq!(diagnostic.code, "kind-not-represented");
+			assert!(!diagnostic.is_error());
+		}
+		// NONE still becomes optionality around them, and they sit in unions like any kind.
+		let parsed = parse_top("none | date | string");
+		assert!(parsed.optional);
+		assert_eq!(
+			serde_json::to_value(&parsed.kind).unwrap(),
+			json!({"kind": "union", "variants": [
+				{"kind": "string"},
+				{"kind": "unknown", "source": "date"},
+			]})
+		);
+	}
+
+	#[test]
 	fn unparseable_text_is_unknown_with_a_problem() {
-		let parsed = parse_top("array<frob>");
+		let parsed = parse_top("array<frob<int>>");
 		assert_eq!(parsed.problems.len(), 1);
 		assert_eq!(
 			serde_json::to_value(&parsed.kind).unwrap(),
-			json!({"kind": "array", "item": {"kind": "unknown", "source": "frob"}})
+			json!({"kind": "array", "item": {"kind": "unknown", "source": "frob<int>"}})
 		);
+		assert_eq!(parsed.problems[0].diagnostic("array<frob<int>>").code, "kind-unrecognized");
 	}
 }

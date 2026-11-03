@@ -347,7 +347,7 @@
 			}
 		},
 		"kindUnknown": {
-			"description": "Kind text the parser could not structure. Always paired with an error diagnostic `kind-unrecognized`.",
+			"description": "Kind text the document does not structure. Always paired with a diagnostic: the error `kind-unrecognized` when the text could not be parsed, the warning `kind-not-represented` when it is a SurrealDB 4.x kind with no node.",
 			"type": "object",
 			"additionalProperties": false,
 			"required": ["kind", "source"],
