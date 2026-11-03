@@ -3,16 +3,16 @@
 /** What these modules were generated from, and how. */
 export const manifest = {
 	store: "presence",
-	semanticDigest: "sha256:527262a64ab7f7c89506f2d104d32b0ef3086d303606ff20977b625f2c6a3309",
+	semanticDigest: "sha256:299548cede4bcbc1040fa3f1bb9310b5cbe887ac41289c1a406faee0d35d5984",
 	emitter: { name: "effect-surrealkit", version: "0.1.0" },
 	profile: { int: "safe-number", datetime: "sdk" },
 	peers: { effect: "4.0.6", surrealdb: "2.1.1" },
 	source: {
 		kind: "compile",
 		modules: ["field_presence"],
-		surrealkit: "1.0.0-beta.6",
-		engine: "3.3.0",
-		adapter: "structure-3.3",
+		surrealkit: "1.0.0-beta.7",
+		engine: "4.0.0",
+		adapter: "structure-4.0",
 	},
 	tables: ["e", "ip", "m", "oa", "p", "up"],
 	functions: [],
