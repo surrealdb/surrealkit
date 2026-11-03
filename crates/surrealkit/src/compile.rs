@@ -91,7 +91,9 @@ pub struct Compiled {
 /// are accepted but name no engine feature: the embedded engine checks only `surrealism`, so
 /// `DEFINE BUCKET`, `DEFINE CONFIG GRAPHQL` and the GQL front-end need no capability. They
 /// stay in the second element, which is what `provenance.capabilities` records.
-fn experimental_features(names: &[String]) -> Result<(Vec<ExperimentalFeature>, Vec<String>)> {
+pub(crate) fn experimental_features(
+	names: &[String],
+) -> Result<(Vec<ExperimentalFeature>, Vec<String>)> {
 	let mut canonical: Vec<String> = names.iter().map(|n| n.trim().to_ascii_lowercase()).collect();
 	canonical.sort();
 	canonical.dedup();
@@ -112,7 +114,7 @@ fn experimental_features(names: &[String]) -> Result<(Vec<ExperimentalFeature>, 
 
 /// The capabilities of the compile engine: the defaults (every non-scripting function), no
 /// network target, no scripting, and only the experimental features given.
-fn capabilities(features: &[ExperimentalFeature]) -> Result<Capabilities> {
+pub(crate) fn capabilities(features: &[ExperimentalFeature]) -> Result<Capabilities> {
 	Capabilities::new()
 		.with_scripting(false)
 		.with_no_net_targets_allowed()
@@ -129,8 +131,8 @@ pub fn normalized_sha256(sql: &str) -> String {
 	hex::encode(Sha256::digest(text.as_bytes()))
 }
 
-/// Open the hermetic engine.
-async fn engine(features: &[ExperimentalFeature]) -> Result<Surreal<Any>> {
+/// Open the hermetic engine, with `name` as its namespace and database.
+pub(crate) async fn engine(features: &[ExperimentalFeature], name: &str) -> Result<Surreal<Any>> {
 	let config = Config::new().capabilities(capabilities(features)?);
 	let db = connect(("mem://", config)).await.map_err(|err| {
 		anyhow!(
@@ -138,8 +140,50 @@ async fn engine(features: &[ExperimentalFeature]) -> Result<Surreal<Any>> {
 			 default): {err}"
 		)
 	})?;
-	db.use_ns("compile").use_db("compile").await.context("selecting the compile database")?;
+	db.use_ns(name).use_db(name).await.with_context(|| format!("selecting the {name} database"))?;
 	Ok(db)
+}
+
+/// Why [`apply_statement`] did not apply a statement.
+#[cfg(feature = "analyze")]
+#[derive(Debug)]
+pub(crate) enum Rejection {
+	/// A template variable the statement uses is not set.
+	Variable(anyhow::Error),
+	/// The statement is one `sync` refuses (a `REMOVE`, a non-`DEFINE`, `DEFINE
+	/// NAMESPACE`) or that SurrealKit cannot prepare.
+	Refused(anyhow::Error),
+	/// The engine returned an error for it.
+	Engine(String),
+}
+
+/// Apply one statement to `db` the way [`compile`] applies a file: the checks `sync` makes of
+/// the statement as written, then the template variables, then [`prepare_schema_sql`] (every
+/// `DEFINE` but a sequence as `OVERWRITE`), then the engine, where a statement that fails is
+/// an error. `path` names the file in the messages.
+#[cfg(feature = "analyze")]
+pub(crate) async fn apply_statement(
+	db: &Surreal<Any>,
+	path: &str,
+	statement: &str,
+	vars: &TemplateVars,
+) -> std::result::Result<(), Rejection> {
+	let as_written = SchemaFile {
+		path: path.to_string(),
+		hash: String::new(),
+		sql: statement.to_string(),
+	};
+	crate::schema_state::parse_schema_statements(&as_written, false).map_err(Rejection::Refused)?;
+	let sql = vars.apply(statement).map_err(Rejection::Variable)?;
+	let prepared = prepare_schema_sql(&sql).map_err(Rejection::Refused)?;
+	for warning in &prepared.warnings {
+		log::warn!("{path}: {warning}");
+	}
+	db.query(prepared.sql.as_str())
+		.await
+		.and_then(|response| response.check())
+		.map_err(|err| Rejection::Engine(err.to_string()))?;
+	Ok(())
 }
 
 /// A `definition-duplicate` warning for every entity the files define more than once.
@@ -318,7 +362,7 @@ fn engine_mismatch(expected: Option<&str>, version: &str) -> Result<Option<Diagn
 /// Compile `modules` (already in dependency order) into schema document v2.
 pub async fn compile(modules: &[CompileModule], opts: &CompileOpts) -> Result<Compiled> {
 	let (features, experimental) = experimental_features(&opts.experimental)?;
-	let db = engine(&features).await?;
+	let db = engine(&features, "compile").await?;
 
 	let files: Vec<&SchemaFile> = modules.iter().flat_map(|m| m.files.iter()).collect();
 	let mut diagnostics = duplicates(&files)?;

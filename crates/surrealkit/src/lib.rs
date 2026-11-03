@@ -1,5 +1,6 @@
 #![doc = include_str!("../README.md")]
 
+pub mod check;
 pub mod compat;
 pub mod compile;
 pub mod config;
@@ -34,6 +35,8 @@ pub mod variables;
 
 // Re-exported dependencies used in the public API surface.
 pub use anyhow;
+// The `[analyze]` section of surrealkit.toml.
+pub use check::AnalyzeConfig;
 // Connecting.
 pub use config::{AuthLevel, DbCfg, DbOverrides, connect};
 // Rollouts (the staged, reversible path).
