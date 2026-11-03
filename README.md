@@ -751,7 +751,8 @@ With code scanning:
 ```
 
 (`surreal kit check` is the same command.) `--format sarif` exits 1 on an error, so the
-upload step needs `if: always()`; the findings appear as code-scanning alerts.
+upload step needs `if: always()`; the findings appear as code-scanning alerts. The upload
+needs the job permission `security-events: write`.
 
 The `check` and `watch` commands, and the `surrealkit::check` library module, are the
 `analyze` cargo feature, on by default. `cargo install surrealkit --no-default-features
