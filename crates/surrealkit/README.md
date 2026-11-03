@@ -12,7 +12,7 @@ The library is useful when you want schema management to happen inside your proc
 
 ```toml
 [dependencies]
-surrealkit = "1.0.0-beta.6"
+surrealkit = "1.0.0-beta.7"
 ```
 
 ---
@@ -27,11 +27,33 @@ only it needs — `clap`, `inquire`, `rustls` (and its `aws-lc-rs` backend) and
 
 ```toml
 [dependencies]
-surrealkit = { version = "1.0.0-beta.6", default-features = false, features = ["kv-mem"] }
+surrealkit = { version = "1.0.0-beta.7", default-features = false, features = ["kv-mem"] }
 ```
 
 Storage engines: `kv-mem` (default), `kv-surrealkv`, `kv-rocksdb`, and `embedded`
 for all three. Remote connections over HTTP need no feature.
+
+The `templates` feature carries `surrealkit init`'s template engine (`cli` enables
+it). The `mcp` feature builds the Model Context Protocol server. `mcp` deliberately
+does not imply `cli`, so you can embed the server without pulling clap, inquire or
+rustls into your tree:
+
+```toml
+[dependencies]
+surrealkit = { version = "1.0.0-beta.7", default-features = false, features = ["mcp"] }
+```
+
+```rust,ignore
+use surrealkit::config::DbOverrides;
+use surrealkit::mcp::{ServerConfig, SurrealKitMcp, serve_stdio};
+use surrealkit::progress::{CaptureLogger, StderrLogger};
+
+// stdout is the JSON-RPC channel: install a logger that never writes there.
+let _ = CaptureLogger::install(Box::new(StderrLogger), log::LevelFilter::Info, false);
+
+let config = ServerConfig::new(std::env::current_dir()?, DbOverrides::default(), vec![])?;
+serve_stdio(SurrealKitMcp::new(config)).await?;
+```
 
 SurrealKit builds against SurrealDB 3.3, so the embedded engines are 3.3. It
 works with servers from 3.2.0 on. It needs Rust 1.95.
@@ -63,6 +85,18 @@ RUST_LOG=surrealkit=info cargo run
 
 Errors are still returned as `Result`; logging is for progress, not for failure
 reporting.
+
+### Capturing progress
+
+[`progress::CaptureLogger`] routes records to a task-local buffer when one is
+active and to a fallback logger otherwise, which is how the MCP server returns the
+same progress lines the CLI prints without writing them to stdout. Because
+`log::set_logger` can only be called once per process, a consumer that wants both
+should install `CaptureLogger` with their own logger as the fallback.
+
+Task-locals are not inherited across `tokio::spawn`, so library code that spawns
+wraps its futures in [`progress::propagate`], or captured output from inside them
+would be silently lost.
 
 ## Concepts: sync vs rollout
 
@@ -99,7 +133,7 @@ SurrealKit works against an in-process SurrealDB such as `mem://`, `surrealkv://
 
 ```toml
 [dependencies]
-surrealkit = "1.0.0-beta.6"
+surrealkit = "1.0.0-beta.7"
 surrealdb = { version = "3", features = ["kv-surrealkv"] }
 ```
 

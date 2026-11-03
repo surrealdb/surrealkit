@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use crate::constants::{fixtures_dir, schema_dir, seed_dir, suites_dir};
 use anyhow::{Context, Result, bail};
-use surrealkit::constants::{fixtures_dir, schema_dir, seed_dir, suites_dir};
 
 use super::manifest::{Feature, TemplateManifest};
 use super::source::TemplateFiles;

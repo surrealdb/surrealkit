@@ -7,8 +7,8 @@ produces the same database metadata, apart from the safety refusal for an empty
 filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
-Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and the
-release after it one more (13). Unreleased changes are 14 to 16.
+Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and
+1.0.0-beta.7 two more (13 and 14). Unreleased changes are 15 to 17.
 Upgrading from 0.7.0 or any 1.0 beta carries existing state forward; CI checks
 that against every published release.
 
@@ -301,7 +301,7 @@ Nothing to do. `[typegen]` takes a `filename` for the file inside the
 itself, e.g. `typescript = "src/types/database.ts"` (#75).
 `surrealkit typegen --typescript <path>` overrides it for one run.
 
-### 13. `-v` is the version, and failures read `error: …` (after 1.0.0-beta.6)
+### 13. `-v` is the version, and failures read `error: …` (1.0.0-beta.7)
 
 SurrealKit is now also `surreal kit`, a component of the `surreal` CLI, and
 reports its version and its failures the way every component does.
@@ -313,7 +313,16 @@ reports its version and its failures the way every component does.
   unchanged.
 - `--json` is new: see [Version and output for scripts](README.md#version-and-output-for-scripts).
 
-### 14. Typegen reads the selected target and writes atomically (unreleased)
+### 14. A rollout id has to be a plain name (1.0.0-beta.7)
+
+A manifest's `id` names its directory, `rollouts/<id>/`, which `rollout
+discard` deletes. An id that contains `/` or `\`, or is `.` or `..`, is now
+refused when the manifest is loaded, because `id = "../../src"` made `rollout
+discard --keep-snapshots` delete the project's `src/`. Every id `rollout plan`
+writes is already a plain name, so this only affects a manifest whose id was
+edited by hand.
+
+### 15. Typegen reads the selected target and writes atomically (unreleased)
 
 `surrealkit typegen` used to connect through the ambient connection even when
 `surrealkit.toml` declared targets, so `--target` and `primary = true` were
@@ -333,7 +342,7 @@ formatter only accepts files matching a pattern, make sure that name matches
 too. New opt-ins: `[typegen] strict`, `[typegen] generated_at = false`, and
 `surrealkit typegen --check`.
 
-### 15. Typegen parses every SurrealDB 3.x kind (unreleased)
+### 16. Typegen parses every SurrealDB 3.x kind (unreleased)
 
 These are changes to v1 output that need no opt-in: they are parser fixes.
 `schema.json` and the generated TypeScript change only where the old parser was
@@ -361,20 +370,20 @@ handle, and `FieldType::Literal` has a `literal_type` field. Anything typegen
 still cannot represent is reported as a `Diagnostic`
 (`typegen::generate_with_diagnostics`), and `strict` fails on errors.
 
-### 16. Effect-native typegen (unreleased)
+### 17. Effect-native typegen (unreleased)
 
-Nothing to change. Relative to the parser fixes in entry 15 (and the behaviour
-changes in entry 14), every part is opt-in: with no new configuration,
-`schema.json` and the generated TypeScript interfaces are what entry 15 describes.
+Nothing to change. Relative to the parser fixes in entry 16 (and the behaviour
+changes in entry 15), every part is opt-in: with no new configuration,
+`schema.json` and the generated TypeScript interfaces are what entry 16 describes.
 
-What changes **without** opting in, across entries 14 and 15 and the tester
+What changes **without** opting in, across entries 15 and 16 and the tester
 section (everything else below is opt-in):
 
 - Unknown keys in `[typegen]` are an error, and `typegen` connects to the
-  selected (or only declared) target instead of the ambient connection (entry 14).
-- The formatter runs on a temporary sibling file, not the output file (entry 14).
+  selected (or only declared) target instead of the ambient connection (entry 15).
+- The formatter runs on a temporary sibling file, not the output file (entry 15).
 - v1 `schema.json` and the TypeScript interfaces change where the old parser was
-  wrong (entry 15), including a field whose VALUE, ASSERT or PERMISSIONS reads a
+  wrong (entry 16), including a field whose VALUE, ASSERT or PERMISSIONS reads a
   field named like a clause keyword (`type`, `value`, `comment`), which used to
   be retyped; `FieldType` and `PrimitiveType` gain variants for library users.
 - `surrealkit test --schema-from` wins over a suite's `schema_from`, and a suite
@@ -626,6 +635,22 @@ PrepareWarning}`, `tester::SchemaSource`, `typegen::typescript_file`.
 `Rollout::new(spec, files)` runs a frozen spec (one with `FrozenFile` entries)
 only with `.folder(..)`, which says where `rollouts/<id>/` is. Without it, start
 fails before recording anything.
+
+From 1.0.0-beta.7:
+
+| 1.0.0-beta.6 | 1.0.0-beta.7 |
+|---|---|
+| `typegen::run_typegen(db, folder, ns, db, opts)` | `run_typegen(db, folder, opts)`; the namespace and database come from the connection |
+| `sync::SyncOpts { .. }` | gains `typegen_json_out` |
+| `variables::TypegenConfig { .. }` | gains `json`; `json_path()` resolves the file |
+| `tester::run_test(..)` | unchanged; `run_test_to(.., format, out)` writes the report to any writer |
+
+New: `tester::{run_test_report, ReportFormat, RunReport, SuiteReport, CaseReport,
+AssertionReport}`, `typegen::write_json`, `selection::Selection` (the module and
+target matrix the CLI resolves), `progress::{CaptureLogger, StderrLogger,
+ProgressSink, capture, propagate}`, `paths::safe_join`, and two modules behind
+features: `templates` (the `init` template engine, enabled by `cli`) and `mcp`
+(the MCP server).
 
 Those last two are internal plumbing for the pre-1.0.0-beta.2 manifest fallback
 and are now `#[doc(hidden)]`. They were added in beta.2 and the fallback goes in

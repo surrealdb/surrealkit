@@ -3,7 +3,7 @@
 Status: **draft contract** for the Effect-native typegen feature. The document is opt-in:
 `schema.json` stays at version 1 unless a project sets `[typegen] schema_version = 2` (or
 uses the new `surrealkit compile` command). Version 1 output is unchanged by this contract;
-it changes only where the v1 parser was wrong, as listed in `MIGRATING.md` entry 15.
+it changes only where the v1 parser was wrong, as listed in `MIGRATING.md` entry 16.
 
 Schema document v2 is the interchange format between SurrealKit, which understands
 SurrealQL, and code generators, which do not. A generator reads the document and

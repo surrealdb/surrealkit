@@ -39,6 +39,13 @@ jobs:
             - name: Lint (library only)
               run: cargo clippy -p surrealkit --lib --no-default-features --features kv-mem --locked -- -D warnings
 
+            # The MCP server must build as a pure library dependency: no clap, no
+            # inquire, no TTY prompting. This is the configuration an embedding
+            # application uses, and it is what stops `mcp` quietly growing a
+            # dependency on `cli`.
+            - name: Lint (library, mcp only)
+              run: cargo clippy -p surrealkit --lib --no-default-features --features mcp,kv-mem --locked -- -D warnings
+
             # Broken intra-doc links render as plain text on docs.rs, so fail on them.
             - name: Docs
               run: cargo doc --workspace --no-deps --all-features --locked
