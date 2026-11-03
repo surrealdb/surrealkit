@@ -7,8 +7,8 @@ produces the same database metadata, apart from the safety refusal for an empty
 filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
-Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and the
-release after it one more (13).
+Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and
+1.0.0-beta.7 one more (13).
 Upgrading from 0.7.0 or any 1.0 beta carries existing state forward; CI checks
 that against every published release.
 
@@ -301,7 +301,7 @@ Nothing to do. `[typegen]` takes a `filename` for the file inside the
 itself, e.g. `typescript = "src/types/database.ts"` (#75).
 `surrealkit typegen --typescript <path>` overrides it for one run.
 
-### 13. `-v` is the version, and failures read `error: …` (after 1.0.0-beta.6)
+### 13. `-v` is the version, and failures read `error: …` (1.0.0-beta.7)
 
 SurrealKit is now also `surreal kit`, a component of the `surreal` CLI, and
 reports its version and its failures the way every component does.
@@ -527,6 +527,22 @@ PrepareWarning}`, `tester::SchemaSource`, `typegen::typescript_file`.
 `Rollout::new(spec, files)` runs a frozen spec (one with `FrozenFile` entries)
 only with `.folder(..)`, which says where `rollouts/<id>/` is. Without it, start
 fails before recording anything.
+
+From 1.0.0-beta.7:
+
+| 1.0.0-beta.6 | 1.0.0-beta.7 |
+|---|---|
+| `typegen::run_typegen(db, folder, ns, db, opts)` | `run_typegen(db, folder, opts)`; the namespace and database come from the connection |
+| `sync::SyncOpts { .. }` | gains `typegen_json_out` |
+| `variables::TypegenConfig { .. }` | gains `json`; `json_path()` resolves the file |
+| `tester::run_test(..)` | unchanged; `run_test_to(.., format, out)` writes the report to any writer |
+
+New: `tester::{run_test_report, ReportFormat, RunReport, SuiteReport, CaseReport,
+AssertionReport}`, `typegen::write_json`, `selection::Selection` (the module and
+target matrix the CLI resolves), `progress::{CaptureLogger, StderrLogger,
+ProgressSink, capture, propagate}`, `paths::safe_join`, and two modules behind
+features: `templates` (the `init` template engine, enabled by `cli`) and `mcp`
+(the MCP server).
 
 Those last two are internal plumbing for the pre-1.0.0-beta.2 manifest fallback
 and are now `#[doc(hidden)]`. They were added in beta.2 and the fallback goes in
