@@ -1,0 +1,13 @@
+{
+  "emitter": "effect",
+  "protocol": 1,
+  "files": [
+    "functions.ts",
+    "ids.ts",
+    "index.ts",
+    "manifest.ts",
+    "member-of.ts",
+    "person.ts",
+    "team.ts"
+  ]
+}

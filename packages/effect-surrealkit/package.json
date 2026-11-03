@@ -1,0 +1,74 @@
+{
+	"name": "effect-surrealkit",
+	"version": "0.1.0",
+	"description": "Effect v4 schemas for SurrealDB values (SDK 2.x), and an Effect emitter for SurrealKit schema documents",
+	"license": "Apache-2.0",
+	"type": "module",
+	"main": "./dist/index.js",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		},
+		"./emitter": {
+			"types": "./dist/emitter.d.ts",
+			"import": "./dist/emitter.js"
+		}
+	},
+	"bin": {
+		"effect-surrealkit": "dist/cli.js"
+	},
+	"files": [
+		"dist",
+		"README.md",
+		"LICENSE"
+	],
+	"sideEffects": false,
+	"engines": {
+		"node": "^20.19.0 || >=22.12.0"
+	},
+	"scripts": {
+		"build": "rm -rf dist && tsup",
+		"clean": "rm -rf dist",
+		"format": "biome check --write .",
+		"prepare": "tsup",
+		"lint": "biome ci .",
+		"test": "vitest run",
+		"test:roundtrip": "node scripts/roundtrip.mjs",
+		"typecheck": "tsc --noEmit && tsc --noEmit -p test/types"
+	},
+	"keywords": [
+		"effect",
+		"schema",
+		"surrealdb",
+		"surrealkit"
+	],
+	"peerDependencies": {
+		"effect": "^4.0.6",
+		"surrealdb": "^2.1.1"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.4.2",
+		"@types/node": "^24.3.0",
+		"ajv": "8.17.1",
+		"effect": "4.0.6",
+		"surrealdb": "2.1.1",
+		"tsup": "^8.2.4",
+		"typescript": "^5.9.2",
+		"vitest": "^3.2.4"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/surrealdb/surrealkit.git",
+		"directory": "packages/effect-surrealkit"
+	},
+	"homepage": "https://github.com/surrealdb/surrealkit/tree/main/packages/effect-surrealkit#readme",
+	"bugs": {
+		"url": "https://github.com/surrealdb/surrealkit/issues"
+	},
+	"publishConfig": {
+		"access": "public"
+	}
+}

@@ -10,7 +10,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::Result;
 
-use super::types::{FieldDef, FieldType, ObjectField, PrimitiveType, SchemaTypes, TableDef};
+use super::types::{
+	FieldDef, FieldType, LiteralType, ObjectField, PrimitiveType, SchemaTypes, TableDef,
+};
 
 pub fn to_json(doc: &SchemaTypes, pretty: bool) -> Result<String> {
 	Ok(if pretty {
@@ -87,20 +89,28 @@ struct Node {
 fn build_field_tree(fields: &[FieldDef]) -> Node {
 	let mut root = Node::default();
 	for field in fields {
-		let segments: Vec<&str> =
-			field.name.split('.').map(str::trim).filter(|s| !s.is_empty()).collect();
+		let segments = path_segments(&field.name);
 		if segments.is_empty() {
 			continue;
 		}
 		// Skip a synthesized-equivalent top-level `id` field.
-		if segments.len() == 1 && segments[0] == "id" {
+		if segments.len() == 1 && segments[0] == ("id".to_string(), false) {
 			continue;
 		}
 
 		let mut node = &mut root;
 		let last = segments.len() - 1;
-		for (i, raw) in segments.iter().enumerate() {
+		for (i, (raw, quoted)) in segments.iter().enumerate() {
 			let is_last = i == last;
+			if *quoted {
+				// A backtick-quoted segment is a literal key, never an array marker.
+				node = node.children.entry(raw.clone()).or_default();
+				if is_last {
+					node.own_type = Some(field.r#type.clone());
+					node.own_optional = field.optional;
+				}
+				continue;
+			}
 			// `*` (or a trailing `[*]` in older SurrealDB) marks the current
 			// node as an array. It modifies the node we are already on instead
 			// of descending into a child.
@@ -181,6 +191,44 @@ fn render_node_type(node: &Node, depth: usize, imports: &mut BTreeSet<&'static s
 	}
 }
 
+/// Split a field name into `(segment, quoted)` pairs on `.`, keeping
+/// backtick-quoted segments (`` `odd.name` ``) whole. Unquoted segments are
+/// trimmed and kept verbatim, `[*]` markers included, exactly as before quoting
+/// was understood.
+fn path_segments(name: &str) -> Vec<(String, bool)> {
+	if !name.contains('`') && !name.contains('\u{27E8}') {
+		return name
+			.split('.')
+			.map(str::trim)
+			.filter(|s| !s.is_empty())
+			.map(|s| (s.to_string(), false))
+			.collect();
+	}
+	let mut segments = Vec::new();
+	let mut current = String::new();
+	let mut quoted = false;
+	for token in super::scan::tokenize(name) {
+		let text = token.text(name);
+		match token.kind {
+			super::scan::TokenKind::Punct if text == "." => {
+				if !current.is_empty() || quoted {
+					segments.push((std::mem::take(&mut current), quoted));
+				}
+				quoted = false;
+			}
+			super::scan::TokenKind::QuotedIdent => {
+				current.push_str(&super::scan::unquote(text));
+				quoted = true;
+			}
+			_ => current.push_str(text),
+		}
+	}
+	if !current.is_empty() || quoted {
+		segments.push((current, quoted));
+	}
+	segments
+}
+
 /// Map a parsed [`FieldType`] to a TypeScript type expression, recording any
 /// surrealdb SDK symbols that need importing.
 fn field_type_to_ts(ty: &FieldType, imports: &mut BTreeSet<&'static str>) -> String {
@@ -188,6 +236,32 @@ fn field_type_to_ts(ty: &FieldType, imports: &mut BTreeSet<&'static str>) -> Str
 		FieldType::Primitive {
 			name,
 		} => primitive_to_ts(*name, imports),
+		FieldType::Table {
+			tables,
+		} => {
+			imports.insert("Table");
+			if tables.is_empty() {
+				"Table".to_string()
+			} else {
+				tables
+					.iter()
+					.map(|t| format!("Table<{}>", quote_ts(t)))
+					.collect::<Vec<_>>()
+					.join(" | ")
+			}
+		}
+		FieldType::File {
+			..
+		} => {
+			imports.insert("FileRef");
+			"FileRef".to_string()
+		}
+		FieldType::Tuple {
+			items,
+		} => {
+			let items = items.iter().map(|i| field_type_to_ts(i, imports)).collect::<Vec<_>>();
+			format!("[{}]", items.join(", "))
+		}
 		FieldType::Option {
 			inner,
 		} => {
@@ -208,7 +282,11 @@ fn field_type_to_ts(ty: &FieldType, imports: &mut BTreeSet<&'static str>) -> Str
 			if tables.is_empty() {
 				"RecordId".to_string()
 			} else {
-				tables.iter().map(|t| format!("RecordId<'{t}'>")).collect::<Vec<_>>().join(" | ")
+				tables
+					.iter()
+					.map(|t| format!("RecordId<{}>", quote_ts(t)))
+					.collect::<Vec<_>>()
+					.join(" | ")
 			}
 		}
 		FieldType::Geometry {
@@ -216,7 +294,23 @@ fn field_type_to_ts(ty: &FieldType, imports: &mut BTreeSet<&'static str>) -> Str
 		} => geometry_to_ts(kinds, imports),
 		FieldType::Literal {
 			value,
-		} => literal_to_ts(value),
+			literal_type,
+		} => match literal_type {
+			None => literal_to_ts(value),
+			Some(LiteralType::Float) => match value {
+				serde_json::Value::Number(n) => n.to_string(),
+				// NaN and the infinities have no literal type in TypeScript.
+				_ => "number".to_string(),
+			},
+			Some(LiteralType::Decimal) => {
+				imports.insert("Decimal");
+				"Decimal".to_string()
+			}
+			Some(LiteralType::Duration) => {
+				imports.insert("Duration");
+				"Duration".to_string()
+			}
+		},
 		FieldType::Union {
 			variants,
 		} => variants.iter().map(|v| field_type_to_ts(v, imports)).collect::<Vec<_>>().join(" | "),
@@ -253,8 +347,20 @@ fn primitive_to_ts(name: PrimitiveType, imports: &mut BTreeSet<&'static str>) ->
 		PrimitiveType::None => "undefined",
 		PrimitiveType::Object => "{ [key: string]: unknown }",
 		PrimitiveType::Function => "unknown",
+		// Regular expressions have no CBOR representation, so the SDK never
+		// returns a typed value for them.
+		PrimitiveType::Regex => "unknown",
+		PrimitiveType::Range => {
+			imports.insert("Range");
+			"Range<unknown, unknown>"
+		}
 	}
 	.to_string()
+}
+
+/// A single-quoted TypeScript string literal for `s`.
+fn quote_ts(s: &str) -> String {
+	format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"))
 }
 
 fn geometry_to_ts(kinds: &[String], imports: &mut BTreeSet<&'static str>) -> String {
@@ -282,13 +388,24 @@ fn geometry_to_ts(kinds: &[String], imports: &mut BTreeSet<&'static str>) -> Str
 		.join(" | ")
 }
 
+/// An object literal kind: exactly these keys. A key whose kind admits NONE
+/// (`none | T`, or `option<T>`) is optional.
 fn object_to_ts(fields: &[ObjectField], imports: &mut BTreeSet<&'static str>) -> String {
 	if fields.is_empty() {
-		return "{ [key: string]: unknown }".to_string();
+		// The literal empty object `{}`: no keys at all.
+		return "Record<string, never>".to_string();
 	}
 	let inner = fields
 		.iter()
-		.map(|f| format!("{}: {}", format_key(&f.name), field_type_to_ts(&f.r#type, imports)))
+		.map(|f| {
+			let (ty, optional) = super::type_parser::unwrap_optional(f.r#type.clone());
+			let mark = if optional {
+				"?"
+			} else {
+				""
+			};
+			format!("{}{mark}: {}", format_key(&f.name), field_type_to_ts(&ty, imports))
+		})
 		.collect::<Vec<_>>()
 		.join("; ");
 	format!("{{ {inner} }}")
@@ -508,9 +625,11 @@ mod tests {
 					variants: vec![
 						FieldType::Literal {
 							value: serde_json::json!("open"),
+							literal_type: None,
 						},
 						FieldType::Literal {
 							value: serde_json::json!("done"),
+							literal_type: None,
 						},
 					],
 				},
@@ -596,5 +715,70 @@ mod tests {
 		let ts = to_typescript(&d).unwrap();
 		assert!(ts.contains("id: RecordId<'user'>;"), "got:\n{ts}");
 		assert!(!ts.contains("id: string;"), "synthesized id must win, got:\n{ts}");
+	}
+
+	fn render_kind(src: &str) -> String {
+		let d = doc(vec![table(
+			"t",
+			vec![field("k", super::super::type_parser::parse_type(src), false)],
+		)]);
+		let ts = to_typescript(&d).unwrap();
+		let line = ts.lines().find(|l| l.trim_start().starts_with("k: ")).unwrap_or_else(|| {
+			panic!("no field line in:\n{ts}");
+		});
+		line.trim().trim_start_matches("k: ").trim_end_matches(';').to_string()
+	}
+
+	#[test]
+	fn kinds_the_old_parser_lost_now_have_typescript_types() {
+		assert_eq!(render_kind("table"), "Table");
+		assert_eq!(render_kind("table<person | team>"), "Table<'person'> | Table<'team'>");
+		assert_eq!(render_kind("file<avatars | docs>"), "FileRef");
+		assert_eq!(render_kind("range"), "Range<unknown, unknown>");
+		assert_eq!(render_kind("regex"), "unknown");
+		assert_eq!(
+			render_kind("[string, int, none | bool]"),
+			"[string, number, undefined | boolean]"
+		);
+		assert_eq!(
+			render_kind("{ a: int, b: none | string, c: { d: bool } }"),
+			"{ a: number; b?: string; c: { d: boolean } }"
+		);
+		assert_eq!(render_kind("{  }"), "Record<string, never>");
+		assert_eq!(render_kind("-5 | 0 |  1.5f |  10dec"), "-5 | 0 | 1.5 | Decimal");
+		assert_eq!(render_kind("'auto' | 1 | true | 1d"), "\"auto\" | 1 | true | Duration");
+		assert_eq!(render_kind("NaN"), "number");
+	}
+
+	#[test]
+	fn sdk_imports_cover_the_new_kinds() {
+		let d = doc(vec![table(
+			"t",
+			vec![
+				field("a", super::super::type_parser::parse_type("table<x>"), false),
+				field("b", super::super::type_parser::parse_type("file"), false),
+				field("c", super::super::type_parser::parse_type("range"), false),
+			],
+		)]);
+		let ts = to_typescript(&d).unwrap();
+		assert!(
+			ts.contains("import type { FileRef, Range, RecordId, Table } from 'surrealdb';"),
+			"got:\n{ts}"
+		);
+	}
+
+	#[test]
+	fn a_quoted_name_with_a_dot_is_one_key() {
+		let d = doc(vec![table(
+			"person",
+			vec![
+				field("`odd.name`", prim(PrimitiveType::String), true),
+				field("address.city", prim(PrimitiveType::String), false),
+			],
+		)]);
+		let ts = to_typescript(&d).unwrap();
+		assert!(ts.contains("\"odd.name\"?: string;"), "got:\n{ts}");
+		assert!(!ts.contains("odd: {"), "the quoted dot must not nest, got:\n{ts}");
+		assert!(ts.contains("address: {"), "got:\n{ts}");
 	}
 }

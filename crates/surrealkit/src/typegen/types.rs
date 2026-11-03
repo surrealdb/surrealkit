@@ -13,7 +13,11 @@ use serde::{Deserialize, Serialize};
 pub struct SchemaTypes {
 	/// Schema-document format version. Bump on breaking shape changes.
 	pub version: u32,
-	/// RFC3339 timestamp of when the document was generated.
+	/// RFC3339 timestamp of when the document was generated. Empty, and then
+	/// omitted from the JSON, when generation was asked not to stamp it
+	/// (`[typegen] generated_at = false`), so identical schemas produce identical
+	/// bytes.
+	#[serde(default, skip_serializing_if = "String::is_empty")]
 	pub generated_at: String,
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub namespace: Option<String>,
@@ -118,10 +122,14 @@ pub enum FieldType {
 	Option {
 		inner: Box<FieldType>,
 	},
+	/// `array`, `array<T>` or `array<T, N>`. `max` is the `N`, which SurrealDB
+	/// enforces as the *exact* length (both fewer and more elements are
+	/// rejected); the name predates that finding and is kept for compatibility.
 	Array {
 		inner: Box<FieldType>,
 		max: Option<u64>,
 	},
+	/// `set`, `set<T>` or `set<T, N>`; `max` is an exact length, as for arrays.
 	Set {
 		inner: Box<FieldType>,
 		max: Option<u64>,
@@ -130,31 +138,69 @@ pub enum FieldType {
 	Record {
 		tables: Vec<String>,
 	},
+	/// `table<a | b>`, a table name value; empty `tables` means any table.
+	Table {
+		tables: Vec<String>,
+	},
+	/// `file<bucket | …>`, a file pointer; empty `buckets` means any bucket.
+	File {
+		buckets: Vec<String>,
+	},
 	/// `geometry<point | polygon | ...>`.
 	Geometry {
 		kinds: Vec<String>,
 	},
 	/// A literal type such as `"active"`, `200`, or `true`.
+	///
+	/// `literal_type` (serialised as `type`) distinguishes the literals a JSON
+	/// value cannot: `float` (`1.5f`, value a number, or the string `NaN` /
+	/// `Infinity` / `-Infinity`), `decimal` (`10dec`, value the number as a
+	/// string, so it stays exact) and `duration` (`1h30m`, value the duration
+	/// as a string). It is absent for strings, integers and booleans, which
+	/// serialise exactly as before it existed.
 	Literal {
 		value: serde_json::Value,
+		#[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+		literal_type: Option<LiteralType>,
+	},
+	/// `[A, B, C]`, a fixed-length array whose elements have these kinds in order.
+	Tuple {
+		items: Vec<FieldType>,
 	},
 	Union {
 		variants: Vec<FieldType>,
 	},
-	/// Reserved for future inline object shapes; not produced in v1.
+	/// An object literal kind such as `{ a: int, b: option<string> }`: exactly
+	/// these keys. Bare `object` is [`PrimitiveType::Object`] instead. An
+	/// optional key keeps its `none | T` kind as a [`FieldType::Union`]
+	/// containing [`PrimitiveType::None`].
 	Object {
 		fields: Vec<ObjectField>,
 	},
 	/// Anything the parser did not recognise. Keeps the source so output is
-	/// never lossy and the parser never panics.
+	/// never lossy and the parser never panics. Every `Unknown` with a source
+	/// comes with a `kind-unrecognized` error [`Diagnostic`](super::Diagnostic).
+	/// A field without `TYPE` is `Unknown` with an empty source, as v1 has
+	/// always written it (`unknown` in TypeScript), with a `field-kind-undeclared`
+	/// info or, when `COMPUTED`, a `field-computed-kind-undeclared` warning.
 	Unknown {
 		source: String,
 	},
 }
 
+/// The kinds of literal that need a tag beside their JSON value.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum LiteralType {
+	Float,
+	Decimal,
+	Duration,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct ObjectField {
+	/// The key, unquoted.
 	pub name: String,
 	pub r#type: FieldType,
 }
@@ -182,4 +228,8 @@ pub enum PrimitiveType {
 	Object,
 	/// Bare `function`.
 	Function,
+	/// `regex`. The SDK has no wire representation for it.
+	Regex,
+	/// `range`.
+	Range,
 }

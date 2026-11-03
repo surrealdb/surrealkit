@@ -1,0 +1,10 @@
+# Generated and pinned files are compared byte for byte (`surrealkit compile --check`,
+# golden and snapshot tests), so they keep LF line endings in every checkout, Windows
+# included. They are also marked generated, so reviews and language statistics skip them.
+examples/effect-typegen/src/generated/** text eol=lf linguist-generated
+packages/effect-surrealkit/test/golden/** text eol=lf linguist-generated
+crates/surrealkit/tests/fixtures/typegen_corpus/** text eol=lf
+crates/surrealkit/tests/fixtures/typegen_corpus/compiled/** linguist-generated
+crates/surrealkit/tests/fixtures/typegen_corpus/introspection/** linguist-generated
+crates/surrealkit/tests/snapshots/** text eol=lf linguist-generated
+crates/surrealkit/src/**/snapshots/** text eol=lf linguist-generated

@@ -59,6 +59,19 @@ pub struct SyncOpts {
 	/// When set (via `[typegen] json` in `surrealkit.toml`), write the JSON
 	/// schema document to this file after applying schema changes.
 	pub typegen_json_out: Option<std::path::PathBuf>,
+	/// `[typegen] strict`: a typegen failure after applying schema fails the sync
+	/// instead of being logged. In watch mode that is an iteration error, handled
+	/// by `fail_fast` like any other.
+	pub typegen_strict: bool,
+	/// `[typegen] generated_at = false`: leave `generatedAt` out of the JSON.
+	pub typegen_omit_generated_at: bool,
+	/// `[typegen] schema_version`: which document the JSON output is.
+	pub typegen_schema_version: crate::typegen::SchemaVersion,
+	/// `[typegen.emit.<name>]`: external emitters run over schema document v2 after a sync
+	/// that changed the schema (and on the first one, before they have published).
+	pub typegen_emitters: Vec<crate::typegen::Emitter>,
+	/// `[typegen] acknowledge`: diagnostic codes whose errors do not fail a strict typegen.
+	pub typegen_acknowledge: std::collections::BTreeMap<String, String>,
 }
 
 /// A schema file embedded into the binary at compile time (via [`embed_schema!`](crate::embed_schema))
@@ -282,6 +295,11 @@ impl<'a> Sync<'a> {
 			typegen_ts_out: None,
 			typegen_ts_format: None,
 			typegen_json_out: None,
+			typegen_strict: false,
+			typegen_omit_generated_at: false,
+			typegen_schema_version: crate::typegen::SchemaVersion::V1,
+			typegen_emitters: Vec::new(),
+			typegen_acknowledge: Default::default(),
 		};
 		sync_embedded(db, self.files, &opts).await
 	}
@@ -604,28 +622,31 @@ async fn run_sync_with_files(
 		let json_due_at_path =
 			opts.typegen_json_out.as_deref().filter(|path| has_changes || !path.exists());
 
-		if ts_due_at_path.is_some() || json_due_at_path.is_some() {
-			match crate::typegen::generate(db).await {
-				Ok(doc) => {
-					if let Some(ts_path) = ts_due_at_path {
-						match crate::typegen::write_typescript_formatted(
-							&doc,
-							ts_path,
-							opts.typegen_ts_format.as_deref(),
-						) {
-							Ok(path) => log::info!("typegen: wrote {}", path.display()),
-							Err(err) => log::error!("typegen: failed to write types: {err:#}"),
-						}
-					}
-					if let Some(json_path) = json_due_at_path {
-						match crate::typegen::write_json(&doc, json_path, true) {
-							Ok(()) => log::info!("typegen: wrote {}", json_path.display()),
-							Err(err) => log::error!("typegen: failed to write JSON: {err:#}"),
-						}
-					}
-				}
-				Err(err) => log::error!("typegen: failed to introspect schema: {err:#}"),
-			}
+		let emitters: &[crate::typegen::Emitter] =
+			if has_changes || crate::typegen::emitters_due(&opts.typegen_emitters) {
+				&opts.typegen_emitters
+			} else {
+				&[]
+			};
+
+		if ts_due_at_path.is_some() || json_due_at_path.is_some() || !emitters.is_empty() {
+			let ts_file = ts_due_at_path.map(crate::typegen::typescript_file);
+			let outputs = crate::typegen::Outputs {
+				json: json_due_at_path.map(|path| (path, true)),
+				typescript: ts_file
+					.as_deref()
+					.map(|path| (path, opts.typegen_ts_format.as_deref())),
+			};
+			crate::typegen::regenerate_after_sync(
+				db,
+				&outputs,
+				opts.typegen_strict,
+				opts.typegen_omit_generated_at,
+				opts.typegen_schema_version,
+				emitters,
+				&opts.typegen_acknowledge,
+			)
+			.await?;
 		}
 	}
 
@@ -1113,6 +1134,48 @@ mod tests {
 		fs::remove_file(&ts_file).unwrap();
 		project.sync(&db).await.expect("idle sync");
 		assert!(ts_file.exists());
+	}
+
+	#[tokio::test]
+	async fn a_typegen_failure_after_sync_is_logged_unless_strict() {
+		let db = mem().await;
+		let mut project = Project::new("DEFINE TABLE item SCHEMAFULL;\n");
+		// A regular file where the output's directory must go: the schema applies,
+		// then writing the JSON fails.
+		let blocker = project.layout.schema_dir().join("../blocked");
+		fs::write(&blocker, "").expect("blocker");
+		project.opts.typegen_json_out = Some(blocker.join("schema.json"));
+		project.sync(&db).await.expect("by default a typegen failure is only logged");
+
+		project.opts.typegen_strict = true;
+		let err = project.sync(&db).await.expect_err("strict propagates it");
+		let message = format!("{err:#}");
+		assert!(message.contains("typegen after sync"), "{message}");
+		assert!(message.contains("schema.json"), "{message}");
+	}
+
+	#[tokio::test]
+	async fn sync_can_omit_generated_at_for_reproducible_json() {
+		let db = mem().await;
+		let mut project =
+			Project::new("DEFINE TABLE item SCHEMAFULL;\nDEFINE FIELD name ON item TYPE string;\n");
+		let json_file = project.layout.schema_dir().join("../types/schema.json");
+		project.opts.typegen_json_out = Some(json_file.clone());
+		project.opts.typegen_omit_generated_at = true;
+		project.sync(&db).await.expect("sync");
+		let first = fs::read_to_string(&json_file).expect("json");
+		assert!(!first.contains("generatedAt"), "{first}");
+
+		// A schema change regenerates; reverting it gives the original bytes back.
+		project.write(
+			"DEFINE TABLE item SCHEMAFULL;\nDEFINE FIELD name ON item TYPE string;\n\
+			 DEFINE FIELD extra ON item TYPE int;\n",
+		);
+		project.sync(&db).await.expect("sync with a change");
+		assert_ne!(fs::read_to_string(&json_file).unwrap(), first);
+		project.write("DEFINE TABLE item SCHEMAFULL;\nDEFINE FIELD name ON item TYPE string;\n");
+		project.sync(&db).await.expect("sync back");
+		assert_eq!(fs::read_to_string(&json_file).unwrap(), first);
 	}
 
 	#[tokio::test]

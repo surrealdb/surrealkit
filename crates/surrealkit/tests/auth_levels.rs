@@ -323,6 +323,8 @@ async fn test_runner_rejects_database_auth_level() {
 		timeout_ms: None,
 		keep_db: false,
 		schema_from: None,
+		exec: Vec::new(),
+		exec_root_token: false,
 	};
 	let err = run_test(None, opts, TemplateVars::default(), &overrides)
 		.await

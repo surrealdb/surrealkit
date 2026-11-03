@@ -8,16 +8,32 @@ use super::types::{
 	CaseKind, GlobalTestConfig, LoadedSpecs, LoadedSuite, PermissionAction, SuiteSpec,
 };
 
-pub fn load_specs(folder: &str) -> Result<LoadedSpecs> {
+/// The test config and suites under `<folder>/tests`. Without suite files that is an error,
+/// unless `exec` is set: then one implicit suite named `exec`, with no cases, runs the
+/// command against a database prepared the usual way.
+pub fn load_specs(folder: &str, exec: bool) -> Result<LoadedSpecs> {
 	let tests_dir = PathBuf::from(folder).join("tests");
 	let suites_dir = tests_dir.join("suites");
 	let config_path = tests_dir.join("config.toml");
 
 	let global = load_global_config(&config_path)?;
-	let suites = load_suites(&suites_dir)?;
+	let mut suites = load_suites(&suites_dir)?;
 
 	if suites.is_empty() {
-		return Err(anyhow!("No suite files found in {}", suites_dir.display()));
+		if !exec {
+			return Err(anyhow!("No suite files found in {}", suites_dir.display()));
+		}
+		suites.push(LoadedSuite {
+			path: PathBuf::from("exec"),
+			spec: SuiteSpec {
+				name: Some("exec".to_string()),
+				schema_from: None,
+				tags: Vec::new(),
+				actors: Default::default(),
+				fixtures: Vec::new(),
+				cases: Vec::new(),
+			},
+		});
 	}
 
 	Ok(LoadedSpecs {

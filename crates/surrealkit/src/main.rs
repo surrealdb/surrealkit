@@ -16,13 +16,13 @@ use surrealkit::core::exec_surql;
 use surrealkit::progress::CaptureLogger;
 use surrealkit::project::ProjectConfig;
 use surrealkit::rollout::{self, RolloutExecutionOpts, RolloutPlanOpts, RolloutUpOpts};
-use surrealkit::selection::Selection;
+use surrealkit::selection::{Selection, select_modules};
 use surrealkit::setup::force_setup;
 use surrealkit::sync::{self, SyncOpts};
 use surrealkit::templates::{self, InitOpts};
 use surrealkit::tester::{ReportFormat, TestOpts, run_test_to};
 use surrealkit::typegen::{TypegenOpts, run_typegen};
-use surrealkit::variables::{TemplateVars, build_vars, parse_var_flag};
+use surrealkit::variables::{TemplateVars, build_project_vars, build_vars, parse_var_flag};
 
 use crate::output::Envelope;
 
@@ -278,18 +278,34 @@ enum Commands {
 		/// `both`, running every suite once on each.
 		#[arg(long, value_enum, value_name = "SOURCE")]
 		schema_from: Option<surrealkit::tester::SchemaSource>,
+		/// Run a command against each suite's prepared database, after its cases and before
+		/// the database is removed. The command is split on whitespace, with no quoting, so
+		/// no argument can contain a space (wrap such a command in a script). It gets the
+		/// endpoint, namespace, database, a token scoped to that database, the actor tokens
+		/// and the schema digest as `SURREALKIT_EXEC_*` variables; its exit status is a case.
+		/// Without suite files, one implicit suite `exec` runs.
+		#[arg(long, value_name = "CMD")]
+		exec: Option<String>,
+		/// Also pass the root actor's token to `--exec` as `SURREALKIT_EXEC_TOKEN_ROOT`. It is
+		/// valid for the whole server, not just the suite database.
+		#[arg(long, requires = "exec")]
+		exec_root_token: bool,
 	},
 	/// Serve SurrealKit's capabilities to an AI agent over the Model Context
 	/// Protocol, on stdio. The MCP host launches this; you rarely run it by hand.
 	#[cfg(feature = "mcp")]
 	Mcp,
 	/// Introspect the database and generate a typed schema document (JSON).
+	///
+	/// Reads one database: `--target`, else the `primary` target, else the only
+	/// declared target, else the ambient connection.
 	Typegen {
 		/// Output path (default: `[typegen] json`, else
 		/// `{folder}/types/schema.json`).
 		#[arg(long)]
 		out: Option<PathBuf>,
-		/// Print the JSON to stdout instead of writing a file.
+		/// Print the JSON to stdout instead of writing the JSON file. Configured
+		/// TypeScript output is still written.
 		#[arg(long)]
 		stdout: bool,
 		/// Emit compact (single-line) JSON instead of pretty-printed.
@@ -300,6 +316,53 @@ enum Commands {
 		/// filename`) in.
 		#[arg(long, value_name = "PATH")]
 		typescript: Option<PathBuf>,
+		/// Write nothing; exit non-zero when any generated file is missing or
+		/// differs from what would be generated.
+		#[arg(long, conflicts_with = "stdout")]
+		check: bool,
+		/// Fail instead of warning when an output cannot be produced exactly as
+		/// configured: the formatter fails, or a kind cannot be parsed. Same as
+		/// `[typegen] strict`.
+		#[arg(long)]
+		strict: bool,
+		/// Leave `generatedAt` out of the JSON so identical schemas produce
+		/// identical bytes. Same as `[typegen] generated_at = false`.
+		#[arg(long)]
+		no_generated_at: bool,
+		/// Read the schema document from this file (written by `typegen` or
+		/// `compile`) instead of a database. Nothing connects.
+		#[arg(long, value_name = "SCHEMA_JSON")]
+		from: Option<PathBuf>,
+	},
+	/// Compile the schema modules to schema document v2 without a database.
+	///
+	/// Applies the selected modules, in dependency order, to a throwaway embedded
+	/// engine with no network access, and writes what it stored as schema document
+	/// v2 (and the TypeScript interfaces, when configured). Reads no connection
+	/// settings. Strict: an error diagnostic fails the command.
+	Compile {
+		/// Output path (default: `[typegen] json`, else
+		/// `{folder}/types/schema.json`).
+		#[arg(long)]
+		out: Option<PathBuf>,
+		/// Print the JSON to stdout instead of writing the JSON file.
+		#[arg(long)]
+		stdout: bool,
+		/// Emit compact (single-line) JSON instead of pretty-printed.
+		#[arg(long)]
+		compact: bool,
+		/// Write nothing; exit non-zero when any output is missing or differs from
+		/// what would be generated.
+		#[arg(long, conflicts_with = "stdout")]
+		check: bool,
+		/// Log error diagnostics instead of failing on them. An external emitter that
+		/// cannot run still fails the command.
+		#[arg(long)]
+		lenient: bool,
+		/// Experimental capabilities the compile engine allows, adding to
+		/// `[typegen] experimental`: files, surrealism, gql.
+		#[arg(long = "allow-experimental", value_name = "FEATURE", value_delimiter = ',')]
+		allow_experimental: Vec<String>,
 	},
 }
 
@@ -403,6 +466,135 @@ enum RolloutCommands {
 		#[arg(value_name = "ROLLOUT_ID")]
 		rollout: String,
 	},
+}
+
+/// Warn that connection flags do nothing on a command that never connects.
+fn warn_unused_connection_flags(command: &str, args: &Cli) {
+	let used = !args.target.is_empty()
+		|| args.all
+		|| args.host.is_some()
+		|| args.ns.is_some()
+		|| args.db.is_some()
+		|| args.user.is_some()
+		|| args.pass.is_some()
+		|| args.auth_level.is_some()
+		|| args.connect_timeout_secs.is_some()
+		|| args.query_timeout_secs.is_some();
+	if used {
+		log::warn!(
+			"{command} never connects to a database, so the connection and target flags were \
+			 ignored"
+		);
+	}
+}
+
+/// The commands that read only files: `compile`, and `typegen --from`. They run before
+/// anything reads connection settings, so no `SURREALDB_*` variable or `.env` file can
+/// reach them. Returns `false` for every other command.
+async fn run_offline(args: &Cli) -> Result<bool> {
+	let folder =
+		args.folder.clone().unwrap_or_else(|| surrealkit::constants::DEFAULT_ROOT_DIR.to_string());
+	match &args.command {
+		Commands::Compile {
+			out,
+			stdout,
+			compact,
+			check,
+			lenient,
+			allow_experimental,
+		} => {
+			warn_unused_connection_flags("compile", args);
+			let project = ProjectConfig::load(None)?;
+			let modules = select_modules(&project, &args.schema, args.all, args.no_deps)?;
+			let typegen_cfg = surrealkit::variables::load_typegen_config(None)?;
+			// `sync` and `typegen` write the configured JSON in the configured version; compile
+			// writing v2 there would make the commands overwrite one another.
+			if out.is_none()
+				&& !*stdout && typegen_cfg.json_path()?.is_some()
+				&& typegen_cfg.schema_version()? != surrealkit::typegen::SchemaVersion::V2
+			{
+				anyhow::bail!(
+					"compile writes schema document v2, but [typegen] json is the v1 document \
+					 `sync` and `typegen` write (schema_version is 1 unless set); set [typegen] \
+					 schema_version = 2 so that every command writes v2 there, or pass --out or \
+					 --stdout"
+				);
+			}
+			let raw_vars: Vec<(String, String)> =
+				args.var.iter().map(|s| parse_var_flag(s)).collect::<anyhow::Result<_>>()?;
+			let mut experimental = typegen_cfg.experimental.clone();
+			experimental.extend(allow_experimental.iter().cloned());
+			surrealkit::compile::run_compile(
+				&project,
+				&folder,
+				&modules,
+				&surrealkit::compile::CompileOpts {
+					experimental,
+					// Files and flags only: no SURREALKIT_VAR_* from the environment.
+					vars: TemplateVars {
+						vars: build_project_vars(&raw_vars, None)?,
+					},
+					expected_engine: typegen_cfg.engine.clone(),
+				},
+				&TypegenOpts {
+					out: out.clone().or(typegen_cfg.json_path()?),
+					stdout: *stdout,
+					pretty: !compact,
+					ts_out: typegen_cfg.typescript_path()?,
+					ts_format: typegen_cfg.format.clone(),
+					strict: !lenient,
+					check: *check,
+					omit_generated_at: true,
+					schema_version: surrealkit::typegen::SchemaVersion::V2,
+					emitters: typegen_cfg.emitters()?,
+					acknowledge: typegen_cfg.acknowledgements()?,
+					// --lenient tolerates diagnostics, never an emitter that cannot run.
+					emitter_failures_fatal: true,
+				},
+			)
+			.await?;
+			Ok(true)
+		}
+		Commands::Typegen {
+			out,
+			stdout,
+			compact,
+			typescript,
+			check,
+			strict,
+			no_generated_at,
+			from: Some(from),
+		} => {
+			warn_unused_connection_flags("typegen --from", args);
+			let mut typegen_cfg = surrealkit::variables::load_typegen_config(None)?;
+			if let Some(typescript) = typescript {
+				if surrealkit::variables::is_typescript_file(typescript) {
+					typegen_cfg.filename = None;
+				}
+				typegen_cfg.typescript = Some(typescript.clone());
+			}
+			surrealkit::typegen::run_typegen_from(
+				from,
+				&folder,
+				TypegenOpts {
+					out: out.clone().or(typegen_cfg.json_path()?),
+					stdout: *stdout,
+					pretty: !compact,
+					ts_out: typegen_cfg.typescript_path()?,
+					ts_format: typegen_cfg.format.clone(),
+					strict: *strict || typegen_cfg.strict,
+					check: *check,
+					omit_generated_at: *no_generated_at || !typegen_cfg.stamps_generated_at(),
+					schema_version: typegen_cfg.schema_version()?,
+					emitters: typegen_cfg.emitters()?,
+					acknowledge: typegen_cfg.acknowledgements()?,
+					emitter_failures_fatal: false,
+				},
+			)?;
+			Ok(true)
+		}
+		_ => Ok(false),
+	}
 }
 
 /// Warn that `--target`/`--all` does nothing on a command that never connects.
@@ -681,6 +873,11 @@ async fn main() {
 /// Run the command, returning the exit code it ends with.
 async fn run(args: Cli) -> Result<i32> {
 	let json = args.json;
+	// `compile` and `typegen --from` read only files, so they run before anything
+	// reads connection settings.
+	if run_offline(&args).await? {
+		return Ok(0);
+	}
 	let env = load_env();
 	let overrides = DbOverrides {
 		host: args.host,
@@ -708,6 +905,7 @@ async fn run(args: Cli) -> Result<i32> {
 	// Read before `args.command` is moved. Offline commands use it to refuse a
 	// target selection rather than accept one and silently ignore it.
 	let target_selection_used = !args.target.is_empty() || args.all;
+	let schema_selection_used = !args.schema.is_empty();
 
 	match args.command {
 		Commands::Init {
@@ -745,6 +943,9 @@ async fn run(args: Cli) -> Result<i32> {
 			let typegen_cfg = surrealkit::variables::load_typegen_config(None)?;
 			let typegen_ts_out = typegen_cfg.typescript_path()?;
 			let typegen_json_out = typegen_cfg.json_path()?;
+			let typegen_schema_version = typegen_cfg.schema_version()?;
+			let typegen_emitters = typegen_cfg.emitters()?;
+			let typegen_acknowledge = typegen_cfg.acknowledgements()?;
 			if selection.pairs() == 0 {
 				bail!(
 					"refusing filesystem sync: the selected targets accept none of the selected \
@@ -814,6 +1015,11 @@ async fn run(args: Cli) -> Result<i32> {
 						typegen_ts_out: typegen_ts_out.clone(),
 						typegen_ts_format: typegen_cfg.format.clone(),
 						typegen_json_out: typegen_json_out.clone(),
+						typegen_strict: typegen_cfg.strict,
+						typegen_omit_generated_at: !typegen_cfg.stamps_generated_at(),
+						typegen_schema_version,
+						typegen_emitters: typegen_emitters.clone(),
+						typegen_acknowledge: typegen_acknowledge.clone(),
 					};
 					let outcome =
 						sync::run_sync_with_filesystem_sources(&db, opts, layout, files).await;
@@ -1034,7 +1240,19 @@ async fn run(args: Cli) -> Result<i32> {
 			timeout_ms,
 			keep_db,
 			schema_from,
+			exec,
+			exec_root_token,
 		} => {
+			let exec: Vec<String> = match exec {
+				Some(cmd) => {
+					let argv: Vec<String> = cmd.split_whitespace().map(str::to_string).collect();
+					if argv.is_empty() {
+						bail!("--exec needs a command");
+					}
+					argv
+				}
+				None => Vec::new(),
+			};
 			// Under --json the run's report is the document on stdout, the one
 			// `--json-out` writes, rather than the summary for a person.
 			let format = if json {
@@ -1058,6 +1276,8 @@ async fn run(args: Cli) -> Result<i32> {
 					timeout_ms,
 					keep_db,
 					schema_from,
+					exec,
+					exec_root_token,
 				},
 				template_vars,
 				&overrides,
@@ -1073,6 +1293,10 @@ async fn run(args: Cli) -> Result<i32> {
 			stdout,
 			compact,
 			typescript,
+			check,
+			strict,
+			no_generated_at,
+			from: _,
 		} => {
 			let mut typegen_cfg = surrealkit::variables::load_typegen_config(None)?;
 			if let Some(typescript) = typescript {
@@ -1085,15 +1309,29 @@ async fn run(args: Cli) -> Result<i32> {
 			}
 			let ts_out = typegen_cfg.typescript_path()?;
 			let json_out = typegen_cfg.json_path()?;
-			let db = connect(&cfg).await?;
+			let target = selection.typegen_target(schema_selection_used)?;
+			let db = connect(target.cfg()).await?;
 			if json {
 				// The schema document is this command's data, so under --json it
 				// is what stdout carries, as with --stdout, and no file is written.
-				let doc = surrealkit::generate(&db).await?;
-				let rendered = if compact {
-					serde_json::to_string(&doc)?
-				} else {
-					output::pretty(&doc)
+				// It is the configured version, as `typegen` would have written.
+				let rendered = match typegen_cfg.schema_version()? {
+					surrealkit::typegen::SchemaVersion::V2 => {
+						let doc = surrealkit::typegen::generate_v2(&db).await?;
+						if compact {
+							serde_json::to_string(&doc)?
+						} else {
+							output::pretty(&doc)
+						}
+					}
+					surrealkit::typegen::SchemaVersion::V1 => {
+						let doc = surrealkit::generate(&db).await?;
+						if compact {
+							serde_json::to_string(&doc)?
+						} else {
+							output::pretty(&doc)
+						}
+					}
 				};
 				println!("{rendered}");
 				return Ok(0);
@@ -1106,11 +1344,22 @@ async fn run(args: Cli) -> Result<i32> {
 					stdout,
 					pretty: !compact,
 					ts_out,
-					ts_format: typegen_cfg.format,
+					ts_format: typegen_cfg.format.clone(),
+					strict: strict || typegen_cfg.strict,
+					check,
+					omit_generated_at: no_generated_at || !typegen_cfg.stamps_generated_at(),
+					schema_version: typegen_cfg.schema_version()?,
+					emitters: typegen_cfg.emitters()?,
+					acknowledge: typegen_cfg.acknowledgements()?,
+					emitter_failures_fatal: false,
 				},
 			)
 			.await?;
 		}
+		// Handled by run_offline before anything reads connection settings.
+		Commands::Compile {
+			..
+		} => bail!("compile runs before connection settings are read"),
 	}
 
 	Ok(0)

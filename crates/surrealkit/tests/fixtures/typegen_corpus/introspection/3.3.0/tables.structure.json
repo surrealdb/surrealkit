@@ -1,0 +1,2074 @@
+{
+	"adults": {
+		"events": [],
+		"fields": [],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"anything": {
+		"events": [],
+		"fields": [],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"attachment": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "none | file",
+				"name": "any_file",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "attachment"
+			},
+			{
+				"kind": "none | file<avatars>",
+				"name": "avatar",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "attachment"
+			},
+			{
+				"default": "[]",
+				"default_always": false,
+				"kind": "array<file<avatars | docs>>",
+				"name": "files",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "attachment"
+			},
+			{
+				"kind": "file<avatars | docs>",
+				"name": "files.*",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "attachment"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"audit_log": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "none | record<doc>",
+				"name": "doc",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "audit_log"
+			},
+			{
+				"kind": "none | string",
+				"name": "note",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "audit_log"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"bag": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "none | string",
+				"name": "label",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "bag"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"doc": {
+		"events": [
+			{
+				"name": "on_any",
+				"then": [
+					"(UPDATE $after.id SET touched = true)",
+					"(CREATE audit_log SET note = 'any')"
+				],
+				"what": "doc",
+				"when": "true"
+			},
+			{
+				"name": "on_create",
+				"then": [
+					"(CREATE audit_log SET doc = $after.id)"
+				],
+				"what": "doc",
+				"when": "$event = 'CREATE'"
+			},
+			{
+				"async": true,
+				"comment": "status transitions",
+				"maxdepth": 2,
+				"name": "on_status",
+				"retry": 3,
+				"then": [
+					"{ CREATE audit_log SET doc = $after.id, note = string::concat($before.status, ' -> ', $after.status) }"
+				],
+				"what": "doc",
+				"when": "$before.status != $after.status"
+			}
+		],
+		"fields": [
+			{
+				"kind": "string",
+				"name": "body",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "doc"
+			},
+			{
+				"kind": "string",
+				"name": "code",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "doc"
+			},
+			{
+				"kind": "array<float, 4>",
+				"name": "embedding",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "doc"
+			},
+			{
+				"kind": "float",
+				"name": "embedding.*",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "doc"
+			},
+			{
+				"kind": "record<person>",
+				"name": "owner",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "doc"
+			},
+			{
+				"default": "'open'",
+				"default_always": false,
+				"kind": "'open' | 'closed'",
+				"name": "status",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "doc"
+			},
+			{
+				"kind": "string",
+				"name": "title",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "doc"
+			},
+			{
+				"default": "false",
+				"default_always": false,
+				"kind": "bool",
+				"name": "touched",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "doc"
+			}
+		],
+		"indexes": [
+			{
+				"cols": [],
+				"index": "COUNT",
+				"name": "cnt_all",
+				"table": "doc"
+			},
+			{
+				"cols": [],
+				"index": "COUNT WHERE status = 'open'",
+				"name": "cnt_open",
+				"table": "doc"
+			},
+			{
+				"cols": [
+					"embedding"
+				],
+				"index": "DISKANN DIMENSION 4 DIST EUCLIDEAN TYPE F32 DEGREE 64 L_BUILD 100 ALPHA 1.2f",
+				"name": "diskann_embedding",
+				"table": "doc"
+			},
+			{
+				"cols": [
+					"body"
+				],
+				"index": "FULLTEXT ANALYZER simple BM25(1.2,0.75) HIGHLIGHTS",
+				"name": "ft_body",
+				"table": "doc"
+			},
+			{
+				"cols": [
+					"embedding"
+				],
+				"index": "HNSW DIMENSION 4 DIST COSINE TYPE F32 EFC 150 M 12 M0 24 LM 0.40242960438184466f",
+				"name": "hnsw_embedding",
+				"table": "doc"
+			},
+			{
+				"cols": [
+					"owner",
+					"status"
+				],
+				"index": "",
+				"name": "idx_owner_status",
+				"table": "doc"
+			},
+			{
+				"cols": [
+					"title"
+				],
+				"index": "",
+				"name": "idx_title",
+				"table": "doc"
+			},
+			{
+				"cols": [
+					"title"
+				],
+				"index": "",
+				"name": "idx_title_concurrent",
+				"table": "doc"
+			},
+			{
+				"cols": [
+					"code"
+				],
+				"comment": "one doc per code",
+				"index": "UNIQUE",
+				"name": "uniq_code",
+				"table": "doc"
+			}
+		],
+		"lives": [],
+		"tables": []
+	},
+	"follows": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "record<person>",
+				"name": "in",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "follows"
+			},
+			{
+				"kind": "record<person>",
+				"name": "out",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "follows"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"id_array": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "[string, datetime]",
+				"name": "id",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "id_array"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"id_implicit": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "int",
+				"name": "id",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "id_implicit"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"id_int": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "int",
+				"name": "id",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "id_int"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"id_object": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "{ n: int, region: string }",
+				"name": "id",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "id_object"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"id_string": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "string",
+				"name": "id",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "id_string"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"id_union": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "int | string",
+				"name": "id",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "id_union"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"id_uuid": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "uuid",
+				"name": "id",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "id_uuid"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"kinds": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "any",
+				"name": "k_any",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "array",
+				"name": "k_array",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "array<int, 3>",
+				"name": "k_array_bounded",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "int",
+				"name": "k_array_bounded.*",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "array<array<float>>",
+				"name": "k_array_nested",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "array<float>",
+				"name": "k_array_nested.*",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "float",
+				"name": "k_array_nested.*.*",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "array<string>",
+				"name": "k_array_of",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "string",
+				"name": "k_array_of.*",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "array<int, 2> | set<string>",
+				"name": "k_array_or_set",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "int | string",
+				"name": "k_array_or_set.*",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "bool",
+				"name": "k_bool",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "bytes",
+				"name": "k_bytes",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "datetime",
+				"name": "k_datetime",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "decimal",
+				"name": "k_decimal",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "duration",
+				"name": "k_duration",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "file",
+				"name": "k_file",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "file<avatars>",
+				"name": "k_file_bucket",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "file<avatars | docs>",
+				"name": "k_file_buckets",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "float",
+				"name": "k_float",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "function",
+				"name": "k_function",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "geometry",
+				"name": "k_geometry",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "geometry<point | line | polygon | multipoint | multiline | multipolygon | collection>",
+				"name": "k_geometry_all",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "geometry<point>",
+				"name": "k_geometry_point",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "int",
+				"name": "k_int",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "'a' | 'b'",
+				"name": "k_literal_double_quoted",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "'auto' | 1 | true | 1d",
+				"name": "k_literal_mixed",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "-5 | 0 |  1.5f |  10dec",
+				"name": "k_literal_numbers",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "'draft' | 'published' | 'archived'",
+				"name": "k_literal_strings",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "none",
+				"name": "k_none",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "null",
+				"name": "k_null",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "string | null",
+				"name": "k_nullable",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "number",
+				"name": "k_number",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "object",
+				"name": "k_object",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"flexible": true,
+				"kind": "object",
+				"name": "k_object_flexible",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "{ a: int, b: none | string, c: { d: bool } }",
+				"name": "k_object_literal",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "{ kind: 'circle', r: float } | { h: float, kind: 'rect', w: float }",
+				"name": "k_object_union",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "none | string",
+				"name": "k_option",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "none | array<record<team>>",
+				"name": "k_option_array",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "record<team>",
+				"name": "k_option_array.*",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "none | string | null",
+				"name": "k_option_nullable",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "none | record<person>",
+				"name": "k_option_record",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "int | string | datetime",
+				"name": "k_primitive_union",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "range",
+				"name": "k_range",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "record<person>",
+				"name": "k_record",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "record",
+				"name": "k_record_any",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "record<person | team>",
+				"name": "k_record_union",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "regex",
+				"name": "k_regex",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "set",
+				"name": "k_set",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "set<int, 5>",
+				"name": "k_set_bounded",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "int",
+				"name": "k_set_bounded.*",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "set<string>",
+				"name": "k_set_of",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "string",
+				"name": "k_set_of.*",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "string",
+				"name": "k_string",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "table<person | team>",
+				"name": "k_table",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "table",
+				"name": "k_table_any",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "[string, int, none | bool]",
+				"name": "k_tuple",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			},
+			{
+				"kind": "uuid",
+				"name": "k_uuid",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "kinds"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"knows": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "record<person>",
+				"name": "in",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "knows"
+			},
+			{
+				"kind": "record<person>",
+				"name": "out",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "knows"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"ledger": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "decimal",
+				"name": "amount",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "ledger"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"likes": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "record",
+				"name": "in",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "likes"
+			},
+			{
+				"kind": "record",
+				"name": "out",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "likes"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"member_of": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "record<person>",
+				"name": "in",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "member_of"
+			},
+			{
+				"kind": "record<team | org>",
+				"name": "out",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "member_of"
+			},
+			{
+				"default": "'member'",
+				"default_always": false,
+				"kind": "'member' | 'lead'",
+				"name": "role",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "member_of"
+			},
+			{
+				"default": "time::now()",
+				"default_always": false,
+				"kind": "datetime",
+				"name": "since",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": true,
+				"table": "member_of"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"org": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "string",
+				"name": "name",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "org"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"person": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "none | string",
+				"name": "`odd.name`",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"flexible": true,
+				"kind": "object",
+				"name": "address",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"kind": "string",
+				"name": "address.city",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"kind": "none | geometry<point>",
+				"name": "address.geo",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"kind": "none | string",
+				"name": "address.zip",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"assert": "$value = NONE OR $value >= 0 AND $value <= 150",
+				"kind": "none | int",
+				"name": "age",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"kind": "string | null",
+				"name": "bio",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"kind": "none | record<person>",
+				"name": "buddy",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"reference": {
+					"on_delete": "IGNORE"
+				},
+				"table": "person"
+			},
+			{
+				"default": "time::now()",
+				"default_always": false,
+				"kind": "datetime",
+				"name": "created_at",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": true,
+				"table": "person"
+			},
+			{
+				"computed": "string::concat(name, ' <', email, '>')",
+				"name": "display",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"computed": "string::concat(name, '!')",
+				"kind": "string",
+				"name": "display_typed",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"assert": "string::is_email($value)",
+				"kind": "string",
+				"name": "email",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person",
+				"value": "string::lowercase($value)"
+			},
+			{
+				"comment": "overwritten once",
+				"default": "false",
+				"default_always": false,
+				"kind": "bool",
+				"name": "flagged",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"default": "'anon'",
+				"default_always": true,
+				"kind": "string",
+				"name": "handle",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person",
+				"value": "string::trim($value)"
+			},
+			{
+				"kind": "none | record<person>",
+				"name": "manager",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"reference": {
+					"on_delete": "UNSET"
+				},
+				"table": "person"
+			},
+			{
+				"kind": "none | record<person>",
+				"name": "mentor",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"reference": {
+					"on_delete": "THEN (UPDATE $this SET flagged = true)"
+				},
+				"table": "person"
+			},
+			{
+				"comment": "semi; colon \"and\" 'quotes'",
+				"default": "\"TYPE; VALUE 'quoted' DEFAULT\"",
+				"default_always": false,
+				"kind": "string",
+				"name": "motto",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"assert": "string::len($value) >= 1 AND string::len($value) <= 80",
+				"kind": "string",
+				"name": "name",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"kind": "none | string",
+				"name": "nickname",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"name": "notes",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"kind": "none | record<org>",
+				"name": "org",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"reference": {
+					"on_delete": "CASCADE"
+				},
+				"table": "person"
+			},
+			{
+				"assert": "$value = NONE OR $value = /^[a-z]+$/",
+				"kind": "none | string",
+				"name": "pattern",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"default": "[]",
+				"default_always": false,
+				"kind": "array<object>",
+				"name": "phones",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"kind": "object",
+				"name": "phones.*",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"kind": "'home' | 'work' | 'mobile'",
+				"name": "phones.*.kind",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"kind": "string",
+				"name": "phones.*.number",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"assert": "array::len($value) <= 3",
+				"default": "[]",
+				"default_always": false,
+				"kind": "array<string>",
+				"name": "pins",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"kind": "string",
+				"name": "pins.*",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"kind": "none | string",
+				"name": "prefs.locale",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"computed": "<~person",
+				"name": "referenced_by",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"assert": "$value INSIDE ['member', 'admin', 'owner']",
+				"default": "'member'",
+				"default_always": false,
+				"kind": "string",
+				"name": "role",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"assert": "$value > 0f AND $value < 100f",
+				"kind": "float",
+				"name": "score",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"assert": "$value >= 1m AND $value <= 1d",
+				"default": "1h",
+				"default_always": false,
+				"kind": "duration",
+				"name": "session_ttl",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"default": "{  }",
+				"default_always": false,
+				"kind": "object",
+				"name": "settings",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"default": "{  }",
+				"default_always": false,
+				"kind": "object",
+				"name": "settings.notify",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"default": "true",
+				"default_always": false,
+				"kind": "bool",
+				"name": "settings.notify.email",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"default": "'light'",
+				"default_always": false,
+				"kind": "'light' | 'dark'",
+				"name": "settings.theme",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"assert": "$value = string::uppercase($value) OR $value CONTAINS '!'",
+				"default": "'HI'",
+				"default_always": false,
+				"kind": "string",
+				"name": "shout",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"kind": "string",
+				"name": "slug",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person",
+				"value": "string::slug(name)"
+			},
+			{
+				"comment": "@acme:policy {\"classification\":\"restricted\",\"archive\":\"encrypt\"}",
+				"kind": "none | string",
+				"name": "ssn",
+				"permissions": {
+					"create": true,
+					"select": "$auth.admin = true",
+					"update": false
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"default": "<set<string>> []",
+				"default_always": false,
+				"kind": "set<string>",
+				"name": "tags",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"kind": "string",
+				"name": "tags.*",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"kind": "none | record<team>",
+				"name": "team",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"reference": {
+					"on_delete": "REJECT"
+				},
+				"table": "person"
+			},
+			{
+				"assert": "$value INSIDE ['free', 'pro']",
+				"default": "'free'",
+				"default_always": false,
+				"kind": "string",
+				"name": "tier",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"kind": "datetime",
+				"name": "touched_at",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person",
+				"value": "time::now()"
+			},
+			{
+				"default": "time::now()",
+				"default_always": true,
+				"kind": "datetime",
+				"name": "updated_at",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			},
+			{
+				"default": "[]",
+				"default_always": false,
+				"kind": "array<record<person>>",
+				"name": "watchers",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"reference": {
+					"on_delete": "IGNORE"
+				},
+				"table": "person"
+			},
+			{
+				"kind": "record<person>",
+				"name": "watchers.*",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "person"
+			}
+		],
+		"indexes": [
+			{
+				"cols": [
+					"email"
+				],
+				"index": "UNIQUE",
+				"name": "uniq_email",
+				"table": "person"
+			}
+		],
+		"lives": [],
+		"tables": [
+			{
+				"drop": false,
+				"id": 12,
+				"kind": {
+					"kind": "ANY"
+				},
+				"name": "adults",
+				"permissions": {
+					"create": false,
+					"delete": false,
+					"select": false,
+					"update": false
+				},
+				"schemafull": false,
+				"view": "AS SELECT name, age FROM person WHERE age >= 18"
+			},
+			{
+				"drop": false,
+				"id": 11,
+				"kind": {
+					"kind": "ANY"
+				},
+				"name": "team_size",
+				"permissions": {
+					"create": false,
+					"delete": false,
+					"select": false,
+					"update": false
+				},
+				"schemafull": false,
+				"view": "AS SELECT count() AS total, team FROM person GROUP BY team"
+			}
+		]
+	},
+	"purchase": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "record<person>",
+				"name": "buyer",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "purchase"
+			},
+			{
+				"default": "`sequence`::nextval('order_number')",
+				"default_always": false,
+				"kind": "int",
+				"name": "number",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": true,
+				"table": "purchase"
+			},
+			{
+				"assert": "$value >= 0dec",
+				"kind": "decimal",
+				"name": "total",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "purchase"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"rates": {
+		"events": [],
+		"fields": [
+			{
+				"kind": "record<person>",
+				"name": "in",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "rates"
+			},
+			{
+				"kind": "record<doc>",
+				"name": "out",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "rates"
+			},
+			{
+				"inline": true,
+				"kind": "none | float",
+				"name": "weight",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "rates"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"sink": {
+		"events": [],
+		"fields": [],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"team": {
+		"events": [],
+		"fields": [
+			{
+				"computed": "<~(person FIELD team)",
+				"name": "members",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "team"
+			},
+			{
+				"flexible": true,
+				"kind": "none | object",
+				"name": "meta",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "team"
+			},
+			{
+				"kind": "string",
+				"name": "name",
+				"permissions": {
+					"create": true,
+					"select": true,
+					"update": true
+				},
+				"readonly": false,
+				"table": "team"
+			}
+		],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	},
+	"team_size": {
+		"events": [],
+		"fields": [],
+		"indexes": [],
+		"lives": [],
+		"tables": []
+	}
+}
