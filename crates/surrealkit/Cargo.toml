@@ -119,6 +119,11 @@ name = 'mcp_stdout_purity'
 path = 'tests/mcp_stdout_purity.rs'
 required-features = ['mcp', 'cli']
 
+[[test]]
+name = 'check_cli'
+path = 'tests/check_cli.rs'
+required-features = ['analyze', 'cli']
+
 [lints]
 workspace = true
 

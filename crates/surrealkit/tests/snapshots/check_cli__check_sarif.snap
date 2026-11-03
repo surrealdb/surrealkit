@@ -1,0 +1,86 @@
+---
+source: crates/surrealkit/tests/check_cli.rs
+expression: "stdout(&sarif).replace(VERSION, \"<version>\")"
+---
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "surreal kit check",
+          "informationUri": "https://github.com/surrealdb/surrealkit",
+          "version": "<version>",
+          "rules": [
+            {
+              "id": "K9001",
+              "shortDescription": {
+                "text": "The file cannot be split into statements"
+              }
+            },
+            {
+              "id": "K9003",
+              "shortDescription": {
+                "text": "The engine rejected a schema statement"
+              }
+            }
+          ]
+        }
+      },
+      "columnKind": "unicodeCodePoints",
+      "results": [
+        {
+          "ruleId": "K9003",
+          "ruleIndex": 1,
+          "level": "error",
+          "message": {
+            "text": "Cannot define field `x.y`: the field `x` it is nested in is not defined. Define `x` first"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "database/schema/002_bad.surql"
+                },
+                "region": {
+                  "startLine": 2,
+                  "startColumn": 1,
+                  "endLine": 2,
+                  "endColumn": 34,
+                  "byteOffset": 30,
+                  "byteLength": 33
+                }
+              }
+            }
+          ]
+        },
+        {
+          "ruleId": "K9001",
+          "ruleIndex": 0,
+          "level": "error",
+          "message": {
+            "text": "string is never closed. If this statement has a regex literal, SurrealKit may have read its opening `/` as division; write it as <regex> \"...\" instead"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "database/schema/003_open.surql"
+                },
+                "region": {
+                  "startLine": 1,
+                  "startColumn": 29,
+                  "endLine": 1,
+                  "endColumn": 30,
+                  "byteOffset": 28,
+                  "byteLength": 1
+                }
+              }
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
