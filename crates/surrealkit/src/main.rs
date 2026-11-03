@@ -24,8 +24,13 @@ use surrealkit::tester::{ReportFormat, TestOpts, run_test_to};
 use surrealkit::typegen::{TypegenOpts, run_typegen};
 use surrealkit::variables::{TemplateVars, build_project_vars, build_vars, parse_var_flag};
 
+#[cfg(feature = "analyze")]
+use crate::check_cli::CheckFormat;
 use crate::output::Envelope;
 
+// `check` and `watch`, which are absent from a build without the `analyze` feature.
+#[cfg(feature = "analyze")]
+mod check_cli;
 // `--version`, `--json` and the JSON error envelope.
 mod output;
 
@@ -302,6 +307,31 @@ enum Commands {
 		#[arg(long, requires = "exec")]
 		exec_root_token: bool,
 	},
+	/// Check the project's SurrealQL against its schema, without a database.
+	///
+	/// Reads the schema directories of the selected modules and every other `.surql` file
+	/// under the project root, applies the schema to a throwaway in-memory engine and
+	/// reports what the engine rejects, then applies the `[analyze]` policy and any
+	/// `-- surreal: allow(CODE)` comments. Nothing connects, and no connection setting is
+	/// read. Exits 1 when a finding is an error after policy.
+	#[cfg(feature = "analyze")]
+	Check {
+		/// Output format. `-j/--json` is `--format json`.
+		#[arg(
+			long,
+			value_enum,
+			value_name = "FORMAT",
+			conflicts_with = "watch",
+			help_heading = OUTPUT
+		)]
+		format: Option<CheckFormat>,
+		/// Keep running, and check again whenever a source file or surrealkit.toml changes.
+		#[arg(long)]
+		watch: bool,
+	},
+	/// Check the project's SurrealQL again on every change, until interrupted.
+	#[cfg(feature = "analyze")]
+	Watch,
 	/// Serve SurrealKit's capabilities to an AI agent over the Model Context
 	/// Protocol, on stdio. The MCP host launches this; you rarely run it by hand.
 	#[cfg(feature = "mcp")]
@@ -519,10 +549,32 @@ fn warn_unused_connection_flags(command: &str, args: &Cli) {
 	}
 }
 
-/// The commands that read only files: `compile`, and `typegen --from`. They run before
-/// anything reads connection settings, so no `SURREALDB_*` variable or `.env` file can
-/// reach them. Returns `false` for every other command.
-async fn run_offline(args: &Cli) -> Result<bool> {
+/// What `check` and `watch` read, from the command line.
+#[cfg(feature = "analyze")]
+fn check_opts(args: &Cli, folder: &str) -> Result<check_cli::Opts> {
+	Ok(check_cli::Opts {
+		folder: folder.to_string(),
+		schemas: args.schema.clone(),
+		all: args.all,
+		no_deps: args.no_deps,
+		vars: args.var.iter().map(|s| parse_var_flag(s)).collect::<Result<_>>()?,
+	})
+}
+
+/// `--watch` and `watch` print for a person, so they take no `--json`.
+#[cfg(feature = "analyze")]
+fn reject_json_watch(args: &Cli, what: &str) -> Result<()> {
+	if args.json {
+		bail!("`{what}` prints for a person; it takes no `--json`");
+	}
+	Ok(())
+}
+
+/// The commands that read only files: `compile`, `typegen --from`, `check` and `watch`. They
+/// run before anything reads connection settings, so no `SURREALDB_*` variable or `.env` file
+/// can reach them. Returns the exit code of the command it ran, or `None` for every other
+/// command.
+async fn run_offline(args: &Cli) -> Result<Option<i32>> {
 	let folder =
 		args.folder.clone().unwrap_or_else(|| surrealkit::constants::DEFAULT_ROOT_DIR.to_string());
 	match &args.command {
@@ -584,7 +636,7 @@ async fn run_offline(args: &Cli) -> Result<bool> {
 				},
 			)
 			.await?;
-			Ok(true)
+			Ok(Some(0))
 		}
 		Commands::Typegen {
 			out,
@@ -622,9 +674,28 @@ async fn run_offline(args: &Cli) -> Result<bool> {
 					emitter_failures_fatal: false,
 				},
 			)?;
-			Ok(true)
+			Ok(Some(0))
 		}
-		_ => Ok(false),
+		#[cfg(feature = "analyze")]
+		Commands::Check {
+			format,
+			watch,
+		} => {
+			warn_unused_connection_flags("check", args);
+			if *watch {
+				reject_json_watch(args, "--watch")?;
+				return Ok(Some(check_cli::watch(&check_opts(args, &folder)?).await?));
+			}
+			let format = check_cli::resolve_format(args.json, *format)?;
+			Ok(Some(check_cli::check(&check_opts(args, &folder)?, format).await?))
+		}
+		#[cfg(feature = "analyze")]
+		Commands::Watch => {
+			warn_unused_connection_flags("watch", args);
+			reject_json_watch(args, "watch")?;
+			Ok(Some(check_cli::watch(&check_opts(args, &folder)?).await?))
+		}
+		_ => Ok(None),
 	}
 }
 
@@ -882,8 +953,24 @@ async fn main() {
 		exit(code);
 	}
 
+	// `--format json` is `--json` for how a failure is reported. Under `--format sarif` stdout
+	// is a document too, so the logger stays off it, but a failure is still `error: …`.
 	let json = args.json;
-	init_logging(args.verbose, json);
+	#[cfg(feature = "analyze")]
+	let (json, document) = match &args.command {
+		Commands::Check {
+			format: Some(CheckFormat::Json),
+			..
+		} => (true, true),
+		Commands::Check {
+			format: Some(CheckFormat::Sarif),
+			..
+		} => (json, true),
+		_ => (json, json),
+	};
+	#[cfg(not(feature = "analyze"))]
+	let document = json;
+	init_logging(args.verbose, document);
 	let code = match run(args).await {
 		Ok(code) => code,
 		// The whole context chain on one line, or the envelope under JSON.
@@ -904,10 +991,10 @@ async fn main() {
 /// Run the command, returning the exit code it ends with.
 async fn run(args: Cli) -> Result<i32> {
 	let json = args.json;
-	// `compile` and `typegen --from` read only files, so they run before anything
-	// reads connection settings.
-	if run_offline(&args).await? {
-		return Ok(0);
+	// `compile`, `typegen --from`, `check` and `watch` read only files, so they run before
+	// anything reads connection settings.
+	if let Some(code) = run_offline(&args).await? {
+		return Ok(code);
 	}
 	let env = load_env();
 	let overrides = DbOverrides {
@@ -1415,6 +1502,11 @@ async fn run(args: Cli) -> Result<i32> {
 		Commands::Compile {
 			..
 		} => bail!("compile runs before connection settings are read"),
+		#[cfg(feature = "analyze")]
+		Commands::Check {
+			..
+		}
+		| Commands::Watch => bail!("check runs before connection settings are read"),
 	}
 
 	Ok(0)
