@@ -370,6 +370,7 @@ enum Commands {
 	/// engine with no network access, and writes what it stored as schema document
 	/// v2 (and the TypeScript interfaces, when configured). Reads no connection
 	/// settings. Strict: an error diagnostic fails the command.
+	#[command(alias = "generate")]
 	Compile {
 		/// Output path (default: `[typegen] json`, else
 		/// `{folder}/types/schema.json`).
@@ -574,6 +575,7 @@ async fn run_offline(args: &Cli) -> Result<Option<i32>> {
 			}
 			let raw_vars: Vec<(String, String)> =
 				args.var.iter().map(|s| parse_var_flag(s)).collect::<anyhow::Result<_>>()?;
+			let queries = surrealkit::typegen::queries_opts(&folder, &typegen_cfg)?;
 			let mut experimental = typegen_cfg.experimental.clone();
 			experimental.extend(allow_experimental.iter().cloned());
 			surrealkit::compile::run_compile(
@@ -587,6 +589,7 @@ async fn run_offline(args: &Cli) -> Result<Option<i32>> {
 						vars: build_project_vars(&raw_vars, None)?,
 					},
 					expected_engine: typegen_cfg.engine.clone(),
+					queries: queries.as_ref().map(|q| q.collected.clone()),
 				},
 				&TypegenOpts {
 					out: out.clone().or(typegen_cfg.json_path()?),
@@ -602,6 +605,7 @@ async fn run_offline(args: &Cli) -> Result<Option<i32>> {
 					acknowledge: typegen_cfg.acknowledgements()?,
 					// --lenient tolerates diagnostics, never an emitter that cannot run.
 					emitter_failures_fatal: true,
+					queries,
 				},
 			)
 			.await?;
@@ -641,6 +645,7 @@ async fn run_offline(args: &Cli) -> Result<Option<i32>> {
 					emitters: typegen_cfg.emitters()?,
 					acknowledge: typegen_cfg.acknowledgements()?,
 					emitter_failures_fatal: false,
+					queries: None,
 				},
 			)?;
 			Ok(Some(0))
@@ -1439,6 +1444,7 @@ async fn run(args: Cli) -> Result<i32> {
 					emitters: typegen_cfg.emitters()?,
 					acknowledge: typegen_cfg.acknowledgements()?,
 					emitter_failures_fatal: false,
+					queries: surrealkit::typegen::queries_opts(&folder, &typegen_cfg)?,
 				},
 			)
 			.await?;

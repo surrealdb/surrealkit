@@ -222,7 +222,7 @@ fn sorted_by_name<T>(mut items: Vec<T>, name: impl Fn(&T) -> &String) -> Vec<T> 
 }
 
 /// Diagnostics in canonical-JSON byte order, without duplicates.
-pub(super) fn sort_diagnostics(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
+pub(crate) fn sort_diagnostics(diagnostics: Vec<Diagnostic>) -> Vec<Diagnostic> {
 	let mut keyed: Vec<(String, Diagnostic)> =
 		diagnostics.into_iter().map(|d| (canonical_of(&d).unwrap_or_default(), d)).collect();
 	keyed.sort_by(|a, b| a.0.cmp(&b.0));

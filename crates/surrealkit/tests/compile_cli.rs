@@ -486,3 +486,112 @@ fn compile_passes_acknowledged_error_codes() {
 	let json = fs::read_to_string(tmp.path().join("out/schema.json")).expect("schema.json");
 	assert!(json.contains("param-value-nondeterministic"), "{json}");
 }
+
+#[test]
+fn generate_is_an_alias_of_compile() {
+	let tmp = tempfile::TempDir::new().expect("tempdir");
+	write_project(tmp.path(), true);
+	let (code, text) = surrealkit(tmp.path(), &["generate"]);
+	assert_eq!(code, Some(0), "{text}");
+	let json = fs::read_to_string(tmp.path().join("out/schema.json")).expect("schema.json");
+	let doc: serde_json::Value = serde_json::from_str(&json).expect("json");
+	assert_eq!(doc["provenance"]["source"]["kind"], "compile");
+}
+
+/// A project that records what each emitter reads on stdin: `plain` has not opted in to
+/// `queries`, `typed` has.
+fn write_queries_project(root: &Path, with_queries: bool) {
+	// The emitters record their input beside their `out`, which SurrealKit creates only when
+	// it publishes.
+	fs::create_dir_all(root.join("out")).expect("out dir");
+	write(
+		&root.join("database/schema/001_person.surql"),
+		"DEFINE TABLE person SCHEMAFULL;\nDEFINE FIELD name ON person TYPE string;\n",
+	);
+	let script = root.join("record.sh");
+	write(
+		&script,
+		"#!/bin/sh\ncat > \"$SURREALKIT_EMIT_OUT.stdin\"\nprintf '{\"protocol\":1,\"files\":[]}'\n",
+	);
+	let mut perms = fs::metadata(&script).expect("script metadata").permissions();
+	std::os::unix::fs::PermissionsExt::set_mode(&mut perms, 0o755);
+	fs::set_permissions(&script, perms).expect("script permissions");
+	let queries = if with_queries {
+		"\n[typegen.queries]\nfiles = [\"database/queries\"]\nsources = [\"src\"]\ntypescript = \
+		 \"src/queries.ts\"\n"
+	} else {
+		""
+	};
+	write(
+		&root.join("surrealkit.toml"),
+		&format!(
+			"[typegen]\nschema_version = 2\njson = \"out/schema.json\"\n{queries}\n[typegen.emit.plain]\ncommand = \
+			 [\"sh\", {script:?}]\nout = \"out/plain\"\n\n[typegen.emit.typed]\ncommand = [\"sh\", \
+			 {script:?}]\nout = \"out/typed\"\nqueries = true\n",
+			script = script.to_string_lossy()
+		),
+	);
+	write(
+		&root.join("database/queries/people.surql"),
+		"-- name: ListPeople\nSELECT name FROM person;\n",
+	);
+	write(&root.join("src/app.ts"), "db.query(\"SELECT * FROM person\");\n");
+}
+
+#[test]
+fn queries_on_an_engine_that_cannot_type_them_warn_and_change_nothing_else() {
+	let with = tempfile::TempDir::new().expect("tempdir");
+	write_queries_project(with.path(), true);
+	let (code, text) = surrealkit(with.path(), &["compile"]);
+	assert_eq!(code, Some(0), "{text}");
+	let json = fs::read_to_string(with.path().join("out/schema.json")).expect("schema.json");
+	let doc: serde_json::Value = serde_json::from_str(&json).expect("json");
+	assert!(doc.get("queries").is_none(), "the engine gave no queries");
+	let codes: Vec<&str> = doc["diagnostics"]
+		.as_array()
+		.unwrap()
+		.iter()
+		.map(|d| d["code"].as_str().unwrap())
+		.collect();
+	assert!(codes.contains(&"queries-unsupported-engine"), "{codes:?}");
+	// The per-query module is written, with an empty registry.
+	assert!(fs::read_to_string(with.path().join("src/queries.ts")).unwrap().contains("Queries"));
+	let (code, text) = surrealkit(with.path(), &["compile", "--check"]);
+	assert_eq!(code, Some(0), "{text}");
+
+	// The emitter that did not opt in reads exactly what the project reads without the section.
+	let without = tempfile::TempDir::new().expect("tempdir");
+	write_queries_project(without.path(), false);
+	let (code, text) = surrealkit(without.path(), &["compile"]);
+	assert_eq!(code, Some(0), "{text}");
+	let stdin = |dir: &Path, name: &str| fs::read(dir.join(format!("out/{name}.stdin"))).unwrap();
+	assert_eq!(stdin(with.path(), "plain"), stdin(without.path(), "plain"));
+	assert_eq!(stdin(with.path(), "typed"), json.as_bytes());
+	assert!(
+		String::from_utf8(stdin(with.path(), "typed"))
+			.unwrap()
+			.contains("queries-unsupported-engine")
+	);
+	assert!(!String::from_utf8(stdin(with.path(), "plain")).unwrap().contains("queries-"));
+}
+
+#[test]
+fn a_bad_query_file_fails_a_strict_compile_and_is_logged_by_a_lenient_one() {
+	let tmp = tempfile::TempDir::new().expect("tempdir");
+	write_queries_project(tmp.path(), true);
+	write(&tmp.path().join("database/queries/bad.surql"), "-- name: not-a-name\nRETURN 1;\n");
+	let (code, text) = surrealkit(tmp.path(), &["compile"]);
+	assert_eq!(code, Some(1), "{text}");
+	assert!(text.contains("query-name-invalid"), "{text}");
+	let (code, text) = surrealkit(tmp.path(), &["compile", "--lenient"]);
+	assert_eq!(code, Some(0), "{text}");
+
+	// A configured directory that is missing fails the command.
+	write(
+		&tmp.path().join("surrealkit.toml"),
+		"[typegen]\nschema_version = 2\njson = \"out/schema.json\"\n[typegen.queries]\nfiles = [\"nowhere\"]\n",
+	);
+	let (code, text) = surrealkit(tmp.path(), &["compile", "--lenient"]);
+	assert_eq!(code, Some(1), "{text}");
+	assert!(text.contains("nowhere"), "{text}");
+}

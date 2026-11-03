@@ -63,6 +63,14 @@ fn the_method_list_is_configurable() {
 }
 
 #[test]
+fn a_query_records_the_method_it_was_passed_to() {
+	let source = "db.run(\"R\"); db.query(`Q ${x}`); db.query('S');";
+	let queries = extract("a.ts", source, &["run", "query"]);
+	let methods: Vec<&str> = queries.iter().map(|query| query.method.as_str()).collect();
+	assert_eq!(methods, ["run", "query", "query"]);
+}
+
+#[test]
 fn nested_and_chained_calls_are_found() {
 	let source = "const r = await db.query(\"SELECT 1\").collect();\nf(db.query(\"SELECT 2\"));";
 	assert_eq!(texts("a.ts", source), ["SELECT 1", "SELECT 2"]);

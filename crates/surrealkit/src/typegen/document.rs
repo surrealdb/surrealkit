@@ -60,6 +60,15 @@ impl SchemaDocument {
 	pub fn has_errors(&self) -> bool {
 		self.diagnostics.iter().any(Diagnostic::is_error)
 	}
+
+	/// The document without its `queries` and the diagnostics about them: what a project
+	/// without a `queries` section produces. The digest is the same, since neither is part of it.
+	pub fn without_queries(&self) -> SchemaDocument {
+		let mut doc = self.clone();
+		doc.queries.clear();
+		doc.diagnostics.retain(|d| !d.concerns_queries());
+		doc
+	}
 }
 
 // ---------------------------------------------------------------------------

@@ -64,6 +64,8 @@ pub struct HostQuery {
 	pub line: u32,
 	/// 1-based column of `host_range.start`, counted in chars.
 	pub column: u32,
+	/// The client method the query was passed to (`query`, `run`, …).
+	pub method: String,
 	/// The `${…}` substitutions that became parameters, in order.
 	pub substitutions: Vec<Substitution>,
 	/// Map from `text` offsets to host offsets: one entry per copied run or decoded escape.

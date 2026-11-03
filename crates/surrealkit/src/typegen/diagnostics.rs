@@ -179,12 +179,23 @@ impl Diagnostic {
 		self
 	}
 
+	pub(crate) fn on_query(mut self, key: &str) -> Self {
+		self.query = Some(key.to_string());
+		self
+	}
+
 	pub(crate) fn with_span(mut self, span: std::ops::Range<usize>) -> Self {
 		self.span = Some(Span {
 			start: span.start,
 			end: span.end,
 		});
 		self
+	}
+
+	/// Whether the diagnostic is about the `queries` section: it names a query, or its code
+	/// starts with `query-` or `queries-`.
+	pub fn concerns_queries(&self) -> bool {
+		self.query.is_some() || self.code.starts_with("query-") || self.code.starts_with("queries-")
 	}
 
 	/// Whether a strict run must fail on this diagnostic.

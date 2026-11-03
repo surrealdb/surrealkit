@@ -593,6 +593,39 @@ off; the diagnostic stays in the document, and emitters receive the list too
 acknowledge = { "param-value-nondeterministic" = "$started is informational only" }
 ```
 
+### Typed queries
+
+`[typegen.queries]` types the queries the project sends, against the compiled schema:
+named queries in query files, and the queries host code passes to a client's `query()`.
+
+```toml
+[typegen.queries]
+files = ["database/queries"]   # directories of .surql query files
+sources = ["src"]              # host code scanned for db.query("…") (.ts, .js, .svelte, .vue, .astro)
+methods = ["query"]            # the client methods to look for (default)
+typescript = "src/generated/queries.ts"   # optional: the per-query TypeScript module
+dates = "class"                # `datetime` as the SDK's DateTime (default), or "native" for Date
+hints = "trust"                # kinds the engine only hints at: as declared (default), or "unknown"
+```
+
+A query file holds named queries, each behind a marker line:
+
+```surql
+-- name: ListPeople
+SELECT name, age FROM person WHERE age >= $min ORDER BY name;
+```
+
+Each query becomes an entry of the document's `queries` section
+([section 19](docs/typegen/schema-document-v2.md#19-queries)): its text, where it comes
+from, the kind of each statement's result and its parameters, in the language-neutral kind
+tree any emitter can render. The TypeScript module gives `Typed<Surreal>` a `query()` that
+returns the registry's result type for known query text. External emitters receive the
+section only when they opt in with `queries = true` in their `[typegen.emit.<name>]`.
+
+The engine types the queries without running them, which needs SurrealDB 4.1. On an older
+engine `compile` and `typegen` report the warning `queries-unsupported-engine` and write no
+`queries`.
+
 ### Effect schemas
 
 [`effect-surrealkit`](packages/effect-surrealkit) is the reference emitter: it

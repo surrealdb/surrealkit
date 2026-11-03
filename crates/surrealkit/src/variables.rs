@@ -212,6 +212,9 @@ pub struct TypegenConfig {
 	/// (`docs/typegen/external-emitters.md`).
 	#[serde(default)]
 	pub emit: std::collections::BTreeMap<String, EmitterConfig>,
+	/// The `queries` section of schema document v2, `[typegen.queries]`
+	/// (`docs/typegen/schema-document-v2.md`, section 19).
+	pub queries: Option<QueriesConfig>,
 	/// Error diagnostic codes that do not fail generation, each with the reason it is
 	/// acceptable: `acknowledge = { "kind-unrecognized" = "…" }`. The diagnostics stay in the
 	/// document, and external emitters receive the list.
@@ -228,6 +231,64 @@ pub struct EmitterConfig {
 	pub command: EmitterCommand,
 	/// The directory the emitter's files go to. SurrealKit owns it.
 	pub out: PathBuf,
+	/// Whether the emitter receives the document's `queries` section and the diagnostics about
+	/// it (default `false`: they are removed from its input).
+	#[serde(default)]
+	pub queries: bool,
+}
+
+/// The `[typegen.queries]` section: where the project's queries are, and how the per-query
+/// TypeScript module is written.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QueriesConfig {
+	/// Host-code roots (files or directories) searched for queries passed to a client.
+	/// Needs the `host-queries` feature.
+	#[serde(default)]
+	pub sources: Vec<PathBuf>,
+	/// The client methods whose first argument is a query (default `["query"]`).
+	#[serde(default = "default_query_methods")]
+	pub methods: Vec<String>,
+	/// Directories of query files: the `.surql` files under them hold named queries.
+	#[serde(default)]
+	pub files: Vec<PathBuf>,
+	/// The per-query TypeScript module to write: a `.ts`, `.mts` or `.cts` file.
+	pub typescript: Option<PathBuf>,
+	/// How a `datetime` is typed in that module: `class` (the SDK's `DateTime`, default) or
+	/// `native` (a `Date`).
+	pub dates: Option<crate::codegen::typescript::DateStyle>,
+	/// How a kind the engine only hints at is typed in that module: `trust` (as declared,
+	/// default) or `unknown`.
+	pub hints: Option<crate::codegen::typescript::HintStyle>,
+}
+
+fn default_query_methods() -> Vec<String> {
+	vec!["query".to_string()]
+}
+
+impl Default for QueriesConfig {
+	fn default() -> Self {
+		Self {
+			sources: Vec::new(),
+			methods: default_query_methods(),
+			files: Vec::new(),
+			typescript: None,
+			dates: None,
+			hints: None,
+		}
+	}
+}
+
+impl QueriesConfig {
+	/// The renderer's options for the per-query TypeScript module.
+	pub fn render_options(&self) -> crate::codegen::typescript::RenderOptions {
+		let defaults = crate::codegen::typescript::RenderOptions::default();
+		crate::codegen::typescript::RenderOptions {
+			dates: self.dates.unwrap_or(defaults.dates),
+			hints: self.hints.unwrap_or(defaults.hints),
+			..defaults
+		}
+	}
 }
 
 /// An emitter command as written in `surrealkit.toml`.
@@ -287,6 +348,7 @@ impl TypegenConfig {
 				name: name.clone(),
 				command,
 				out: cfg.out.clone(),
+				queries: cfg.queries,
 			});
 		}
 		// An emitter owns its `out` and removes what it did not write there, so SurrealKit's own
@@ -294,11 +356,12 @@ impl TypegenConfig {
 		let lexical = |p: &Path| -> PathBuf {
 			p.components().filter(|c| !matches!(c, std::path::Component::CurDir)).collect()
 		};
-		let own: Vec<PathBuf> = [self.json_path()?, self.typescript_path()?]
-			.into_iter()
-			.flatten()
-			.map(|p| lexical(&p))
-			.collect();
+		let own: Vec<PathBuf> =
+			[self.json_path()?, self.typescript_path()?, self.queries_typescript()?]
+				.into_iter()
+				.flatten()
+				.map(|p| lexical(&p))
+				.collect();
 		for emitter in &out {
 			let dir = lexical(&emitter.out);
 			if let Some(inside) = own.iter().find(|p| p.starts_with(&dir)) {
@@ -326,6 +389,48 @@ impl TypegenConfig {
 			}
 		}
 		Ok(out)
+	}
+
+	/// `[typegen.queries]`, validated: the methods are not empty names, and `typescript` names a
+	/// TypeScript file that is neither the `[typegen] json` nor the `[typegen] typescript` output.
+	pub fn queries_config(&self) -> Result<Option<QueriesConfig>> {
+		let Some(queries) = &self.queries else {
+			return Ok(None);
+		};
+		if queries.methods.iter().any(|method| method.trim().is_empty()) {
+			bail!("[typegen.queries] methods: a method name is empty");
+		}
+		if let Some(typescript) = self.queries_typescript()? {
+			let lexical = |p: &Path| -> PathBuf {
+				p.components().filter(|c| !matches!(c, std::path::Component::CurDir)).collect()
+			};
+			for (key, other) in
+				[("json", self.json_path()?), ("typescript", self.typescript_path()?)]
+			{
+				if other.is_some_and(|other| lexical(&other) == lexical(&typescript)) {
+					bail!(
+						"[typegen.queries] typescript = {:?} is also [typegen] {key}; each output \
+						 needs its own file",
+						typescript.display().to_string()
+					);
+				}
+			}
+		}
+		Ok(Some(queries.clone()))
+	}
+
+	/// The per-query TypeScript file, if `[typegen.queries] typescript` is set. It names a file.
+	pub fn queries_typescript(&self) -> Result<Option<PathBuf>> {
+		let Some(typescript) = self.queries.as_ref().and_then(|q| q.typescript.as_ref()) else {
+			return Ok(None);
+		};
+		if !is_typescript_file(typescript) {
+			bail!(
+				"[typegen.queries] typescript = {:?} must name a .ts, .mts or .cts file",
+				typescript.display().to_string()
+			);
+		}
+		Ok(Some(typescript.clone()))
 	}
 
 	/// The configured schema document version. Anything but 1 or 2 is an error.
@@ -757,6 +862,79 @@ mod tests {
 		)
 		.unwrap();
 		assert_eq!(ok.emitters().unwrap().len(), 1);
+	}
+
+	#[test]
+	fn the_queries_section_parses_and_validates() {
+		use crate::codegen::typescript::{DateStyle, HintStyle};
+		let parse = |raw: &str| toml::from_str::<ProjectConfig>(raw).map(|c| c.typegen);
+		assert!(TypegenConfig::default().queries_config().unwrap().is_none());
+
+		let cfg = parse("[typegen.queries]\n").unwrap().queries_config().unwrap().unwrap();
+		assert_eq!(cfg, QueriesConfig::default());
+		assert_eq!(cfg.methods, ["query"]);
+		assert!(cfg.sources.is_empty() && cfg.files.is_empty() && cfg.typescript.is_none());
+
+		let cfg = parse(
+			"[typegen.queries]\nsources = [\"src\", \"app\"]\nmethods = [\"query\", \"run\"]\nfiles = \
+			 [\"database/queries\"]\ntypescript = \"src/queries.ts\"\ndates = \"native\"\nhints = \
+			 \"unknown\"\n",
+		)
+		.unwrap()
+		.queries_config()
+		.unwrap()
+		.unwrap();
+		assert_eq!(cfg.sources, [PathBuf::from("src"), PathBuf::from("app")]);
+		assert_eq!(cfg.methods, ["query", "run"]);
+		assert_eq!(cfg.files, [PathBuf::from("database/queries")]);
+		let render = cfg.render_options();
+		assert_eq!((render.dates, render.hints), (DateStyle::Native, HintStyle::Unknown));
+		assert_eq!(QueriesConfig::default().render_options(), Default::default());
+
+		// An unknown key, or a value outside the choices, is refused rather than ignored.
+		assert!(parse("[typegen.queries]\nwat = 1\n").is_err());
+		assert!(parse("[typegen.queries]\ndates = \"iso\"\n").is_err());
+		assert!(parse("[typegen.queries]\nhints = \"guess\"\n").is_err());
+
+		let err = |raw: &str| parse(raw).unwrap().queries_config().unwrap_err().to_string();
+		assert!(
+			err("[typegen.queries]\ntypescript = \"src/queries\"\n").contains(".ts, .mts or .cts")
+		);
+		assert!(err("[typegen.queries]\nmethods = [\"\"]\n").contains("method name is empty"));
+		assert!(
+			err("[typegen]\ntypescript = \"src/db.ts\"\n[typegen.queries]\ntypescript = \
+			     \"./src/db.ts\"\n")
+			.contains("also [typegen] typescript")
+		);
+	}
+
+	#[test]
+	fn an_emitter_opts_in_to_queries_and_none_may_contain_the_queries_module() {
+		let parse = |raw: &str| toml::from_str::<ProjectConfig>(raw).map(|c| c.typegen);
+		let cfg = parse(
+			"[typegen.emit.a]\ncommand = \"x\"\nout = \"a\"\nqueries = true\n[typegen.emit.b]\ncommand \
+			 = \"y\"\nout = \"b\"\n",
+		)
+		.unwrap();
+		let emitters = cfg.emitters().unwrap();
+		assert_eq!((emitters[0].name.as_str(), emitters[0].queries), ("a", true));
+		assert_eq!((emitters[1].name.as_str(), emitters[1].queries), ("b", false));
+		assert!(
+			parse("[typegen.emit.a]\ncommand = \"x\"\nout = \"a\"\nqueries = \"yes\"\n").is_err()
+		);
+
+		let err = parse(
+			"[typegen.queries]\ntypescript = \"gen/queries.ts\"\n[typegen.emit.e]\ncommand = \
+			 \"x\"\nout = \"gen\"\n",
+		)
+		.unwrap()
+		.emitters()
+		.unwrap_err()
+		.to_string();
+		assert!(
+			err.contains("gen/queries.ts") && err.contains("which SurrealKit writes itself"),
+			"{err}"
+		);
 	}
 
 	#[test]

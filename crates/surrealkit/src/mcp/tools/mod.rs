@@ -811,6 +811,7 @@ impl SurrealKitMcp {
 							emitters: ctx.typegen.emitters()?,
 							acknowledge: ctx.typegen.acknowledgements()?,
 							emitter_failures_fatal: false,
+							queries: crate::typegen::queries_opts(&ctx.folder, &ctx.typegen)?,
 						},
 					)
 					.await?;

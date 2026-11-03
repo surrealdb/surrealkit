@@ -38,6 +38,7 @@ fn emitter(name: &str, command: &str, out: PathBuf) -> Emitter {
 		name: name.to_string(),
 		command: vec!["sh".to_string(), command.to_string()],
 		out,
+		queries: false,
 	}
 }
 
@@ -417,4 +418,159 @@ printf '{"protocol":1,"files":[],"diagnostics":[{"severity":"error","code":"valu
 	run_typegen(&db, "./database", o).await.expect("acknowledged");
 	assert_eq!(read(&tmp.path().join("gen.ack")), r#"{"value-unresolved":"reviewed by hand"}"#);
 	assert!(out.join(super::EMITTER_MANIFEST).exists());
+}
+
+/// A compiled document, and the same document with a `queries` section and the diagnostics
+/// about it, as a project with `[typegen.queries]` on an engine that types queries would get.
+#[cfg(feature = "kv-mem")]
+async fn documents_with_and_without_queries() -> (super::SchemaDocument, super::SchemaDocument) {
+	use crate::codegen::queries::{QueryEntry, QueryOrigin, QuerySource, QueryStatement};
+	use crate::compile::{CompileModule, CompileOpts, compile};
+	use crate::typegen::document::{Certainty, Kind};
+	use crate::typegen::{Diagnostic, Severity, Span, codes};
+	let module = CompileModule {
+		name: "default".into(),
+		files: vec![crate::schema_state::SchemaFile {
+			path: "schema/a.surql".into(),
+			sql: "DEFINE TABLE a SCHEMAFULL;".into(),
+			hash: String::new(),
+		}],
+	};
+	let plain = compile(std::slice::from_ref(&module), &CompileOpts::default()).await.unwrap();
+	let mut typed = plain.document.clone();
+	typed.queries = vec![QueryEntry {
+		key: "ListA".into(),
+		name: Some("ListA".into()),
+		text: "SELECT id FROM a;".into(),
+		sources: vec![QuerySource {
+			origin: QueryOrigin::File,
+			path: "queries/a.surql".into(),
+			span: Span {
+				start: 11,
+				end: 28,
+			},
+			line: 2,
+			column: 1,
+			method: None,
+		}],
+		statements: vec![QueryStatement {
+			kind: Some(Kind::int()),
+			optional: false,
+			certainty: Certainty::Fact,
+			exact: true,
+			open: Vec::new(),
+		}],
+		params: Vec::new(),
+	}];
+	typed.diagnostics.extend([
+		Diagnostic::new(Severity::Warning, codes::QUERY_KIND_UNRECOGNIZED, "x", "a kind")
+			.on_query("ListA"),
+		Diagnostic::new(Severity::Error, codes::QUERY_NAME_INVALID, "-- name: 1", "a name"),
+		Diagnostic::new(
+			Severity::Warning,
+			codes::QUERIES_UNSUPPORTED_ENGINE,
+			"[typegen.queries]",
+			"no",
+		),
+	]);
+	typed.diagnostics = super::sort_diagnostics(std::mem::take(&mut typed.diagnostics));
+	(plain.document, typed)
+}
+
+#[cfg(feature = "kv-mem")]
+#[tokio::test]
+async fn an_emitter_reads_queries_only_when_it_opts_in() {
+	let (plain, typed) = documents_with_and_without_queries().await;
+	let tmp = tempfile::TempDir::new().unwrap();
+	let script = digest_emitter(tmp.path());
+	let mut opted_in = emitter("typed", &script, tmp.path().join("gen-typed"));
+	opted_in.queries = true;
+	let emitters = vec![emitter("plain", &script, tmp.path().join("gen-plain")), opted_in];
+
+	let mut o = opts(tmp.path(), emitters, true, false);
+	o.pretty = true;
+	super::produce(&super::empty_v1(), Some(&typed), "./database", &o).unwrap();
+
+	let plain_stdin = read(&tmp.path().join("gen-plain.input.json"));
+	let typed_stdin = read(&tmp.path().join("gen-typed.input.json"));
+	assert!(!plain_stdin.contains("\"queries\""), "{plain_stdin}");
+	assert!(!plain_stdin.contains("query-") && !plain_stdin.contains("queries-"));
+	assert!(typed_stdin.contains("\"queries\"") && typed_stdin.contains("query-name-invalid"));
+	assert!(typed_stdin.contains("\"query\": \"ListA\""));
+
+	// What an emitter that did not opt in reads is, byte for byte, what the same project
+	// produces without `[typegen.queries]`; the one that opted in reads the whole document and
+	// so does the JSON output.
+	let bytes = |doc: &super::SchemaDocument| super::v2_bytes(doc, true).unwrap();
+	assert_eq!(plain_stdin.as_bytes(), bytes(&plain).as_slice());
+	assert_eq!(typed_stdin.as_bytes(), bytes(&typed).as_slice());
+	assert_eq!(read(&tmp.path().join("schema.json")), typed_stdin);
+	// The digest is the same whichever the emitter reads.
+	assert_eq!(read(&tmp.path().join("gen-plain/digest.txt")).trim(), typed.semantic_digest);
+	assert_eq!(read(&tmp.path().join("gen-typed/digest.txt")).trim(), typed.semantic_digest);
+}
+
+#[cfg(feature = "kv-mem")]
+#[tokio::test]
+async fn the_queries_module_is_written_checked_and_needs_v2() {
+	use crate::typegen::QueriesOpts;
+	let (_, typed) = documents_with_and_without_queries().await;
+	let tmp = tempfile::TempDir::new().unwrap();
+	let module = tmp.path().join("src/queries.ts");
+	let mut o = opts(tmp.path(), vec![], true, false);
+	o.queries = Some(QueriesOpts {
+		typescript: Some(module.clone()),
+		..QueriesOpts::default()
+	});
+
+	// `--check` before anything was written reports the module missing and writes nothing.
+	let err = super::produce(
+		&super::empty_v1(),
+		Some(&typed),
+		"./database",
+		&TypegenOpts {
+			check: true,
+			..o.clone()
+		},
+	)
+	.unwrap_err()
+	.to_string();
+	assert!(err.contains("missing:") && err.contains("queries.ts"), "{err}");
+	assert!(!module.exists());
+
+	super::produce(&super::empty_v1(), Some(&typed), "./database", &o).unwrap();
+	assert_eq!(
+		read(&module),
+		crate::codegen::typescript::render(&typed.queries, &typed.types, &Default::default())
+	);
+	assert!(read(&module).contains("SELECT id FROM a;"));
+	let modified = std::fs::metadata(&module).unwrap().modified().unwrap();
+	super::produce(&super::empty_v1(), Some(&typed), "./database", &o).unwrap();
+	assert_eq!(std::fs::metadata(&module).unwrap().modified().unwrap(), modified);
+	super::produce(
+		&super::empty_v1(),
+		Some(&typed),
+		"./database",
+		&TypegenOpts {
+			check: true,
+			..o.clone()
+		},
+	)
+	.expect("up to date");
+	std::fs::write(&module, "edited\n").unwrap();
+	let err = super::produce(
+		&super::empty_v1(),
+		Some(&typed),
+		"./database",
+		&TypegenOpts {
+			check: true,
+			..o.clone()
+		},
+	)
+	.unwrap_err()
+	.to_string();
+	assert!(err.contains("stale:") && err.contains("queries.ts"), "{err}");
+
+	let err = super::produce(&super::empty_v1(), None, "./database", &o).unwrap_err().to_string();
+	assert!(err.contains("schema document v2"), "{err}");
 }

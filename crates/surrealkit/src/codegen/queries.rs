@@ -9,7 +9,7 @@
 //! from the engine's [`TypesDocument`].
 
 pub use super::document::Certainty;
-use super::document::{FieldStep, KindValue, QueryParam, StatementType, TypesDocument};
+use super::document::{FieldStep, KindValue, QueryParam, QueryTypes, StatementType, TypesDocument};
 use super::v2;
 use crate::typegen::document::{Kind, TypeDef};
 pub use crate::typegen::document::{
@@ -44,26 +44,9 @@ pub fn from_types_document(doc: &TypesDocument) -> Converted {
 	};
 	let mut entries = Vec::with_capacity(doc.queries.len());
 	for query in &doc.queries {
-		let mut statements = Vec::with_capacity(query.statements.len());
-		for statement in &query.statements {
-			let (entry, spellings) = statement_entry(statement);
-			note(spellings);
-			statements.push(entry);
-		}
-		let mut params = Vec::with_capacity(query.params.len());
-		for param in &query.params {
-			let (entry, spellings) = param_entry(param);
-			note(spellings);
-			params.push(entry);
-		}
-		entries.push(QueryEntry {
-			key: query.name.clone().unwrap_or_else(|| query.text.clone()),
-			name: query.name.clone(),
-			text: query.text.clone(),
-			sources: Vec::new(),
-			statements,
-			params,
-		});
+		let (entry, spellings) = convert_query(query);
+		note(spellings);
+		entries.push(entry);
 	}
 	let mut types: Vec<TypeDef> = doc
 		.types
@@ -84,6 +67,40 @@ pub fn from_types_document(doc: &TypesDocument) -> Converted {
 		types,
 		unrepresented,
 	}
+}
+
+/// Converts one query of an engine document, with the `source` of each `unknown` kind in it,
+/// in the order met.
+pub fn convert_query(query: &QueryTypes) -> (QueryEntry, Vec<String>) {
+	let mut unrepresented: Vec<String> = Vec::new();
+	let mut note = |spellings: Vec<String>| {
+		for spelling in spellings {
+			if !unrepresented.contains(&spelling) {
+				unrepresented.push(spelling);
+			}
+		}
+	};
+	let mut statements = Vec::with_capacity(query.statements.len());
+	for statement in &query.statements {
+		let (entry, spellings) = statement_entry(statement);
+		note(spellings);
+		statements.push(entry);
+	}
+	let mut params = Vec::with_capacity(query.params.len());
+	for param in &query.params {
+		let (entry, spellings) = param_entry(param);
+		note(spellings);
+		params.push(entry);
+	}
+	let entry = QueryEntry {
+		key: query.name.clone().unwrap_or_else(|| query.text.clone()),
+		name: query.name.clone(),
+		text: query.text.clone(),
+		sources: Vec::new(),
+		statements,
+		params,
+	};
+	(entry, unrepresented)
 }
 
 fn statement_entry(statement: &StatementType) -> (QueryStatement, Vec<String>) {

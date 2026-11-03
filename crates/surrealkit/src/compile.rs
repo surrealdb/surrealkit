@@ -73,6 +73,9 @@ pub struct CompileOpts {
 	/// from the embedded engine's minor the document carries the error
 	/// `compile-engine-mismatch`, because it then describes the embedded engine's behaviour.
 	pub expected_engine: Option<String>,
+	/// The project's queries (`[typegen.queries]`), typed against the compiled schema into the
+	/// document's `queries` section. `None` leaves the section out.
+	pub queries: Option<crate::codegen::section::Collected>,
 }
 
 /// What one compile produced.
@@ -418,7 +421,7 @@ pub async fn compile(modules: &[CompileModule], opts: &CompileOpts) -> Result<Co
 		})
 		.collect();
 	source_files.sort();
-	let document = assemble(
+	let mut document = assemble(
 		&snapshot,
 		Origin {
 			source: Source::Compile {
@@ -433,6 +436,9 @@ pub async fn compile(modules: &[CompileModule], opts: &CompileOpts) -> Result<Co
 			diagnostics,
 		},
 	)?;
+	if let Some(collected) = &opts.queries {
+		crate::codegen::section::attach(&db, collected, &mut document).await?;
+	}
 	Ok(Compiled {
 		document,
 		v1,

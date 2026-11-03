@@ -1,0 +1,559 @@
+//! The `queries` section of schema document v2: collecting the project's queries, and
+//! assembling the engine's typed result into entries.
+//!
+//! [`collect`] reads the query files and the host code `[typegen.queries]` names. The engine
+//! types what [`Collected::inputs`] lists, and [`assemble`] turns its [`TypesDocument`] into the
+//! section's [`QueryEntry`]s, with the places each query is written and the diagnostics about
+//! them. [`attach`] does both against a database and puts the result in a document. Every path
+//! in the section is relative to the same root as `provenance.source.files`, `/`-separated.
+
+use std::collections::BTreeMap;
+#[cfg(feature = "host-queries")]
+use std::collections::HashMap;
+
+use anyhow::Result;
+use surrealdb::Surreal;
+use surrealdb::engine::any::Any;
+
+use super::document::TypesDocument;
+use super::queries::{QueryEntry, QueryOrigin, QuerySource, convert_query};
+use super::{engine, query_files};
+#[cfg(feature = "host-queries")]
+use crate::typegen::Span;
+use crate::typegen::document::SchemaDocument;
+use crate::typegen::{Diagnostic, Severity, codes};
+use crate::variables::QueriesConfig;
+
+/// The text of the warning raised when queries are configured and the engine cannot type them.
+const UNSUPPORTED_SOURCE: &str = "[typegen.queries]";
+
+/// One query the project sends, and every place it is written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CollectedQuery {
+	/// The name of a query file's query; `None` for an inline query.
+	pub name: Option<String>,
+	/// The text the engine receives.
+	pub text: String,
+	/// Where it is written, in the order found.
+	pub sources: Vec<QuerySource>,
+}
+
+/// The queries of a project, before the engine types them.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Collected {
+	/// Named queries from query files, in path then position order.
+	pub named: Vec<CollectedQuery>,
+	/// Inline queries from host code, one per distinct text, in the order first found.
+	pub inline: Vec<CollectedQuery>,
+	/// What reading the query files found wrong.
+	pub diagnostics: Vec<Diagnostic>,
+}
+
+impl Collected {
+	/// Whether no query was found. Diagnostics may remain.
+	pub fn is_empty(&self) -> bool {
+		self.named.is_empty() && self.inline.is_empty()
+	}
+
+	/// What the engine types, as [`engine::types_document`] takes it: named queries with their
+	/// name, then inline ones without.
+	pub fn inputs(&self) -> Vec<(Option<String>, String)> {
+		self.named.iter().chain(&self.inline).map(|q| (q.name.clone(), q.text.clone())).collect()
+	}
+}
+
+/// Collects the project's queries as `config` names them. `root` is the base of
+/// `provenance.source.files` (the project folder): a path under it is written relative to it,
+/// and one outside it as given.
+///
+/// # Errors
+///
+/// Fails when a configured directory or source root does not exist, a file cannot be read, or
+/// `sources` is set in a build without the `host-queries` feature.
+pub fn collect(root: &str, config: &QueriesConfig) -> Result<Collected> {
+	let (files, diagnostics) = query_files::scan(&config.files)?;
+	let mut named = Vec::with_capacity(files.len());
+	for (path, query) in files {
+		named.push(CollectedQuery {
+			name: Some(query.name),
+			text: query.text,
+			sources: vec![QuerySource {
+				origin: QueryOrigin::File,
+				path: relative(root, &path)?,
+				span: query.span,
+				line: query.line,
+				column: query.column,
+				method: None,
+			}],
+		});
+	}
+	Ok(Collected {
+		named,
+		inline: inline(root, config)?,
+		diagnostics,
+	})
+}
+
+fn relative(root: &str, path: &std::path::Path) -> Result<String> {
+	crate::schema_state::folder_relative_key(root, path)
+}
+
+#[cfg(feature = "host-queries")]
+fn inline(root: &str, config: &QueriesConfig) -> Result<Vec<CollectedQuery>> {
+	if config.sources.is_empty() {
+		return Ok(Vec::new());
+	}
+	let methods: Vec<&str> = config.methods.iter().map(String::as_str).collect();
+	let mut inline: Vec<CollectedQuery> = Vec::new();
+	let mut by_text: HashMap<String, usize> = HashMap::new();
+	for found in super::extract::scan(&config.sources, &methods)? {
+		let source = QuerySource {
+			origin: QueryOrigin::Host,
+			path: relative(root, &found.file)?,
+			span: Span {
+				start: found.query.host_range.start,
+				end: found.query.host_range.end,
+			},
+			line: found.query.line,
+			column: found.query.column,
+			method: Some(found.query.method),
+		};
+		match by_text.get(&found.query.text) {
+			Some(&at) => inline[at].sources.push(source),
+			None => {
+				by_text.insert(found.query.text.clone(), inline.len());
+				inline.push(CollectedQuery {
+					name: None,
+					text: found.query.text,
+					sources: vec![source],
+				});
+			}
+		}
+	}
+	Ok(inline)
+}
+
+#[cfg(not(feature = "host-queries"))]
+fn inline(_root: &str, config: &QueriesConfig) -> Result<Vec<CollectedQuery>> {
+	if config.sources.is_empty() {
+		return Ok(Vec::new());
+	}
+	anyhow::bail!(
+		"[typegen.queries] sources needs the `host-queries` feature, which this build of \
+		 SurrealKit does not have; remove `sources`, or use a build with it"
+	)
+}
+
+/// The section's entries and diagnostics for `collected`, typed by `types`.
+///
+/// Entries are sorted by key, each one's sources by path then `span.start` and its params by
+/// name. Without a `types` document (an engine that cannot type queries) there are no entries
+/// and, when anything was collected, the warning `queries-unsupported-engine`. A kind the
+/// reader does not know is `query-kind-unrecognized` on its entry, and a key that two entries
+/// share is `query-name-duplicate`, the first one kept. The diagnostics include those of
+/// reading the query files. The document's own `types` are not used: schema document v2
+/// carries its own.
+pub fn assemble(
+	collected: &Collected,
+	types: Option<&TypesDocument>,
+) -> (Vec<QueryEntry>, Vec<Diagnostic>) {
+	let mut diagnostics = collected.diagnostics.clone();
+	let Some(types) = types else {
+		if !collected.is_empty() {
+			diagnostics.push(Diagnostic::new(
+				Severity::Warning,
+				codes::QUERIES_UNSUPPORTED_ENGINE,
+				UNSUPPORTED_SOURCE,
+				"queries are configured, but the engine cannot type them (SurrealDB before 4.1), \
+				 so the document has no `queries`",
+			));
+		}
+		return (Vec::new(), diagnostics);
+	};
+
+	let sources_of = |queries: &[CollectedQuery], key: &dyn Fn(&CollectedQuery) -> String| {
+		queries
+			.iter()
+			.map(|q| (key(q), q.sources.clone()))
+			.collect::<BTreeMap<String, Vec<QuerySource>>>()
+	};
+	let named = sources_of(&collected.named, &|q| q.name.clone().unwrap_or_default());
+	let inline = sources_of(&collected.inline, &|q| q.text.clone());
+
+	let mut entries: Vec<QueryEntry> = Vec::with_capacity(types.queries.len());
+	for query in &types.queries {
+		let (mut entry, unrepresented) = convert_query(query);
+		if entries.iter().any(|seen| seen.key == entry.key) {
+			diagnostics.push(
+				Diagnostic::new(
+					Severity::Error,
+					codes::QUERY_NAME_DUPLICATE,
+					entry.key.as_str(),
+					format!("two queries have the key {:?}; the first one is kept", entry.key),
+				)
+				.on_query(&entry.key),
+			);
+			continue;
+		}
+		for spelling in unrepresented {
+			diagnostics.push(
+				Diagnostic::new(
+					Severity::Warning,
+					codes::QUERY_KIND_UNRECOGNIZED,
+					spelling,
+					"the engine typed the query with a kind this SurrealKit does not know; it is \
+					 `unknown`",
+				)
+				.on_query(&entry.key),
+			);
+		}
+		let sources = match &entry.name {
+			Some(name) => named.get(name),
+			None => inline.get(&entry.text),
+		};
+		entry.sources = sources.cloned().unwrap_or_default();
+		entry.sources.sort_by(|a, b| (&a.path, a.span.start).cmp(&(&b.path, b.span.start)));
+		entry.params.sort_by(|a, b| a.name.cmp(&b.name));
+		entries.push(entry);
+	}
+	entries.sort_by(|a, b| a.key.cmp(&b.key));
+	(entries, diagnostics)
+}
+
+/// Types `collected` against `db` and sets `document.queries`, adding the diagnostics to
+/// `document.diagnostics`, which stay in canonical order. The digest is outside the section, so
+/// it does not change.
+pub async fn attach(
+	db: &Surreal<Any>,
+	collected: &Collected,
+	document: &mut SchemaDocument,
+) -> Result<()> {
+	let inputs = collected.inputs();
+	let types = if inputs.is_empty() {
+		None
+	} else {
+		engine::types_document(db, &inputs).await?
+	};
+	let (entries, diagnostics) = assemble(collected, types.as_ref());
+	document.queries = entries;
+	document.diagnostics.extend(diagnostics);
+	document.diagnostics =
+		crate::typegen::sort_diagnostics(std::mem::take(&mut document.diagnostics));
+	Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+	use serde_json::json;
+
+	use super::*;
+	use crate::typegen::Span;
+	use crate::typegen::document::QueryOrigin as Origin;
+
+	fn source(origin: Origin, path: &str, start: usize, method: Option<&str>) -> QuerySource {
+		QuerySource {
+			origin,
+			path: path.to_string(),
+			span: Span {
+				start,
+				end: start + 10,
+			},
+			line: 1,
+			column: 1,
+			method: method.map(str::to_string),
+		}
+	}
+
+	fn named(name: &str, text: &str, sources: Vec<QuerySource>) -> CollectedQuery {
+		CollectedQuery {
+			name: Some(name.to_string()),
+			text: text.to_string(),
+			sources,
+		}
+	}
+
+	fn inline_query(text: &str, sources: Vec<QuerySource>) -> CollectedQuery {
+		CollectedQuery {
+			name: None,
+			text: text.to_string(),
+			sources,
+		}
+	}
+
+	fn engine_document(queries: serde_json::Value) -> TypesDocument {
+		let doc = json!({ "format": "surrealdb.types", "version": 1, "queries": queries });
+		TypesDocument::from_json(&doc.to_string()).expect("document")
+	}
+
+	fn int_statement() -> serde_json::Value {
+		json!({ "kind_value": "Int", "certainty": "fact", "support": { "exact": true } })
+	}
+
+	#[test]
+	fn inputs_list_named_queries_with_their_name_then_inline_ones() {
+		let collected = Collected {
+			named: vec![named("A", "RETURN 1", vec![])],
+			inline: vec![inline_query("RETURN 2", vec![])],
+			diagnostics: vec![],
+		};
+		assert_eq!(
+			collected.inputs(),
+			[(Some("A".to_string()), "RETURN 1".to_string()), (None, "RETURN 2".to_string())]
+		);
+	}
+
+	#[test]
+	fn sources_are_attached_by_key_and_sorted_with_entries_and_params() {
+		let collected = Collected {
+			named: vec![named(
+				"Zeta",
+				"RETURN $b + $a",
+				vec![source(Origin::File, "q/z.surql", 5, None)],
+			)],
+			inline: vec![inline_query(
+				"RETURN 1",
+				vec![
+					source(Origin::Host, "src/b.ts", 7, Some("query")),
+					source(Origin::Host, "src/a.ts", 90, Some("run")),
+					source(Origin::Host, "src/a.ts", 20, Some("query")),
+				],
+			)],
+			diagnostics: vec![],
+		};
+		let types = engine_document(json!([
+			{ "name": "Zeta", "text": "RETURN $b + $a", "statements": [int_statement()],
+				"params": [{ "name": "b", "required": true }, { "name": "a", "required": true }] },
+			{ "text": "RETURN 1", "statements": [int_statement()] },
+			{ "name": "Alpha", "text": "RETURN 3", "statements": [int_statement()] },
+		]));
+		let (entries, diagnostics) = assemble(&collected, Some(&types));
+		assert!(diagnostics.is_empty(), "{diagnostics:?}");
+		let keys: Vec<&str> = entries.iter().map(|e| e.key.as_str()).collect();
+		assert_eq!(keys, ["Alpha", "RETURN 1", "Zeta"]);
+		let inline = &entries[1];
+		let places: Vec<(&str, usize)> =
+			inline.sources.iter().map(|s| (s.path.as_str(), s.span.start)).collect();
+		assert_eq!(places, [("src/a.ts", 20), ("src/a.ts", 90), ("src/b.ts", 7)]);
+		assert_eq!(inline.sources[1].method.as_deref(), Some("run"));
+		assert!(entries[0].sources.is_empty(), "an engine entry nothing collected has no sources");
+		let zeta = &entries[2];
+		assert_eq!(zeta.sources.len(), 1);
+		assert_eq!(zeta.sources[0].origin, Origin::File);
+		let params: Vec<&str> = zeta.params.iter().map(|p| p.name.as_str()).collect();
+		assert_eq!(params, ["a", "b"]);
+	}
+
+	#[test]
+	fn the_engines_own_types_are_not_used() {
+		let types = engine_document(json!([]));
+		let (entries, diagnostics) = assemble(&Collected::default(), Some(&types));
+		assert!(entries.is_empty() && diagnostics.is_empty());
+	}
+
+	#[test]
+	fn an_engine_that_cannot_type_queries_gives_a_warning_only_when_something_was_collected() {
+		let collected = Collected {
+			inline: vec![inline_query(
+				"RETURN 1",
+				vec![source(Origin::Host, "a.ts", 0, Some("query"))],
+			)],
+			..Collected::default()
+		};
+		let (entries, diagnostics) = assemble(&collected, None);
+		assert!(entries.is_empty());
+		assert_eq!(diagnostics.len(), 1);
+		assert_eq!(diagnostics[0].code, codes::QUERIES_UNSUPPORTED_ENGINE);
+		assert_eq!(diagnostics[0].severity, Severity::Warning);
+		assert!(diagnostics[0].query.is_none());
+
+		let (entries, diagnostics) = assemble(&Collected::default(), None);
+		assert!(entries.is_empty() && diagnostics.is_empty());
+	}
+
+	#[test]
+	fn reading_diagnostics_are_kept_with_or_without_an_engine() {
+		let problem =
+			Diagnostic::new(Severity::Error, codes::QUERY_TEXT_EMPTY, "-- name: A", "empty");
+		let collected = Collected {
+			diagnostics: vec![problem],
+			..Collected::default()
+		};
+		assert_eq!(assemble(&collected, None).1, collected.diagnostics);
+		assert_eq!(
+			assemble(&collected, Some(&engine_document(json!([])))).1,
+			collected.diagnostics
+		);
+	}
+
+	#[test]
+	fn an_unrepresented_kind_is_a_warning_on_its_entry() {
+		let types = engine_document(json!([
+			{ "name": "Odd", "text": "q1", "statements": [
+				{ "kind_value": { "Hologram": 1 }, "certainty": "fact" }
+			] },
+			{ "text": "q2", "statements": [
+				{ "kind_value": { "Quux": [] }, "certainty": "fact" }
+			] },
+		]));
+		let (entries, diagnostics) = assemble(&Collected::default(), Some(&types));
+		assert_eq!(entries.len(), 2);
+		let warnings: Vec<(&str, &str, Option<&str>)> = diagnostics
+			.iter()
+			.map(|d| (d.code.as_str(), d.source.as_str(), d.query.as_deref()))
+			.collect();
+		assert_eq!(
+			warnings,
+			[
+				("query-kind-unrecognized", r#"{"Hologram":1}"#, Some("Odd")),
+				("query-kind-unrecognized", r#"{"Quux":[]}"#, Some("q2")),
+			]
+		);
+		assert!(diagnostics.iter().all(|d| d.severity == Severity::Warning));
+	}
+
+	#[test]
+	fn a_named_query_and_an_inline_text_with_the_same_key_collide() {
+		let collected = Collected {
+			named: vec![named("Clash", "RETURN 1", vec![source(Origin::File, "q.surql", 0, None)])],
+			inline: vec![inline_query(
+				"Clash",
+				vec![source(Origin::Host, "a.ts", 3, Some("query"))],
+			)],
+			diagnostics: vec![],
+		};
+		let types = engine_document(json!([
+			{ "name": "Clash", "text": "RETURN 1", "statements": [int_statement()] },
+			{ "text": "Clash", "statements": [int_statement()] },
+		]));
+		let (entries, diagnostics) = assemble(&collected, Some(&types));
+		assert_eq!(entries.len(), 1);
+		assert_eq!(entries[0].name.as_deref(), Some("Clash"));
+		assert_eq!(entries[0].sources.len(), 1, "the inline source does not join the named entry");
+		assert_eq!(diagnostics.len(), 1);
+		assert_eq!(diagnostics[0].code, codes::QUERY_NAME_DUPLICATE);
+		assert_eq!(diagnostics[0].severity, Severity::Error);
+		assert_eq!(diagnostics[0].query.as_deref(), Some("Clash"));
+	}
+
+	#[test]
+	fn collect_reads_query_files_with_paths_relative_to_the_root() {
+		let dir = tempfile::TempDir::new().unwrap();
+		let root = dir.path().join("database");
+		std::fs::create_dir_all(root.join("queries")).unwrap();
+		std::fs::write(
+			root.join("queries/people.surql"),
+			"-- name: ListPeople\nSELECT name FROM person;\n-- name: Bad-Name\nRETURN 1;\n",
+		)
+		.unwrap();
+		let config = QueriesConfig {
+			files: vec![root.join("queries")],
+			..QueriesConfig::default()
+		};
+		let collected = collect(root.to_str().unwrap(), &config).unwrap();
+		assert_eq!(collected.named.len(), 1);
+		let query = &collected.named[0];
+		assert_eq!(query.name.as_deref(), Some("ListPeople"));
+		assert_eq!(query.sources[0].origin, Origin::File);
+		assert_eq!(query.sources[0].path, "queries/people.surql");
+		assert_eq!((query.sources[0].line, query.sources[0].column), (2, 1));
+		assert_eq!(collected.diagnostics.len(), 1);
+		assert_eq!(collected.diagnostics[0].code, codes::QUERY_NAME_INVALID);
+	}
+
+	#[cfg(feature = "host-queries")]
+	#[test]
+	fn collect_reads_host_code_and_merges_identical_text() {
+		let dir = tempfile::TempDir::new().unwrap();
+		let root = dir.path().join("database");
+		let src = dir.path().join("src");
+		std::fs::create_dir_all(&root).unwrap();
+		std::fs::create_dir_all(&src).unwrap();
+		std::fs::write(
+			src.join("a.ts"),
+			"db.query(\"SELECT 1\");\ndb.run(\"SELECT 2\");\ndb.other(\"SELECT 3\");\n",
+		)
+		.unwrap();
+		std::fs::write(src.join("b.ts"), "db.query(\"SELECT 1\");\n").unwrap();
+		let config = QueriesConfig {
+			sources: vec![src],
+			methods: vec!["query".into(), "run".into()],
+			..QueriesConfig::default()
+		};
+		let collected = collect(root.to_str().unwrap(), &config).unwrap();
+		assert!(collected.named.is_empty());
+		let texts: Vec<&str> = collected.inline.iter().map(|q| q.text.as_str()).collect();
+		assert_eq!(texts, ["SELECT 1", "SELECT 2"]);
+		let first = &collected.inline[0];
+		assert_eq!(first.sources.len(), 2, "one query, two call sites");
+		assert!(first.sources.iter().all(|s| s.origin == Origin::Host));
+		assert_eq!(first.sources[0].method.as_deref(), Some("query"));
+		assert_eq!(
+			first.sources[0].span,
+			Span {
+				start: 10,
+				end: 18
+			}
+		);
+		assert_eq!((first.sources[0].line, first.sources[0].column), (1, 11));
+		assert_eq!(collected.inline[1].sources[0].method.as_deref(), Some("run"));
+		assert_eq!(
+			collected.inputs(),
+			[(None, "SELECT 1".to_string()), (None, "SELECT 2".to_string())]
+		);
+	}
+
+	#[cfg(not(feature = "host-queries"))]
+	#[test]
+	fn host_sources_need_the_feature() {
+		let config = QueriesConfig {
+			sources: vec!["src".into()],
+			..QueriesConfig::default()
+		};
+		let err = collect("database", &config).unwrap_err().to_string();
+		assert!(err.contains("host-queries"), "{err}");
+	}
+
+	#[cfg(feature = "kv-mem")]
+	#[tokio::test]
+	async fn a_compile_on_this_engine_warns_and_keeps_the_digest() {
+		use crate::compile::{CompileModule, CompileOpts, compile};
+		use crate::schema_state::SchemaFile;
+		let module = CompileModule {
+			name: "default".into(),
+			files: vec![SchemaFile {
+				path: "schema/a.surql".into(),
+				sql: "DEFINE TABLE person SCHEMAFULL;\nDEFINE FIELD name ON person TYPE string;"
+					.into(),
+				hash: String::new(),
+			}],
+		};
+		let plain = compile(std::slice::from_ref(&module), &CompileOpts::default()).await.unwrap();
+		let collected = Collected {
+			inline: vec![inline_query(
+				"SELECT name FROM person",
+				vec![source(Origin::Host, "a.ts", 0, Some("query"))],
+			)],
+			..Collected::default()
+		};
+		let with = compile(
+			std::slice::from_ref(&module),
+			&CompileOpts {
+				queries: Some(collected),
+				..CompileOpts::default()
+			},
+		)
+		.await
+		.unwrap();
+		assert!(with.document.queries.is_empty());
+		assert_eq!(with.document.semantic_digest, plain.document.semantic_digest);
+		let added: Vec<&Diagnostic> = with
+			.document
+			.diagnostics
+			.iter()
+			.filter(|d| !plain.document.diagnostics.contains(d))
+			.collect();
+		assert_eq!(added.len(), 1);
+		assert_eq!(added[0].code, codes::QUERIES_UNSUPPORTED_ENGINE);
+		assert_eq!(with.document.without_queries(), plain.document);
+	}
+}

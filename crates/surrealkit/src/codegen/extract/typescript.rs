@@ -59,7 +59,8 @@ fn query_of(call: Node<'_>, source: &str, base: usize, methods: &[&str]) -> Opti
 		return None;
 	}
 	let method = function.child_by_field_name("property")?;
-	if !methods.contains(&&source[shifted(method, base)]) {
+	let method = &source[shifted(method, base)];
+	if !methods.contains(&method) {
 		return None;
 	}
 	let arguments = call.child_by_field_name("arguments")?;
@@ -70,8 +71,8 @@ fn query_of(call: Node<'_>, source: &str, base: usize, methods: &[&str]) -> Opti
 	let first = arguments.named_children(&mut walker).find(|child| child.kind() != "comment")?;
 	let literal = shifted(first, base);
 	match first.kind() {
-		"string" => string_query(source, literal),
-		"template_string" => template_query(source, literal, first, base),
+		"string" => string_query(source, literal, method),
+		"template_string" => template_query(source, literal, first, base, method),
 		_ => None,
 	}
 }
@@ -90,12 +91,12 @@ fn contents(source: &str, literal: &Range<usize>, delimiters: &[u8]) -> Option<R
 		.then(|| literal.start + 1..literal.end - 1)
 }
 
-fn string_query(source: &str, literal: Range<usize>) -> Option<HostQuery> {
+fn string_query(source: &str, literal: Range<usize>, method: &str) -> Option<HostQuery> {
 	let host_range = contents(source, &literal, b"\"'")?;
 	let mut text = String::new();
 	let mut segments = Vec::new();
 	decode(source, host_range.clone(), Quoting::String, &mut text, &mut segments)?;
-	Some(host_query(source, text, host_range, Vec::new(), segments))
+	Some(host_query(source, text, host_range, method, Vec::new(), segments))
 }
 
 /// Builds the query of a template literal: each chunk decodes to its runtime value and every
@@ -105,6 +106,7 @@ fn template_query(
 	literal: Range<usize>,
 	node: Node<'_>,
 	base: usize,
+	method: &str,
 ) -> Option<HostQuery> {
 	let host_range = contents(source, &literal, b"`")?;
 	let mut text = String::new();
@@ -127,13 +129,14 @@ fn template_query(
 		cursor = hole.end;
 	}
 	decode(source, cursor..host_range.end, Quoting::Template, &mut text, &mut segments)?;
-	Some(host_query(source, text, host_range, substitutions, segments))
+	Some(host_query(source, text, host_range, method, substitutions, segments))
 }
 
 fn host_query(
 	source: &str,
 	text: String,
 	host_range: Range<usize>,
+	method: &str,
 	substitutions: Vec<Substitution>,
 	segments: Vec<Segment>,
 ) -> HostQuery {
@@ -143,6 +146,7 @@ fn host_query(
 		host_range,
 		line,
 		column,
+		method: method.to_string(),
 		substitutions,
 		segments,
 	}

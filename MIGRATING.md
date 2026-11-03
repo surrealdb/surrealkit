@@ -8,7 +8,7 @@ filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
 Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and
-1.0.0-beta.7 two more (13 and 14). Unreleased changes are 15 to 19.
+1.0.0-beta.7 two more (13 and 14). Unreleased changes are 15 to 20.
 Upgrading from 0.7.0 or any 1.0 beta carries existing state forward; CI checks
 that against every published release.
 
@@ -747,3 +747,22 @@ SurrealQL".
 `analyze` is a new default cargo feature, which adds `notify` to the dependency tree. A build
 with `default-features = false` is unchanged. Without `analyze` the CLI has no `check` or
 `watch`, and `[analyze]` still parses.
+
+### 20. Typed queries (unreleased)
+
+Nothing to change. New, and opt-in: `[typegen.queries]` types the queries a project sends,
+named queries in `.surql` query files (`-- name: ListPeople`) and `db.query("…")` calls found
+in host code, into a `queries` section of schema document v2
+([section 19](docs/typegen/schema-document-v2.md#19-queries)) and, with
+`[typegen.queries] typescript`, a TypeScript module that types a client's `query()` by query
+text. The engine types the queries; SurrealDB before 4.1 cannot, so `compile` reports the
+warning `queries-unsupported-engine` and the document has no `queries`.
+
+A document without `[typegen.queries]` is unchanged, byte for byte, and `queries` is outside
+`semanticDigest`. An external emitter receives `queries` only with
+`[typegen.emit.<name>] queries = true`; every other emitter, `effect-surrealkit` included,
+receives the document it received before. `surrealkit generate` is another name for
+`surrealkit compile`.
+
+For library users: `TypegenOpts` and `CompileOpts` gain a `queries` field (`None` keeps the
+current behaviour), `SchemaDocument` gains `queries`, and `Diagnostic` gains `query`.
