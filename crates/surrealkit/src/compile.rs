@@ -161,10 +161,15 @@ pub(crate) enum Rejection {
 /// the statement as written, then the template variables, then [`prepare_schema_sql`] (every
 /// `DEFINE` but a sequence as `OVERWRITE`), then the engine, where a statement that fails is
 /// an error. `path` names the file in the messages.
+///
+/// `lets` are the `LET` statements the file ran before this one. A file is one query to
+/// [`compile`], so a `$param` a `LET` sets is visible to the statements after it; here each
+/// runs in front of `statement` to give it the same view.
 #[cfg(feature = "analyze")]
 pub(crate) async fn apply_statement(
 	db: &Surreal<Any>,
 	path: &str,
+	lets: &[&str],
 	statement: &str,
 	vars: &TemplateVars,
 ) -> std::result::Result<(), Rejection> {
@@ -174,7 +179,11 @@ pub(crate) async fn apply_statement(
 		sql: statement.to_string(),
 	};
 	crate::schema_state::parse_schema_statements(&as_written, false).map_err(Rejection::Refused)?;
-	let sql = vars.apply(statement).map_err(Rejection::Variable)?;
+	let mut sql = String::new();
+	for part in lets.iter().chain(std::iter::once(&statement)) {
+		sql.push_str(&vars.apply(part).map_err(Rejection::Variable)?);
+		sql.push_str(";\n");
+	}
 	let prepared = prepare_schema_sql(&sql).map_err(Rejection::Refused)?;
 	for warning in &prepared.warnings {
 		log::warn!("{path}: {warning}");
