@@ -215,11 +215,12 @@ pub enum Certainty {
 	Hint,
 }
 
-/// The type of one top-level statement's slot in the response.
+/// The type of one top-level statement's slot in the response. Every statement has one, in
+/// source order.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct QueryStatement {
-	/// Absent for a statement with no slot in the response (`BEGIN`, `COMMIT`, `CANCEL`).
+	/// Absent when the engine did not type the statement; `exact` is then `false`.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub kind: Option<Kind>,
 	/// The top-level kind admitted NONE: v2's rule for a top position folds it into this flag.

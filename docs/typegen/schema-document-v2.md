@@ -779,18 +779,21 @@ cannot type queries (SurrealDB before 4.1) gives no `queries` and the warning
 | `name` | A named query's name: an identifier (`[A-Za-z_][A-Za-z0-9_]*`), so a generator can use it as a function or type name as written. |
 | `text` | The query exactly as the engine receives it. For an inline query, each `${…}` substitution of a template literal is the parameter `$__hostN`, numbered from 0 in source order. |
 | `sources` | Where the query comes from, sorted by `path`, then `span.start`. A named query has one; an inline query has one per call site that passes the same text. `path` is relative to the directory the `[typegen.queries]` paths resolve against (the one SurrealKit runs in), `/`-separated. `span` is a UTF-8 byte range in the file: the query text of a named query, the literal's contents for an inline one. `line` and `column` are 1-based, of `span.start`; `column` counts Unicode scalar values. `method` (host only) is the client method the text was passed to. |
-| `statements` | One per top-level statement, in source order. |
+| `statements` | One per top-level statement, in source order: every statement, `BEGIN`, `COMMIT`, `CANCEL`, `USE` and `OPTION` included, has exactly one slot in the response, so `statements[i]` describes slot `i`. |
 | `params` | Each `$name` the query reads without binding it, that is neither a `DEFINE PARAM` nor a session parameter, sorted by name. Names start without `$`. A `__host`-prefixed parameter is filled by the host-language template, not by the caller. |
 
 A statement:
 
 | Property | Meaning |
 | --- | --- |
-| `kind` | The kind of the statement's slot in the response (section 4). Absent for a statement with no slot (`BEGIN`, `COMMIT`, `CANCEL`). `LET` and `DEFINE` have a slot of kind `none`. |
+| `kind` | The kind of the statement's slot in the response (section 4). `BEGIN`, `COMMIT`, `CANCEL`, `LET` and `DEFINE` have a slot of kind `none`. Absent when the engine did not type the statement: the slot is then any value, and `exact` is `false`. |
 | `optional` | The top-level kind admitted NONE. A statement's kind is a top position: NONE is folded into this flag, not into an `option`. |
 | `certainty` | `fact`: an engine invariant guarantees the kind. `hint`: the kind is declared but unproven (a schemaless or `FLEXIBLE` field, a computed field, anything inferred as `any`). |
 | `exact` | `false` when the engine approximated part of the kind with `any`. The kind is still a sound supertype of the result. |
 | `open` | Positions inside `kind` where an object admits undeclared keys, as path segments (section 6): `[]` is the kind itself, `"*"` steps into an array or set element, any other segment is an object-literal field. A path passes through `option` and `union`. |
+
+Each statement's kind assumes that every earlier statement of the query succeeded. After a
+statement fails, the kinds of the statements after it are not guaranteed.
 
 A parameter has `name`, `kind` (absent when nothing constrains it), `optional` (the kind
 admitted NONE, folded as for a statement) and `required` (the caller must bind it). A
@@ -869,6 +872,7 @@ async def query(
 ) -> tuple[list[ListPeopleRow]]: ...
 ```
 
-The result is a tuple with one item for each statement that has a `kind`. A statement that
-is `optional` adds `None`, and a parameter that is not `required` becomes a `NotRequired` key.
+The result is a tuple with one item for each statement, `Any` for one without a `kind`. A
+statement that is `optional` adds `None`, and a parameter that is not `required` becomes a
+`NotRequired` key.
 `open` paths make a row a plain `dict[str, Any]`, or a `TypedDict` with `extra_items`.

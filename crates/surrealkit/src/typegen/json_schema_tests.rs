@@ -429,15 +429,9 @@ fn queries_section() -> Value {
 				}
 			],
 			"statements": [
-				{ "optional": false, "certainty": "fact", "exact": true, "open": [] },
-				{
-					"kind": { "kind": "array", "item": { "kind": "object" } },
-					"optional": false,
-					"certainty": "hint",
-					"exact": false,
-					"open": [["*"]]
-				},
-				{ "optional": false, "certainty": "fact", "exact": true, "open": [] }
+				{ "kind": { "kind": "none" }, "optional": false, "certainty": "fact", "exact": true, "open": [] },
+				{ "optional": false, "certainty": "hint", "exact": false, "open": [] },
+				{ "kind": { "kind": "none" }, "optional": false, "certainty": "fact", "exact": true, "open": [] }
 			],
 			"params": [{ "name": "__host0", "optional": false, "required": true }]
 		}

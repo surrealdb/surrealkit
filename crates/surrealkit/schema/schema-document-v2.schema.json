@@ -946,13 +946,13 @@
 			}
 		},
 		"queryStatement": {
-			"description": "The type of one top-level statement's slot in the response.",
+			"description": "The type of one top-level statement's slot in the response. Every statement has one.",
 			"type": "object",
 			"additionalProperties": false,
 			"required": ["optional", "certainty", "exact", "open"],
 			"properties": {
 				"kind": {
-					"description": "Absent for a statement with no slot in the response (BEGIN, COMMIT, CANCEL).",
+					"description": "Absent when the engine did not type the statement; exact is then false.",
 					"$ref": "#/$defs/kind"
 				},
 				"optional": { "description": "The top-level kind admitted NONE.", "type": "boolean" },
