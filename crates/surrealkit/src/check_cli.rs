@@ -148,7 +148,7 @@ pub async fn check(opts: &Opts, format: CheckFormat) -> Result<i32> {
 
 /// Whether a change to `path` should run a check: a `.surql` file, `surrealkit.toml`, `.env` or
 /// `.env.local`, not under an ignored path.
-fn relevant(path: &Path, root: &Path, ignore: &Ignore) -> bool {
+fn relevant(path: &Path, root: &Path, ignore: Option<&Ignore>) -> bool {
 	let named = path
 		.file_name()
 		.and_then(|name| name.to_str())
@@ -156,9 +156,9 @@ fn relevant(path: &Path, root: &Path, ignore: &Ignore) -> bool {
 	if !named && path.extension().and_then(|ext| ext.to_str()) != Some("surql") {
 		return false;
 	}
-	match path.strip_prefix(root) {
-		Ok(relative) => !ignore.matches(relative),
-		Err(_) => true,
+	match (path.strip_prefix(root), ignore) {
+		(Ok(relative), Some(ignore)) => !ignore.matches(relative),
+		_ => true,
 	}
 }
 
@@ -212,10 +212,9 @@ pub async fn watch(opts: &Opts) -> Result<i32> {
 		let ignore = loaded.as_ref().map(|l| &l.ignore);
 		let changed = |event: notify::Result<notify::Event>| -> Option<PathBuf> {
 			match event {
-				Ok(event) if !matches!(event.kind, EventKind::Access(_)) => event
-					.paths
-					.into_iter()
-					.find(|path| ignore.is_none_or(|ignore| relevant(path, &events_root, ignore))),
+				Ok(event) if !matches!(event.kind, EventKind::Access(_)) => {
+					event.paths.into_iter().find(|path| relevant(path, &events_root, ignore))
+				}
 				Ok(_) => None,
 				Err(err) => {
 					eprintln!("watch error: {err}");

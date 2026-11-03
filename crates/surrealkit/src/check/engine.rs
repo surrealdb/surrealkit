@@ -74,12 +74,22 @@ impl Engine for SchemaApply {
 				return Ok(vec![Finding::kit(K9001, message, source.path.clone(), start..end)]);
 			}
 		};
-		let path = source.path.display().to_string();
+		let name = source.path.file_name().map_or_else(
+			|| source.path.display().to_string(),
+			|name| name.to_string_lossy().into_owned(),
+		);
 		let mut findings = Vec::new();
+		// The `LET`s that applied: a later statement may read what they set.
+		let mut lets: Vec<&str> = Vec::new();
 		for (index, statement) in statements.iter().enumerate() {
-			let applied = apply_statement(&self.db, &path, statement.text(text), vars).await;
+			let applied = apply_statement(&self.db, &name, &lets, statement.text(text), vars).await;
 			let finding = match applied {
-				Ok(()) => continue,
+				Ok(()) => {
+					if statement.is_word(text, 0, "LET") {
+						lets.push(statement.text(text));
+					}
+					continue;
+				}
 				Err(Rejection::Variable(err)) => {
 					let message = err.to_string();
 					let message =
@@ -189,6 +199,19 @@ mod tests {
 		vars.vars.insert("PREFIX".to_string(), "app".to_string());
 		let set = engine.apply(&source("DEFINE TABLE ${PREFIX}_t;"), &vars).await.unwrap();
 		assert!(set.is_empty(), "{set:#?}");
+	}
+
+	#[tokio::test]
+	async fn a_let_is_visible_to_the_statements_after_it_as_in_compile() {
+		let mut engine = SchemaApply::new(&[]).await.expect("engine");
+		let text = "LET $limit = 5;\nDEFINE PARAM $max VALUE $limit;\nDEFINE TABLE t;\n";
+		let findings = apply(&mut engine, text).await;
+		assert!(findings.is_empty(), "{findings:#?}");
+		// A `LET` that fails is reported once, not in front of every statement after it.
+		let text = "LET $v = ${NOPE};\nDEFINE TABLE a;\nDEFINE TABLE b;\n";
+		let findings = apply(&mut engine, text).await;
+		assert_eq!(findings.len(), 1, "{findings:#?}");
+		assert_eq!(findings[0].code, K9002);
 	}
 
 	#[tokio::test]
