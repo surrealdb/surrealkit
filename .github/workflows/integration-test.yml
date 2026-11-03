@@ -304,6 +304,10 @@ jobs:
             - name: Concurrency — two rollout up runs at once
               run: examples/rollout-repro/scenarios/ci_concurrency.sh
 
+            # Status, step and lock writes that lose a conflict are retried.
+            - name: Conflicts — rollout up while its own rows are rewritten
+              run: examples/rollout-repro/scenarios/ci_conflicts.sh
+
             # After a rollback: run it again, or discard it and plan again.
             - name: Rollback recovery — start again, or discard
               run: examples/rollout-repro/scenarios/ci_rollback_recovery.sh

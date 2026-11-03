@@ -8,7 +8,7 @@ filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
 Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and
-1.0.0-beta.7 two more (13 and 14). Unreleased changes are 15 to 17.
+1.0.0-beta.7 two more (13 and 14). Unreleased changes are 15 to 18.
 Upgrading from 0.7.0 or any 1.0 beta carries existing state forward; CI checks
 that against every published release.
 
@@ -406,6 +406,34 @@ section (everything else below is opt-in):
 - `surrealkit test --exec <cmd>` runs a command against each prepared suite database
   (and `--schema-from` now wins over a suite's `schema_from`; see the tester section).
 
+### 18. Rollout bookkeeping retries transaction conflicts (unreleased)
+
+Nothing to change. On a distributed SurrealDB, the small writes a rollout makes
+around its steps (taking and releasing the lock, recording each step, moving the
+status) can lose a transaction conflict. One lost conflict used to fail the run
+even when every step had run, and could leave the lock behind. Now:
+
+- Those writes are retried with backoff, up to six attempts, and each retry is
+  logged as a warning.
+- A rollout's record is read and written by its record id rather than by
+  scanning `__rollout`.
+- `rollout start` on a rollout that is `ready_to_complete` does nothing. It used
+  to write the status twice more, and a conflict between the two writes left the
+  rollout back in `running_start`. On a rollout that is `running_complete`, or
+  that failed while completing, `start` now refuses and points at
+  `rollout complete`.
+- `rollout repair` on a `running_start` rollout whose start steps all ran moves it
+  to `ready_to_complete` instead of `failed`.
+- `rollout complete` on a `failed` rollout refuses when its start phase did not
+  finish. Run `rollout start` again first; it carries on from the first step that
+  did not finish.
+- A lock's owner is now `<SURREALKIT_OWNER or surrealkit>/<pid>/<8 hex
+  characters>`. Containers reuse pids, so two CI runs could share the old
+  `surrealkit/<pid>` owner and release each other's lock. A release that fails is
+  reported with the statement that clears the lock, and that statement names the
+  lock's real partition (`lock@<module>` for a named module). A lock row written
+  by an older release is honoured until it expires, as before.
+
 ## Opting into multiple schema modules
 
 Adopting modules is additive. Your existing schema stays in the default module
@@ -644,6 +672,14 @@ From 1.0.0-beta.7:
 | `sync::SyncOpts { .. }` | gains `typegen_json_out` |
 | `variables::TypegenConfig { .. }` | gains `json`; `json_path()` resolves the file |
 | `tester::run_test(..)` | unchanged; `run_test_to(.., format, out)` writes the report to any writer |
+
+Unreleased:
+
+| 1.0.0-beta.7 | unreleased |
+|---|---|
+| `Rollout::start` on a rollout that is ready to complete | returns `Ok` and writes nothing, where it ran the start phase again |
+| `Rollout::start` on a rollout that is completing, or failed while completing | fails, pointing at `complete` |
+| `Rollout::complete` on a rollout that failed before its start phase finished | fails, where it ran the complete phase |
 
 New: `tester::{run_test_report, ReportFormat, RunReport, SuiteReport, CaseReport,
 AssertionReport}`, `typegen::write_json`, `selection::Selection` (the module and

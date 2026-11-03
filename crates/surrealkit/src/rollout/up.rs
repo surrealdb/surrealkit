@@ -10,7 +10,7 @@ use super::chain::{self, Baseline, ChainPlan, Ledger, RolloutChain};
 use super::frozen::{TargetCatalog, preflight_frozen};
 use super::{
 	LoadedRolloutSpec, LockKeepAlive, StepContext, acquire_lock, canonicalise_manifest_paths,
-	complete_inner, live_catalog, release_lock, start_inner,
+	complete_inner, finish_locked, live_catalog, start_inner,
 };
 use crate::constants::rollouts_dir;
 use crate::module::Module;
@@ -89,12 +89,7 @@ pub async fn run_up(
 	let keep_alive = LockKeepAlive::spawn(db, &lock);
 	let result = up_locked(db, folder, &chain, &opts, vars).await;
 	drop(keep_alive);
-	let release = release_lock(db, &lock).await;
-	match (result, release) {
-		(Err(err), _) => Err(err),
-		(Ok(_), Err(err)) => Err(err),
-		(Ok(report), Ok(())) => Ok(report),
-	}
+	finish_locked(db, &lock, result).await
 }
 
 async fn up_locked(

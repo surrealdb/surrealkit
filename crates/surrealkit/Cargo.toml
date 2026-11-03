@@ -85,6 +85,8 @@ required-features = ['cli']
 
 [dev-dependencies]
 tempfile = '3'
+# Paused time, so the conflict-retry tests do not sleep through real backoffs.
+tokio = { version = '1.47', features = ['test-util'] }
 test-case = '3'
 insta = { version = '1', features = ['json'] }
 # An in-process MCP client, so the protocol tests drive the real server over an
