@@ -575,7 +575,7 @@ async fn run_offline(args: &Cli) -> Result<Option<i32>> {
 			}
 			let raw_vars: Vec<(String, String)> =
 				args.var.iter().map(|s| parse_var_flag(s)).collect::<anyhow::Result<_>>()?;
-			let queries = surrealkit::typegen::queries_opts(&folder, &typegen_cfg)?;
+			let queries = surrealkit::typegen::queries_opts(&typegen_cfg)?;
 			let mut experimental = typegen_cfg.experimental.clone();
 			experimental.extend(allow_experimental.iter().cloned());
 			surrealkit::compile::run_compile(
@@ -1444,7 +1444,7 @@ async fn run(args: Cli) -> Result<i32> {
 					emitters: typegen_cfg.emitters()?,
 					acknowledge: typegen_cfg.acknowledgements()?,
 					emitter_failures_fatal: false,
-					queries: surrealkit::typegen::queries_opts(&folder, &typegen_cfg)?,
+					queries: surrealkit::typegen::queries_opts(&typegen_cfg)?,
 				},
 			)
 			.await?;

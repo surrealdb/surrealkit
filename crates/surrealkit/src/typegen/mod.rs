@@ -128,18 +128,15 @@ pub struct QueriesOpts {
 	pub render: crate::codegen::typescript::RenderOptions,
 }
 
-/// The `[typegen.queries]` options for a run, with the project's queries collected from disk
-/// (paths relative to `folder`, like `provenance.source.files`). `None` when the section is
-/// not configured.
-pub fn queries_opts(
-	folder: &str,
-	config: &crate::variables::TypegenConfig,
-) -> Result<Option<QueriesOpts>> {
+/// The `[typegen.queries]` options for a run, with the project's queries collected from disk.
+/// Their paths are relative to the current directory, which the configured paths resolve
+/// against. `None` when the section is not configured.
+pub fn queries_opts(config: &crate::variables::TypegenConfig) -> Result<Option<QueriesOpts>> {
 	let Some(queries) = config.queries_config()? else {
 		return Ok(None);
 	};
 	Ok(Some(QueriesOpts {
-		collected: crate::codegen::section::collect(folder, &queries)?,
+		collected: crate::codegen::section::collect(".", &queries)?,
 		typescript: config.queries_typescript()?,
 		render: queries.render_options(),
 	}))

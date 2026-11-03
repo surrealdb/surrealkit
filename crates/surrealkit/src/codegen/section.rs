@@ -58,13 +58,24 @@ impl Collected {
 	/// What the engine types, as [`engine::types_document`] takes it: named queries with their
 	/// name, then inline ones without.
 	pub fn inputs(&self) -> Vec<(Option<String>, String)> {
-		self.named.iter().chain(&self.inline).map(|q| (q.name.clone(), q.text.clone())).collect()
+		self.named
+			.iter()
+			.chain(self.inline.iter().filter(|q| !self.is_a_name(&q.text)))
+			.map(|q| (q.name.clone(), q.text.clone()))
+			.collect()
+	}
+
+	/// Whether `text` is also a named query's name, so an inline query with that text would
+	/// share its key. The engine refuses two inputs with one key, so such an inline query is
+	/// not sent.
+	fn is_a_name(&self, text: &str) -> bool {
+		self.named.iter().any(|q| q.name.as_deref() == Some(text))
 	}
 }
 
-/// Collects the project's queries as `config` names them. `root` is the base of
-/// `provenance.source.files` (the project folder): a path under it is written relative to it,
-/// and one outside it as given.
+/// Collects the project's queries as `config` names them. `root` is the directory the configured
+/// paths resolve against (the current directory): every source path is written relative to it,
+/// so query files and host code share one base.
 ///
 /// # Errors
 ///
@@ -158,6 +169,21 @@ pub fn assemble(
 	types: Option<&TypesDocument>,
 ) -> (Vec<QueryEntry>, Vec<Diagnostic>) {
 	let mut diagnostics = collected.diagnostics.clone();
+	for query in collected.inline.iter().filter(|q| collected.is_a_name(&q.text)) {
+		diagnostics.push(
+			Diagnostic::new(
+				Severity::Error,
+				codes::QUERY_NAME_DUPLICATE,
+				query.text.as_str(),
+				format!(
+					"an inline query's text is the name {:?} of a named query, so both would have \
+					 the key {:?}; the named query is kept",
+					query.text, query.text
+				),
+			)
+			.on_query(&query.text),
+		);
+	}
 	let Some(types) = types else {
 		if !collected.is_empty() {
 			diagnostics.push(Diagnostic::new(
@@ -421,9 +447,10 @@ mod tests {
 			)],
 			diagnostics: vec![],
 		};
+		// The engine refuses two inputs with one key, so the inline query is not sent.
+		assert_eq!(collected.inputs(), [(Some("Clash".to_string()), "RETURN 1".to_string())]);
 		let types = engine_document(json!([
 			{ "name": "Clash", "text": "RETURN 1", "statements": [int_statement()] },
-			{ "text": "Clash", "statements": [int_statement()] },
 		]));
 		let (entries, diagnostics) = assemble(&collected, Some(&types));
 		assert_eq!(entries.len(), 1);
