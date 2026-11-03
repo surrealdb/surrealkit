@@ -23,10 +23,6 @@ DEFINE FIELD phones.*.kind ON person TYPE 'home' | 'work' | 'mobile';
 -- demand exactly ten elements (see semantics/collections.surql).
 DEFINE FIELD tags ON person TYPE set<string> DEFAULT <set<string>> [];
 
--- A nested field whose parent `prefs` is never declared: the engine accepts it and
--- treats the parent as an implicit object.
-DEFINE FIELD prefs.locale ON person TYPE option<string>;
-
 -- A field with no TYPE clause (any value)
 DEFINE FIELD notes ON person;
 

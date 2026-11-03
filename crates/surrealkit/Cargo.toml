@@ -82,9 +82,8 @@ templates = ['dep:tempfile']
 mcp = ['templates', 'dep:rmcp']
 kv-mem = ['surrealdb/kv-mem']
 kv-surrealkv = ['surrealdb/kv-surrealkv']
-kv-rocksdb = ['surrealdb/kv-rocksdb']
 # Convenience: a full embedded CLI with every supported local engine.
-embedded = ['kv-surrealkv', 'kv-rocksdb', 'kv-mem']
+embedded = ['kv-surrealkv', 'kv-mem']
 
 [[bin]]
 name = 'surrealkit'

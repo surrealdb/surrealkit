@@ -44,9 +44,9 @@ const DB_CATEGORIES: &[&str] = &[
 	"users",
 ];
 
-/// The `INFO FOR TABLE` categories the fallback reads (`lives` and `tables` are not schema of
-/// the table).
-const TABLE_CATEGORIES: &[&str] = &["events", "fields", "indexes", "lives", "tables"];
+/// The `INFO FOR TABLE` categories the fallback reads (`lives`, `tables` and 4.0's `migrations`
+/// are not schema of the table).
+const TABLE_CATEGORIES: &[&str] = &["events", "fields", "indexes", "lives", "migrations", "tables"];
 
 /// Read a whole schema from plain `INFO` results.
 pub(super) fn read(db_info: &Value, tables_info: &[(String, Value)]) -> RawSchema {

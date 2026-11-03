@@ -185,7 +185,7 @@ export const PersonMerge = Schema.Struct({
 	pattern: Schema.optional(PersonFields.pattern),
 	phones: Schema.optionalKey(PersonFields.phones),
 	pins: Schema.optionalKey(PersonFields.pins),
-	prefs: Schema.optional(Schema.Struct({
+	prefs: Schema.optionalKey(Schema.Struct({
 		locale: Schema.optional(SurrealSchema.String),
 	})),
 	role: Schema.optionalKey(PersonFields.role),
@@ -234,9 +234,9 @@ export const PersonContent = Schema.Struct({
 	pattern: Schema.optionalKey(PersonFields.pattern),
 	phones: PersonFields.phones,
 	pins: PersonFields.pins,
-	prefs: Schema.optionalKey(Schema.Struct({
+	prefs: Schema.Struct({
 		locale: Schema.optionalKey(SurrealSchema.String),
-	})),
+	}),
 	role: PersonFields.role,
 	score: PersonFields.score,
 	session_ttl: PersonFields.session_ttl,
@@ -294,7 +294,7 @@ export const PersonTable = SurrealSchema.table({
 		pattern: { select: "optional", create: "optional", merge: "removable", content: "optional" },
 		phones: { select: "required", create: "optional", merge: "optional", content: "required" },
 		pins: { select: "required", create: "optional", merge: "optional", content: "required" },
-		prefs: { select: "required", create: "optional", merge: "resettable", content: "optional" },
+		prefs: { select: "required", create: "optional", merge: "optional", content: "required" },
 		referenced_by: { select: "optional", create: "excluded", merge: "excluded", content: "excluded" },
 		role: { select: "required", create: "optional", merge: "optional", content: "required" },
 		score: { select: "required", create: "required", merge: "optional", content: "required" },

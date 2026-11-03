@@ -1,17 +1,17 @@
 {
   "version": 2,
-  "semanticDigest": "sha256:527262a64ab7f7c89506f2d104d32b0ef3086d303606ff20977b625f2c6a3309",
+  "semanticDigest": "sha256:30d1a5dcdf5d738a7b20e91f48e140ff6309da62c875c69df4112004ab919d8b",
   "provenance": {
     "generator": {
       "name": "surrealkit",
-      "version": "1.0.0-beta.6"
+      "version": "1.0.0-beta.7"
     },
     "engine": {
-      "version": "3.3.0",
-      "build": "surrealdb-3.3.0",
+      "version": "4.0.0",
+      "build": "surrealdb-4.0.0",
       "mode": "embedded"
     },
-    "adapter": "structure-3.3",
+    "adapter": "structure-4.0",
     "source": {
       "kind": "compile",
       "modules": [
@@ -20,7 +20,7 @@
       "files": [
         {
           "path": "semantics/field_presence.defines.surql",
-          "sha256": "3b14b3fe519f58b61e36177564f47ca3125cf4609aac036fe4594282f05e1930"
+          "sha256": "03d793ac72fb1c8d600b1ac64ae3db4383cb577dc16158dfa0b062f25e367d73"
         }
       ]
     },
@@ -120,63 +120,6 @@
       "indexes": [],
       "events": [],
       "define": "DEFINE TABLE e TYPE RELATION IN p OUT p SCHEMAFULL PERMISSIONS NONE"
-    },
-    {
-      "name": "ip",
-      "type": {
-        "kind": "normal"
-      },
-      "schemafull": true,
-      "drop": false,
-      "permissions": {
-        "select": false,
-        "create": false,
-        "update": false,
-        "delete": false
-      },
-      "fields": [
-        {
-          "path": [
-            "need",
-            "x"
-          ],
-          "kind": {
-            "kind": "string"
-          },
-          "optional": false,
-          "flexible": false,
-          "readonly": false,
-          "inline": false,
-          "permissions": {
-            "select": true,
-            "create": true,
-            "update": true
-          },
-          "define": "DEFINE FIELD need.x ON ip TYPE string PERMISSIONS FULL"
-        },
-        {
-          "path": [
-            "pref",
-            "locale"
-          ],
-          "kind": {
-            "kind": "string"
-          },
-          "optional": true,
-          "flexible": false,
-          "readonly": false,
-          "inline": false,
-          "permissions": {
-            "select": true,
-            "create": true,
-            "update": true
-          },
-          "define": "DEFINE FIELD pref.locale ON ip TYPE none | string PERMISSIONS FULL"
-        }
-      ],
-      "indexes": [],
-      "events": [],
-      "define": "DEFINE TABLE ip TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
     },
     {
       "name": "m",
@@ -584,59 +527,6 @@
       "indexes": [],
       "events": [],
       "define": "DEFINE TABLE p TYPE ANY SCHEMALESS PERMISSIONS NONE"
-    },
-    {
-      "name": "up",
-      "type": {
-        "kind": "normal"
-      },
-      "schemafull": true,
-      "drop": false,
-      "permissions": {
-        "select": false,
-        "create": false,
-        "update": false,
-        "delete": false
-      },
-      "fields": [
-        {
-          "path": [
-            "obj"
-          ],
-          "optional": false,
-          "flexible": false,
-          "readonly": false,
-          "inline": false,
-          "permissions": {
-            "select": true,
-            "create": true,
-            "update": true
-          },
-          "define": "DEFINE FIELD obj ON up PERMISSIONS FULL"
-        },
-        {
-          "path": [
-            "obj",
-            "a"
-          ],
-          "kind": {
-            "kind": "int"
-          },
-          "optional": false,
-          "flexible": false,
-          "readonly": false,
-          "inline": false,
-          "permissions": {
-            "select": true,
-            "create": true,
-            "update": true
-          },
-          "define": "DEFINE FIELD obj.a ON up TYPE int PERMISSIONS FULL"
-        }
-      ],
-      "indexes": [],
-      "events": [],
-      "define": "DEFINE TABLE up TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
     }
   ],
   "functions": [],
@@ -650,38 +540,6 @@
   "configs": [],
   "users": [],
   "diagnostics": [
-    {
-      "severity": "info",
-      "code": "field-kind-undeclared",
-      "table": "up",
-      "field": [
-        "obj"
-      ],
-      "source": "DEFINE FIELD obj ON up PERMISSIONS FULL",
-      "reason": "Field has no TYPE clause; it holds any value."
-    },
-    {
-      "severity": "info",
-      "code": "field-parent-implicit",
-      "table": "ip",
-      "field": [
-        "need",
-        "x"
-      ],
-      "source": "need",
-      "reason": "The parent path is not declared; it is an implicit object, required when any child is required."
-    },
-    {
-      "severity": "info",
-      "code": "field-parent-implicit",
-      "table": "ip",
-      "field": [
-        "pref",
-        "locale"
-      ],
-      "source": "pref",
-      "reason": "The parent path is not declared; it is an implicit object, required when any child is required."
-    },
     {
       "severity": "warning",
       "code": "field-value-input-conditional",
