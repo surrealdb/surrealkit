@@ -8,7 +8,7 @@ filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
 Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and
-1.0.0-beta.7 one more (13).
+1.0.0-beta.7 two more (13 and 14).
 Upgrading from 0.7.0 or any 1.0 beta carries existing state forward; CI checks
 that against every published release.
 
@@ -312,6 +312,15 @@ reports its version and its failures the way every component does.
   instead of `Error: <message>` and a `Caused by:` list. The exit code is
   unchanged.
 - `--json` is new: see [Version and output for scripts](README.md#version-and-output-for-scripts).
+
+### 14. A rollout id has to be a plain name (1.0.0-beta.7)
+
+A manifest's `id` names its directory, `rollouts/<id>/`, which `rollout
+discard` deletes. An id that contains `/` or `\`, or is `.` or `..`, is now
+refused when the manifest is loaded, because `id = "../../src"` made `rollout
+discard --keep-snapshots` delete the project's `src/`. Every id `rollout plan`
+writes is already a plain name, so this only affects a manifest whose id was
+edited by hand.
 
 ## Opting into multiple schema modules
 

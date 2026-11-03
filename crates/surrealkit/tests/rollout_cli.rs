@@ -387,3 +387,37 @@ fn the_folder_flag_chooses_where_rollout_files_go() {
 	assert_eq!(planned.len(), 2, "a manifest and its frozen directory under --folder");
 	assert!(fs::read_dir(root.join("database/rollouts")).unwrap().next().is_none());
 }
+
+/// `discard` deletes `rollouts/<id>/` recursively and `freeze` writes there, and
+/// the id comes from inside the manifest, not from the command line. Before
+/// 1.0.0-beta.7 nothing checked it, so `id = "../../src"` made `rollout discard
+/// --keep-snapshots` delete the project's `src/`.
+#[test]
+fn a_manifest_id_cannot_reach_outside_rollouts() {
+	let dir = TempDir::new().unwrap();
+	let root = dir.path();
+	write_project(root, "");
+	fs::create_dir_all(root.join("src")).unwrap();
+	fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+	fs::write(
+		root.join("database/rollouts/crafted.toml"),
+		"id = \"../../src\"\nname = \"crafted\"\n",
+	)
+	.unwrap();
+
+	for args in [
+		&["rollout", "discard", "crafted.toml", "--keep-snapshots"][..],
+		&["rollout", "discard", "crafted.toml"][..],
+		&["rollout", "freeze", "crafted.toml"][..],
+	] {
+		let output = run(root, args);
+		let text = combined(&output);
+		assert!(!output.status.success(), "{args:?} should refuse: {text}");
+		assert!(text.contains("not a plain name"), "{args:?} should say why: {text}");
+		assert!(root.join("src/main.rs").exists(), "{args:?} reached outside rollouts/");
+		assert!(
+			root.join("database/rollouts/crafted.toml").exists(),
+			"{args:?} deleted the manifest"
+		);
+	}
+}

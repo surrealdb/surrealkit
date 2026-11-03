@@ -357,66 +357,16 @@ pub struct InitReport {
 pub(super) fn contain_rollout_selector(ctx: &CallContext, selector: &str) -> Result<String> {
 	let looks_like_path =
 		selector.contains('/') || selector.contains('\\') || selector.ends_with(".toml");
-	let selector = if looks_like_path {
+	// The manifest's own id is checked by the library when it loads it, since
+	// that id names `rollouts/<id>/`, which `discard` deletes recursively.
+	if looks_like_path {
 		let rollouts = crate::constants::rollouts_dir(&ctx.folder);
-		safe_join(&rollouts, selector)
+		return Ok(safe_join(&rollouts, selector)
 			.with_context(|| format!("resolving rollout manifest {selector:?}"))?
 			.to_string_lossy()
-			.into_owned()
-	} else {
-		selector.to_string()
-	};
-	// The manifest it resolves to must carry a plain id too. A missing manifest
-	// is left for the command itself to report.
-	if let Ok(path) = crate::rollout::resolve_rollout_path(&ctx.folder, Some(&selector))
-		&& let Ok(loaded) = crate::rollout::load_rollout_spec(path)
-	{
-		check_rollout_id(&loaded.spec.id)?;
+			.into_owned());
 	}
-	Ok(selector)
-}
-
-/// Refuse a manifest whose `id` is not a single plain name.
-///
-/// The id names the rollout's own directory, `rollouts/<id>/`, which frozen
-/// starts read SQL from, `freeze` writes to, and `discard` deletes recursively.
-/// The selector is contained above, but a manifest sitting inside `rollouts/`
-/// can still carry an id like `../../src`, and a manifest is a project file:
-/// here it is untrusted input chosen by whatever wrote the repository.
-fn check_rollout_id(id: &str) -> Result<()> {
-	let mut components = std::path::Path::new(id).components();
-	let plain = matches!(
-		(components.next(), components.next()),
-		(Some(std::path::Component::Normal(_)), None)
-	) && !id.contains(['/', '\\']);
-	if !plain {
-		bail!(
-			"rollout manifest has id {id:?}, which is not a plain name. The id names the \
-			 rollout's directory under rollouts/, so it must not contain a path separator or \
-			 `..`. Fix the manifest's `id` before running rollout tools against it."
-		);
-	}
-	Ok(())
-}
-
-/// Check every manifest under `rollouts/`, for the tools that walk all of them.
-///
-/// Manifests that do not load are skipped: the command reports those itself, and
-/// a file that cannot be parsed has no id to misuse.
-pub(super) fn check_all_rollout_ids(ctx: &CallContext) -> Result<()> {
-	let rollouts = crate::constants::rollouts_dir(&ctx.folder);
-	let Ok(entries) = std::fs::read_dir(&rollouts) else {
-		return Ok(());
-	};
-	for entry in entries.flatten() {
-		let path = entry.path();
-		if path.extension().is_some_and(|ext| ext == "toml")
-			&& let Ok(loaded) = crate::rollout::load_rollout_spec(path)
-		{
-			check_rollout_id(&loaded.spec.id)?;
-		}
-	}
-	Ok(())
+	Ok(selector.to_string())
 }
 
 /// Build the tool router.

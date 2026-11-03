@@ -2792,10 +2792,13 @@ fn embedded_to_schema_files(files: &[crate::sync::EmbeddedSchemaFile]) -> Vec<Sc
 		.collect()
 }
 
-pub(crate) fn load_rollout_spec(path: PathBuf) -> Result<LoadedRolloutSpec> {
+fn load_rollout_spec(path: PathBuf) -> Result<LoadedRolloutSpec> {
 	let raw = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
 	let spec: RolloutSpec =
 		toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
+	// Before `frozen_root` is built from it: a manifest is a file anyone can edit,
+	// and its id is about to become a directory.
+	validate_rollout_id(&spec.id).with_context(|| format!("checking {}", path.display()))?;
 	let frozen_root = path.parent().map(|dir| dir.join(&spec.id));
 	Ok(LoadedRolloutSpec {
 		path,
@@ -2810,7 +2813,7 @@ pub(crate) fn load_rollout_spec(path: PathBuf) -> Result<LoadedRolloutSpec> {
 /// Only files match. Since 1.0.0-beta.6 each manifest has a directory of frozen
 /// files beside it with the same name as its id, and matching that directory
 /// failed `rollout start <id>` with "Is a directory".
-pub(crate) fn resolve_rollout_path(folder: &str, selector: Option<&str>) -> Result<PathBuf> {
+fn resolve_rollout_path(folder: &str, selector: Option<&str>) -> Result<PathBuf> {
 	let selector = selector.ok_or_else(|| anyhow!("rollout id or path is required"))?;
 	let rd = rollouts_dir(folder);
 	let candidates =
@@ -2821,10 +2824,35 @@ pub(crate) fn resolve_rollout_path(folder: &str, selector: Option<&str>) -> Resu
 	bail!("unable to find rollout '{}'", selector)
 }
 
-fn validate_rollout_spec(spec: &RolloutSpec) -> Result<()> {
-	if spec.id.trim().is_empty() {
+/// A rollout id has to be a single plain name.
+///
+/// The id names the rollout's own directory, `rollouts/<id>/`, which frozen
+/// starts read SQL from, `plan` and `freeze` write, and `discard` deletes with
+/// `remove_dir_all`. Unchecked, a manifest with `id = "../../src"` turned
+/// `rollout discard` into a recursive delete of the project's `src/`. The ids
+/// `plan` writes are `<timestamp>__<slug>`, and `slugify` keeps only `[a-z0-9_]`,
+/// so this never rejects one SurrealKit wrote itself.
+fn validate_rollout_id(id: &str) -> Result<()> {
+	if id.trim().is_empty() {
 		bail!("rollout id is required");
 	}
+	let mut components = Path::new(id).components();
+	let plain = matches!(
+		(components.next(), components.next()),
+		(Some(std::path::Component::Normal(_)), None)
+	) && !id.contains(['/', '\\']);
+	if !plain {
+		bail!(
+			"rollout id {id:?} is not a plain name. The id names the rollout's directory under \
+			 rollouts/, so it cannot contain a path separator or be \".\" or \"..\". Ids that \
+			 `rollout plan` writes look like 20261001042758__add_notes."
+		);
+	}
+	Ok(())
+}
+
+fn validate_rollout_spec(spec: &RolloutSpec) -> Result<()> {
+	validate_rollout_id(&spec.id)?;
 	// Half frozen is never right: the frozen half can run anywhere, the rest only
 	// against the schema it was planned from, and nothing could say which applies.
 	if spec.has_frozen_files() && !spec.is_frozen() {
@@ -5816,5 +5844,49 @@ files = ["schema/a.surql", { path = "schema/b.surql", hash = "h" }]
 		assert_eq!(relevant_warnings(&db, warnings()).await.len(), 2);
 		assert_eq!(bare_ident("`member`"), "member");
 		assert_eq!(bare_ident("⟨member⟩"), "member");
+	}
+
+	// ---- rollout ids ------------------------------------------------------------
+
+	#[test]
+	fn a_rollout_id_must_be_a_plain_name() {
+		for id in ["20261001042758__add_notes", "hand_written", "v2-schema", "with space"] {
+			validate_rollout_id(id).unwrap_or_else(|err| panic!("{id:?} should pass: {err:#}"));
+		}
+		for id in ["../../src", "a/b", "a\\b", ".", "..", "/abs", "./x", "x/"] {
+			let err = validate_rollout_id(id).expect_err(id).to_string();
+			assert!(err.contains("not a plain name"), "{id:?}: {err}");
+		}
+		assert!(validate_rollout_id("  ").unwrap_err().to_string().contains("required"));
+	}
+
+	#[test]
+	fn every_id_plan_can_write_is_a_plain_name() {
+		// `plan` builds `<timestamp>__<slug>`, so the check must never refuse one,
+		// whatever name it was given.
+		for name in ["add notes", "../../etc/passwd", "a/b\\c", "..", "   ", "ünïcode", ""] {
+			let id = format!("20261001042758__{}", slugify(name));
+			validate_rollout_id(&id).unwrap_or_else(|err| panic!("{name:?} -> {id:?}: {err:#}"));
+		}
+	}
+
+	#[test]
+	fn a_manifest_whose_id_leaves_rollouts_does_not_load() {
+		let dir = tempfile::TempDir::new().unwrap();
+		let path = dir.path().join("crafted.toml");
+		std::fs::write(&path, "id = \"../../src\"\nname = \"crafted\"\n").unwrap();
+		let err = load_rollout_spec(path).map(|_| ()).unwrap_err();
+		let rendered = format!("{err:#}");
+		assert!(rendered.contains("not a plain name"), "{rendered}");
+		assert!(rendered.contains("crafted.toml"), "the error should name the file: {rendered}");
+	}
+
+	#[test]
+	fn a_code_defined_spec_whose_id_leaves_rollouts_is_refused() {
+		// `Rollout::new(spec, ..).folder(..)` joins the id onto rollouts/ too.
+		let mut spec = golden_spec(vec!["schema/a.surql".into()]);
+		spec.id = "../outside".into();
+		let err = validate_rollout_spec(&spec).unwrap_err().to_string();
+		assert!(err.contains("not a plain name"), "{err}");
 	}
 }

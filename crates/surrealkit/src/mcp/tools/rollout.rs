@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 
 use super::{
 	BaselineInput, RolloutPlanInput, RolloutSelectorInput, RolloutStatusInput, TargetOutcome,
-	WorkRequest, check_all_rollout_ids, connect_single, contain_rollout_selector,
+	WorkRequest, connect_single, contain_rollout_selector,
 };
 use crate::mcp::SurrealKitMcp;
 use crate::mcp::error;
@@ -192,10 +192,7 @@ impl SurrealKitMcp {
 				let ctx = server.context(&input.work)?;
 				let selector = match &input.rollout_id {
 					Some(id) => Some(contain_rollout_selector(&ctx, id)?),
-					None => {
-						check_all_rollout_ids(&ctx)?;
-						None
-					}
+					None => None,
 				};
 				// Lint never executes a step, so it takes no deadline.
 				crate::rollout::run_lint(&ctx.folder, RolloutExecutionOpts::new(selector.clone()))
@@ -518,8 +515,6 @@ impl SurrealKitMcp {
 			|| async move {
 				let ctx = server.context(&input.work)?;
 				let selection = ctx.selection(&input.work)?;
-				// `up` walks every manifest, so every manifest has to pass.
-				check_all_rollout_ids(&ctx)?;
 				let _rollouts = server.lock_rollouts().await;
 				let _guard = server.lock_folder(&ctx.folder).await;
 				let (db, target) = connect_single(&selection).await?;
