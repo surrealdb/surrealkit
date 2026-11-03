@@ -633,6 +633,131 @@ database and the schema digest, and removes the database afterwards (see
 [Running your own tests against the suite database](#running-your-own-tests-against-the-suite-database)).
 effect-surrealkit's own round-trip properties run that way.
 
+## Checking SurrealQL
+
+`surrealkit check` is a lint for the SurrealQL in a project, for CI and for the editor
+loop. It reads, and connects to nothing:
+
+- the schema files of the selected modules (`--schema`, `--all` and `--no-deps` work as
+  they do for `compile`), in `depends_on` order;
+- every other `.surql` file under the project root: queries, seed files, anything. The
+  built-in ignores `target`, `node_modules` and `.git` apply, as do `[analyze] ignore`,
+  the schema directories of every declared module, each module's `rollouts` and
+  `snapshots`, `<folder>/tests` and `<folder>/setup.surql`.
+
+The project root is the working directory, and the database folder is `--folder` or
+`./database`, exactly as for `compile`. Like `compile`, it reads no connection settings
+(`SURREALDB_*`, `.env`, `[target.*]`), so a lint runs in a job with no credentials. Template
+variables come from `surrealkit.toml [variables]` and `--var`.
+
+```bash
+surrealkit check                    # findings on stderr, like rustc; exit 1 on an error
+surrealkit check --format json      # one JSON document on stdout (same as -j/--json)
+surrealkit check --format sarif     # one SARIF 2.1.0 document on stdout, for code scanning
+surrealkit watch                    # check again on every change, until Ctrl-C
+surrealkit check --watch            # the same
+```
+
+```text
+error[K9003]: Cannot define field `x.y`: the field `x` it is nested in is not defined. Define `x` first
+ --> database/schema/002_bad.surql:2:1
+  |
+2 | DEFINE FIELD x.y ON t TYPE string;
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+checked 3 schema files and 0 query files: 1 error, 0 warnings
+```
+
+**Exit codes.** `0` when no finding is an error after policy; `1` when one is, and also
+when the command itself fails (a bad `[analyze]` key, an unreadable file). Under `--json`
+(or `--format json`) a failure is the usual JSON error envelope on stderr and stdout stays
+empty; a report, even a failing one, is never an envelope. `watch` is for a person and takes
+no `--json`.
+
+**What it finds in this build.** SurrealKit applies each schema file, in order, to a
+throwaway in-memory engine, the way `compile` does (no network, no scripting), one
+statement at a time so each failing statement is its own finding and the next still
+applies:
+
+| Code | Meaning | Default |
+|---|---|---|
+| `K9001` | a file SurrealKit cannot split into statements (an unterminated string, an unmatched bracket) | deny |
+| `K9002` | a template variable a statement uses is not set | deny |
+| `K9003` | a schema statement the engine rejected, or one `sync` refuses (a `REMOVE`, a non-`DEFINE`) | deny |
+| `L7013` | a malformed or reasonless suppression comment (below) | warn |
+
+Query type checking, the `E` and the other `L` codes, arrives with the engine's own checker
+(the SDK's `Surreal::check`, SurrealDB 4.1). The 4.0 build applies and reports schema only:
+query files are counted, and the summary says that they were found but not analyzed.
+Findings, policy and suppressions already follow the engine's contract, so the checker is a
+drop-in behind the same configuration. SurrealQL embedded in host-language files
+(`db.query("...")` in TypeScript, say) is not read; only `.surql` files are.
+
+**Policy: `[analyze]` in `surrealkit.toml`.** The section parses in every build, with or
+without the `analyze` feature.
+
+```toml
+[analyze]
+# Query files to skip, beyond target, node_modules and .git. A name (no `/`) matches any
+# path component; a path with a `/` is relative to the project root and matches everything
+# under it. No globs. An ignore that covers a schema directory is an error.
+ignore = ["dist", "src/generated"]
+# Report every default-level warning as an error (a CI gate). A code with a level of its own
+# in [analyze.lints] is not raised.
+warnings_as_errors = false
+# Require reason="..." on every suppression comment.
+require_suppression_reason = true
+
+[analyze.lints]
+"7xxx" = "warn"   # a family: 7xxx, 7XXX or 7*
+E1002 = "allow"   # one code: E1002, or the bare number 1002
+K9003 = "deny"
+```
+
+A level is `allow` (drop the finding), `warn` or `deny`. The first entry that matches wins:
+the exact code, then its family, then the code's own default level (where
+`warnings_as_errors` applies). A code whose severity is a hint stays a hint under `warn`.
+There is no `strict` or `surrealdb_version` key: the checker runs against the engine
+SurrealKit embeds. An unknown key, or a key or level that is not understood, is an error.
+
+**Suppressions.** A `--`, `//` or `#` line comment silences one code on one line:
+
+```sql
+-- surreal: allow(E1002) reason="legacy column, removed in the next migration"
+SELECT nickname FROM user;
+SELECT nickname FROM user; -- surreal: allow(E1002)
+```
+
+On a line of its own it covers findings that start on the next line; after code, those on
+its own line. The target is one code (`E1002`, or `1002`); `*`, a family or a name is
+rejected. `surrealql-analyzer:` is accepted in place of `surreal:`. Comments are found by
+lexing, so a `--` inside a string is not one, and block comments are not read. A malformed
+directive is the warning `L7013` and suppresses nothing; with `require_suppression_reason`,
+one without a reason is `L7013` too but still suppresses.
+
+**In CI.** The plain gate:
+
+```yaml
+- run: surrealkit check
+```
+
+With code scanning:
+
+```yaml
+- run: surrealkit check --format sarif > surrealql.sarif
+- uses: github/codeql-action/upload-sarif@v3
+  if: always()
+  with: { sarif_file: surrealql.sarif, category: surrealql }
+```
+
+(`surreal kit check` is the same command.) `--format sarif` exits 1 on an error, so the
+upload step needs `if: always()`; the findings appear as code-scanning alerts. The upload
+needs the job permission `security-events: write`.
+
+The `check` and `watch` commands, and the `surrealkit::check` library module, are the
+`analyze` cargo feature, on by default. `cargo install surrealkit --no-default-features
+--features kv-mem,cli` builds the CLI without them.
+
 ## MCP Server
 
 `surrealkit mcp` serves every SurrealKit capability to an AI coding agent over the

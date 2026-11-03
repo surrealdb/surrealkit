@@ -12,10 +12,18 @@
 //! 4. Name lists are sorted and deduplicated; literal-object fields are sorted by name.
 //! 5. Literal values are strings (booleans excepted) in their SurrealQL spelling without the
 //!    type suffix.
+//! 6. SurrealDB 4.0's sized numbers carry their width: `i8`/`i16`/`i32` are `int` with `width`,
+//!    `u8`…`u64` are `int` with `width` and `signed: false`, `f16`/`f32` are `float` with `width`.
+//!    The engine renders `i64` and `f64` as `int` and `float`, so those carry no width. A width
+//!    is part of a kind's identity: `i8 | int` is a union of two variants.
+//! 7. The other 4.0 kinds have nodes of their own: `date`, `time`, `timestamp`, `interval`,
+//!    `bigdecimal`; `enum<'a', 'b'>` is `enum` with its labels in declaration order (exempt from
+//!    rules 3 and 4: the order is semantic, nothing is sorted or deduplicated); a `DEFINE TYPE`
+//!    name is `named`.
 
 use super::canonical::canonical_of;
 use super::document::{Kind, LiteralType, LiteralValue, ObjectLiteralField};
-use super::type_parser::{KindProblem, parse_type_checked};
+use super::type_parser::{KindProblem, SizedNumber, V2Extension, parse_type_v2, v2_extension};
 use super::types::{FieldType, LiteralType as V1LiteralType, PrimitiveType};
 
 /// A kind parsed from engine text, at a top-level position.
@@ -30,12 +38,81 @@ pub(super) struct ParsedKind {
 /// Parse `text` as a kind in a top-level position (field, literal-object field, function
 /// argument): a `none` variant becomes `optional`.
 pub(super) fn parse_top(text: &str) -> ParsedKind {
-	let (parsed, problems) = parse_type_checked(text);
+	let (parsed, problems) = parse_type_v2(text);
 	let (kind, optional) = top(&parsed);
 	ParsedKind {
 		kind,
 		optional,
-		problems,
+		problems: unlowered(text, problems),
+	}
+}
+
+/// Parse `text` as a kind in a value position, such as a `DEFINE TYPE`'s kind: a `none` variant
+/// is an `option`, not optionality.
+pub(super) fn parse_value(text: &str) -> ParsedKind {
+	let (parsed, problems) = parse_type_v2(text);
+	ParsedKind {
+		kind: nested(&parsed),
+		optional: false,
+		problems: unlowered(text, problems),
+	}
+}
+
+/// The problems of `text` that remain once the kinds this module lowers to nodes are accounted
+/// for: a problem the parser `understood` is one such kind, and is dropped. Should one not
+/// lower after all, it stays, as an error.
+fn unlowered(text: &str, problems: Vec<KindProblem>) -> Vec<KindProblem> {
+	problems
+		.into_iter()
+		.filter_map(|problem| {
+			if !problem.understood {
+				return Some(problem);
+			}
+			match text.get(problem.span.clone()).and_then(extension) {
+				Some(_) => None,
+				None => Some(KindProblem {
+					understood: false,
+					..problem
+				}),
+			}
+		})
+		.collect()
+}
+
+/// The node for kind text that [`parse_type_v2`] leaves as `unknown`: a sized number, `date`,
+/// `time`, `timestamp`, `interval`, `bigdecimal`, an `enum<…>` or a `DEFINE TYPE` name.
+fn extension(source: &str) -> Option<Kind> {
+	Some(match v2_extension(source)? {
+		V2Extension::Sized(number) => sized(number),
+		V2Extension::Plain(name) => match name.as_str() {
+			"date" => Kind::Date,
+			"time" => Kind::Time,
+			"timestamp" => Kind::Timestamp,
+			"interval" => Kind::Interval,
+			"bigdecimal" => Kind::BigDecimal,
+			_ => return None,
+		},
+		V2Extension::Enum(labels) => Kind::Enum {
+			labels,
+		},
+		V2Extension::Named(name) => Kind::Named {
+			name,
+		},
+	})
+}
+
+/// A sized number: `int`/`float` with the width the engine would not render away. `i64` and
+/// `f64` are what `int` and `float` already mean, so they carry none.
+fn sized(number: SizedNumber) -> Kind {
+	if number.float {
+		Kind::Float {
+			width: (number.width != 64).then_some(number.width),
+		}
+	} else {
+		Kind::Int {
+			width: (number.width != 64 || !number.signed).then_some(number.width),
+			signed: (!number.signed).then_some(false),
+		}
 	}
 }
 
@@ -193,11 +270,13 @@ fn lower(ty: &FieldType) -> Kind {
 				fields,
 			}
 		}
+		// The 4.0 kinds `parse_type_v2` leaves as unknown have nodes; anything else is
+		// unknown for good.
 		FieldType::Unknown {
 			source,
-		} => Kind::Unknown {
+		} => extension(source).unwrap_or_else(|| Kind::Unknown {
 			source: source.clone(),
-		},
+		}),
 		// Handled by `collect`; lowering them on their own still has to mean something.
 		FieldType::Union {
 			..
@@ -211,8 +290,8 @@ fn lower(ty: &FieldType) -> Kind {
 fn primitive(name: PrimitiveType) -> Kind {
 	match name {
 		PrimitiveType::String => Kind::String,
-		PrimitiveType::Int => Kind::Int,
-		PrimitiveType::Float => Kind::Float,
+		PrimitiveType::Int => Kind::int(),
+		PrimitiveType::Float => Kind::float(),
 		PrimitiveType::Bool => Kind::Bool,
 		PrimitiveType::Number => Kind::Number,
 		PrimitiveType::Decimal => Kind::Decimal,
@@ -372,13 +451,198 @@ mod tests {
 		);
 	}
 
+	/// A sized number keeps its width, wherever a kind may appear; the engine's own `int` and
+	/// `float` (`i64`, `f64`) carry none.
+	#[test]
+	fn sized_numbers_carry_their_width_everywhere() {
+		for (text, node) in [
+			("i8", json!({"kind": "int", "width": 8})),
+			("i16", json!({"kind": "int", "width": 16})),
+			("i32", json!({"kind": "int", "width": 32})),
+			("i64", json!({"kind": "int"})),
+			("u8", json!({"kind": "int", "width": 8, "signed": false})),
+			("u16", json!({"kind": "int", "width": 16, "signed": false})),
+			("u32", json!({"kind": "int", "width": 32, "signed": false})),
+			("u64", json!({"kind": "int", "width": 64, "signed": false})),
+			("f16", json!({"kind": "float", "width": 16})),
+			("f32", json!({"kind": "float", "width": 32})),
+			("f64", json!({"kind": "float"})),
+			("U8", json!({"kind": "int", "width": 8, "signed": false})),
+		] {
+			assert_eq!(kind(text), (node.clone(), false), "{text}");
+			assert_eq!(kind(&format!("option<{text}>")), (node.clone(), true), "{text}");
+			assert_eq!(
+				kind(&format!("array<{text}, 2>")),
+				(json!({"kind": "array", "item": node.clone(), "length": 2}), false),
+				"{text}"
+			);
+			assert_eq!(
+				kind(&format!("set<none | {text}>")),
+				(json!({"kind": "set", "item": {"kind": "option", "item": node.clone()}}), false),
+				"{text}"
+			);
+			assert_eq!(
+				kind(&format!("[{text}, string]")),
+				(json!({"kind": "tuple", "items": [node.clone(), {"kind": "string"}]}), false),
+				"{text}"
+			);
+			assert_eq!(
+				kind(&format!("{{ a: {text}, b: none | {text} }}")),
+				(
+					json!({"kind": "objectLiteral", "fields": [
+						{"name": "a", "kind": node.clone(), "optional": false},
+						{"name": "b", "kind": node.clone(), "optional": true},
+					]}),
+					false
+				),
+				"{text}"
+			);
+		}
+	}
+
+	/// A width is part of a kind's identity: unions deduplicate on it and do not collapse
+	/// `i8 | int` into `int`.
+	#[test]
+	fn widths_are_part_of_a_unions_identity() {
+		assert_eq!(
+			kind("i8 | i8 | i64 | int"),
+			(
+				json!({"kind": "union", "variants": [
+					{"kind": "int", "width": 8},
+					{"kind": "int"},
+				]}),
+				false
+			)
+		);
+		assert_eq!(
+			kind("f32 | f64 | u16 | string"),
+			(
+				json!({"kind": "union", "variants": [
+					{"kind": "float", "width": 32},
+					{"kind": "float"},
+					{"kind": "int", "signed": false, "width": 16},
+					{"kind": "string"},
+				]}),
+				false
+			)
+		);
+	}
+
+	#[test]
+	fn the_other_four_oh_kinds_have_nodes() {
+		for (text, node) in [
+			("date", json!({"kind": "date"})),
+			("time", json!({"kind": "time"})),
+			("timestamp", json!({"kind": "timestamp"})),
+			("interval", json!({"kind": "interval"})),
+			("bigdecimal", json!({"kind": "bigdecimal"})),
+			("mood", json!({"kind": "named", "name": "mood"})),
+			("Mood2", json!({"kind": "named", "name": "Mood2"})),
+			("`my type`", json!({"kind": "named", "name": "my type"})),
+			("⟨odd name⟩", json!({"kind": "named", "name": "odd name"})),
+		] {
+			assert_eq!(kind(text), (node.clone(), false), "{text}");
+			assert_eq!(kind(&format!("none | {text}")), (node.clone(), true), "{text}");
+			assert_eq!(
+				kind(&format!("array<none | {text}>")),
+				(json!({"kind": "array", "item": {"kind": "option", "item": node.clone()}}), false),
+				"{text}"
+			);
+		}
+	}
+
+	/// An enum keeps its labels exactly: unescaped, in declaration order, duplicates and all.
+	#[test]
+	fn an_enum_keeps_its_labels_in_declaration_order() {
+		assert_eq!(
+			kind("enum<'z', 'a', 'm'>"),
+			(json!({"kind": "enum", "labels": ["z", "a", "m"]}), false)
+		);
+		assert_eq!(
+			kind("enum<'a', 'a', 'b'>"),
+			(json!({"kind": "enum", "labels": ["a", "a", "b"]}), false)
+		);
+		// The spellings the engine writes (probed on 4.0): `'` inside a label switches to
+		// double quotes, a backslash is doubled.
+		assert_eq!(
+			kind(r#"enum<'a', 'b c', "it's", 'q"x', 'back\\slash', 'é ☃', ''>"#),
+			(
+				json!({"kind": "enum", "labels": ["a", "b c", "it's", "q\"x", "back\\slash", "é ☃", ""]}),
+				false
+			)
+		);
+		assert_eq!(
+			kind("none | enum<'b', 'a'>"),
+			(json!({"kind": "enum", "labels": ["b", "a"]}), true)
+		);
+		// In a union the enum is one variant; the union sorts its variants, not its labels, and
+		// two enums are the same variant only when their labels are in the same order.
+		assert_eq!(
+			kind("enum<'b', 'a'> | int"),
+			(
+				json!({"kind": "union", "variants": [
+					{"kind": "enum", "labels": ["b", "a"]},
+					{"kind": "int"},
+				]}),
+				false
+			)
+		);
+		assert_eq!(
+			kind("enum<'b', 'a'> | enum<'a', 'b'> | enum<'b', 'a'>"),
+			(
+				json!({"kind": "union", "variants": [
+					{"kind": "enum", "labels": ["a", "b"]},
+					{"kind": "enum", "labels": ["b", "a"]},
+				]}),
+				false
+			)
+		);
+	}
+
+	/// Names that were never kinds stay errors and do not become `named`.
+	#[test]
+	fn names_that_are_not_kinds_are_still_unknown() {
+		for text in ["either", "references", "literal", "mood<int>", "date<int>", "i32<int>"] {
+			let parsed = parse_top(text);
+			assert_eq!(parsed.problems.len(), 1, "{text}");
+			assert_eq!(parsed.problems[0].diagnostic(text).code, "kind-unrecognized", "{text}");
+			assert!(matches!(parsed.kind, Kind::Unknown { .. }), "{text}: {:?}", parsed.kind);
+		}
+		for text in ["enum", "enum<>", "enum<1>", "enum<'a'"] {
+			let parsed = parse_top(text);
+			assert_eq!(parsed.problems.len(), 1, "{text}");
+			assert!(matches!(parsed.kind, Kind::Unknown { .. }), "{text}");
+		}
+	}
+
+	/// A `DEFINE TYPE`'s kind is a value kind: NONE is an `option`, not optionality.
+	#[test]
+	fn a_type_kind_keeps_none_as_an_option() {
+		let parsed = parse_value("none | string");
+		assert!(!parsed.optional);
+		assert_eq!(
+			serde_json::to_value(&parsed.kind).unwrap(),
+			json!({"kind": "option", "item": {"kind": "string"}})
+		);
+		let parsed = parse_value("'sad' | 'ok'");
+		assert!(parsed.problems.is_empty());
+		assert_eq!(
+			serde_json::to_value(&parsed.kind).unwrap(),
+			json!({"kind": "union", "variants": [
+				{"kind": "literal", "type": "string", "value": "ok"},
+				{"kind": "literal", "type": "string", "value": "sad"},
+			]})
+		);
+	}
+
 	#[test]
 	fn unparseable_text_is_unknown_with_a_problem() {
-		let parsed = parse_top("array<frob>");
+		let parsed = parse_top("array<frob<int>>");
 		assert_eq!(parsed.problems.len(), 1);
 		assert_eq!(
 			serde_json::to_value(&parsed.kind).unwrap(),
-			json!({"kind": "array", "item": {"kind": "unknown", "source": "frob"}})
+			json!({"kind": "array", "item": {"kind": "unknown", "source": "frob<int>"}})
 		);
+		assert_eq!(parsed.problems[0].diagnostic("array<frob<int>>").code, "kind-unrecognized");
 	}
 }

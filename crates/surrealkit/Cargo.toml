@@ -31,7 +31,7 @@ sha2 = '0.10'
 surrealdb = { workspace = true }
 surrealdb-types = { workspace = true }
 time = { version = '0.3', features = ['macros', 'formatting'] }
-tokio = { version = '1.47', features = ['macros', 'rt-multi-thread', 'signal', 'time'] }
+tokio = { version = '1.47', features = ['macros', 'rt-multi-thread', 'signal', 'sync', 'time'] }
 walkdir = { workspace = true }
 reqwest = { version = '0.12', default-features = false, features = ['json', 'rustls-tls'] }
 regex = '1'
@@ -48,6 +48,9 @@ tree-sitter-typescript = { version = '0.23', optional = true }
 # versions with it); `transport-io` is stdio. `default-features = false` drops
 # `base64`, which nothing here uses.
 rmcp = { version = '1.7.0', default-features = false, features = ['server', 'macros', 'transport-io'], optional = true }
+# `surrealkit watch`: file-change events. Only the macOS FSEvents backend is named; Linux
+# (inotify) and the BSDs need no feature.
+notify = { version = '8', optional = true, default-features = false, features = ['macos_fsevent'] }
 
 [features]
 # The published CLI binary bundles only the in-memory engine, keeping the
@@ -59,7 +62,7 @@ rmcp = { version = '1.7.0', default-features = false, features = ['server', 'mac
 # Cargo unifies features across the dependency graph, so enabling e.g.
 # `surrealdb/kv-surrealkv` in your own crate is enough for SurrealKit's
 # `Surreal<Any>` to open `surrealkv://`.
-default = ['kv-mem', 'cli']
+default = ['kv-mem', 'cli', 'analyze']
 # The `surrealkit` binary. On by default so `cargo install surrealkit` works, but
 # `default-features = false` drops clap, inquire, rustls (and its aws-lc-rs
 # backend) and tempfile from a library consumer's dependency tree -- none of them
@@ -80,6 +83,12 @@ templates = ['dep:tempfile']
 # designed -- in stateless mode MCP requires no handshake, so an unauthenticated
 # port would expose arbitrary SurrealQL execution.)
 mcp = ['templates', 'dep:rmcp']
+# `surrealkit check` and `surrealkit watch` (and `surrealkit::check`): static checks of a
+# project's SurrealQL, against an in-memory engine and with no database. It needs the
+# in-memory engine and does NOT imply `cli`, so a library consumer can run a check without
+# clap. `[analyze]` in surrealkit.toml parses whether or not this feature is on, so one
+# config file serves every build.
+analyze = ['kv-mem', 'dep:notify']
 kv-mem = ['surrealdb/kv-mem']
 kv-surrealkv = ['surrealdb/kv-surrealkv']
 # Convenience: a full embedded CLI with every supported local engine.
@@ -115,6 +124,11 @@ required-features = ['mcp', 'cli']
 name = 'mcp_stdout_purity'
 path = 'tests/mcp_stdout_purity.rs'
 required-features = ['mcp', 'cli']
+
+[[test]]
+name = 'check_cli'
+path = 'tests/check_cli.rs'
+required-features = ['analyze', 'cli']
 
 [lints]
 workspace = true

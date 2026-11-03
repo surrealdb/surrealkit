@@ -1,7 +1,8 @@
 #![doc = include_str!("../README.md")]
 
-// `generate`: TypeScript from the engine's `TypesDocument`, plus per-query types
-// for the queries host code sends.
+pub mod check;
+// Per-query TypeScript from the `queries` section of schema document v2, and the
+// host-code query extraction that feeds it.
 pub mod codegen;
 pub mod compile;
 pub mod config;
@@ -35,6 +36,8 @@ pub mod variables;
 
 // Re-exported dependencies used in the public API surface.
 pub use anyhow;
+// The `[analyze]` section of surrealkit.toml.
+pub use check::AnalyzeConfig;
 // Connecting.
 pub use config::{AuthLevel, DbCfg, DbOverrides, connect};
 // Rollouts (the staged, reversible path).

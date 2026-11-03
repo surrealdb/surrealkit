@@ -97,13 +97,18 @@ every supported minor (`info_and_structure_agree_on_3_2_4`, `…_3_3_0`).
   "functions": [ … ],              // section 10
   "params": [ … ], "accesses": [ … ], "analyzers": [ … ], "sequences": [ … ],
   "buckets": [ … ], "apis": [ … ], "modules": [ … ], "configs": [ … ], "users": [ … ],
+  "types": [ … ],                  // section 11; SurrealDB 4.0 DEFINE TYPE; omitted when empty
   "diagnostics": [ … ]             // section 14; excluded from the digest
 }
 ```
 
 Rules that apply everywhere:
 
-- Every top-level array is present, even when empty.
+- Every top-level array is present, even when empty, except `types` (an additive extension,
+  like an access's `authenticate`, section 13): it is omitted when the database defines no
+  type. A document without types is therefore byte-for-byte, and digest-for-digest, what
+  it was before `types` existed, and a reader accepts an older document that lacks it
+  without inserting a default.
 - Properties marked required in the JSON Schema are always present. Optional properties
   are omitted when they do not apply; they are never `null`.
 - There is no generation timestamp and no physical namespace or database in the
@@ -142,6 +147,11 @@ returns (`"none | array<record<team>>"`) into this tree.
 | SurrealQL | v2 kind |
 | --- | --- |
 | `any`, `null`, `bool`, `int`, `float`, `decimal`, `number`, `string`, `datetime`, `duration`, `uuid`, `bytes`, `regex`, `range`, `function`, `object` | `{ "kind": "<name>" }` |
+| SurrealDB 4.0 `date`, `time`, `timestamp`, `interval`, `bigdecimal` | `{ "kind": "<name>" }`, the engine's lowercase spelling |
+| SurrealDB 4.0 `i8`, `i16`, `i32`, `u8`, `u16`, `u32`, `u64` | `{ "kind": "int", "width": 8\|16\|32\|64, "signed"?: false }` — `signed: false` for `uN`, absent for `iN`. `i64` is the engine's `int`: it renders as `int` and carries no width, and a producer never writes `i64` as a width. |
+| SurrealDB 4.0 `f16`, `f32` | `{ "kind": "float", "width": 16\|32 }` — `f64` is the engine's `float`, with no width |
+| SurrealDB 4.0 `enum<'a', 'b'>` | `{ "kind": "enum", "labels": ["a", "b"] }` — the string values themselves, unescaped, in declaration order; not a union |
+| SurrealDB 4.0 `mood`, a `DEFINE TYPE` name (bare or quoted) | `{ "kind": "named", "name": "mood" }`; the document's `types` define it (section 11) |
 | `none` (alone) | `{ "kind": "none" }` |
 | `record`, `record<a \| b>` | `{ "kind": "record", "tables": ["a", "b"] }` — empty = any table |
 | `table`, `table<a \| b>` | `{ "kind": "table", "tables": [...] }` |
@@ -169,9 +179,15 @@ Normalisation rules (each MUST be applied):
    `optional: true`.
 3. **Unions are canonical.** Variants are flattened, deduplicated and sorted by their
    canonical JSON (section 13). A union has at least two variants; one survivor replaces
-   the union. Authored order carries no meaning and does not survive.
+   the union. Authored order carries no meaning and does not survive. A width is part of a
+   kind's identity: `i8 | int` is a union of `{ "kind": "int", "width": 8 }` and
+   `{ "kind": "int" }`, not `int`. An `enum` is one variant, compared by its labels in
+   order: `enum<'a', 'b'>` and `enum<'b', 'a'>` are different variants.
 4. **Name lists are sorted and deduplicated**: `record.tables`, `table.tables`,
-   `file.buckets`, `geometry.types`. `literal-object` fields are sorted by name (the engine
+   `file.buckets`, `geometry.types`. `enum.labels` is **not** one: the engine compares,
+   ranges and sorts an enum field by declaration rank (`ORDER BY e` on `enum<'z', 'a', 'm'>`
+   returns `z`, `a`, `m`), so the labels keep their declaration order, and a repeated label
+   is kept (the engine accepts `enum<'a', 'a'>`). `literal-object` fields are sorted by name (the engine
    already sorts them: `{ n: int, region: string }`).
 5. **Literals.** `value` is a JSON boolean for `bool`, otherwise a string: strings
    unquoted and unescaped; numbers and durations in their SurrealQL spelling without the
@@ -464,6 +480,7 @@ are descriptive metadata, not typed application contracts.
 | `modules` | `{ name, executable: { type, bucket?, key? }, permissions, comment? }` | `name` gets its `mod::` prefix back. 3.3's `unsigned` flag is not carried: modules are unsigned on every supported version. 4.0 calls them extensions; its `digest` and `capabilities` are not carried either (section 15). |
 | `configs` | `{ type: "graphql", tables, functions }` or `{ type: "api", middleware, permissions }` | |
 | `users` | `{ name, roles, durations, comment? }` | Password hashes and SCRAM material are never copied. |
+| `types` | `{ name, kind, comment? }` | SurrealDB 4.0 `DEFINE TYPE`. `kind` is a value kind (section 4): a `none` variant is `{ "kind": "option", … }`, never optionality. A field typed with the name is `{ "kind": "named", "name" }`, so a generator can expand the reference or emit an alias. An `ASSERT`, `PERMISSIONS` other than `FULL`, and the declaration order of a string-literal union (which the engine ranks by, as it does an `enum`) are not carried: each gives a `definition-unsupported` warning. The plain-`INFO` reader does not read types (section 15). Omitted when empty (section 2). |
 
 `models` is always empty on the supported builds (`DEFINE MODEL` is rejected without the
 ML feature). Any entry in a category the contract does not model produces warning
@@ -473,13 +490,13 @@ ML feature). Any entry in a category the contract does not model produces warnin
 
 | Collection | Order |
 | --- | --- |
-| tables, functions, params, accesses, analyzers, sequences, buckets, modules, users, indexes, events | `name`, byte order |
+| tables, functions, params, accesses, analyzers, sequences, buckets, modules, users, types, indexes, events | `name`, byte order |
 | apis | `path`; configs: `type` |
 | fields | `path`, compared segment by segment in byte order, a prefix before its extensions |
 | relation `in`/`out`, `record.tables`, `table.tables`, `file.buckets`, `geometry.types`, api `methods`, user `roles`, `provenance.source.modules`, `capabilities.experimental` | sorted, deduplicated |
 | union variants, `literals` values, api `actions`, `diagnostics` | canonical JSON (section 13), byte order |
 | `provenance.source.files` | `path`, byte order |
-| function `args`, tuple `items`, event `then`, analyzer `tokenizers`/`filters` | declared order (meaningful) |
+| function `args`, tuple `items`, event `then`, analyzer `tokenizers`/`filters`, `enum.labels` | declared order (meaningful) |
 | literal-object `fields` | `name`, byte order |
 
 "Byte order" is the order of the UTF-8 encodings.
@@ -551,6 +568,7 @@ reason, in its configuration. Codes are stable identifiers; reasons are not.
 | `field-reference-unrecognized` | error | A `REFERENCE` `ON DELETE` action is none of the known ones; `onDelete` is recorded as `ignore`. |
 | `object-without-fields` | error | On a SCHEMAFULL table, an `object` field (also under `option`/`\| null`, or the element of an `array`/`set`) that is not FLEXIBLE and has no declared fields. SurrealDB 3.2 and 3.3 refuse every undeclared key of it, so it holds only `{}` (evidence: `semantics/objects.surql`). A FLEXIBLE array opens its elements. |
 | `field-name-run-together` | warning | A top-level field name is an object field's name run straight into a lowercase word (`envelopealgorithm` beside `envelope`): perhaps a child path missing its dot. Heuristic. |
+| `kind-not-represented` | warning | A kind parsed, but names a SurrealDB 4.x kind the reader has no node for (the v1 TypeScript generator reads `date`, `enum<…>` and a type name as `unknown`). A v2 producer with the 4.x nodes never raises it. |
 | `definition-unsupported` | warning | INFO returned an entry in a category this contract does not model (e.g. models). |
 | `field-id-clauses-ignored` | warning | `DEFINE FIELD id` carries clauses other than `TYPE`. |
 | `field-computed-kind-undeclared` | warning | `COMPUTED` without `TYPE`. |
@@ -593,7 +611,8 @@ What 4.0.0 changes, relative to 3.3.0 (`structure-4.0`):
 | Area | 4.0.0 | Adapter rule |
 | --- | --- | --- |
 | Modules | `DEFINE MODULE` defines an extension, listed as `extensions` (`name` without `ext::`) in place of `modules`, with `digest` and `capabilities` besides `unsigned`. The embedded engine requires `DIGEST` when it cannot read the archive | Same `modules` entry, named `mod::<name>`; `digest` and `capabilities` are not carried and each gives a `definition-unsupported` warning |
-| `DEFINE TYPE` | listed as `types` | not carried; `definition-unsupported` warning per type |
+| `DEFINE TYPE` | listed as `types`: `name`, `kind` (the engine's text), `comment?`, `asserts`, `permissions`, and `labels` for a union of string literals | read into `types` (section 11). `asserts`, `permissions` other than `true` and `labels` are known keys that are not carried: one `definition-unsupported` warning each. The plain-`INFO` reader (`info`) does not read `DEFINE TYPE`: it warns `definition-unsupported` per type, so a document read that way has dangling `named` kinds. |
+| 4.0 kinds | `i8`…`u64`, `f16`, `f32`, `date`, `time`, `timestamp`, `interval`, `bigdecimal`, `enum<…>`, type names | the kind nodes of section 4; SurrealKit schema files cannot define a type, so `types` and `named` arise from introspection of a database (not from `compile`) |
 | `compatibility` | the database's compatibility level | never copied |
 | Bucket `presign_nonce` | random for every definition | never copied |
 | Table `migrations` | `generation` counter, `guaranteed` and `migrations` lists | never copied |

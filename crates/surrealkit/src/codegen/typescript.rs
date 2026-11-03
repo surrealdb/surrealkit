@@ -187,13 +187,30 @@ impl Emitter<'_> {
 			Kind::Any
 			| Kind::Function
 			| Kind::Regex
+			| Kind::Date
+			| Kind::Time
+			| Kind::Timestamp
+			| Kind::Interval
+			| Kind::BigDecimal
+			| Kind::Enum {
+				..
+			}
+			| Kind::Named {
+				..
+			}
 			| Kind::Unknown {
 				..
 			} => "unknown".to_string(),
 			Kind::None => "undefined".to_string(),
 			Kind::Null => "null".to_string(),
 			Kind::Bool => "boolean".to_string(),
-			Kind::Int | Kind::Float | Kind::Number => "number".to_string(),
+			Kind::Int {
+				..
+			}
+			| Kind::Float {
+				..
+			}
+			| Kind::Number => "number".to_string(),
 			Kind::Decimal => self.note("Decimal").to_string(),
 			Kind::String => "string".to_string(),
 			Kind::Datetime => match self.opts.dates {

@@ -41,6 +41,11 @@
 		"modules": { "type": "array", "items": { "$ref": "#/$defs/module" } },
 		"configs": { "type": "array", "items": { "$ref": "#/$defs/config" } },
 		"users": { "type": "array", "items": { "$ref": "#/$defs/user" } },
+		"types": {
+			"description": "DEFINE TYPE (SurrealDB 4.0), sorted by name. Omitted when there are none, so a document without types keeps the bytes and digest it had before the collection existed.",
+			"type": "array",
+			"items": { "$ref": "#/$defs/typeDef" }
+		},
 		"diagnostics": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } }
 	},
 	"$defs": {
@@ -167,6 +172,10 @@
 			"required": ["kind"],
 			"oneOf": [
 				{ "$ref": "#/$defs/kindPrimitive" },
+				{ "$ref": "#/$defs/kindInt" },
+				{ "$ref": "#/$defs/kindFloat" },
+				{ "$ref": "#/$defs/kindEnum" },
+				{ "$ref": "#/$defs/kindNamed" },
 				{ "$ref": "#/$defs/kindRecord" },
 				{ "$ref": "#/$defs/kindTable" },
 				{ "$ref": "#/$defs/kindFile" },
@@ -192,8 +201,6 @@
 						"none",
 						"null",
 						"bool",
-						"int",
-						"float",
 						"decimal",
 						"number",
 						"string",
@@ -204,9 +211,55 @@
 						"regex",
 						"range",
 						"function",
-						"object"
+						"object",
+						"date",
+						"time",
+						"timestamp",
+						"interval",
+						"bigdecimal"
 					]
 				}
+			}
+		},
+		"kindInt": {
+			"description": "`int`, and SurrealDB 4.0's `i8`, `i16`, `i32` and `u8`…`u64`. `width` is the bit width; absent is the engine default, `i64` (which the engine renders as `int`, so a producer never writes `i64` as a width). `signed` is only ever `false`, for `uN`.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["kind"],
+			"properties": {
+				"kind": { "const": "int" },
+				"width": { "enum": [8, 16, 32, 64] },
+				"signed": { "const": false }
+			}
+		},
+		"kindFloat": {
+			"description": "`float`, and SurrealDB 4.0's `f16` and `f32`. `width` is the bit width; absent is the engine default, `f64`.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["kind"],
+			"properties": {
+				"kind": { "const": "float" },
+				"width": { "enum": [16, 32, 64] }
+			}
+		},
+		"kindEnum": {
+			"description": "SurrealDB 4.0 `enum<'a', 'b'>`: the string values themselves, in declaration order. The order is semantic (the engine compares, ranges and sorts by it) and is exempt from the contract's sorting and deduplication rules. Not a union.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["kind", "labels"],
+			"properties": {
+				"kind": { "const": "enum" },
+				"labels": { "type": "array", "minItems": 1, "items": { "type": "string" } }
+			}
+		},
+		"kindNamed": {
+			"description": "A kind written as the name of a `DEFINE TYPE` (SurrealDB 4.0), which the document's `types` define.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["kind", "name"],
+			"properties": {
+				"kind": { "const": "named" },
+				"name": { "$ref": "#/$defs/name" }
 			}
 		},
 		"kindRecord": {
@@ -800,6 +853,17 @@
 				"name": { "$ref": "#/$defs/name" },
 				"roles": { "type": "array", "items": { "type": "string" } },
 				"durations": { "$ref": "#/$defs/durations" },
+				"comment": { "type": "string" }
+			}
+		},
+		"typeDef": {
+			"description": "A DEFINE TYPE (SurrealDB 4.0): a named kind.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["name", "kind"],
+			"properties": {
+				"name": { "$ref": "#/$defs/name" },
+				"kind": { "$ref": "#/$defs/kind" },
 				"comment": { "type": "string" }
 			}
 		},

@@ -38,8 +38,6 @@ const PrimitiveKindName = Schema.Literals([
 	'none',
 	'null',
 	'bool',
-	'int',
-	'float',
 	'decimal',
 	'number',
 	'string',
@@ -51,6 +49,11 @@ const PrimitiveKindName = Schema.Literals([
 	'range',
 	'function',
 	'object',
+	'date',
+	'time',
+	'timestamp',
+	'interval',
+	'bigdecimal',
 ]);
 export type PrimitiveKindName = typeof PrimitiveKindName.Type;
 
@@ -79,8 +82,25 @@ export interface LiteralKind {
 	readonly value: string | boolean;
 }
 
+/** SurrealDB 4.0 `i8`…`u64`: `signed` is only ever `false`; no `width` is `i64`. */
+export interface IntKind {
+	readonly kind: 'int';
+	readonly width?: 8 | 16 | 32 | 64;
+	readonly signed?: false;
+}
+
+/** SurrealDB 4.0 `f16` and `f32`; no `width` is `f64`. */
+export interface FloatKind {
+	readonly kind: 'float';
+	readonly width?: 16 | 32 | 64;
+}
+
 export type Kind =
 	| { readonly kind: PrimitiveKindName }
+	| IntKind
+	| FloatKind
+	| { readonly kind: 'enum'; readonly labels: ReadonlyArray<string> }
+	| { readonly kind: 'named'; readonly name: string }
 	| { readonly kind: 'record'; readonly tables: ReadonlyArray<string> }
 	| { readonly kind: 'table'; readonly tables: ReadonlyArray<string> }
 	| { readonly kind: 'file'; readonly buckets: ReadonlyArray<string> }
@@ -121,6 +141,20 @@ const LiteralKindSchema = Schema.Struct({
 
 export const KindSchema: Schema.Codec<Kind> = Schema.Union([
 	Schema.Struct({ kind: PrimitiveKindName }),
+	Schema.Struct({
+		kind: Schema.Literal('int'),
+		width: Schema.optionalKey(Schema.Literals([8, 16, 32, 64])),
+		signed: Schema.optionalKey(Schema.Literal(false)),
+	}),
+	Schema.Struct({
+		kind: Schema.Literal('float'),
+		width: Schema.optionalKey(Schema.Literals([16, 32, 64])),
+	}),
+	Schema.Struct({
+		kind: Schema.Literal('enum'),
+		labels: Schema.Array(Schema.String).check(Schema.isMinLength(1)),
+	}),
+	Schema.Struct({ kind: Schema.Literal('named'), name: Name }),
 	Schema.Struct({ kind: Schema.Literal('record'), tables: Names }),
 	Schema.Struct({ kind: Schema.Literal('table'), tables: Names }),
 	Schema.Struct({ kind: Schema.Literal('file'), buckets: Names }),
@@ -517,6 +551,16 @@ export const SchemaDocument = Schema.Struct({
 			durations: Durations,
 			comment: Schema.optionalKey(Schema.String),
 		}),
+	),
+	/** `DEFINE TYPE` (SurrealDB 4.0); omitted when the database defines none. */
+	types: Schema.optionalKey(
+		Schema.Array(
+			Schema.Struct({
+				name: Name,
+				kind: KindRef,
+				comment: Schema.optionalKey(Schema.String),
+			}),
+		),
 	),
 	diagnostics: Schema.Array(Diagnostic),
 });

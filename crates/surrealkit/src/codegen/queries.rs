@@ -232,7 +232,7 @@ mod tests {
 			text: "RETURN 1".into(),
 			sources: Vec::new(),
 			statements: vec![StatementEntry {
-				kind: Some(Kind::Int),
+				kind: Some(Kind::int()),
 				optional: false,
 				certainty: Certainty::Fact,
 				exact: true,
