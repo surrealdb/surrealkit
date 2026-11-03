@@ -89,7 +89,11 @@ jobs:
                   for f in dist/index.js dist/emitter.js dist/cli.js; do
                       grep -qx "package/$f" <<<"$listing" || { echo "::error::$f is not in the package"; exit 1; }
                   done
-                  npm publish --dry-run
+                  # Under a version of its own: the dry-run checks what would be
+                  # published, and npm refuses one over a version already on the
+                  # registry, which every change after a release would be.
+                  npm version --no-git-tag-version "$(node -p 'require("./package.json").version')-ci.${GITHUB_RUN_ID}"
+                  npm publish --dry-run --tag ci
 
     generated-ts:
         name: Generated TypeScript compiles (examples/effect-typegen through surrealkit compile)
