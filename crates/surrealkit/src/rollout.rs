@@ -2792,7 +2792,7 @@ fn embedded_to_schema_files(files: &[crate::sync::EmbeddedSchemaFile]) -> Vec<Sc
 		.collect()
 }
 
-fn load_rollout_spec(path: PathBuf) -> Result<LoadedRolloutSpec> {
+pub(crate) fn load_rollout_spec(path: PathBuf) -> Result<LoadedRolloutSpec> {
 	let raw = fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
 	let spec: RolloutSpec =
 		toml::from_str(&raw).with_context(|| format!("parsing {}", path.display()))?;
@@ -2810,7 +2810,7 @@ fn load_rollout_spec(path: PathBuf) -> Result<LoadedRolloutSpec> {
 /// Only files match. Since 1.0.0-beta.6 each manifest has a directory of frozen
 /// files beside it with the same name as its id, and matching that directory
 /// failed `rollout start <id>` with "Is a directory".
-fn resolve_rollout_path(folder: &str, selector: Option<&str>) -> Result<PathBuf> {
+pub(crate) fn resolve_rollout_path(folder: &str, selector: Option<&str>) -> Result<PathBuf> {
 	let selector = selector.ok_or_else(|| anyhow!("rollout id or path is required"))?;
 	let rd = rollouts_dir(folder);
 	let candidates =
@@ -3910,7 +3910,9 @@ impl LockKeepAlive {
 	pub(crate) fn spawn(db: &Surreal<Any>, token: &LockToken) -> Self {
 		let db = db.clone();
 		let token = token.clone();
-		Self(tokio::spawn(async move {
+		// `propagate`, so a lost or unrefreshable lock is reported to whoever is
+		// capturing this run's progress, not only to the process's own logger.
+		Self(tokio::spawn(crate::progress::propagate(async move {
 			let mut ticker = tokio::time::interval(LOCK_REFRESH);
 			ticker.tick().await;
 			loop {
@@ -3924,7 +3926,7 @@ impl LockKeepAlive {
 					Err(err) => log::warn!("could not extend the '{}' lock: {err:#}", token.key),
 				}
 			}
-		}))
+		})))
 	}
 }
 

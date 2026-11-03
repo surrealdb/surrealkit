@@ -11,7 +11,7 @@ use std::{env, io};
 
 use anyhow::{Result, bail};
 use rust_dotenv::dotenv::DotEnv;
-pub use types::{SchemaSource, TestOpts};
+pub use types::{AssertionReport, CaseReport, RunReport, SchemaSource, SuiteReport, TestOpts};
 
 use crate::config::{AuthLevel, DbCfg, DbOverrides};
 use crate::variables::TemplateVars;
@@ -47,6 +47,37 @@ pub async fn run_test_to(
 	format: ReportFormat,
 	out: &mut (dyn io::Write + Send),
 ) -> Result<()> {
+	let json_out = opts.json_out.clone();
+	let report = run_test_report(dotenv, opts, vars, overrides).await?;
+	match format {
+		ReportFormat::Human => report::print_human_report(out, &report)?,
+		ReportFormat::Json => {
+			serde_json::to_writer_pretty(&mut *out, &report)?;
+			writeln!(out)?;
+		}
+	}
+	if let Some(path) = &json_out {
+		report::write_json_report(path, &report)?;
+	}
+	if report.cases_failed > 0 {
+		bail!("{} test cases failed", report.cases_failed);
+	}
+	Ok(())
+}
+
+/// Run the test suites and return the report as data.
+///
+/// Writes nothing and does not fail when a case fails: read
+/// [`RunReport::cases_failed`] for that. Problems that stop a run from starting,
+/// such as an unsupported auth level, an embedded endpoint or no suites matching
+/// the filters, are still errors, because they are configuration rather than
+/// results. `opts.json_out` is left to the caller, like the rendering.
+pub async fn run_test_report(
+	dotenv: Option<&DotEnv>,
+	opts: TestOpts,
+	vars: TemplateVars,
+	overrides: &DbOverrides,
+) -> Result<RunReport> {
 	let cfg = DbCfg::from_env(dotenv, overrides)?;
 	if matches!(cfg.auth_level(), AuthLevel::Database) {
 		bail!(
@@ -76,22 +107,7 @@ pub async fn run_test_to(
 	let timeout_ms = resolve_timeout_ms(&opts, &loaded.global);
 	let ctx =
 		runner::RunnerContext::new(cfg, opts.clone(), loaded.global, base_url, timeout_ms, vars);
-	let report = ctx.run(suites).await?;
-
-	match format {
-		ReportFormat::Human => report::print_human_report(out, &report)?,
-		ReportFormat::Json => {
-			serde_json::to_writer_pretty(&mut *out, &report)?;
-			writeln!(out)?;
-		}
-	}
-	if let Some(path) = &opts.json_out {
-		report::write_json_report(path, &report)?;
-	}
-	if report.cases_failed > 0 {
-		bail!("{} test cases failed", report.cases_failed);
-	}
-	Ok(())
+	ctx.run(suites).await
 }
 
 fn resolve_base_url(opts: &TestOpts, global: &types::GlobalTestConfig) -> Option<String> {

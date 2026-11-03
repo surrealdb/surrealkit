@@ -7,15 +7,15 @@
 //! feature contributes a set of files that are copied into the scaffolded project.
 
 mod emit;
-mod manifest;
+pub mod manifest;
 mod select;
 mod source;
 
+use crate::scaffold;
 use anyhow::Result;
 use emit::EmitPlan;
 pub use select::InitOpts;
 use source::TemplateSource;
-use surrealkit::scaffold;
 
 /// Run `surrealkit init`: scaffold the base project and layer on the selected
 /// template features.
