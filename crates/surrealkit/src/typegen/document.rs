@@ -136,7 +136,7 @@ pub enum Source {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SourceFile {
-	/// Relative to the project root, `/`-separated.
+	/// Relative to the directory the `[typegen.queries]` paths resolve against, `/`-separated.
 	pub path: String,
 	/// Lowercase hex SHA-256 of the bytes, after removing a UTF-8 BOM and turning CRLF into LF.
 	pub sha256: String,
@@ -191,7 +191,7 @@ pub enum QueryOrigin {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct QuerySource {
 	pub origin: QueryOrigin,
-	/// Relative to the project root, `/`-separated.
+	/// Relative to the directory the `[typegen.queries]` paths resolve against, `/`-separated.
 	pub path: String,
 	/// The UTF-8 byte range of the query text in the file: the text of a named query, the
 	/// literal's contents for an inline one.
