@@ -1,0 +1,64 @@
+name: Publish effect-surrealkit
+
+on:
+    push:
+        tags:
+            - "effect-surrealkit-v*"
+    workflow_dispatch:
+
+permissions:
+    contents: read
+    id-token: write
+
+jobs:
+    publish:
+        name: Publish effect-surrealkit to npm
+        runs-on: ubuntu-latest
+        defaults:
+            run:
+                working-directory: packages/effect-surrealkit
+
+        steps:
+            - name: Checkout repository
+              uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+
+            - name: Setup Node.js
+              uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
+              with:
+                  node-version: 24
+                  registry-url: https://registry.npmjs.org
+
+            # The tag names the version being released; refuse to publish
+            # whatever package.json says instead.
+            - name: Check tag matches package version
+              if: startsWith(github.ref, 'refs/tags/')
+              run: |
+                  expected="effect-surrealkit-v$(node -p "require('./package.json').version")"
+                  if [ "$GITHUB_REF_NAME" != "$expected" ]; then
+                      echo "::error::tag $GITHUB_REF_NAME does not match package.json ($expected)"
+                      exit 1
+                  fi
+
+            - name: Install dependencies
+              run: npm install
+
+            - name: Lint
+              run: npm run lint
+
+            - name: Typecheck
+              run: npm run typecheck
+
+            - name: Test
+              run: npm test
+
+            # Build before publishing: npm checks `bin` (dist/cli.js) before
+            # `prepare` runs, and drops it from the manifest if it is missing.
+            - name: Build
+              run: npm run build
+
+            # Trusted publishing: npm exchanges this job's OIDC token (id-token:
+            # write) for a short-lived publish credential, and attaches provenance.
+            # No npm token is stored anywhere. Needs npm >= 11.5.1 (Node 24).
+            - name: Publish package
+              if: startsWith(github.ref, 'refs/tags/')
+              run: npm publish --access public
