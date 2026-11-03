@@ -205,13 +205,7 @@ fn kind_problems(
 	diagnostics: &mut Vec<Diagnostic>,
 ) {
 	for problem in &parsed.problems {
-		diagnostics.push(at(Diagnostic::new(
-			Severity::Error,
-			codes::KIND_UNRECOGNIZED,
-			text,
-			problem.reason.clone(),
-		)
-		.with_span(problem.span.clone())));
+		diagnostics.push(at(problem.diagnostic(text)));
 	}
 }
 

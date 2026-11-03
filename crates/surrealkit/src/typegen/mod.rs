@@ -217,7 +217,8 @@ pub async fn generate_unstamped(db: &Surreal<Any>) -> Result<SchemaTypes> {
 /// Introspect the database into an unstamped [`SchemaTypes`] document together
 /// with a [`Diagnostic`] for everything that could not be represented
 /// structurally. Every [`FieldType::Unknown`] with a source in the document has a matching
-/// [`codes::KIND_UNRECOGNIZED`] error; one with an empty source is a field without `TYPE`
+/// [`codes::KIND_UNRECOGNIZED`] error, or [`codes::KIND_NOT_REPRESENTED`] warning when it is
+/// a SurrealDB 4.x kind the document has no node for; one with an empty source is a field without `TYPE`
 /// ([`codes::FIELD_KIND_UNDECLARED`] or [`codes::FIELD_COMPUTED_KIND_UNDECLARED`]).
 pub async fn generate_with_diagnostics(
 	db: &Surreal<Any>,

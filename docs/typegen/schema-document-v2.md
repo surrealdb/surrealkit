@@ -156,6 +156,7 @@ returns (`"none | array<record<team>>"`) into this tree.
 | `'draft'`, `-5`, `1.5f`, `10dec`, `true`, `1d` | `{ "kind": "literal", "type": "string"\|"int"\|"float"\|"decimal"\|"bool"\|"duration", "value": … }` |
 | `none \| T` in a nested position | `{ "kind": "option", "item": T }` |
 | `A \| B` | `{ "kind": "union", "variants": [A, B] }` |
+| SurrealDB 4.0 `date`, `time`, `timestamp`, `interval`, `bigdecimal`, `enum<'a', 'b'>`, a `DEFINE TYPE` name | `{ "kind": "unknown", "source": "<text>" }` plus warning `kind-not-represented`. The kinds are parsed (an `enum`'s label list included) and have no node of their own; `unknown` is sound, since every value fits it. |
 | anything unparseable | `{ "kind": "unknown", "source": "<text>" }` plus error `kind-unrecognized` |
 
 Normalisation rules (each MUST be applied):
@@ -553,6 +554,7 @@ reason, in its configuration. Codes are stable identifiers; reasons are not.
 | `field-reference-unrecognized` | error | A `REFERENCE` `ON DELETE` action is none of the known ones; `onDelete` is recorded as `ignore`. |
 | `object-without-fields` | error | On a SCHEMAFULL table, an `object` field (also under `option`/`\| null`, or the element of an `array`/`set`) that is not FLEXIBLE and has no declared fields. SurrealDB 3.2 and 3.3 refuse every undeclared key of it, so it holds only `{}` (evidence: `semantics/objects.surql`). A FLEXIBLE array opens its elements. |
 | `field-name-run-together` | warning | A top-level field name is an object field's name run straight into a lowercase word (`envelopealgorithm` beside `envelope`): perhaps a child path missing its dot. Heuristic. |
+| `kind-not-represented` | warning | A kind string parsed, but names a SurrealDB 4.x kind with no node (`date`, `time`, `timestamp`, `interval`, `bigdecimal`, `enum<…>`, a `DEFINE TYPE` name); the kind becomes `unknown`, which every value fits. |
 | `definition-unsupported` | warning | INFO returned an entry in a category this contract does not model (e.g. models). |
 | `field-id-clauses-ignored` | warning | `DEFINE FIELD id` carries clauses other than `TYPE`. |
 | `field-computed-kind-undeclared` | warning | `COMPUTED` without `TYPE`. |
