@@ -1,0 +1,14 @@
+{
+	"engine": "surrealdb-4.0.0",
+	"statements": 191,
+	"accepted": 190,
+	"rejected": [
+		{
+			"file": "31_module.v4.0.surql",
+			"index": 0,
+			"statement": "DEFINE MODULE mod::demo FROM f\"avatars:/demo.wasm\" UNSIGNED DIGEST 'sha256:0000000000000000000000000000000000000000000000000000000000000000'",
+			"status": "PARSE_ERR",
+			"error": "Parse error: Surrealism extensions are not enabled\n --> [1:8]\n  |\n1 | DEFINE MODULE mod::demo FROM f\"avatars:/demo.wasm\" UNSIGNED DIGEST 'sha256:00...\n  |        ^^^^^^ Use of `DEFINE MODULE` requires Surrealism extensions\n"
+		}
+	]
+}

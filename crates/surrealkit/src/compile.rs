@@ -7,12 +7,13 @@
 //! introspecting a database synced from the same files would give **on the same engine
 //! minor**.
 //!
-//! The embedded engine is the `surrealdb` version SurrealKit is built with (3.3), whatever
-//! server a project deploys to. A store pinned to another minor (3.2) gets a document shaped
-//! by 3.3: 3.3's normalisation and 3.3-only properties, and 3.2-only spellings (such as
-//! `DEFINE MODULE … AS f"…"`) are refused. `CompileOpts::expected_engine` (`[typegen] engine`)
-//! names the minor a project deploys to; when it differs from the embedded one, the document
-//! carries the error `compile-engine-mismatch`.
+//! The embedded engine is the `surrealdb` version SurrealKit is built with (4.0), whatever
+//! server a project deploys to. A store pinned to another minor (3.3) gets a document shaped
+//! by 4.0: 4.0's normalisation and 4.0-only properties, and spellings 4.0 refuses (such as a
+//! nested field whose parent is not declared) are refused.
+//! `CompileOpts::expected_engine` (`[typegen] engine`) names the minor a project deploys to;
+//! when it differs from the embedded one, the document carries the error
+//! `compile-engine-mismatch`.
 //!
 //! Hermetic by construction:
 //!
@@ -63,11 +64,12 @@ pub struct CompileModule {
 /// Options for [`compile`].
 #[derive(Debug, Clone, Default)]
 pub struct CompileOpts {
-	/// Experimental capabilities the engine allows: `files`, `surrealism`, `gql`.
+	/// Experimental capabilities the engine allows: `surrealism`. `files` and `gql` are accepted
+	/// and change nothing, because the embedded engine gates no definition on them.
 	pub experimental: Vec<String>,
 	/// Template variables substituted into each file before it is applied, as in `sync`.
 	pub vars: TemplateVars,
-	/// The engine minor (`"3.2"`) the project deploys to, `[typegen] engine`. When it differs
+	/// The engine minor (`"4.0"`) the project deploys to, `[typegen] engine`. When it differs
 	/// from the embedded engine's minor the document carries the error
 	/// `compile-engine-mismatch`, because it then describes the embedded engine's behaviour.
 	pub expected_engine: Option<String>,
@@ -85,22 +87,26 @@ pub struct Compiled {
 	pub v1_diagnostics: Vec<Diagnostic>,
 }
 
-/// The experimental features named in `names`, sorted and deduplicated.
+/// The experimental features named in `names`, sorted and deduplicated. `files` and `gql`
+/// are accepted but name no engine feature: the embedded engine checks only `surrealism`, so
+/// `DEFINE BUCKET`, `DEFINE CONFIG GRAPHQL` and the GQL front-end need no capability. They
+/// stay in the second element, which is what `provenance.capabilities` records.
 fn experimental_features(names: &[String]) -> Result<(Vec<ExperimentalFeature>, Vec<String>)> {
 	let mut canonical: Vec<String> = names.iter().map(|n| n.trim().to_ascii_lowercase()).collect();
 	canonical.sort();
 	canonical.dedup();
-	let features = canonical
-		.iter()
-		.map(|name| match name.as_str() {
-			"files" => Ok(ExperimentalFeature::Files),
-			"surrealism" => Ok(ExperimentalFeature::Surrealism),
-			"gql" => Ok(ExperimentalFeature::Gql),
-			other => Err(anyhow!(
-				"unknown experimental capability {other:?}; use files, surrealism or gql"
-			)),
-		})
-		.collect::<Result<Vec<_>>>()?;
+	let mut features = Vec::new();
+	for name in &canonical {
+		match name.as_str() {
+			"files" | "gql" => {}
+			"surrealism" => features.push(ExperimentalFeature::Surrealism),
+			other => {
+				return Err(anyhow!(
+					"unknown experimental capability {other:?}; use files, surrealism or gql"
+				));
+			}
+		}
+	}
 	Ok((features, canonical))
 }
 
@@ -276,7 +282,7 @@ async fn outside_the_database(db: &Surreal<Any>) -> Result<Vec<Diagnostic>> {
 }
 
 /// The error `compile-engine-mismatch` when the project deploys to an engine minor other than
-/// the embedded one (`version`, such as `3.3.0`).
+/// the embedded one (`version`, such as `4.0.0`).
 fn engine_mismatch(expected: Option<&str>, version: &str) -> Result<Option<Diagnostic>> {
 	let Some(expected) = expected.map(str::trim) else {
 		return Ok(None);
@@ -290,7 +296,7 @@ fn engine_mismatch(expected: Option<&str>, version: &str) -> Result<Option<Diagn
 		Some(format!("{major}.{minor}"))
 	};
 	let wanted = minor(expected).filter(|_| expected.split('.').count() == 2).ok_or_else(|| {
-		anyhow!("[typegen] engine = {expected:?} is not an engine minor such as \"3.3\"")
+		anyhow!("[typegen] engine = {expected:?} is not an engine minor such as \"4.0\"")
 	})?;
 	let embedded = minor(version).ok_or_else(|| anyhow!("unexpected engine version {version}"))?;
 	if wanted == embedded {
@@ -466,7 +472,9 @@ mod corpus {
 	use std::path::Path;
 
 	use super::*;
-	use crate::typegen::corpus_tests::{Module, corpus_dir, corpus_modules};
+	use crate::typegen::corpus_tests::{
+		EMBEDDED_MINOR, EMBEDDED_VERSION, Module, corpus_dir, corpus_modules,
+	};
 	use crate::typegen::corpus_v2_tests::{
 		apply_corpus, corpus_acknowledged, fixture_document, remote_has_experimental,
 	};
@@ -481,7 +489,8 @@ mod corpus {
 	}
 
 	/// The corpus modules for engine minor `minor` (with or without the experimental ones),
-	/// as one compile module per corpus file, in corpus order.
+	/// as one compile module per corpus file, in corpus order. Each version-specific spelling
+	/// is a corpus entry of its own, selected by the minor.
 	fn modules_for(minor: &str, experimental: bool) -> Vec<Module> {
 		corpus_modules()
 			.into_iter()
@@ -490,25 +499,23 @@ mod corpus {
 			.collect()
 	}
 
-	/// The same modules in the spelling the embedded 3.3 engine accepts: a version-specific
-	/// file (`31_module.v3.2.surql`) is replaced by its 3.3 twin (`31_module.v3.3.surql`).
-	fn in_33_spelling(modules: &[Module]) -> Vec<CompileModule> {
+	/// One compile module per corpus module, as `compile` takes them.
+	fn compile_modules(modules: &[Module]) -> Vec<CompileModule> {
 		modules
 			.iter()
 			.map(|m| {
-				let path = match m.path.split_once(".v3.") {
-					Some((stem, _)) if !m.path.ends_with(".v3.3.surql") => {
-						format!("{stem}.v3.3.surql")
-					}
-					_ => m.path.clone(),
-				};
-				assert!(Path::new(&corpus_dir().join(&path)).is_file(), "{path}");
+				assert!(Path::new(&corpus_dir().join(&m.path)).is_file(), "{}", m.path);
 				CompileModule {
-					name: path.clone(),
-					files: vec![file(&path)],
+					name: m.path.clone(),
+					files: vec![file(&m.path)],
 				}
 			})
 			.collect()
+	}
+
+	/// The corpus as the embedded engine accepts it.
+	fn embedded_corpus(experimental: bool) -> Vec<CompileModule> {
+		compile_modules(&modules_for(EMBEDDED_MINOR, experimental))
 	}
 
 	fn experimental() -> CompileOpts {
@@ -519,16 +526,16 @@ mod corpus {
 	}
 
 	#[tokio::test]
-	async fn the_corpus_compiles_to_the_3_3_0_snapshot_document() {
-		let compiled = compile(&in_33_spelling(&modules_for("3.3", true)), &experimental())
-			.await
-			.expect("compile the corpus");
+	async fn the_corpus_compiles_to_the_embedded_engines_snapshot_document() {
+		let compiled =
+			compile(&embedded_corpus(true), &experimental()).await.expect("compile the corpus");
 		let doc = compiled.document;
-		let snapshot = fixture_document("3.3.0");
+		assert!(doc.provenance.engine.version.starts_with(EMBEDDED_MINOR));
+		let snapshot = fixture_document(EMBEDDED_VERSION);
 		assert_eq!(doc.semantic_digest, snapshot.semantic_digest);
-		// `define` evidence is identical too: both read plain INFO from a 3.3.0 engine.
+		// `define` evidence is identical too: both read plain INFO from the same engine.
 		assert_eq!(doc.tables, snapshot.tables);
-		assert_eq!(doc.provenance.adapter, "structure-3.3");
+		assert_eq!(doc.provenance.adapter, "structure-4.0");
 		assert_eq!(doc.provenance.engine.mode, EngineMode::Embedded);
 		let caps = doc.provenance.capabilities.as_ref().expect("capabilities");
 		assert_eq!(caps.experimental, vec!["files", "surrealism"]);
@@ -612,8 +619,8 @@ mod corpus {
 	#[test]
 	fn pins_ignore_the_generator_and_engine_versions() {
 		let a = r#"{"version":2,"provenance":{"generator":{"name":"surrealkit","version":"1.0.0"},
-			"engine":{"version":"3.3.0","build":"surrealdb-3.3.0","mode":"embedded"}},"tables":[]}"#;
-		let b = a.replace("1.0.0", "1.0.1").replace("3.3.0", "3.3.1");
+			"engine":{"version":"4.0.0","build":"surrealdb-4.0.0","mode":"embedded"}},"tables":[]}"#;
+		let b = a.replace("1.0.0", "1.0.1").replace("4.0.0", "4.0.1");
 		assert_eq!(without_versions(a), without_versions(&b));
 		let c = a.replace("\"tables\":[]", "\"tables\":[1]");
 		assert_ne!(without_versions(a), without_versions(&c));
@@ -621,14 +628,21 @@ mod corpus {
 
 	#[tokio::test]
 	async fn the_compiled_corpus_is_pinned() {
-		let compiled = compile(&in_33_spelling(&modules_for("3.3", true)), &experimental())
-			.await
-			.expect("compile the corpus");
+		let compiled =
+			compile(&embedded_corpus(true), &experimental()).await.expect("compile the corpus");
 		assert_pinned("corpus.v2.json", &compiled.document);
 	}
 
+	/// Whether `line` defines `table` or one of its fields.
+	fn defines_on(line: &str, table: &str) -> bool {
+		let words: Vec<&str> = line.trim_end_matches(';').split_whitespace().collect();
+		words.windows(2).any(|pair| matches!(pair[0], "TABLE" | "ON") && pair[1] == table)
+	}
+
 	/// The tables of the field-presence evidence (`semantics/field_presence.surql`): only its
-	/// `DEFINE` statements, which is what a project with that schema would hold.
+	/// `DEFINE` statements, which is what a project with that schema would hold. Tables `ip` and
+	/// `up` are left out: they hold nested fields whose parent is not declared (`ip`) or has no
+	/// type (`up`), which 4.0 refuses.
 	#[tokio::test]
 	async fn the_compiled_field_presence_tables_are_pinned() {
 		let evidence = std::fs::read_to_string(corpus_dir().join("semantics/field_presence.surql"))
@@ -636,6 +650,7 @@ mod corpus {
 		let sql: String = evidence
 			.lines()
 			.filter(|line| line.starts_with("DEFINE "))
+			.filter(|line| !["ip", "up"].iter().any(|table| defines_on(line, table)))
 			.map(|line| format!("{line}\n"))
 			.collect();
 		let module = CompileModule {
@@ -649,7 +664,7 @@ mod corpus {
 		let compiled =
 			compile(&[module], &CompileOpts::default()).await.expect("compile the evidence tables");
 		let names: Vec<&str> = compiled.document.tables.iter().map(|t| t.name.as_str()).collect();
-		assert_eq!(names, ["e", "ip", "m", "oa", "p", "up"]);
+		assert_eq!(names, ["e", "m", "oa", "p"]);
 		assert_pinned("field-presence.v2.json", &compiled.document);
 	}
 
@@ -663,7 +678,9 @@ mod corpus {
 		let folder = tmp.path().join("database");
 		std::fs::create_dir_all(folder.join("schema")).expect("schema dir");
 		let mut files = Vec::new();
-		for module in modules_for("3.3", false).iter().filter(|m| m.path.starts_with("schema/")) {
+		for module in
+			modules_for(EMBEDDED_MINOR, false).iter().filter(|m| m.path.starts_with("schema/"))
+		{
 			let mut copied = file(&module.path);
 			std::fs::write(folder.join(&copied.path), &copied.sql).expect("copy");
 			copied.hash = crate::core::sha256_hex(copied.sql.as_bytes());
@@ -728,7 +745,7 @@ mod corpus {
 
 	#[tokio::test]
 	async fn compile_is_deterministic() {
-		let modules = in_33_spelling(&modules_for("3.3", true));
+		let modules = embedded_corpus(true);
 		let a = compile(&modules, &experimental()).await.unwrap().document;
 		let b = compile(&modules, &experimental()).await.unwrap().document;
 		assert_eq!(
@@ -869,12 +886,12 @@ mod corpus {
 		let version = embedded.provenance.engine.version.clone();
 		let minor = version.rsplit_once('.').map(|(m, _)| m.to_string()).expect("x.y.z");
 		assert_eq!(mismatch(&compile_with(Some(&minor)).await.expect("same").document), 0);
-		let other = compile_with(Some("3.2")).await.expect("compile").document;
-		if minor != "3.2" {
+		for other_minor in ["3.2", "3.3"] {
+			let other = compile_with(Some(other_minor)).await.expect("compile").document;
 			assert_eq!(mismatch(&other), 1, "{:?}", other.diagnostics);
 			assert!(other.has_errors());
 		}
-		for bad in ["3", "3.x", "3.3.0", "latest"] {
+		for bad in ["4", "4.x", "4.0.0", "latest"] {
 			let err = format!("{:#}", compile_with(Some(bad)).await.unwrap_err());
 			assert!(err.contains("not an engine minor"), "{bad}: {err}");
 		}
@@ -899,27 +916,56 @@ mod corpus {
 		}
 	}
 
+	/// `DEFINE BUCKET` needs no capability on 4.0, which gates only Surrealism: a module is
+	/// refused without it and compiles with it.
 	#[tokio::test]
-	async fn gated_definitions_need_their_experimental_capability() {
-		let module = CompileModule {
+	async fn only_surrealism_is_gated() {
+		let buckets = CompileModule {
 			name: "files".into(),
 			files: vec![file("schema-gated/20_experimental_files.surql")],
 		};
-		let err = format!(
-			"{:#}",
-			compile(std::slice::from_ref(&module), &CompileOpts::default()).await.unwrap_err()
-		);
-		assert!(err.contains("schema-gated/20_experimental_files.surql"), "{err}");
+		let document = compile(std::slice::from_ref(&buckets), &CompileOpts::default())
+			.await
+			.expect("buckets compile with the default options")
+			.document;
+		assert_eq!(document.buckets.len(), 2);
+
+		let module = compile_modules(&[
+			Module {
+				path: "schema-gated/20_experimental_files.surql".into(),
+				engines: None,
+				experimental: false,
+			},
+			Module {
+				path: "schema-gated/31_module.v4.0.surql".into(),
+				engines: None,
+				experimental: false,
+			},
+		]);
+		let err = format!("{:#}", compile(&module, &CompileOpts::default()).await.unwrap_err());
+		assert!(err.contains("schema-gated/31_module.v4.0.surql"), "{err}");
 		let opts = CompileOpts {
-			experimental: vec!["files".into()],
+			experimental: vec!["surrealism".into()],
 			..CompileOpts::default()
 		};
-		compile(&[module], &opts).await.expect("with the files capability");
+		let document =
+			compile(&module, &opts).await.expect("with the surrealism capability").document;
+		assert_eq!(document.modules.len(), 1);
+
+		// `files` and `gql` are accepted and change nothing, but the document records them.
+		let opts = CompileOpts {
+			experimental: vec!["files".into(), "gql".into()],
+			..CompileOpts::default()
+		};
+		let document =
+			compile(&[buckets], &opts).await.expect("with the files capability").document;
+		let caps = document.provenance.capabilities.expect("capabilities");
+		assert_eq!(caps.experimental, vec!["files", "gql"]);
 	}
 
 	/// Access clauses the document does not carry (AUDIENCE, CONTEXT) compile
-	/// with warnings, never errors, so a strict compile succeeds; on a 3.3 server the compiled
-	/// and live documents agree.
+	/// with warnings, never errors, so a strict compile succeeds; on a server of the embedded
+	/// engine's minor the compiled and live documents agree.
 	#[tokio::test]
 	async fn access_clauses_the_document_does_not_carry_are_warnings() {
 		let module = CompileModule {
@@ -946,7 +992,7 @@ mod corpus {
 		}
 		let db = crate::test_db::fresh("compile_access_vs_live").await;
 		let version = db.version().await.expect("engine version");
-		if (version.major, version.minor) != (3, 3) {
+		if format!("{}.{}", version.major, version.minor) != EMBEDDED_MINOR {
 			return;
 		}
 		db.query(module.files[0].sql.as_str()).await.and_then(|r| r.check()).expect("apply");
@@ -956,10 +1002,10 @@ mod corpus {
 		assert_eq!(document.semantic_digest, live.semantic_digest);
 	}
 
-	/// With a server at `SURREALKIT_TEST_URL`, the corpus applied to it and the same corpus
-	/// compiled hermetically have the same semantic content. On a 3.2 server the compile
-	/// applies the 3.3 spelling of the version-specific module (3.3 refuses the 3.2 one; see
-	/// the module docs), and the 3.3-only relations are not part of the 3.2 corpus.
+	/// With a server of the embedded engine's minor at `SURREALKIT_TEST_URL`, the corpus
+	/// applied to it and the same corpus compiled hermetically have the same semantic content.
+	/// A server of another minor is not compared: a compile describes the embedded engine (see
+	/// the module docs).
 	#[tokio::test]
 	async fn a_hermetic_compile_equals_live_introspection() {
 		if !crate::test_db::is_remote() {
@@ -967,8 +1013,11 @@ mod corpus {
 		}
 		let experimental_server = remote_has_experimental();
 		let db = crate::test_db::fresh("compile_vs_live").await;
+		let version = db.version().await.expect("engine version");
+		if format!("{}.{}", version.major, version.minor) != EMBEDDED_MINOR {
+			return;
+		}
 		let exact = apply_corpus(&db, experimental_server).await;
-		let minor = exact.rsplit_once('.').map_or(exact.as_str(), |(m, _)| m).to_string();
 		let live = crate::typegen::introspect_v2::introspect(&db, EngineMode::Remote)
 			.await
 			.expect("introspect");
@@ -977,10 +1026,8 @@ mod corpus {
 		} else {
 			CompileOpts::default()
 		};
-		let compiled = compile(&in_33_spelling(&modules_for(&minor, experimental_server)), &opts)
-			.await
-			.expect("compile")
-			.document;
+		let compiled =
+			compile(&embedded_corpus(experimental_server), &opts).await.expect("compile").document;
 		let semantic = |d: &SchemaDocument| {
 			serde_json::to_string_pretty(&crate::typegen::canonical::projection(
 				&serde_json::to_value(d).unwrap(),

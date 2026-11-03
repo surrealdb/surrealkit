@@ -199,11 +199,11 @@ pub struct TypegenConfig {
 	/// (schema document v2, `docs/typegen/schema-document-v2.md`). TypeScript output is the
 	/// same either way.
 	pub schema_version: Option<u32>,
-	/// Experimental capabilities the `surrealkit compile` engine allows (`files`,
-	/// `surrealism`, `gql`), for schemas that use `DEFINE BUCKET` or `DEFINE MODULE`.
+	/// Experimental capabilities the `surrealkit compile` engine allows: `surrealism`, for
+	/// schemas that use `DEFINE MODULE`. `files` and `gql` are accepted and change nothing.
 	#[serde(default)]
 	pub experimental: Vec<String>,
-	/// The SurrealDB minor the project deploys to (`"3.2"`). `surrealkit compile` runs the
+	/// The SurrealDB minor the project deploys to (`"4.0"`). `surrealkit compile` runs the
 	/// embedded engine whatever this says, and reports the error `compile-engine-mismatch`
 	/// when it is a different minor, since the document then describes the embedded engine.
 	pub engine: Option<String>,

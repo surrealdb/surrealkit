@@ -360,7 +360,7 @@ enum Commands {
 		#[arg(long)]
 		lenient: bool,
 		/// Experimental capabilities the compile engine allows, adding to
-		/// `[typegen] experimental`: files, surrealism, gql.
+		/// `[typegen] experimental`: surrealism, and files and gql, which change nothing.
 		#[arg(long = "allow-experimental", value_name = "FEATURE", value_delimiter = ',')]
 		allow_experimental: Vec<String>,
 	},

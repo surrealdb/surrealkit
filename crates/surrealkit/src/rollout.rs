@@ -3076,7 +3076,7 @@ pub(crate) async fn capture_definitions(
 
 	let mut out = BTreeMap::new();
 	for entity in entities {
-		let Some(section) = info_section(&entity.kind) else {
+		let Some(sections) = info_sections(&entity.kind) else {
 			continue;
 		};
 		let source = match table_scope(entity) {
@@ -3084,7 +3084,7 @@ pub(crate) async fn capture_definitions(
 			None => Some(&db_info),
 		};
 		let definition = source
-			.and_then(|info| info.get(section))
+			.and_then(|info| sections.iter().find_map(|section| info.get(section)))
 			.and_then(Value::as_object)
 			.and_then(|listed| info_entry(listed, &entity.kind, &entity.name));
 		if let Some(definition) = definition {
@@ -3097,24 +3097,24 @@ pub(crate) async fn capture_definitions(
 	Ok(out)
 }
 
-/// The `INFO` section that lists entities of this kind, if a rollback can
-/// restore them from it. Fields, indexes and events are in `INFO FOR TABLE`,
-/// everything else in `INFO FOR DB`.
-fn info_section(kind: &EntityKind) -> Option<&'static str> {
+/// The `INFO` sections that list entities of this kind, in the order to try them, if a rollback
+/// can restore them from there. Fields, indexes and events are in `INFO FOR TABLE`, everything
+/// else in `INFO FOR DB`. SurrealDB 4.0 lists modules as `extensions`.
+fn info_sections(kind: &EntityKind) -> Option<&'static [&'static str]> {
 	Some(match kind {
-		EntityKind::Table => "tables",
-		EntityKind::Function => "functions",
-		EntityKind::Param => "params",
-		EntityKind::Analyzer => "analyzers",
-		EntityKind::Access => "accesses",
-		EntityKind::User => "users",
-		EntityKind::Api => "apis",
-		EntityKind::Bucket => "buckets",
-		EntityKind::Config => "configs",
-		EntityKind::Module => "modules",
-		EntityKind::Field => "fields",
-		EntityKind::Index => "indexes",
-		EntityKind::Event => "events",
+		EntityKind::Table => &["tables"],
+		EntityKind::Function => &["functions"],
+		EntityKind::Param => &["params"],
+		EntityKind::Analyzer => &["analyzers"],
+		EntityKind::Access => &["accesses"],
+		EntityKind::User => &["users"],
+		EntityKind::Api => &["apis"],
+		EntityKind::Bucket => &["buckets"],
+		EntityKind::Config => &["configs"],
+		EntityKind::Module => &["modules", "extensions"],
+		EntityKind::Field => &["fields"],
+		EntityKind::Index => &["indexes"],
+		EntityKind::Event => &["events"],
 		// `INFO FOR DB` lists models and sequences too, but what it lists for them
 		// cannot be re-applied (see `unrestorable`). An unknown kind has no section.
 		EntityKind::Model | EntityKind::Sequence | EntityKind::Other(_) => return None,
@@ -3132,7 +3132,7 @@ fn table_scope(entity: &EntityKey) -> Option<&str> {
 /// Find an entity's definition in its `INFO` section.
 ///
 /// The catalog records a name the way the schema file spells it, but `INFO`
-/// keys each kind its own way. On SurrealDB 3.2.4 and 3.3.0 alike:
+/// keys each kind its own way. On SurrealDB 3.2.4, 3.3.0 and 4.0.0 alike:
 ///
 /// - most kinds drop the quotes, so `` `odd-bucket` `` is listed as `odd-bucket`;
 /// - functions and params drop their sigil too: `fn::greet` is `greet`, `$env` is `env`;
@@ -3141,7 +3141,8 @@ fn table_scope(entity: &EntityKey) -> Option<&str> {
 /// - an API is listed by its path, without the string quotes and without a
 ///   trailing `/`, so `"/health/"` is `/health`;
 /// - a config is listed by its type as SurrealDB spells it, so `GRAPHQL` is `GraphQL`;
-/// - a module is listed as `mod::<name>`, which is how the catalog records it.
+/// - a module is listed as `mod::<name>`, which is how the catalog records it. SurrealDB 4.0
+///   lists it as `ext::<name>`.
 fn info_entry<'a>(
 	listed: &'a serde_json::Map<String, Value>,
 	kind: &EntityKind,
@@ -3160,6 +3161,8 @@ fn info_entry<'a>(
 			let config = unquote_ident(name);
 			listed.iter().find(|(key, _)| key.eq_ignore_ascii_case(&config))?.1.as_str()
 		}
+		EntityKind::Module => get(&unquote_ident(name))
+			.or_else(|| get(&format!("ext::{}", unquote_ident(name.strip_prefix("mod::")?)))),
 		EntityKind::Function => get(&unquote_ident(name.strip_prefix("fn::").unwrap_or(name))),
 		EntityKind::Param => get(&unquote_ident(name.strip_prefix('$').unwrap_or(name))),
 		EntityKind::Field => {
@@ -5383,23 +5386,33 @@ mod tests {
 	#[tokio::test]
 	async fn rollback_restores_a_modified_module() {
 		let db = experimental_db().await;
-		// 3.3 reads a module's source after FROM, and refuses one without UNSIGNED.
-		let db_minor = db.version().await.expect("version").minor;
-		let define = |comment: &str| {
-			if db_minor < 3 {
+		// 3.3 reads a module's source after FROM, and refuses one without UNSIGNED. 4.0 calls
+		// it an extension and, when it cannot read the archive, requires its DIGEST.
+		let version = db.version().await.expect("version");
+		let define = |comment: &str| match (version.major, version.minor) {
+			(3, 0..=2) => {
 				format!("DEFINE MODULE mod::demo AS f\"modules:/demo.surli\" COMMENT '{comment}';")
-			} else {
-				format!(
-					"DEFINE MODULE mod::demo FROM f\"modules:/demo.surli\" UNSIGNED COMMENT \
-					 '{comment}';"
-				)
 			}
+			(3, _) => format!(
+				"DEFINE MODULE mod::demo FROM f\"modules:/demo.surli\" UNSIGNED COMMENT \
+				 '{comment}';"
+			),
+			_ => format!(
+				"DEFINE MODULE mod::demo FROM f\"modules:/demo.surli\" UNSIGNED DIGEST \
+				 'sha256:{}' COMMENT '{comment}';",
+				"0".repeat(64)
+			),
+		};
+		let listed = if version.major >= 4 {
+			in_db("extensions", "ext::demo")
+		} else {
+			in_db("modules", "mod::demo")
 		};
 		assert_rolls_back(
 			&db,
 			&format!("DEFINE BUCKET modules BACKEND \"memory\";\n{}", define("v1")),
 			&define("v2"),
-			&[in_db("modules", "mod::demo")],
+			&[listed],
 		)
 		.await;
 	}

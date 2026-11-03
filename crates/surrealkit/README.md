@@ -30,8 +30,7 @@ only it needs — `clap`, `inquire`, `rustls` (and its `aws-lc-rs` backend) and
 surrealkit = { version = "1.0.0-beta.7", default-features = false, features = ["kv-mem"] }
 ```
 
-Storage engines: `kv-mem` (default), `kv-surrealkv`, `kv-rocksdb`, and `embedded`
-for all three. Remote connections over HTTP need no feature.
+Storage engines: `kv-mem` (default), `kv-surrealkv`, and `embedded` for both. Remote connections over HTTP need no feature.
 
 The `templates` feature carries `surrealkit init`'s template engine (`cli` enables
 it). The `mcp` feature builds the Model Context Protocol server. `mcp` deliberately
@@ -55,8 +54,8 @@ let config = ServerConfig::new(std::env::current_dir()?, DbOverrides::default(),
 serve_stdio(SurrealKitMcp::new(config)).await?;
 ```
 
-SurrealKit builds against SurrealDB 3.3, so the embedded engines are 3.3. It
-works with servers from 3.2.0 on. It needs Rust 1.95.
+SurrealKit builds against SurrealDB 4.0, so the embedded engines are 4.0. CI
+tests it against servers 3.2.4, 3.3.0 and 4.0.0. It needs Rust 1.95.
 
 > You do not need these features to target an embedded engine from a library:
 > cargo unifies features across the dependency graph, so enabling e.g.
@@ -129,7 +128,7 @@ let db = connect(&cfg).await?;
 
 ### Embedded databases
 
-SurrealKit works against an in-process SurrealDB such as `mem://`, `surrealkv://`, or `rocksdb://`. Because Cargo unifies features across the dependency graph, you only need to enable the engine on **your own** `surrealdb` dependency. SurrealKit itself stays engine-agnostic:
+SurrealKit works against an in-process SurrealDB such as `mem://` or `surrealkv://`. Because Cargo unifies features across the dependency graph, you only need to enable the engine on **your own** `surrealdb` dependency. SurrealKit itself stays engine-agnostic:
 
 ```toml
 [dependencies]

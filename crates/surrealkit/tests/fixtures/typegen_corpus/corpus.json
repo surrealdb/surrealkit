@@ -6,19 +6,23 @@
 		{ "path": "schema/03_ids.surql" },
 		{ "path": "schema/04_fields.surql" },
 		{ "path": "schema/05_nested.surql" },
+		{ "path": "schema-gated/05_implicit_parent.v3.surql", "engines": ["3.2", "3.3"] },
+		{ "path": "schema/05_declared_parent.v4.0.surql", "engines": ["4.0"] },
 		{ "path": "schema/06_references.surql" },
 		{ "path": "schema/07_functions_params.surql" },
 		{ "path": "schema/08_indexes_events.surql" },
 		{ "path": "schema/09_access_sequences.surql" },
 		{ "path": "schema/10_api_config.surql" },
 		{ "path": "schema-gated/20_experimental_files.surql", "experimental": ["files"] },
-		{ "path": "schema-gated/30_relations.v3.3.surql", "engines": ["3.3"] },
+		{ "path": "schema-gated/30_relations.v3.3.surql", "engines": ["3.3", "4.0"] },
 		{ "path": "schema-gated/31_module.v3.2.surql", "engines": ["3.2"], "experimental": ["surrealism"] },
-		{ "path": "schema-gated/31_module.v3.3.surql", "engines": ["3.3"], "experimental": ["surrealism"] }
+		{ "path": "schema-gated/31_module.v3.3.surql", "engines": ["3.3"], "experimental": ["surrealism"] },
+		{ "path": "schema-gated/31_module.v4.0.surql", "engines": ["4.0"], "experimental": ["surrealism"] }
 	],
 	"introspection": {
 		"3.2.4": "introspection/3.2.4",
-		"3.3.0": "introspection/3.3.0"
+		"3.3.0": "introspection/3.3.0",
+		"4.0.0": "introspection/4.0.0"
 	},
 	"semantics": ["semantics/field_presence.surql", "semantics/collections.surql", "semantics/access.v3.3.surql"],
 	"rejected": [

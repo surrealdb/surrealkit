@@ -94,8 +94,10 @@ fn assert_no_errors(label: &str, doc: &SchemaDocument) {
 }
 
 #[test]
-fn the_corpus_reads_cleanly_through_both_structure_adapters() {
-	for (version, adapter) in [("3.2.4", "structure-3.2"), ("3.3.0", "structure-3.3")] {
+fn the_corpus_reads_cleanly_through_every_structure_adapter() {
+	for (version, adapter) in
+		[("3.2.4", "structure-3.2"), ("3.3.0", "structure-3.3"), ("4.0.0", "structure-4.0")]
+	{
 		let doc = fixture_document(version);
 		assert_no_errors(version, &doc);
 		assert_eq!(doc.provenance.adapter, adapter);
@@ -103,19 +105,30 @@ fn the_corpus_reads_cleanly_through_both_structure_adapters() {
 	}
 }
 
-/// The 3.3.0 document's content is pinned once, by `compiled/corpus.v2.json`: compiling the
+/// The 3.3.0 document's diagnostics, which differ between the readers, and its semantic digest
+/// are pinned by the snapshot.
+#[test]
+fn the_3_3_0_document_is_pinned() {
+	let doc = fixture_document("3.3.0");
+	let mut text = String::from("diagnostics:\n");
+	text.push_str(&diagnostic_lines(&doc).join("\n"));
+	text.push_str(&format!("\n\n{}\n", doc.semantic_digest));
+	insta::assert_snapshot!("corpus_v2_3_3_0", text);
+}
+
+/// The 4.0.0 document's content is pinned once, by `compiled/corpus.v2.json`: compiling the
 /// corpus gives the same semantic content (`compile::corpus` checks that), so here its digest
 /// must equal that file's, and only its diagnostics, which differ between the readers, are
 /// pinned.
 #[test]
-fn the_3_3_0_document_is_pinned() {
-	let doc = fixture_document("3.3.0");
+fn the_4_0_0_document_is_pinned() {
+	let doc = fixture_document("4.0.0");
 	let compiled = read_json(&corpus_dir().join("compiled/corpus.v2.json"));
 	assert_eq!(compiled["semanticDigest"].as_str(), Some(doc.semantic_digest.as_str()));
 	let mut text = String::from("diagnostics:\n");
 	text.push_str(&diagnostic_lines(&doc).join("\n"));
 	text.push_str(&format!("\n\n{}\n", doc.semantic_digest));
-	insta::assert_snapshot!("corpus_v2_3_3_0", text);
+	insta::assert_snapshot!("corpus_v2_4_0_0", text);
 }
 
 #[test]
