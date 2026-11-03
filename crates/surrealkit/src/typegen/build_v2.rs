@@ -193,6 +193,7 @@ pub(super) fn build(raw: RawSchema, provenance: Provenance) -> Result<SchemaDocu
 		configs,
 		users: sorted_by_name(users, |u| &u.name),
 		types,
+		queries: Vec::new(),
 		diagnostics: Vec::new(),
 	};
 	doc.diagnostics = sort_diagnostics(diagnostics);

@@ -13,7 +13,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::diagnostics::Diagnostic;
+use super::diagnostics::{Diagnostic, Span};
 
 /// The version this module reads and writes.
 pub const SCHEMA_DOCUMENT_VERSION: u32 = 2;
@@ -47,6 +47,10 @@ pub struct SchemaDocument {
 	/// types is byte-for-byte what it was before the collection existed (and keeps its digest).
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub types: Vec<TypeDef>,
+	/// The typed result of each query the project sends (contract section 19). Omitted when
+	/// there are none, and not part of the digest.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub queries: Vec<QueryEntry>,
 	/// Everything not structurally understood. Not part of the digest.
 	pub diagnostics: Vec<Diagnostic>,
 }
@@ -136,6 +140,103 @@ pub struct Capabilities {
 	pub experimental: Vec<String>,
 	/// Whether the compile engine could reach the network. Always `false` for a compile.
 	pub network: bool,
+}
+
+// ---------------------------------------------------------------------------
+// Queries
+// ---------------------------------------------------------------------------
+
+/// One query and the typed result of each of its statements.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QueryEntry {
+	/// The query's identity: its name when it has one, otherwise its exact text.
+	pub key: String,
+	/// A named query's name, an identifier.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub name: Option<String>,
+	/// The query exactly as the engine receives it.
+	pub text: String,
+	/// Where the query comes from, sorted by `path`, then `span.start`. May be empty.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub sources: Vec<QuerySource>,
+	/// One per top-level statement, in source order.
+	pub statements: Vec<QueryStatement>,
+	/// The `$name` parameters the query reads without binding, sorted by name.
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub params: Vec<QueryParameter>,
+}
+
+/// Where a query's text is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum QueryOrigin {
+	/// A query file.
+	File,
+	/// Host code.
+	Host,
+}
+
+/// A place a query is written: a query file, or a call in host code.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QuerySource {
+	pub origin: QueryOrigin,
+	/// Relative to the project root, `/`-separated.
+	pub path: String,
+	/// The UTF-8 byte range of the query text in the file: the text of a named query, the
+	/// literal's contents for an inline one.
+	pub span: Span,
+	/// 1-based line of `span.start`.
+	pub line: u32,
+	/// 1-based column of `span.start`, counted in Unicode scalar values.
+	pub column: u32,
+	/// The client method the text was passed to. Host code only.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub method: Option<String>,
+}
+
+/// How firmly the engine stands behind a kind.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Certainty {
+	/// Guaranteed by an engine invariant.
+	Fact,
+	/// Declared but unproven.
+	Hint,
+}
+
+/// The type of one top-level statement's slot in the response.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QueryStatement {
+	/// Absent for a statement with no slot in the response (`BEGIN`, `COMMIT`, `CANCEL`).
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub kind: Option<Kind>,
+	/// The top-level kind admitted NONE: v2's rule for a top position folds it into this flag.
+	pub optional: bool,
+	pub certainty: Certainty,
+	/// Whether the engine reports the kind as the exact shape of the result.
+	pub exact: bool,
+	/// Positions inside `kind` where an object admits undeclared keys. Each is a path of v2
+	/// segments: `[]` is the kind itself, `"*"` an array or set element, any other segment an
+	/// object literal field.
+	#[serde(default)]
+	pub open: Vec<Vec<String>>,
+}
+
+/// A `$name` a query reads without binding it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QueryParameter {
+	/// Without the `$`.
+	pub name: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub kind: Option<Kind>,
+	/// The kind admitted NONE (folded as for a statement).
+	pub optional: bool,
+	/// Whether the caller must bind it.
+	pub required: bool,
 }
 
 // ---------------------------------------------------------------------------

@@ -31,6 +31,8 @@ out = "docs/generated"
 - `out` is a directory, relative to the current directory. **SurrealKit owns it**: no two
   emitters may share or nest their `out` directories, and `[typegen] json` and `typescript`
   may not be inside one (the configuration is refused).
+- `queries` (default `false`): whether the emitter receives the document's `queries`
+  section ([below](#queries)).
 
 Emitters run in `surrealkit typegen`, `surrealkit typegen --from <schema.json>` (v2
 documents only), `surrealkit compile`, and `surrealkit sync` (including every
@@ -43,7 +45,9 @@ schema_version` says the JSON output is.
 SurrealKit starts `command` with:
 
 - **stdin**: the schema document v2, as UTF-8 JSON — exactly the bytes SurrealKit writes as
-  the pretty-printed JSON output, ending in a newline. stdin is closed after the document.
+  the pretty-printed JSON output, ending in a newline, except that `queries` and its
+  diagnostics are removed for an emitter that does not opt in ([below](#queries)). stdin is
+  closed after the document.
 - **environment**: the parent's environment plus
   - `SURREALKIT_EMIT_PROTOCOL` — `1`;
   - `SURREALKIT_EMIT_NAME` — the emitter's `<name>`;
@@ -84,6 +88,27 @@ The emitter MUST exit with status 0 and print exactly one JSON object on stdout:
 The output MUST depend only on the document (and the emitter's own version and
 arguments): the same document must give the same files, byte for byte, or `--check`
 cannot work.
+
+## Queries
+
+A document's `queries` (contract section 19) is an additive v2 extension. A strict reader
+that predates it refuses a document that carries it, so SurrealKit removes it from the
+document it sends an emitter unless that emitter's configuration says `queries = true`. It
+removes `queries` and every diagnostic about queries: those with a `query` locator, and
+those whose code starts with `query-` or `queries-`.
+
+```toml
+[typegen.emit.go]
+command = "surrealkit-go"
+out = "internal/db"
+queries = true
+```
+
+Removing them changes nothing else: `queries` and diagnostics are outside `semanticDigest`,
+so the document an emitter receives without them has the same digest, and is exactly the
+document SurrealKit would produce for the project without `[typegen.queries]`. An emitter that sets `queries = true`
+MUST accept a document without `queries`, which is how a project with no typed query, or an
+engine that cannot type queries, arrives.
 
 ## What SurrealKit does with the reply
 

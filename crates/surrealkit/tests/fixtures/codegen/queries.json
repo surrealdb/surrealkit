@@ -5,9 +5,15 @@
     "text": "SELECT name, email FROM user WHERE name = $name LIMIT $limit",
     "sources": [
       {
+        "origin": "host",
         "path": "src/users.ts",
+        "span": {
+          "start": 311,
+          "end": 371
+        },
         "line": 12,
-        "column": 30
+        "column": 30,
+        "method": "query"
       }
     ],
     "statements": [

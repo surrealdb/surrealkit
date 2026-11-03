@@ -22,7 +22,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::queries::{Certainty, ELEMENT_SEGMENT, ParamEntry, QueryEntry, StatementEntry};
+use super::queries::{Certainty, ELEMENT_SEGMENT, QueryEntry, QueryParameter, QueryStatement};
 use crate::typegen::document::{Kind, LiteralType, LiteralValue, ObjectLiteralField, TypeDef};
 
 /// Query parameters with this prefix are filled by the host-language template, not by the caller.
@@ -423,13 +423,13 @@ impl Emitter<'_> {
 
 	/// One element per statement that has a slot in the response, in source order. A statement
 	/// without a kind (`BEGIN`, `COMMIT`, `CANCEL`) has none, so the SDK response skips it.
-	fn result_tuple(&mut self, statements: &[StatementEntry]) -> String {
+	fn result_tuple(&mut self, statements: &[QueryStatement]) -> String {
 		let slots: Vec<String> =
 			statements.iter().filter_map(|statement| self.statement(statement)).collect();
 		format!("[{}]", slots.join(", "))
 	}
 
-	fn statement(&mut self, statement: &StatementEntry) -> Option<String> {
+	fn statement(&mut self, statement: &QueryStatement) -> Option<String> {
 		let kind = statement.kind.as_ref()?;
 		if statement.certainty == Certainty::Hint && self.opts.hints == HintStyle::Unknown {
 			return Some("unknown".to_string());
@@ -447,7 +447,7 @@ impl Emitter<'_> {
 	/// query needs the argument at all, while a property's `?` answers whether the value can be
 	/// absent. Folding a parameter's `option<T>` into the key as well would let callers omit a key
 	/// the query requires, so an optional kind stays `T | undefined`.
-	fn query_params(&mut self, params: &[ParamEntry]) -> String {
+	fn query_params(&mut self, params: &[QueryParameter]) -> String {
 		let mut parts = Vec::new();
 		for param in params {
 			if param.name.starts_with(HOST_PARAM_PREFIX) {

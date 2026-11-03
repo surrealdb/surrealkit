@@ -1,78 +1,20 @@
-//! The typed result of each query, in schema document v2's vocabulary.
+//! Building the `queries` section's entries from the engine's [`TypesDocument`].
 //!
-//! A [`QueryEntry`] is one query: its text, where host code sends it, the type of each
-//! statement's slot in the response, and the `$name` parameters it reads. Its kinds are v2
-//! [`Kind`]s, and its JSON form follows the v2 conventions: camelCase members, no
-//! user-controlled object keys, optional members omitted, never `null`.
+//! The entry model ([`QueryEntry`] and the types it holds) is schema document v2's, defined in
+//! [`crate::typegen::document`]; its kinds are v2 [`Kind`]s, and its JSON form follows the v2
+//! conventions: camelCase members, no user-controlled object keys, optional members omitted,
+//! never `null`.
 //!
 //! [`from_types_document`] builds the entries, and the `types` their `named` kinds refer to,
 //! from the engine's [`TypesDocument`].
-
-use serde::{Deserialize, Serialize};
 
 pub use super::document::Certainty;
 use super::document::{FieldStep, KindValue, QueryParam, StatementType, TypesDocument};
 use super::v2;
 use crate::typegen::document::{Kind, TypeDef};
-
-/// One query and the typed result of each of its statements.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct QueryEntry {
-	/// The name the query was given, or its exact text when it has none.
-	pub key: String,
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub name: Option<String>,
-	/// The exact text host code passes to the client.
-	pub text: String,
-	/// Where host code sends the query. May be empty.
-	#[serde(default, skip_serializing_if = "Vec::is_empty")]
-	pub sources: Vec<SourceRef>,
-	pub statements: Vec<StatementEntry>,
-	#[serde(default, skip_serializing_if = "Vec::is_empty")]
-	pub params: Vec<ParamEntry>,
-}
-
-/// A place in host code that sends a query.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct SourceRef {
-	pub path: String,
-	pub line: u32,
-	pub column: u32,
-}
-
-/// The type of one top-level statement's slot in the response.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct StatementEntry {
-	/// Absent for a statement with no slot in the response (`BEGIN`, `COMMIT`, `CANCEL`).
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub kind: Option<Kind>,
-	/// The top-level kind admitted NONE: v2's rule for a top position folds it into this flag.
-	pub optional: bool,
-	pub certainty: Certainty,
-	/// Whether the engine reports the kind as the exact shape of the result.
-	pub exact: bool,
-	/// Positions inside `kind` where an object admits undeclared keys. Each is a path of v2
-	/// segments: `[]` is the kind itself, `"*"` an array or set element, any other segment an
-	/// object literal field.
-	#[serde(default)]
-	pub open: Vec<Vec<String>>,
-}
-
-/// A `$name` a query reads without binding it.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ParamEntry {
-	pub name: String,
-	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub kind: Option<Kind>,
-	/// The kind admitted NONE (folded as for a statement).
-	pub optional: bool,
-	/// Whether the caller must bind it.
-	pub required: bool,
-}
+pub use crate::typegen::document::{
+	QueryEntry, QueryOrigin, QueryParameter, QuerySource, QueryStatement,
+};
 
 /// The v2 spelling of a path step into a collection's elements.
 pub const ELEMENT_SEGMENT: &str = "*";
@@ -144,11 +86,11 @@ pub fn from_types_document(doc: &TypesDocument) -> Converted {
 	}
 }
 
-fn statement_entry(statement: &StatementType) -> (StatementEntry, Vec<String>) {
+fn statement_entry(statement: &StatementType) -> (QueryStatement, Vec<String>) {
 	let (kind, optional, unrepresented) = top_kind(statement.kind_value.as_ref());
 	let exact =
 		statement.support.get("exact").and_then(serde_json::Value::as_bool).unwrap_or(false);
-	let entry = StatementEntry {
+	let entry = QueryStatement {
 		kind,
 		optional,
 		certainty: statement.certainty,
@@ -158,9 +100,9 @@ fn statement_entry(statement: &StatementType) -> (StatementEntry, Vec<String>) {
 	(entry, unrepresented)
 }
 
-fn param_entry(param: &QueryParam) -> (ParamEntry, Vec<String>) {
+fn param_entry(param: &QueryParam) -> (QueryParameter, Vec<String>) {
 	let (kind, optional, unrepresented) = top_kind(param.kind_value.as_ref());
-	let entry = ParamEntry {
+	let entry = QueryParameter {
 		name: param.name.clone(),
 		kind,
 		optional,
@@ -262,7 +204,7 @@ mod tests {
 			name: None,
 			text: "RETURN 1".into(),
 			sources: Vec::new(),
-			statements: vec![StatementEntry {
+			statements: vec![QueryStatement {
 				kind: Some(Kind::int()),
 				optional: false,
 				certainty: Certainty::Fact,

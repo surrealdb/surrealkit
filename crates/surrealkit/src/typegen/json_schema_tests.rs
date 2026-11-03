@@ -381,6 +381,183 @@ fn the_four_oh_nodes_validate() {
 	assert_valid("a document with types", &doc);
 }
 
+/// A `queries` section: a named file query, and a host query two call sites send.
+fn queries_section() -> Value {
+	serde_json::json!([
+		{
+			"key": "ListPeople",
+			"name": "ListPeople",
+			"text": "SELECT name, age FROM person WHERE age >= $min ORDER BY name;",
+			"sources": [{
+				"origin": "file",
+				"path": "database/queries/people.surql",
+				"span": { "start": 18, "end": 79 },
+				"line": 2,
+				"column": 1
+			}],
+			"statements": [{
+				"kind": { "kind": "array", "item": { "kind": "objectLiteral", "fields": [
+					{ "name": "age", "kind": { "kind": "int" }, "optional": false },
+					{ "name": "name", "kind": { "kind": "string" }, "optional": false }
+				] } },
+				"optional": false,
+				"certainty": "fact",
+				"exact": true,
+				"open": []
+			}],
+			"params": [{ "name": "min", "kind": { "kind": "int" }, "optional": false, "required": true }]
+		},
+		{
+			"key": "BEGIN; SELECT * FROM person WHERE id = $__host0; COMMIT;",
+			"text": "BEGIN; SELECT * FROM person WHERE id = $__host0; COMMIT;",
+			"sources": [
+				{
+					"origin": "host",
+					"path": "src/a.ts",
+					"span": { "start": 120, "end": 177 },
+					"line": 5,
+					"column": 24,
+					"method": "query"
+				},
+				{
+					"origin": "host",
+					"path": "src/b.ts",
+					"span": { "start": 40, "end": 97 },
+					"line": 2,
+					"column": 20,
+					"method": "query"
+				}
+			],
+			"statements": [
+				{ "optional": false, "certainty": "fact", "exact": true, "open": [] },
+				{
+					"kind": { "kind": "array", "item": { "kind": "object" } },
+					"optional": false,
+					"certainty": "hint",
+					"exact": false,
+					"open": [["*"]]
+				},
+				{ "optional": false, "certainty": "fact", "exact": true, "open": [] }
+			],
+			"params": [{ "name": "__host0", "optional": false, "required": true }]
+		}
+	])
+}
+
+#[test]
+fn a_queries_section_validates_and_round_trips() {
+	let mut doc = serde_json::to_value(fixture_document("3.3.0")).unwrap();
+	doc["types"] =
+		serde_json::json!([{ "name": "mood", "kind": { "kind": "enum", "labels": ["ok"] } }]);
+	doc["queries"] = queries_section();
+	doc["diagnostics"] = serde_json::json!([{
+		"severity": "error",
+		"code": "query-invalid",
+		"query": "ListPeople",
+		"source": "SELECT FROM",
+		"reason": "the engine refuses it"
+	}]);
+	assert_valid("a document with queries", &doc);
+
+	let decoded: super::document::SchemaDocument = serde_json::from_value(doc.clone()).unwrap();
+	assert_eq!(decoded.queries.len(), 2);
+	let encoded = serde_json::to_value(&decoded).unwrap();
+	assert_eq!(encoded, doc);
+	assert_eq!(
+		serde_json::to_string_pretty(&encoded).unwrap(),
+		serde_json::to_string_pretty(&doc).unwrap()
+	);
+	let text = serde_json::to_string(&decoded).unwrap();
+	let at = |member: &str| text.find(&format!(",\"{member}\":[")).unwrap();
+	assert!(at("types") < at("queries") && at("queries") < at("diagnostics"));
+}
+
+#[test]
+fn a_document_without_queries_serialises_without_the_member() {
+	let doc = serde_json::to_value(fixture_document("3.3.0")).unwrap();
+	assert!(doc.get("queries").is_none());
+}
+
+#[test]
+fn query_violations_are_rejected() {
+	let mut base = serde_json::to_value(fixture_document("3.3.0")).unwrap();
+	base["queries"] = queries_section();
+	assert_valid("the base document", &base);
+	type Mutation = (&'static str, Box<dyn Fn(&mut Value)>);
+	let mutations: Vec<Mutation> = vec![
+		("unknown entry property", Box::new(|d| d["queries"][0]["extra"] = Value::from(1))),
+		("origin x", Box::new(|d| d["queries"][0]["sources"][0]["origin"] = Value::from("x"))),
+		(
+			"unknown source property",
+			Box::new(|d| d["queries"][0]["sources"][0]["extra"] = Value::from(1)),
+		),
+		(
+			"source without a span",
+			Box::new(|d| {
+				d["queries"][0]["sources"][0].as_object_mut().unwrap().remove("span");
+			}),
+		),
+		("line 0", Box::new(|d| d["queries"][0]["sources"][0]["line"] = Value::from(0))),
+		(
+			"name that is not an identifier",
+			Box::new(|d| d["queries"][0]["name"] = Value::from("list-people")),
+		),
+		("name starting with a digit", Box::new(|d| d["queries"][0]["name"] = Value::from("1st"))),
+		("null name", Box::new(|d| d["queries"][0]["name"] = Value::Null)),
+		(
+			"entry without text",
+			Box::new(|d| {
+				d["queries"][0].as_object_mut().unwrap().remove("text");
+			}),
+		),
+		(
+			"statement without certainty",
+			Box::new(|d| {
+				d["queries"][0]["statements"][0].as_object_mut().unwrap().remove("certainty");
+			}),
+		),
+		(
+			"certainty maybe",
+			Box::new(|d| d["queries"][0]["statements"][0]["certainty"] = Value::from("maybe")),
+		),
+		(
+			"unknown statement kind",
+			Box::new(|d| {
+				d["queries"][0]["statements"][0]["kind"] = serde_json::json!({ "kind": "frob" })
+			}),
+		),
+		(
+			"null statement kind",
+			Box::new(|d| d["queries"][0]["statements"][0]["kind"] = Value::Null),
+		),
+		(
+			"param without required",
+			Box::new(|d| {
+				d["queries"][0]["params"][0].as_object_mut().unwrap().remove("required");
+			}),
+		),
+		(
+			"unknown param property",
+			Box::new(|d| d["queries"][0]["params"][0]["extra"] = Value::from(1)),
+		),
+		(
+			"query locator that is not a string",
+			Box::new(|d| {
+				d["diagnostics"] = serde_json::json!([{
+					"severity": "error", "code": "query-invalid", "query": 1,
+					"source": "x", "reason": "r"
+				}])
+			}),
+		),
+		("queries null", Box::new(|d| d["queries"] = Value::Null)),
+	];
+	for (label, mutate) in mutations {
+		let mut doc = base.clone();
+		mutate(&mut doc);
+		assert!(!validation_errors(&doc).is_empty(), "{label} was accepted");
+	}
+}
+
 #[test]
 fn an_unsupported_keyword_is_an_error_not_a_skip() {
 	let validator_schema = serde_json::json!({ "type": "object", "maxProperties": 1 });

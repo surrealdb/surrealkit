@@ -6,9 +6,9 @@
 //! ECMAScript `JSON.stringify` does. A non-integer number is a bug in the document and fails.
 //!
 //! `semanticDigest = "sha256:" + hex(sha256(canonical(projection(document))))`, where the
-//! projection removes the top-level `semanticDigest`, `provenance` and `diagnostics`, `define`
-//! on every table and field, and the derived `value.readsInput` and `assert.recognized` on
-//! every field (contract section 13).
+//! projection removes the top-level `semanticDigest`, `provenance`, `diagnostics` and
+//! `queries`, `define` on every table and field, and the derived `value.readsInput` and
+//! `assert.recognized` on every field (contract section 13).
 
 use anyhow::{Result, bail};
 use serde::Serialize;
@@ -105,6 +105,7 @@ pub fn projection(document: &Value) -> Value {
 		map.remove("semanticDigest");
 		map.remove("provenance");
 		map.remove("diagnostics");
+		map.remove("queries");
 		if let Some(Value::Array(tables)) = map.get_mut("tables") {
 			for table in tables {
 				let Value::Object(table) = table else {
@@ -198,6 +199,24 @@ mod tests {
 				}],
 			})
 		);
+	}
+
+	#[test]
+	fn queries_are_outside_the_digest() {
+		let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+			.join("tests/fixtures/typegen_corpus/example.v2.json");
+		let mut doc: Value = serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+		let before = semantic_digest(&doc).unwrap();
+		doc["queries"] = json!([{
+			"key": "RETURN 1",
+			"text": "RETURN 1",
+			"statements": [{
+				"kind": { "kind": "int" }, "optional": false,
+				"certainty": "fact", "exact": true, "open": []
+			}]
+		}]);
+		assert_eq!(semantic_digest(&doc).unwrap(), before);
+		assert_eq!(projection(&doc).get("queries"), None);
 	}
 
 	/// The contract's example document carries a digest that two independent implementations

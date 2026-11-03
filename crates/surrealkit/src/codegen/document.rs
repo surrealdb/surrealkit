@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use super::kind::{KindValue, LiteralValue};
+pub use crate::typegen::document::Certainty;
 
 /// The `format` member of every document this reader accepts.
 pub const FORMAT: &str = "surrealdb.types";
@@ -158,16 +159,6 @@ impl From<FieldStep> for RawStep {
 			},
 		}
 	}
-}
-
-/// How firmly the engine stands behind a kind.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Certainty {
-	/// Guaranteed by an engine invariant.
-	Fact,
-	/// Declared but unproven.
-	Hint,
 }
 
 /// A `DEFINE FUNCTION`.
