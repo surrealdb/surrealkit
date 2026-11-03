@@ -7,7 +7,7 @@
 //! - [`parse_type_prefix`] parses one kind at the start of a longer text.
 //! - `extract_type_clause` (tests only) pulls the `TYPE …` body out of a `DEFINE FIELD` statement.
 //!
-//! It accepts what SurrealDB 3.x renders (see `docs/typegen/schema-document-v2.md`, section
+//! It accepts what SurrealDB 3.x and 4.0 render (see `docs/typegen/schema-document-v2.md`, section
 //! 4): every primitive, `option<T>` and its `none | T` normal form, `array` and `set` with an
 //! optional exact length, `record`, `table`, `file` and `geometry` with their name lists
 //! (backtick-quoted names included), tuples `[A, B]`, object literals `{ a: int, "b c": T }`,
@@ -740,6 +740,11 @@ fn primitive(name: &str) -> Option<PrimitiveType> {
 		"string" => PrimitiveType::String,
 		"int" => PrimitiveType::Int,
 		"float" => PrimitiveType::Float,
+		// SurrealDB 4.0 sized numbers. The width is not represented, in v1 or in schema
+		// document v2: every `iN`/`uN` value is an `int` and every `fN` value a `float`. (The
+		// engine itself renders `i64` and `f64` as `int` and `float`.)
+		"i8" | "i16" | "i32" | "i64" | "u8" | "u16" | "u32" | "u64" => PrimitiveType::Int,
+		"f16" | "f32" | "f64" => PrimitiveType::Float,
 		"bool" | "boolean" => PrimitiveType::Bool,
 		"number" => PrimitiveType::Number,
 		"decimal" => PrimitiveType::Decimal,
@@ -809,8 +814,74 @@ mod tests {
 	#[test_case("function", PrimitiveType::Function)]
 	#[test_case("regex", PrimitiveType::Regex)]
 	#[test_case("range", PrimitiveType::Range)]
+	#[test_case("i8", PrimitiveType::Int)]
+	#[test_case("i16", PrimitiveType::Int)]
+	#[test_case("i32", PrimitiveType::Int)]
+	#[test_case("i64", PrimitiveType::Int)]
+	#[test_case("u8", PrimitiveType::Int)]
+	#[test_case("u16", PrimitiveType::Int)]
+	#[test_case("u32", PrimitiveType::Int)]
+	#[test_case("u64", PrimitiveType::Int)]
+	#[test_case("f16", PrimitiveType::Float)]
+	#[test_case("f32", PrimitiveType::Float)]
+	#[test_case("f64", PrimitiveType::Float)]
 	fn primitives(src: &str, expected: PrimitiveType) {
 		assert_eq!(clean(src), prim(expected));
+	}
+
+	/// A sized number is the plain number wherever a kind may appear.
+	#[test]
+	fn sized_numbers_nest_like_int_and_float() {
+		let int = prim(PrimitiveType::Int);
+		let float = prim(PrimitiveType::Float);
+		assert_eq!(
+			clean("array<i32, 3>"),
+			FieldType::Array {
+				inner: Box::new(int.clone()),
+				max: Some(3)
+			}
+		);
+		assert_eq!(
+			clean("option<u8>"),
+			FieldType::Option {
+				inner: Box::new(int.clone())
+			}
+		);
+		assert_eq!(
+			clean("{ a: i16, b: none | f32 }"),
+			FieldType::Object {
+				fields: vec![
+					ObjectField {
+						name: "a".into(),
+						r#type: int.clone()
+					},
+					ObjectField {
+						name: "b".into(),
+						r#type: FieldType::Union {
+							variants: vec![prim(PrimitiveType::None), float.clone()]
+						}
+					},
+				]
+			}
+		);
+		assert_eq!(
+			clean("[u64, f16]"),
+			FieldType::Tuple {
+				items: vec![int.clone(), float.clone()]
+			}
+		);
+		assert_eq!(
+			clean("i8 | f64 | string"),
+			FieldType::Union {
+				variants: vec![int, float, prim(PrimitiveType::String)]
+			}
+		);
+		// Names are case-insensitive, as the engine's are.
+		assert_eq!(clean("U32"), prim(PrimitiveType::Int));
+		assert_eq!(clean("F16"), prim(PrimitiveType::Float));
+		// A width is not a type parameter.
+		let (_, problems) = parse_type_checked("i32<int>");
+		assert_eq!(problems.len(), 1, "{problems:?}");
 	}
 
 	#[test]
