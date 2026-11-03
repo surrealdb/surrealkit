@@ -1,66 +1,75 @@
-//! Golden tests for the TypeScript renderer, over hand-built `TypesDocument` fixtures. No engine,
-//! no network.
+//! Golden tests for the per-query TypeScript renderer, over hand-built `QueryEntry` fixtures, and
+//! the conversion of the engine's `TypesDocument` into those entries. No engine, no network.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use surrealkit::codegen::document::{FORMAT, TypesDocument, VERSION};
+use surrealkit::codegen::document::TypesDocument;
+use surrealkit::codegen::queries::{QueryEntry, from_types_document};
 use surrealkit::codegen::typescript::{DateStyle, HintStyle, RenderOptions, render};
 
+const QUERIES: &str = include_str!("fixtures/codegen/queries.json");
+const KINDS: &str = include_str!("fixtures/codegen/queries_kinds.json");
+const EMPTY: &str = include_str!("fixtures/codegen/queries_empty.json");
 const BLOG: &str = include_str!("fixtures/codegen/blog.json");
-const EMPTY: &str = include_str!("fixtures/codegen/empty.json");
 const OPEN: &str = include_str!("fixtures/codegen/open.json");
-const KINDS: &str = include_str!("fixtures/codegen/kinds.json");
 
-fn doc(text: &str) -> TypesDocument {
-	TypesDocument::from_json(text).expect("fixture document reads")
+fn entries(text: &str) -> Vec<QueryEntry> {
+	serde_json::from_str(text).expect("fixture entries read")
 }
 
 fn render_default(text: &str) -> String {
-	render(&doc(text), &RenderOptions::default())
+	render(&entries(text), &RenderOptions::default())
 }
 
-#[test]
-fn blog_schema() {
-	insta::assert_snapshot!("blog", render_default(BLOG));
-}
-
-#[test]
-fn blog_schema_with_native_dates_and_distrusted_hints() {
-	let opts = RenderOptions {
+fn native_unknown() -> RenderOptions {
+	RenderOptions {
 		dates: DateStyle::Native,
 		hints: HintStyle::Unknown,
 		..RenderOptions::default()
-	};
-	insta::assert_snapshot!("blog_native_unknown", render(&doc(BLOG), &opts));
+	}
 }
 
 #[test]
-fn empty_document() {
-	insta::assert_snapshot!("empty", render_default(EMPTY));
+fn queries() {
+	insta::assert_snapshot!("queries", render_default(QUERIES));
 }
 
 #[test]
-fn open_rows_and_nested_open_fields() {
-	insta::assert_snapshot!("open", render_default(OPEN));
+fn queries_with_native_dates_and_distrusted_hints() {
+	insta::assert_snapshot!("queries_native_unknown", render(&entries(QUERIES), &native_unknown()));
 }
 
 #[test]
-fn every_engine_kind() {
+fn every_v2_kind() {
 	insta::assert_snapshot!("kinds", render_default(KINDS));
 }
 
 #[test]
-fn refuses_a_foreign_format_and_a_newer_version() {
-	let foreign = TypesDocument::from_json(r#"{"format":"other.types","version":1}"#)
-		.expect_err("a foreign format is refused");
-	let foreign = format!("{foreign:#}");
-	assert!(foreign.contains("other.types") && foreign.contains(FORMAT), "{foreign}");
+fn empty_list() {
+	insta::assert_snapshot!("empty", render_default(EMPTY));
+}
 
-	let newer = format!(r#"{{"format":"{FORMAT}","version":{}}}"#, VERSION + 1);
-	let newer = TypesDocument::from_json(&newer).expect_err("a newer version is refused");
-	let newer = format!("{newer:#}");
-	assert!(newer.contains(&(VERSION + 1).to_string()) && newer.contains(FORMAT), "{newer}");
+#[test]
+fn fixtures_round_trip_through_the_entry_model() {
+	for text in [QUERIES, KINDS, EMPTY] {
+		let parsed = entries(text);
+		let again = serde_json::to_value(&parsed).expect("serialises");
+		let original: serde_json::Value = serde_json::from_str(text).expect("json");
+		assert_eq!(again, original);
+	}
+}
+
+#[test]
+fn the_engines_types_document_converts_to_entries() {
+	let mut all = Vec::new();
+	for (name, text) in [("blog", BLOG), ("open", OPEN)] {
+		let doc = TypesDocument::from_json(text).expect("fixture document reads");
+		let (entries, unrepresented) = from_types_document(&doc);
+		assert!(unrepresented.is_empty(), "{name}: {unrepresented:?}");
+		all.push((name, entries));
+	}
+	insta::assert_json_snapshot!("engine_entries", all);
 }
 
 /// Typechecks the goldens with `strict` against the real SDK. Needs `SURREALKIT_TSC` (a `tsc`
@@ -80,16 +89,10 @@ fn typecheck_golden_with_tsc() {
 	std::fs::create_dir_all(&modules).expect("node_modules");
 	symlink(Path::new(&sdk), &modules.join("surrealdb"));
 
-	for (name, text) in [("blog", BLOG), ("open", OPEN), ("kinds", KINDS)] {
+	for (name, text) in [("queries", QUERIES), ("kinds", KINDS), ("empty", EMPTY)] {
 		write(&root.join(format!("{name}.ts")), &render_default(text));
 	}
-	let native = RenderOptions {
-		dates: DateStyle::Native,
-		hints: HintStyle::Unknown,
-		..RenderOptions::default()
-	};
-	write(&root.join("native.ts"), &render(&doc(BLOG), &native));
-	write(&root.join("empty.ts"), &render_default(EMPTY));
+	write(&root.join("native.ts"), &render(&entries(QUERIES), &native_unknown()));
 	write(&root.join("use.ts"), USE_TS);
 	write(
 		&root.join("tsconfig.json"),
@@ -103,7 +106,7 @@ fn typecheck_golden_with_tsc() {
     "skipLibCheck": true,
     "types": []
   },
-  "files": ["use.ts", "blog.ts", "open.ts", "kinds.ts", "native.ts", "empty.ts"]
+  "files": ["use.ts", "queries.ts", "kinds.ts", "native.ts", "empty.ts"]
 }
 "#,
 	);
@@ -138,7 +141,7 @@ fn symlink(_target: &Path, _link: &Path) {
 /// What a consumer writes against the generated module, including what it must reject.
 const USE_TS: &str = r#"
 import { Surreal } from "surrealdb";
-import type { Queries, QueryNames, Tables, Typed, User, Post } from "./blog";
+import type { Queries, QueryNames, Typed } from "./queries";
 
 const db = new Surreal() as Typed<Surreal>;
 
@@ -161,6 +164,15 @@ export async function main() {
   const n: number = counted[0].count;
   void n;
 
+  const [events] = await db.query("SELECT * FROM event");
+  const extra: unknown = events[0].anything;
+  void extra;
+
+  await db.query("SELECT * FROM post WHERE published = $published AND author = $author", {
+    published: true,
+    author: undefined,
+  });
+
   // @ts-expect-error The result is typed, not the SDK's `unknown`.
   const bad: number = rows[0].name;
   void bad;
@@ -171,13 +183,4 @@ export async function main() {
 
 const named: Queries[QueryNames["usersByName"]]["params"] = { name: "ada" };
 void named;
-
-const user = {} as User;
-const joined: import("surrealdb").DateTime = user.joined;
-void joined;
-const id: import("surrealdb").RecordId<"user"> = user.id;
-void id;
-const tables: Tables = {} as Tables;
-const post: Post = tables.post;
-void post;
 "#;

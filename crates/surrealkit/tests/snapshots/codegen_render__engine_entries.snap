@@ -1,0 +1,291 @@
+---
+source: crates/surrealkit/tests/codegen_render.rs
+expression: all
+---
+[
+  [
+    "blog",
+    [
+      {
+        "key": "usersByName",
+        "name": "usersByName",
+        "text": "SELECT name, email FROM user WHERE name = $name LIMIT $limit",
+        "statements": [
+          {
+            "kind": {
+              "kind": "array",
+              "item": {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "email",
+                    "kind": {
+                      "kind": "string"
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "name",
+                    "kind": {
+                      "kind": "string"
+                    },
+                    "optional": false
+                  }
+                ]
+              }
+            },
+            "optional": false,
+            "certainty": "fact",
+            "exact": true,
+            "open": []
+          }
+        ],
+        "params": [
+          {
+            "name": "name",
+            "kind": {
+              "kind": "string"
+            },
+            "optional": false,
+            "required": true
+          },
+          {
+            "name": "limit",
+            "kind": {
+              "kind": "int"
+            },
+            "optional": false,
+            "required": false
+          }
+        ]
+      },
+      {
+        "key": "SELECT * FROM ONLY user:alice",
+        "text": "SELECT * FROM ONLY user:alice",
+        "statements": [
+          {
+            "kind": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "bio",
+                  "kind": {
+                    "kind": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "id",
+                  "kind": {
+                    "kind": "record",
+                    "tables": [
+                      "user"
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "name",
+                  "kind": {
+                    "kind": "string"
+                  },
+                  "optional": false
+                }
+              ]
+            },
+            "optional": true,
+            "certainty": "fact",
+            "exact": true,
+            "open": []
+          }
+        ]
+      },
+      {
+        "key": "BEGIN; LET $n = 1; SELECT count() FROM post GROUP ALL; SELECT * FROM $__host0; COMMIT;",
+        "text": "BEGIN; LET $n = 1; SELECT count() FROM post GROUP ALL; SELECT * FROM $__host0; COMMIT;",
+        "statements": [
+          {
+            "optional": false,
+            "certainty": "fact",
+            "exact": true,
+            "open": []
+          },
+          {
+            "kind": {
+              "kind": "none"
+            },
+            "optional": true,
+            "certainty": "fact",
+            "exact": true,
+            "open": []
+          },
+          {
+            "kind": {
+              "kind": "array",
+              "item": {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "count",
+                    "kind": {
+                      "kind": "int"
+                    },
+                    "optional": false
+                  }
+                ]
+              }
+            },
+            "optional": false,
+            "certainty": "fact",
+            "exact": true,
+            "open": []
+          },
+          {
+            "kind": {
+              "kind": "array",
+              "item": {
+                "kind": "any"
+              }
+            },
+            "optional": false,
+            "certainty": "hint",
+            "exact": true,
+            "open": []
+          },
+          {
+            "optional": false,
+            "certainty": "fact",
+            "exact": true,
+            "open": []
+          }
+        ],
+        "params": [
+          {
+            "name": "__host0",
+            "optional": false,
+            "required": true
+          }
+        ]
+      }
+    ]
+  ],
+  [
+    "open",
+    [
+      {
+        "key": "SELECT * FROM event",
+        "text": "SELECT * FROM event",
+        "statements": [
+          {
+            "kind": {
+              "kind": "array",
+              "item": {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "detail",
+                    "kind": {
+                      "kind": "objectLiteral",
+                      "fields": [
+                        {
+                          "name": "source",
+                          "kind": {
+                            "kind": "string"
+                          },
+                          "optional": false
+                        }
+                      ]
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "id",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "event"
+                      ]
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "kind",
+                    "kind": {
+                      "kind": "string"
+                    },
+                    "optional": false
+                  }
+                ]
+              }
+            },
+            "optional": false,
+            "certainty": "hint",
+            "exact": true,
+            "open": [
+              [
+                "*"
+              ],
+              [
+                "*",
+                "detail"
+              ]
+            ]
+          }
+        ]
+      },
+      {
+        "key": "SELECT kind FROM event",
+        "text": "SELECT kind FROM event",
+        "statements": [
+          {
+            "kind": {
+              "kind": "array",
+              "item": {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "kind",
+                    "kind": {
+                      "kind": "string"
+                    },
+                    "optional": false
+                  }
+                ]
+              }
+            },
+            "optional": false,
+            "certainty": "fact",
+            "exact": true,
+            "open": []
+          }
+        ]
+      },
+      {
+        "key": "RETURN { a: 1 }",
+        "text": "RETURN { a: 1 }",
+        "statements": [
+          {
+            "kind": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "a",
+                  "kind": {
+                    "kind": "int"
+                  },
+                  "optional": false
+                }
+              ]
+            },
+            "optional": true,
+            "certainty": "fact",
+            "exact": true,
+            "open": [
+              []
+            ]
+          }
+        ]
+      }
+    ]
+  ]
+]
