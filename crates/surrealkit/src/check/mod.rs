@@ -1,13 +1,13 @@
 //! `surrealkit check`: a lint for a project's SurrealQL, with no database.
 //!
 //! A check discovers the project's schema and query files ([`discover`]), runs them through an
-//! analysis backend ([`Engine`]), applies the `[analyze]` policy and the in-source suppressions
+//! analysis backend ([`Engine`](engine::Engine)), applies the `[analyze]` policy and the in-source suppressions
 //! ([`policy`]) and reports what is left ([`Report`], rendered by [`render`]). The backend
 //! uses an embedded in-memory engine, so nothing connects anywhere.
 //!
 //! The data model, the severity policy and the suppression grammar are those of the engine's
 //! own checker (the SDK's `Surreal::check`, SurrealDB 4.1), so that the checker is a drop-in
-//! backend behind the same configuration. The backend this build ships, [`SchemaApply`],
+//! backend behind the same configuration. The backend this build ships, [`SchemaApply`](engine::SchemaApply),
 //! applies the schema and reports what the engine rejects.
 //!
 //! [`AnalyzeConfig`], the `[analyze]` section of `surrealkit.toml`, is plain serde and parses
