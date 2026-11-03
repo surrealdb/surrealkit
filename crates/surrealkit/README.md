@@ -19,7 +19,7 @@ surrealkit = "1.0.0-beta.7"
 
 ## Cargo features
 
-`default = ["kv-mem", "cli"]`.
+`default = ["kv-mem", "cli", "analyze"]`.
 
 The `cli` feature builds the `surrealkit` binary and pulls in the dependencies
 only it needs — `clap`, `inquire`, `rustls` (and its `aws-lc-rs` backend) and
@@ -61,6 +61,40 @@ tests it against servers 3.2.4, 3.3.0 and 4.0.0. It needs Rust 1.95.
 > cargo unifies features across the dependency graph, so enabling e.g.
 > `surrealdb/kv-surrealkv` in your own crate is enough for SurrealKit's
 > `Surreal<Any>` to open `surrealkv://`.
+
+The `analyze` feature builds the `check` and `watch` commands and `surrealkit::check` (see
+[Checking SurrealQL](#checking-surrealql)). It needs
+`kv-mem`, does not imply `cli`, and `[analyze]` in `surrealkit.toml` parses without it.
+
+## Checking SurrealQL
+
+`surrealkit::check` (the `analyze` feature) is the lint behind `surrealkit check`, with no
+database. It discovers a project's schema and query files, runs them through a backend,
+applies the `[analyze]` policy and the `-- surreal: allow(CODE)` suppressions, and returns a
+`Report`:
+
+```rust,ignore
+use surrealkit::check::{self, discover::discover, engine::SchemaApply, policy::Policy, render};
+use surrealkit::selection::select_modules;
+use surrealkit::{ProjectConfig, TemplateVars};
+
+let root = std::env::current_dir()?;
+let project = ProjectConfig::load(None)?;
+let modules = select_modules(&project, &[], false, false)?;
+let sources = discover(&project, "./database", &root, &modules, &project.analyze)?;
+let policy = Policy::from_config(&project.analyze)?;
+let mut engine = SchemaApply::new(&[]).await?;
+let report = check::run(&mut engine, &sources, &policy, &TemplateVars::default()).await?;
+eprint!("{}", render::human(&report, &root, false));
+assert!(report.passed());
+```
+
+`render::json` and `render::sarif` return serialisable documents. The backend this build
+ships, `SchemaApply`, applies the schema as `surrealkit compile` does and reports what the
+engine rejects; query analysis arrives with the engine's checker (the SDK's `Surreal::check`,
+SurrealDB 4.1) as another `Engine`. `AnalyzeConfig`, the `[analyze]` section, parses without
+the feature. The [project README](../../README.md#checking-surrealql) has the CLI, the
+`[analyze]` keys, the codes and the suppression syntax.
 
 ## Logging
 
