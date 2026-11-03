@@ -10,3 +10,4 @@ pub mod document;
 pub mod extract;
 mod kind;
 pub mod typescript;
+pub mod v2;

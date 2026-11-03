@@ -39,8 +39,16 @@ pub(super) fn parse_top(text: &str) -> ParsedKind {
 	}
 }
 
+/// Parse `text` as a kind in a top-level position, or `None` when any part of it could not be
+/// parsed.
+#[cfg(test)]
+pub(crate) fn parse_top_exact(text: &str) -> Option<(Kind, bool)> {
+	let parsed = parse_top(text);
+	parsed.problems.is_empty().then_some((parsed.kind, parsed.optional))
+}
+
 /// Lower a kind in a top-level position.
-fn top(ty: &FieldType) -> (Kind, bool) {
+pub(crate) fn top(ty: &FieldType) -> (Kind, bool) {
 	let (has_none, rest) = flatten(ty);
 	match rest.len() {
 		0 if has_none => (Kind::None, true),
@@ -56,7 +64,7 @@ fn top(ty: &FieldType) -> (Kind, bool) {
 }
 
 /// Lower a kind in a nested position (tuple item, array or set item): NONE becomes `option`.
-fn nested(ty: &FieldType) -> Kind {
+pub(crate) fn nested(ty: &FieldType) -> Kind {
 	let (has_none, rest) = flatten(ty);
 	let inner = match rest.len() {
 		0 if has_none => return Kind::None,

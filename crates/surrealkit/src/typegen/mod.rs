@@ -32,7 +32,7 @@ mod introspect;
 pub mod introspect_v2;
 #[cfg(test)]
 mod json_schema_tests;
-mod kind_v2;
+pub(crate) mod kind_v2;
 mod output;
 mod refine;
 mod scan;
