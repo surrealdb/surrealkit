@@ -538,7 +538,7 @@ describe.skipIf(!engineConfigured)(
 			});
 		});
 
-		describe('implicit parents (contract section 6)', () => {
+		describe('an always-present parent object (contract section 6)', () => {
 			const ip2 = new RecordId('ip', 2);
 			const selectIp = async (id: RecordId) =>
 				Schema.decodeUnknownSync(SurrealSchema.NoneAsAbsent(Ip))(
@@ -550,7 +550,7 @@ describe.skipIf(!engineConfigured)(
 				await fails(
 					'CREATE ip:1 CONTENT $content',
 					{ content: {} },
-					/field `need.x` .* Expected `string` but found `NONE`/,
+					/field `need` .* Expected `object` but found `NONE`/,
 				);
 				const content = accepted(IpCreate, { need: { x: 'v' } });
 				await one('CREATE $id CONTENT $content', { id: ip2, content });
@@ -560,7 +560,7 @@ describe.skipIf(!engineConfigured)(
 				});
 			});
 
-			it('merge: NONE resets an all-optional parent to {} and is rejected when a child is required', async () => {
+			it('merge: NONE resets a DEFAULT ALWAYS {} parent to {} and is rejected when a child is required', async () => {
 				await one('UPDATE $id MERGE $patch', {
 					id: ip2,
 					patch: accepted(IpMerge, { pref: { locale: 'en' } }),
@@ -575,7 +575,7 @@ describe.skipIf(!engineConfigured)(
 				await fails(
 					'UPDATE $id MERGE $patch',
 					{ id: ip2, patch: { need: undefined } },
-					/field `need.x` .* Expected `string` but found `NONE`/,
+					/field `need` .* Expected `object` but found `NONE`/,
 				);
 			});
 
@@ -631,7 +631,7 @@ describe.skipIf(!engineConfigured)(
 			});
 		});
 
-		describe('a parent without TYPE whose child is required', () => {
+		describe('a typed parent whose child is required', () => {
 			const up4 = new RecordId('up', 4);
 			const selectUp = async () =>
 				Schema.decodeUnknownSync(SurrealSchema.NoneAsAbsent(Up))(
@@ -649,7 +649,7 @@ describe.skipIf(!engineConfigured)(
 				await fails(
 					'CREATE up:1 CONTENT $content',
 					{ content: {} },
-					/field `obj.a` .* Expected `int` but found `NONE`/,
+					/field `obj` .* Expected `object` but found `NONE`/,
 				);
 				rejected(UpCreate, { obj: { a: 1, b: 2 } });
 				await fails(
@@ -675,7 +675,7 @@ describe.skipIf(!engineConfigured)(
 				await fails(
 					'UPDATE $id MERGE $patch',
 					{ id: up4, patch: { obj: undefined } },
-					/field `obj.a` .* Expected `int` but found `NONE`/,
+					/field `obj` .* Expected `object` but found `NONE`/,
 				);
 			});
 
@@ -684,7 +684,7 @@ describe.skipIf(!engineConfigured)(
 				await fails(
 					'UPDATE $id CONTENT $content',
 					{ id: up4, content: {} },
-					/field `obj.a` .* Expected `int` but found `NONE`/,
+					/field `obj` .* Expected `object` but found `NONE`/,
 				);
 				await one('UPDATE $id CONTENT $content', {
 					id: up4,

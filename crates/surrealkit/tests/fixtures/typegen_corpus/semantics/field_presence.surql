@@ -1,7 +1,8 @@
 -- Field-presence evidence for the matrix in docs/typegen/schema-document-v2.md.
 --
 -- Run statement by statement against a fresh database. Each statement is preceded by
--- its observed outcome on SurrealDB 3.2.4 and 3.3.0 (identical on both). `expect: OK`
+-- its observed outcome on SurrealDB 3.2.4 and 3.3.0 (identical on both), except tables `ip`
+-- and `up`, observed on 3.3.2 and 4.0.0 (identical on both). `expect: OK`
 -- lists the returned fields where they matter; `expect: ERR` quotes the engine error.
 -- These are the seeds of the per-cell disposable-engine tests; they are not applied
 -- as part of the schema corpus.
@@ -126,13 +127,17 @@ UPDATE e:1 CONTENT { w: 2 } RETURN in, out, w;
 -- expect: OK { in: p:a }
 UPDATE e:1 MERGE { in: p:b } RETURN in;
 
--- Implicit parents (contract section 6): `pref` and `need` are never declared. The engine
--- keeps an empty object for an undeclared parent on every write, so the parent is always
--- present when selected; NONE resets it to `{}`, which fails when a child is required.
+-- An always-present parent object (contract section 6): `pref` is declared
+-- `TYPE object DEFAULT ALWAYS {}` with an optional child, so it is always present when
+-- selected, may be omitted, and NONE resets it to `{}`; an optional child may be absent.
+-- `need` is declared `TYPE object` with a required child, so it is required on create and
+-- content and NONE is rejected on merge.
 DEFINE TABLE ip SCHEMAFULL;
+DEFINE FIELD pref ON ip TYPE object DEFAULT ALWAYS {};
 DEFINE FIELD pref.locale ON ip TYPE option<string>;
+DEFINE FIELD need ON ip TYPE object;
 DEFINE FIELD need.x ON ip TYPE string;
--- expect: ERR Couldn't coerce value for field `need.x` of `ip:1`: Expected `string` but found `NONE`
+-- expect: ERR Couldn't coerce value for field `need` of `ip:1`: Expected `object` but found `NONE`
 CREATE ip:1 CONTENT {};
 -- expect: OK { need: { x: 'v' }, pref: {} }
 CREATE ip:2 CONTENT { need: { x: 'v' } } RETURN pref, need;
@@ -140,7 +145,7 @@ CREATE ip:2 CONTENT { need: { x: 'v' } } RETURN pref, need;
 UPDATE ip:2 MERGE { pref: { locale: 'en' } } RETURN pref;
 -- expect: OK { pref: {} }
 UPDATE ip:2 MERGE { pref: NONE } RETURN pref;
--- expect: ERR Couldn't coerce value for field `need.x` of `ip:2`: Expected `string` but found `NONE`
+-- expect: ERR Couldn't coerce value for field `need` of `ip:2`: Expected `object` but found `NONE`
 UPDATE ip:2 MERGE { need: NONE };
 -- expect: OK { need: { x: 'w' }, pref: {} }
 UPDATE ip:2 CONTENT { need: { x: 'w' } } RETURN pref, need;
@@ -162,12 +167,13 @@ UPDATE oa:2 MERGE { x: 'y' } RETURN x;
 -- expect: OK { x: 'z' }
 UPDATE oa:2 CONTENT {} RETURN x;
 
--- A parent declared without TYPE whose child is typed: the engine treats it as an object
--- closed over its children, required when a child is required.
+-- A typed parent closed over its children: `obj` is declared `TYPE object` and its child is
+-- typed. The field is required when a child is required, a wrongly typed child fails, an
+-- undeclared child key fails, and MERGE / CONTENT dropping it fails.
 DEFINE TABLE up SCHEMAFULL;
-DEFINE FIELD obj ON up;
+DEFINE FIELD obj ON up TYPE object;
 DEFINE FIELD obj.a ON up TYPE int;
--- expect: ERR Couldn't coerce value for field `obj.a` of `up:1`: Expected `int` but found `NONE`
+-- expect: ERR Couldn't coerce value for field `obj` of `up:1`: Expected `object` but found `NONE`
 CREATE up:1 CONTENT {};
 -- expect: ERR Couldn't coerce value for field `obj.a` of `up:2`: Expected `int` but found `'x'`
 CREATE up:2 CONTENT { obj: { a: 'x' } };
@@ -177,7 +183,7 @@ CREATE up:3 CONTENT { obj: { a: 1, b: 2 } };
 CREATE up:4 CONTENT { obj: { a: 1 } } RETURN obj;
 -- expect: OK { obj: { a: 2 } }
 UPDATE up:4 MERGE { obj: { a: 2 } } RETURN obj;
--- expect: ERR Couldn't coerce value for field `obj.a` of `up:4`: Expected `int` but found `NONE`
+-- expect: ERR Couldn't coerce value for field `obj` of `up:4`: Expected `object` but found `NONE`
 UPDATE up:4 MERGE { obj: NONE };
--- expect: ERR Couldn't coerce value for field `obj.a` of `up:4`: Expected `int` but found `NONE`
+-- expect: ERR Couldn't coerce value for field `obj` of `up:4`: Expected `object` but found `NONE`
 UPDATE up:4 CONTENT {};
