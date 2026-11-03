@@ -3,16 +3,16 @@
 /** What these modules were generated from, and how. */
 export const manifest = {
 	store: "corpus",
-	semanticDigest: "sha256:2f9e281988f2a7eb4efc7d9a1b07924e3b269d53e8c1945b1d5a474b949605b6",
+	semanticDigest: "sha256:3197d8c7fbe3ad8cf90b03a3a50e8afd751dc478a0a1f80f837491b7ea68e479",
 	emitter: { name: "effect-surrealkit", version: "0.1.0" },
 	profile: { int: "safe-number", datetime: "sdk" },
 	peers: { effect: "4.0.6", surrealdb: "2.1.1" },
 	source: {
 		kind: "compile",
-		modules: ["schema-gated/20_experimental_files.surql", "schema-gated/30_relations.v3.3.surql", "schema-gated/31_module.v3.3.surql", "schema/01_tables.surql", "schema/02_kinds.surql", "schema/03_ids.surql", "schema/04_fields.surql", "schema/05_nested.surql", "schema/06_references.surql", "schema/07_functions_params.surql", "schema/08_indexes_events.surql", "schema/09_access_sequences.surql", "schema/10_api_config.surql"],
-		surrealkit: "1.0.0-beta.6",
-		engine: "3.3.0",
-		adapter: "structure-3.3",
+		modules: ["schema-gated/20_experimental_files.surql", "schema-gated/30_relations.v3.3.surql", "schema-gated/31_module.v4.0.surql", "schema/01_tables.surql", "schema/02_kinds.surql", "schema/03_ids.surql", "schema/04_fields.surql", "schema/05_declared_parent.v4.0.surql", "schema/05_nested.surql", "schema/06_references.surql", "schema/07_functions_params.surql", "schema/08_indexes_events.surql", "schema/09_access_sequences.surql", "schema/10_api_config.surql"],
+		surrealkit: "1.0.0-beta.7",
+		engine: "4.0.0",
+		adapter: "structure-4.0",
 	},
 	tables: ["adults", "anything", "attachment", "audit_log", "bag", "doc", "follows", "id_array", "id_implicit", "id_int", "id_object", "id_string", "id_union", "id_uuid", "kinds", "knows", "ledger", "likes", "member_of", "org", "person", "purchase", "rates", "sink", "team", "team_size"],
 	functions: ["fn::doc::related", "fn::double", "fn::greet", "fn::now", "fn::optional_first", "fn::prep"],

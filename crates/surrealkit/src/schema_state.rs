@@ -3023,27 +3023,58 @@ DEFINE ACCESS acc ON DATABASE TYPE RECORD
 		out.join("\n")
 	}
 
+	/// The files a corpus file builds on: the earlier files of its directory, for a typegen
+	/// corpus `schema/` file. SurrealDB 4.0 refuses a nested field whose parent is not
+	/// declared, so `05_nested.surql` needs the tables and fields before it.
+	fn corpus_prior(path: &str, all: &[(String, String)]) -> String {
+		let Some((dir, _)) =
+			path.rsplit_once('/').filter(|(dir, _)| dir.ends_with("typegen_corpus/schema"))
+		else {
+			return String::new();
+		};
+		all.iter()
+			.filter(|(other, _)| {
+				other.rsplit_once('/').is_some_and(|(d, _)| d == dir) && other.as_str() < path
+			})
+			.map(|(_, sql)| format!("{sql}\n"))
+			.collect()
+	}
+
 	/// SurrealDB is the oracle. For each file: its own statement count matches
 	/// ours, applying our statements one at a time defines exactly what applying
 	/// the file does, and the prepared form applies twice without error and
 	/// defines the same schema again.
 	#[tokio::test]
 	async fn splitting_and_preparing_agree_with_surrealdb() {
-		let mut corpus: Vec<(String, String)> = repo_corpus()
-			.into_iter()
+		let repo = repo_corpus();
+		let mut corpus: Vec<(String, String, String)> = repo
+			.iter()
 			.filter(|(path, _)| {
 				path.contains("/schema/")
 					|| path.contains("embed_schema")
 					|| path.contains("embed_modules")
 			})
+			.map(|(path, sql)| (path.clone(), sql.clone(), corpus_prior(path, &repo)))
 			.collect();
-		corpus.push(("tricky".to_string(), TRICKY_SCHEMA.to_string()));
-		corpus.push(("crlf".to_string(), TRICKY_SCHEMA.replace('\n', "\r\n")));
-		for (path, sql) in corpus {
+		corpus.push(("tricky".to_string(), TRICKY_SCHEMA.to_string(), String::new()));
+		corpus.push(("crlf".to_string(), TRICKY_SCHEMA.replace('\n', "\r\n"), String::new()));
+		for (path, sql, prior) in corpus {
 			let statements =
 				crate::surql_scan::scan(&sql).unwrap_or_else(|err| panic!("{path}: {err}"));
+			let with_prior = |db: surrealdb::Surreal<surrealdb::engine::any::Any>| {
+				let prior = prior.clone();
+				let path = path.clone();
+				async move {
+					if !prior.is_empty() {
+						db.query(prior.as_str()).await.and_then(|r| r.check()).unwrap_or_else(
+							|err| panic!("{path}: applying its prior files: {err}"),
+						);
+					}
+					db
+				}
+			};
 
-			let whole = mem_db().await;
+			let whole = with_prior(mem_db().await).await;
 			let response =
 				whole.query(sql.as_str()).await.unwrap_or_else(|err| panic!("{path}: {err}"));
 			assert_eq!(
@@ -3053,7 +3084,7 @@ DEFINE ACCESS acc ON DATABASE TYPE RECORD
 			);
 			response.check().unwrap_or_else(|err| panic!("{path}: {err}"));
 
-			let split = mem_db().await;
+			let split = with_prior(mem_db().await).await;
 			for stmt in &statements {
 				split.query(stmt.text(&sql)).await.and_then(|r| r.check()).unwrap_or_else(|err| {
 					panic!("{path} line {}: {err}\n{}", stmt.line, stmt.text(&sql))
@@ -3062,7 +3093,7 @@ DEFINE ACCESS acc ON DATABASE TYPE RECORD
 
 			let prepared = prepare_schema_sql(&sql).unwrap();
 			assert_eq!(prepared.statements, statements.len());
-			let reapplied = mem_db().await;
+			let reapplied = with_prior(mem_db().await).await;
 			for round in 0..2 {
 				reapplied
 					.query(prepared.sql.as_str())

@@ -360,6 +360,8 @@ describe('generation rules', () => {
 		);
 		expect(result.warnings).toEqual([
 			'document: definition-duplicate (person flagged): defined 2 times (schema/04_fields.surql, schema/04_fields.surql); SurrealKit applies every DEFINE but a sequence as OVERWRITE, so the last one wins, which raw SurrealQL would not do for IF NOT EXISTS',
+			'document: definition-unsupported: CAPABILITIES is not carried by schema document v2',
+			'document: definition-unsupported: DIGEST is not carried by schema document v2',
 			'document: field-computed-kind-undeclared (person display): COMPUTED field has no TYPE clause; its value kind is unknown and is typed as `any`.',
 			'document: field-computed-kind-undeclared (person referenced_by): COMPUTED field has no TYPE clause; its value kind is unknown and is typed as `any`.',
 			'document: field-computed-kind-undeclared (team members): COMPUTED field has no TYPE clause; its value kind is unknown and is typed as `any`.',

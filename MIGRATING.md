@@ -9,6 +9,7 @@ on an existing project re-applies nothing and prunes nothing.
 
 Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and
 1.0.0-beta.7 two more (13 and 14), and 1.0.0-beta.8 four more (15 to 18).
+Unreleased changes are 19 and up.
 Upgrading from 0.7.0 or any 1.0 beta carries existing state forward; CI checks
 that against every published release.
 
@@ -433,6 +434,44 @@ even when every step had run, and could leave the lock behind. Now:
   reported with the statement that clears the lock, and that statement names the
   lock's real partition (`lock@<module>` for a named module). A lock row written
   by an older release is honoured until it expires, as before.
+
+### 19. SurrealDB 4.0, and no RocksDB engine (unreleased)
+
+SurrealKit builds against the SurrealDB 4.0 SDK, so embedded engines (`mem://`,
+`surrealkv://`) are 4.0. CI tests servers 3.2.4, 3.3.0 and 4.0.0.
+
+SurrealDB 4.0 has no RocksDB engine, so the `kv-rocksdb` cargo feature is gone
+and `embedded` enables `kv-surrealkv` and `kv-mem`. A build that named
+`kv-rocksdb` fails to resolve; use `kv-surrealkv` instead.
+
+The embedded engine checks only the `surrealism` experimental capability. It
+gates nothing else, so `DEFINE BUCKET`, `DEFINE CONFIG GRAPHQL` and the GQL
+front-end need no capability. `surrealkit compile --allow-experimental` and
+`[typegen] experimental` still accept `files` and `gql`; they change nothing and
+`provenance.capabilities` still records them.
+
+`surrealkit compile` therefore describes SurrealDB 4.0, and 4.0 differs from 3.3
+where SurrealKit reads it:
+
+- A nested field needs its parent declared first: `DEFINE FIELD prefs.locale
+  ON person` fails unless `prefs` is defined, and so does a nested field in a
+  field with no type. Compile refuses such a schema; against a 3.x server the
+  diagnostic `field-parent-implicit` still reports it.
+- `DEFINE MODULE` defines an extension. The embedded engine needs `DIGEST` on
+  it when it cannot read the archive. Schema document v2 still lists it under
+  `modules` as `mod::<name>`, and does not carry its `digest` and
+  `capabilities`, which compile reports as `definition-unsupported` warnings.
+- `provenance.adapter` is `structure-4.0` for a 4.0 engine, so a document
+  compiled with this version differs from one compiled before (the engine
+  version, the adapter and the declared parents). A project pinned to
+  `[typegen] engine = "3.3"` gets the error `compile-engine-mismatch`.
+- `DEFINE TYPE` is not part of schema document v2. Each one is reported as a
+  `definition-unsupported` warning.
+
+Running the 4.0 engine under a current-thread `#[tokio::test]` runtime overflowed
+Rust's 2 MiB test-thread stack in SurrealKit's own suite (unoptimised builds), so
+`.cargo/config.toml` sets `RUST_MIN_STACK` to 8 MiB. Do the same if your tests
+run the embedded engine and overflow.
 
 ## Opting into multiple schema modules
 

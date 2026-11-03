@@ -1,27 +1,28 @@
 {
   "version": 2,
-  "semanticDigest": "sha256:2f9e281988f2a7eb4efc7d9a1b07924e3b269d53e8c1945b1d5a474b949605b6",
+  "semanticDigest": "sha256:3197d8c7fbe3ad8cf90b03a3a50e8afd751dc478a0a1f80f837491b7ea68e479",
   "provenance": {
     "generator": {
       "name": "surrealkit",
-      "version": "1.0.0-beta.6"
+      "version": "1.0.0-beta.7"
     },
     "engine": {
-      "version": "3.3.0",
-      "build": "surrealdb-3.3.0",
+      "version": "4.0.0",
+      "build": "surrealdb-4.0.0",
       "mode": "embedded"
     },
-    "adapter": "structure-3.3",
+    "adapter": "structure-4.0",
     "source": {
       "kind": "compile",
       "modules": [
         "schema-gated/20_experimental_files.surql",
         "schema-gated/30_relations.v3.3.surql",
-        "schema-gated/31_module.v3.3.surql",
+        "schema-gated/31_module.v4.0.surql",
         "schema/01_tables.surql",
         "schema/02_kinds.surql",
         "schema/03_ids.surql",
         "schema/04_fields.surql",
+        "schema/05_declared_parent.v4.0.surql",
         "schema/05_nested.surql",
         "schema/06_references.surql",
         "schema/07_functions_params.surql",
@@ -39,8 +40,8 @@
           "sha256": "5ffe85842402973ebe5f7973be87489bb6acbb73b0e0fd51d8ed3191800647ed"
         },
         {
-          "path": "schema-gated/31_module.v3.3.surql",
-          "sha256": "0d17cbec19b9e57eb150f9ce5d624e17316459b02cc056fd72b598781ab73864"
+          "path": "schema-gated/31_module.v4.0.surql",
+          "sha256": "ac11d62c3a52934c5852105c1966cc213fb9b3875fcd2e04322d4837797e86f8"
         },
         {
           "path": "schema/01_tables.surql",
@@ -59,8 +60,12 @@
           "sha256": "8d122e76ef2588a173eadf1448ab73b0f09662f94abb956e35ad7e4a216ddda9"
         },
         {
+          "path": "schema/05_declared_parent.v4.0.surql",
+          "sha256": "594da1294240b846382e762e93447945057e3725497fa818669ba0495b003d9e"
+        },
+        {
           "path": "schema/05_nested.surql",
-          "sha256": "73f3c6fd2b44fbaf3779b7bd40d2e53330b998ae6cc7f071ed8088d008b90968"
+          "sha256": "53fb98f8ec9f867dc184555d1d3d16ef3dcc953f3f42c7800466439da5f035e6"
         },
         {
           "path": "schema/06_references.surql",
@@ -3288,6 +3293,28 @@
         },
         {
           "path": [
+            "prefs"
+          ],
+          "kind": {
+            "kind": "object"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "{  }"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD prefs ON person TYPE object DEFAULT {  } PERMISSIONS FULL"
+        },
+        {
+          "path": [
             "prefs",
             "locale"
           ],
@@ -4517,6 +4544,18 @@
     },
     {
       "severity": "warning",
+      "code": "definition-unsupported",
+      "source": "module demo",
+      "reason": "CAPABILITIES is not carried by schema document v2"
+    },
+    {
+      "severity": "warning",
+      "code": "definition-unsupported",
+      "source": "module demo",
+      "reason": "DIGEST is not carried by schema document v2"
+    },
+    {
+      "severity": "warning",
       "code": "field-computed-kind-undeclared",
       "table": "person",
       "field": [
@@ -4554,17 +4593,6 @@
       ],
       "source": "DEFINE FIELD notes ON person PERMISSIONS FULL",
       "reason": "Field has no TYPE clause; it holds any value."
-    },
-    {
-      "severity": "info",
-      "code": "field-parent-implicit",
-      "table": "person",
-      "field": [
-        "prefs",
-        "locale"
-      ],
-      "source": "prefs",
-      "reason": "The parent path is not declared; it is an implicit object, required when any child is required."
     },
     {
       "severity": "warning",

@@ -157,17 +157,33 @@ fn compile_refuses_what_sync_refuses_and_unknown_capabilities() {
 #[test]
 fn compile_takes_experimental_capabilities_from_config_and_flag() {
 	let tmp = tempfile::TempDir::new().expect("tempdir");
+	let digest = "0".repeat(64);
 	write(
 		&tmp.path().join("database/schema/001.surql"),
 		"DEFINE BUCKET avatars BACKEND \"memory\";\nDEFINE TABLE a SCHEMAFULL;\nDEFINE FIELD f ON a TYPE option<file<avatars>>;\n",
 	);
+	// 4.0 gates no bucket: it compiles with no capability, and `files` is accepted and changes
+	// nothing.
 	let (code, text) = surrealkit(tmp.path(), &["compile", "--stdout"]);
-	assert_eq!(code, Some(1), "DEFINE BUCKET needs the files capability: {text}");
+	assert_eq!(code, Some(0), "DEFINE BUCKET needs no capability: {text}");
+	assert!(text.contains("\"avatars\""), "{text}");
 	let (code, text) =
 		surrealkit(tmp.path(), &["compile", "--stdout", "--allow-experimental", "files"]);
 	assert_eq!(code, Some(0), "{text}");
-	assert!(text.contains("\"avatars\""), "{text}");
-	write(&tmp.path().join("surrealkit.toml"), "[typegen]\nexperimental = [\"files\"]\n");
+
+	write(
+		&tmp.path().join("database/schema/002.surql"),
+		&format!(
+			"DEFINE MODULE mod::demo FROM f\"avatars:/demo.wasm\" UNSIGNED DIGEST 'sha256:{digest}';\n"
+		),
+	);
+	let (code, text) = surrealkit(tmp.path(), &["compile", "--stdout"]);
+	assert_eq!(code, Some(1), "DEFINE MODULE needs the surrealism capability: {text}");
+	let (code, text) =
+		surrealkit(tmp.path(), &["compile", "--stdout", "--allow-experimental", "surrealism"]);
+	assert_eq!(code, Some(0), "{text}");
+	assert!(text.contains("\"mod::demo\""), "{text}");
+	write(&tmp.path().join("surrealkit.toml"), "[typegen]\nexperimental = [\"surrealism\"]\n");
 	let (code, text) = surrealkit(tmp.path(), &["compile", "--stdout"]);
 	assert_eq!(code, Some(0), "{text}");
 }

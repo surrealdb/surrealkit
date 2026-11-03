@@ -147,7 +147,7 @@ Embedded schemes: `surrealkv://`, `rocksdb://`, `speedb://`, `mem://`, `file://`
 The **prebuilt CLI bundles only the in-memory engine** to stay light. For a CLI that can open on-disk engines, build with the matching feature:
 
 ```bash
-cargo install surrealkit --features kv-surrealkv   # or kv-rocksdb, or `embedded` for all
+cargo install surrealkit --features kv-surrealkv   # or `embedded` for both
 ```
 
 Embedded engines are single-process, so run the CLI while your application is stopped (it holds an exclusive lock on the datastore). For schema management inside your application at startup, use the [library](crates/surrealkit/README.md) instead, which needs no engine feature on SurrealKit itself.
@@ -490,7 +490,7 @@ the property still decode with their existing digest; regenerate them to
 include any authentication expressions their schema declares.
 
 The document is read through `INFO … STRUCTURE`, by an adapter for each
-supported engine minor (SurrealDB 3.2.x and 3.3.x). Any other minor is read from
+supported engine minor (SurrealDB 3.2.x, 3.3.x and 4.0.x). Any other minor is read from
 plain `INFO` instead, with the error diagnostic `structure-unsupported-engine`,
 so a `strict` run refuses it.
 
@@ -504,7 +504,7 @@ a throwaway embedded in-memory engine, then reads that engine back:
 surrealkit compile                       # writes [typegen] json (schema_version = 2), else database/types/schema.json
 surrealkit compile --check               # CI: fail when the committed outputs are stale
 surrealkit --schema billing compile      # billing and the modules it depends on
-surrealkit compile --allow-experimental files,surrealism
+surrealkit compile --allow-experimental surrealism
 ```
 
 It needs no server and reads no connection settings (`SURREALDB_*`, `.env`,
@@ -517,25 +517,29 @@ and no scripting. It is strict by default: an error diagnostic fails the command
 engine, and what it cannot represent fails a strict compile as well. Because `sync` and `typegen`
 write `[typegen] json` in the configured version, compile writes that file only when the project
 sets `schema_version = 2` (otherwise use `--out` or `--stdout`). Accesses and users defined `ON
-NAMESPACE` or `ON ROOT` are not part of the document, and each is reported as a warning. Schemas that use `DEFINE BUCKET` or `DEFINE MODULE` need the matching
-capability, from `--allow-experimental` or:
+NAMESPACE` or `ON ROOT` are not part of the document, and each is reported as a warning. Schemas that use `DEFINE MODULE` need the `surrealism` capability, from
+`--allow-experimental` or:
 
 ```toml
 [typegen]
-experimental = ["files", "surrealism"]
+experimental = ["surrealism"]
 ```
+
+SurrealDB 4.0 gates nothing else: `DEFINE BUCKET` and `DEFINE CONFIG GRAPHQL` need no
+capability. `files` and `gql` are still accepted, change nothing and are recorded in
+`provenance.capabilities`.
 
 The compiled document equals what `surrealkit typegen` reads from a database
 synced from the same files on the same engine minor: SurrealKit's test suite
-checks it against live SurrealDB 3.2.4 and 3.3.0 servers. The embedded engine is
-always SurrealKit's own `surrealdb` version (3.3), so a project deploying to 3.2
-gets a document shaped by 3.3, and 3.2-only spellings are refused. Name the minor
-you deploy to and compile reports the error `compile-engine-mismatch` when it
-differs:
+checks it against a live SurrealDB 4.0.0 server. The embedded engine is
+always SurrealKit's own `surrealdb` version (4.0), so a project deploying to 3.3
+gets a document shaped by 4.0, and a nested field whose parent is not declared is
+refused, as 4.0 refuses it. Name the minor you deploy to and compile
+reports the error `compile-engine-mismatch` when it differs:
 
 ```toml
 [typegen]
-engine = "3.2"
+engine = "3.3"
 ```
 
 A module that defines the same entity twice gets the warning

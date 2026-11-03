@@ -1,7 +1,7 @@
 //! A fresh database for a test: in memory by default, or a new namespace on the
 //! server at `SURREALKIT_TEST_URL`, so the same tests can run against released
-//! servers as well as the embedded engine. CI runs them on SurrealDB 3.2.4 and
-//! 3.3.0, whose SurrealQL differs in places the embedded 3.3 engine cannot show.
+//! servers as well as the embedded engine. CI runs them on SurrealDB 3.2.4, 3.3.0
+//! and 4.0.0, whose SurrealQL differs in places the embedded 4.0 engine cannot show.
 
 use surrealdb::Surreal;
 use surrealdb::engine::any::{Any, connect};
@@ -13,15 +13,14 @@ pub(crate) async fn fresh(label: &str) -> Surreal<Any> {
 	fresh_with(label, Capabilities::all()).await
 }
 
-/// [`fresh`], with the experimental features `DEFINE BUCKET` and `DEFINE MODULE`
-/// need. `Capabilities::all()` leaves them off. Only the embedded engine takes
-/// this from the client: a server at `SURREALKIT_TEST_URL` has them only when it
-/// was started with `--allow-experimental=files,surrealism`.
+/// [`fresh`], with the experimental feature `DEFINE MODULE` needs.
+/// `Capabilities::all()` leaves it off. Only the embedded engine takes this from
+/// the client: a server at `SURREALKIT_TEST_URL` has it only when it was started
+/// with `--allow-experimental=surrealism` (and, before 4.0, `files` for
+/// `DEFINE BUCKET`).
 pub(crate) async fn fresh_experimental(label: &str) -> Surreal<Any> {
-	let caps = Capabilities::all().with_experimental_features_allowed(&[
-		ExperimentalFeature::Files,
-		ExperimentalFeature::Surrealism,
-	]);
+	let caps =
+		Capabilities::all().with_experimental_features_allowed(&[ExperimentalFeature::Surrealism]);
 	fresh_with(label, caps).await
 }
 
