@@ -1,0 +1,121 @@
+---
+source: crates/surrealkit/tests/check_cli.rs
+expression: redacted(&report)
+---
+{
+  "diagnostics": [
+    {
+      "code": "K9104",
+      "message": "field `person.name` differs on target `live`: kind",
+      "notes": [
+        {
+          "kind": "note",
+          "message": "the files say kind: {\"kind\":\"string\"}",
+          "replacement": null,
+          "span": null
+        },
+        {
+          "kind": "note",
+          "message": "target `live` has kind: {\"kind\":\"int\"}",
+          "replacement": null,
+          "span": null
+        }
+      ],
+      "path": "database/schema/001_person.surql",
+      "severity": "error",
+      "span": {
+        "column": 1,
+        "end": 71,
+        "end_column": 40,
+        "end_line": 2,
+        "line": 2,
+        "start": 32
+      },
+      "statement": 1,
+      "tags": []
+    },
+    {
+      "code": "K9103",
+      "message": "field `person.age` is not defined on target `live`",
+      "notes": [],
+      "path": "database/schema/001_person.surql",
+      "severity": "error",
+      "span": {
+        "column": 1,
+        "end": 108,
+        "end_column": 36,
+        "end_line": 3,
+        "line": 3,
+        "start": 73
+      },
+      "statement": 2,
+      "tags": []
+    },
+    {
+      "code": "K9105",
+      "message": "table `legacy` is on target `live` and managed by SurrealKit, but it is no longer in the files",
+      "notes": [
+        {
+          "kind": "help",
+          "message": "`surrealkit sync` removes it, or define it again in the schema files",
+          "replacement": null,
+          "span": null
+        }
+      ],
+      "path": "surrealkit.toml",
+      "severity": "warning",
+      "span": {
+        "column": 1,
+        "end": 13,
+        "end_column": 14,
+        "end_line": 1,
+        "line": 1,
+        "start": 0
+      },
+      "statement": null,
+      "tags": []
+    },
+    {
+      "code": "K9106",
+      "message": "table `audit` is on target `live` and was never managed by SurrealKit",
+      "notes": [
+        {
+          "kind": "help",
+          "message": "if it is intentionally unmanaged, list it under `[analyze] drift_ignore`",
+          "replacement": null,
+          "span": null
+        }
+      ],
+      "path": "surrealkit.toml",
+      "severity": "warning",
+      "span": {
+        "column": 1,
+        "end": 13,
+        "end_column": 14,
+        "end_line": 1,
+        "line": 1,
+        "start": 0
+      },
+      "statement": null,
+      "tags": []
+    }
+  ],
+  "summary": {
+    "allowed": 0,
+    "drift": {
+      "live": 4
+    },
+    "errors": 2,
+    "hints": 0,
+    "host_files": 0,
+    "host_queries": 0,
+    "host_read": false,
+    "passed": false,
+    "queries_analyzed": false,
+    "query_files": 0,
+    "schema_files": 1,
+    "suppressed": 0,
+    "targets_checked": 1,
+    "warnings": 2
+  }
+}
