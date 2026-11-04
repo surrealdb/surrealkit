@@ -154,7 +154,7 @@ describe('live lifecycle', () => {
 			.subscribe(() => {});
 		off();
 		await settle();
-		expect(db.ran(/^LIVE/)).toEqual(['LIVE SELECT * FROM user']);
+		expect(db.ran(/^LIVE/)).toEqual(['LIVE SELECT id FROM user']);
 		expect(db.killed).toEqual([]);
 		offSecond();
 		await settle();
@@ -173,11 +173,11 @@ describe('live lifecycle', () => {
 		);
 		const offs = observed.map((live) => live.subscribe(() => {}));
 		await settle();
-		expect(db.ran(/^LIVE/)).toEqual(['LIVE SELECT * FROM user']);
+		expect(db.ran(/^LIVE/)).toEqual(['LIVE SELECT id FROM user']);
 		expect(cache.stats().live).toBe(1);
 		const before = db.ran(/^SELECT/).length;
 
-		db.emit(USERS, {
+		db.emit('FROM user', {
 			action: 'CREATE',
 			recordId: 'user:cy',
 			value: { id: 'user:cy', name: 'cy' },
@@ -251,7 +251,11 @@ describe('live lifecycle', () => {
 		]);
 		expect([...db.open.keys()]).toEqual(['live-3']);
 		expect(live.get().data).toEqual(users('ada', 'bob', 'cy'));
-		db.emit(USERS, { action: 'DELETE', recordId: 'user:cy', value: {} });
+		db.emit('FROM user', {
+			action: 'DELETE',
+			recordId: 'user:cy',
+			value: {},
+		});
 		expect(live.get().data).toEqual(users('ada', 'bob'));
 		off();
 		await settle();
@@ -274,7 +278,7 @@ describe('live lifecycle', () => {
 		const live = cache.observeLive<Row>(USERS);
 		const off = live.subscribe(() => {});
 		await settle();
-		db.emit(USERS, { action: 'KILLED' });
+		db.emit('FROM user', { action: 'KILLED' });
 		expect(live.get()).toMatchObject({
 			status: 'error',
 			error: { code: 'killed' },
@@ -325,17 +329,17 @@ describe('reconciling notifications', () => {
 		const off = live.subscribe(() => seen.push(live.get().data));
 		await settle();
 		const [ada] = live.get().data as Row[];
-		db.emit(USERS, {
+		db.emit('FROM user', {
 			action: 'CREATE',
 			recordId: 'user:cy',
 			value: { id: 'user:cy', name: 'cy' },
 		});
-		db.emit(USERS, {
+		db.emit('FROM user', {
 			action: 'UPDATE',
 			recordId: 'user:bob',
 			value: { id: 'user:bob', name: 'robert' },
 		});
-		db.emit(USERS, {
+		db.emit('FROM user', {
 			action: 'DELETE',
 			recordId: 'user:cy',
 			value: { id: 'user:cy', name: 'cy' },
@@ -356,7 +360,7 @@ describe('reconciling notifications', () => {
 		const off = live.subscribe(() => {});
 		// The LIVE statement has registered but the subscription is not yet attached.
 		await Promise.resolve();
-		db.emit(USERS, {
+		db.emit('FROM user', {
 			action: 'CREATE',
 			recordId: 'user:cy',
 			value: { id: 'user:cy', name: 'cy' },
@@ -396,7 +400,7 @@ describe('windowed live queries', () => {
 		const live = cache.observeLive<Row>(PAGE, { lim: 2, start: 1 });
 		const off = live.subscribe(() => {});
 		await settle();
-		expect(db.ran(/^LIVE/)).toEqual(['LIVE SELECT * FROM user']);
+		expect(db.ran(/^LIVE/)).toEqual(['LIVE SELECT id FROM user']);
 		expect(live.get().data).toEqual(users('bob', 'cy'));
 		const [bob] = live.get().data as Row[];
 
@@ -404,7 +408,7 @@ describe('windowed live queries', () => {
 			{ id: 'user:bob', name: 'bob' },
 			{ id: 'user:abe', name: 'abe' },
 		];
-		db.emit(USERS, {
+		db.emit('FROM user', {
 			action: 'CREATE',
 			recordId: 'user:abe',
 			value: { id: 'user:abe', name: 'abe' },
@@ -428,7 +432,7 @@ describe('windowed live queries', () => {
 		await settle();
 		db.hold();
 		for (let i = 0; i < 5; i += 1) {
-			db.emit(USERS, {
+			db.emit('FROM user', {
 				action: 'UPDATE',
 				recordId: 'user:ada',
 				value: { id: 'user:ada', name: `${i}` },
@@ -596,6 +600,44 @@ describe('an engine live manifest', () => {
 		expect(live.get().data).toEqual(users('ada', 'cy'));
 		expect(db.ran(/^SELECT/)).toHaveLength(1);
 		off();
+	});
+
+	it('shares one watcher between window queries the engine describes differently', async () => {
+		const db = new MockDb();
+		const page =
+			'SELECT id, name FROM user ORDER BY name LIMIT $lim START $start';
+		const team = 'SELECT id, name FROM user WHERE team = $team';
+		const count = 'SELECT count() AS total FROM user GROUP ALL';
+		const cache = new QueryCache(db, {
+			live: {
+				[page]: {
+					query: 'LIVE SELECT id, name FROM user',
+					refusal: {
+						clauses: ['ORDER BY', 'LIMIT', 'START'],
+						windowable: true,
+					},
+				},
+				[team]: {
+					query: `LIVE ${team}`,
+					exit: 'silent',
+					watch: 'LIVE SELECT id FROM user',
+				},
+				[count]: {
+					query: 'LIVE SELECT count() AS total FROM user',
+					refusal: { clauses: ['GROUP BY'], windowable: true },
+				},
+			},
+		});
+		const offs = [
+			cache.observeLive(page, { lim: 2, start: 0 }),
+			cache.observeLive(team, { team: 'red' }),
+			cache.observeLive(count),
+		].map((live) => live.subscribe(() => {}));
+		await settle();
+		expect(db.ran(/^LIVE/)).toEqual(['LIVE SELECT id FROM user']);
+		for (const off of offs) off();
+		await settle();
+		expect(db.open.size).toBe(0);
 	});
 
 	it('is added by cacheFor after the cache exists', async () => {

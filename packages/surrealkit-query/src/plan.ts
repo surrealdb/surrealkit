@@ -11,7 +11,7 @@
  *   runs as `LIVE <text>`, and each notification is applied to the rows by
  *   record id.
  * - **window**: the SELECT has a clause `LIVE SELECT` refuses, uses `VALUE`,
- *   or has a `WHERE`. A `LIVE SELECT * FROM <target>` watches the target, and
+ *   or has a `WHERE`. A `LIVE SELECT id FROM <target>` watches the target, and
  *   each notification re-runs the SELECT itself, so the rows (their filter,
  *   order, offset, limit and grouping) are always the ones the engine
  *   computes.
@@ -184,13 +184,17 @@ export function planLive(text: string, options: PlanOptions = {}): LivePlan {
 	if (windowed.length === 0) {
 		return { mode: 'keyed', liveText: described, snapshot, windowed: [] };
 	}
-	// A record leaving the filter notifies nothing, so watch the whole target:
-	// the engine's `watch`, or else the text's own unfiltered watcher.
-	const derived = silent && !entry.watch ? planText(text, false) : undefined;
-	const unfiltered =
-		(silent ? entry.watch : undefined) ??
+	// A window's watcher only triggers re-runs, so its text should be one that
+	// every window query on the target shares: the engine's `watch`, else the
+	// text's own target watcher (with the WHERE only when leaving it notifies),
+	// else the engine's reduced query.
+	const derived = entry.watch
+		? undefined
+		: planText(text, entry.exit === 'delete');
+	const watcher =
+		entry.watch ??
 		(derived?.mode === 'window' ? derived.liveText : described);
-	return { mode: 'window', liveText: unfiltered, snapshot, windowed };
+	return { mode: 'window', liveText: watcher, snapshot, windowed };
 }
 
 function planText(text: string, trustWhere: boolean): LivePlan {
@@ -253,7 +257,7 @@ function planText(text: string, trustWhere: boolean): LivePlan {
 	}
 	return {
 		mode: 'window',
-		liveText: `LIVE SELECT * FROM ${target}${where && options.trustWhere ? ` WHERE ${where}` : ''}`,
+		liveText: `LIVE SELECT id FROM ${target}${where && options.trustWhere ? ` WHERE ${where}` : ''}`,
 		snapshot,
 		windowed: [...windowed],
 	};

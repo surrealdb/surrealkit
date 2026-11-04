@@ -17,5 +17,5 @@
 		"types": ["node"]
 	},
 	"include": ["src/**/*.ts", "test/**/*.ts", "vitest.config.ts", "tsup.config.ts"],
-	"exclude": ["test/types", "test/types-strict", "test/types-live"]
+	"exclude": ["test/types", "test/types-strict", "test/types-live", "test/types-generated"]
 }

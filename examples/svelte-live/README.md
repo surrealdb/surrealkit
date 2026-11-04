@@ -59,9 +59,9 @@ The browser must have the token to authenticate its connection, so page scripts 
 
 ## What to try
 
-- **Page through the list.** **Next** and **Previous** change `$start`, and the page's `SELECT` runs again with the new value. The window, the team list and the count are all window queries on `person`, so they share one `LIVE SELECT * FROM person`, which stays open while any of them is shown.
+- **Page through the list.** **Next** and **Previous** change `$start`, and the page's `SELECT` runs again with the new value. The window, the team list and the count are all window queries on `person`, so they share one `LIVE SELECT id FROM person`, which stays open while any of them is shown.
 - **Write from somewhere else.** Run a `CREATE`, `UPDATE` or `DELETE` on `person` in `surreal sql` (namespace `demo`, database `demo`). The page, the team list and the count change without a reload.
-- **Move someone to another team.** The team list drops them. The engine sends no notification for a record that leaves a live `WHERE`, so the binding runs the `SELECT` again on each change to the table.
+- **Move someone to another team.** The team list drops them. The engine sends no notification for a record that leaves a live `WHERE` (its live entry says `exit: "silent"`), so the binding watches the whole table and runs the `SELECT` again on each change.
 - **Sign out.** The page goes back to the login form, and the cache is reset.
 - **Check the types.** Run `npm run check`. Change a parameter name in `src/routes/+page.svelte`, or read a field the query does not select, and the check fails.
 
@@ -69,12 +69,12 @@ The browser must have the token to authenticate its connection, so page scripts 
 
 | File | Purpose |
 | --- | --- |
-| `src/app.d.ts` | Registers the generated `Queries`, and types `locals`. |
+| `src/app.d.ts` | Types `locals`. The generated module registers `Queries` and `LiveQueries` itself (`register = "surrealkit-query"`). |
 | `src/hooks.server.ts` | Connects a client for each request, as its user. |
 | `src/routes/login/+page.server.ts` | Signs up and signs in with record access. |
 | `src/routes/+layout.server.ts` | Gives the user's token to the browser. |
-| `src/routes/+layout.svelte` | Connects the browser's client as the user, and calls `setSurreal`. |
+| `src/routes/+layout.svelte` | Connects the browser's client as the user, and calls `setSurreal` with the generated `liveQueries`. |
 | `src/routes/+page.server.ts` | Preloads the first page and the count. |
 | `src/routes/+page.svelte` | `<LiveQuery>`, `createLive` (seeded from the count) and `<Query>`. |
-| `src/lib/generated/queries.ts` | The typed-query module. |
+| `src/lib/generated/queries.ts` | The typed-query module: `Queries`, the runtime `liveQueries` and the `Register` augmentation. |
 | `database/schema/` | The schema and the record access that `npm run seed` applies. |

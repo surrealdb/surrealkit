@@ -24,17 +24,7 @@ Peer dependencies: `react` 18.3 or later, and `surrealdb` 2.1.1 or later.
 
 ## Set up
 
-1. Register the generated queries in a `.d.ts` file the compiler includes:
-
-   ```ts
-   import type { Queries } from './generated/queries';
-
-   declare module 'surrealkit-query' {
-   	interface Register {
-   		queries: Queries;
-   	}
-   }
-   ```
+1. Register the generated queries. Set `register = "surrealkit-query"` under `[typegen.queries]` in `surrealkit.toml`, and the generated module does it for you. Without it, add the augmentation yourself in a `.d.ts` file the compiler includes (see [the core README](../surrealkit-query/README.md#register-the-generated-queries)).
 
 2. Give the browser's client to every hook:
 
@@ -42,13 +32,18 @@ Peer dependencies: `react` 18.3 or later, and `surrealdb` 2.1.1 or later.
    'use client';
    import { SurrealProvider } from 'react-surrealkit';
    import { db } from './db';
+   import { liveQueries } from './generated/queries';
 
    export function Providers({ children }: { children: React.ReactNode }) {
-   	return <SurrealProvider client={db}>{children}</SurrealProvider>;
+   	return (
+   		<SurrealProvider client={db} live={liveQueries}>
+   			{children}
+   		</SurrealProvider>
+   	);
    }
    ```
 
-   When the generated module exports `liveQueries` (SurrealDB 4.1 and later), pass it as `live={liveQueries}`. Live queries then subscribe as the engine describes them. See [the core README](../surrealkit-query/README.md#with-the-engines-live-entries).
+   `liveQueries` holds the engine's facts about each live query, so they subscribe as the engine describes them. See [the core README](../surrealkit-query/README.md#with-the-engines-live-entries).
 
 ## Hooks
 

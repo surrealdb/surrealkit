@@ -8,3 +8,5 @@ schema_version = 2
 [typegen.queries]
 sources = ["src"]
 typescript = "src/lib/generated/queries.ts"
+# Registers the module with the bindings, so no hand-written augmentation is needed.
+register = "surrealkit-query"

@@ -186,7 +186,7 @@ describe('useLive', () => {
 		);
 		expect(names()).toEqual(['dee', 'eve']);
 		await flush();
-		expect(db.ran(/^LIVE/)).toEqual(['LIVE SELECT * FROM user']);
+		expect(db.ran(/^LIVE/)).toEqual(['LIVE SELECT id FROM user']);
 		expect(names()).toEqual(['dee', 'eve']);
 	});
 });

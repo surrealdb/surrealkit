@@ -131,7 +131,7 @@ describe('<LiveQuery>', () => {
 			params: { team: 'red' },
 		});
 		await settle();
-		expect(db.ran(/^LIVE/)).toEqual(['LIVE SELECT * FROM user']);
+		expect(db.ran(/^LIVE/)).toEqual(['LIVE SELECT id FROM user']);
 		page.unmount();
 		await settle();
 		expect(db.open.size).toBe(1);

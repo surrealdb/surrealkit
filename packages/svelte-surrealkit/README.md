@@ -22,17 +22,7 @@ Peer dependencies: `svelte` 5.7 or later, and `surrealdb` 2.1.1 or later.
 
 ## Set up
 
-1. Register the generated queries in `src/app.d.ts`:
-
-   ```ts
-   import type { Queries } from '$lib/generated/queries';
-
-   declare module 'surrealkit-query' {
-   	interface Register {
-   		queries: Queries;
-   	}
-   }
-   ```
+1. Register the generated queries. Set `register = "surrealkit-query"` under `[typegen.queries]` in `surrealkit.toml`, and the generated module does it for you. Without it, add the augmentation yourself in `src/app.d.ts` (see [the core README](../surrealkit-query/README.md#register-the-generated-queries)).
 
 2. Give the browser's client to every query, in the root layout:
 
@@ -42,11 +32,12 @@ Peer dependencies: `svelte` 5.7 or later, and `surrealdb` 2.1.1 or later.
    	import { Surreal } from 'surrealdb';
    	import { setSurreal } from 'svelte-surrealkit';
    	import { browser } from '$app/environment';
+   	import { liveQueries } from '$lib/generated/queries';
 
    	let { children } = $props();
    	const db = new Surreal();
    	if (browser) void db.connect('wss://<your-host>', { namespace: 'app', database: 'app' });
-   	setSurreal(db);
+   	setSurreal(db, { live: liveQueries });
    </script>
 
    {@render children()}
@@ -54,7 +45,7 @@ Peer dependencies: `svelte` 5.7 or later, and `surrealdb` 2.1.1 or later.
 
    The server render does not subscribe, so it does not need a connected client.
 
-   When the generated module exports `liveQueries` (SurrealDB 4.1 and later), pass it: `setSurreal(db, { live: liveQueries })`. Live queries then subscribe as the engine describes them. See [the core README](../surrealkit-query/README.md#with-the-engines-live-entries).
+   `liveQueries` holds the engine's facts about each live query, so they subscribe as the engine describes them. See [the core README](../surrealkit-query/README.md#with-the-engines-live-entries).
 
 ## Components
 

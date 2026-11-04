@@ -15,7 +15,7 @@ describe('planLive', () => {
 	it('windows a WHERE, watching the whole target', () => {
 		expect(planLive('SELECT * FROM user WHERE age > $min')).toEqual({
 			mode: 'window',
-			liveText: 'LIVE SELECT * FROM user',
+			liveText: 'LIVE SELECT id FROM user',
 			snapshot: 'SELECT * FROM user WHERE age > $min',
 			windowed: ['WHERE'],
 		});
@@ -39,13 +39,13 @@ describe('planLive', () => {
 			'SELECT * FROM user WHERE active = true ORDER BY name LIMIT $lim START $start';
 		expect(planLive(text)).toEqual({
 			mode: 'window',
-			liveText: 'LIVE SELECT * FROM user',
+			liveText: 'LIVE SELECT id FROM user',
 			snapshot: text,
 			windowed: ['WHERE', 'ORDER', 'LIMIT', 'START'],
 		});
 		expect(planLive(text, { trustWhere: true })).toEqual({
 			mode: 'window',
-			liveText: 'LIVE SELECT * FROM user WHERE active = true',
+			liveText: 'LIVE SELECT id FROM user WHERE active = true',
 			snapshot: text,
 			windowed: ['ORDER', 'LIMIT', 'START'],
 		});
@@ -72,7 +72,7 @@ describe('planLive', () => {
 			{ trustWhere: true },
 		);
 		expect(plan.mode !== 'unsupported' && plan.liveText).toBe(
-			'LIVE SELECT * FROM user WHERE a = 1',
+			'LIVE SELECT id FROM user WHERE a = 1',
 		);
 	});
 
@@ -143,7 +143,7 @@ describe('planLive with an engine entry', () => {
 			}),
 		).toEqual({
 			mode: 'window',
-			liveText: 'LIVE SELECT * FROM user',
+			liveText: 'LIVE SELECT id FROM user',
 			snapshot: 'SELECT * FROM user WHERE active',
 			windowed: ['WHERE'],
 		});
@@ -163,7 +163,7 @@ describe('planLive with an engine entry', () => {
 			}),
 		).toEqual({
 			mode: 'window',
-			liveText: 'LIVE SELECT * FROM user WHERE active',
+			liveText: 'LIVE SELECT id FROM user WHERE active',
 			snapshot: PAGE,
 			windowed: ['ORDER BY', 'LIMIT'],
 		});
@@ -179,7 +179,7 @@ describe('planLive with an engine entry', () => {
 		});
 		expect(plan).toMatchObject({
 			mode: 'window',
-			liveText: 'LIVE SELECT * FROM user',
+			liveText: 'LIVE SELECT id FROM user',
 			windowed: ['ORDER BY', 'LIMIT', 'WHERE'],
 		});
 	});
@@ -195,6 +195,18 @@ describe('planLive with an engine entry', () => {
 		});
 		expect(plan.mode !== 'unsupported' && plan.liveText).toBe(
 			'LIVE SELECT id FROM user',
+		);
+	});
+
+	it('watches the plain target for a window, not the reduced projection', () => {
+		const plan = planLive('SELECT count() AS total FROM person GROUP ALL', {
+			entry: {
+				query: 'LIVE SELECT count() AS total FROM person',
+				refusal: { clauses: ['GROUP BY'], windowable: true },
+			},
+		});
+		expect(plan.mode !== 'unsupported' && plan.liveText).toBe(
+			'LIVE SELECT id FROM person',
 		);
 	});
 
@@ -220,7 +232,7 @@ describe('planLive with an engine entry', () => {
 			},
 		});
 		expect(plan.mode !== 'unsupported' && plan.liveText).toBe(
-			'LIVE SELECT * FROM user',
+			'LIVE SELECT id FROM user',
 		);
 	});
 });

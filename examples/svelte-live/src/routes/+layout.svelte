@@ -4,6 +4,7 @@
 
 	import { browser } from '$app/environment';
 	import { SCOPE, SURREAL_URL } from '$lib/db';
+	import { liveQueries } from '$lib/generated/queries';
 
 	let { data, children } = $props();
 
@@ -11,7 +12,8 @@
 	// user. The server render never subscribes, so it gets a client that is
 	// never connected.
 	const db = new Surreal();
-	setSurreal(db);
+	// The engine's live facts, so each live query subscribes as it described.
+	setSurreal(db, { live: liveQueries });
 
 	// The current token, read again whenever the SDK (re)connects.
 	let token = $derived(data.token);
