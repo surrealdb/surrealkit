@@ -500,25 +500,42 @@ async fn query_types_is_a_read_only_tool_that_requires_a_query() {
 	client.cancel().await.expect("shutdown");
 }
 
+/// Whether the embedded engine, the `surrealdb` this build links, types queries: the same
+/// question `query_types` asks it, through the same seam.
+async fn the_embedded_engine_types_queries() -> bool {
+	let db = surrealdb::engine::any::connect("mem://").await.expect("embedded engine");
+	db.use_ns("probe").use_db("probe").await.expect("namespace");
+	surrealkit::codegen::engine::types_document(&db, &[(None, "RETURN 1".to_string())])
+		.await
+		.expect("ask the engine")
+		.is_some()
+}
+
 #[tokio::test]
 async fn query_types_against_an_engine_that_cannot_type_says_so() {
-	// The SDK this build links has no `types` method, so the engine seam answers none. The call
-	// is a clear error for the model, not a panic or a protocol failure.
+	// An engine that cannot type queries makes the call a clear error for the model, not a panic
+	// or a protocol failure; one that can makes it the query's report.
+	let can_type = the_embedded_engine_types_queries().await;
 	let dir = project();
 	let schema = dir.path().join("database/schema/001_person.surql");
 	std::fs::create_dir_all(schema.parent().expect("parent")).expect("mkdir");
 	std::fs::write(&schema, "DEFINE TABLE person SCHEMAFULL;\n").expect("schema");
 	let client = connect(&dir).await;
 	let mut arguments = serde_json::Map::new();
-	arguments.insert("query".to_string(), serde_json::json!("SELECT 1"));
+	arguments.insert("query".to_string(), serde_json::json!("RETURN 1"));
 	arguments.insert(
 		"params".to_string(),
 		serde_json::json!({ "a": { "kind": "int" }, "b": { "example": null } }),
 	);
 	let result = client.call_tool(call_params("query_types", arguments)).await.expect("tools/call");
-	assert_eq!(result.is_error, Some(true), "{result:?}");
 	let text = serde_json::to_string(&result.content).expect("serialize");
-	assert!(text.contains("4.1 or later"), "{text}");
+	if can_type {
+		assert_ne!(result.is_error, Some(true), "{result:?}");
+		assert!(text.contains("export type Query"), "{text}");
+	} else {
+		assert_eq!(result.is_error, Some(true), "{result:?}");
+		assert!(text.contains("4.1 or later"), "{text}");
+	}
 	client.cancel().await.expect("shutdown");
 }
 
