@@ -8,6 +8,13 @@ DEFINE FIELD OVERWRITE email ON user TYPE string
 
 DEFINE FIELD OVERWRITE name ON user TYPE option<string>;
 
+-- To change a field once users exist, say in the definition what their values
+-- become, and keep the clause here: SurrealKit runs each named migration once.
+-- For example, to make the name required:
+--
+-- DEFINE FIELD OVERWRITE name ON user TYPE string
+-- 	MIGRATE EXISTING ROWS AS name_required USING $value ?? '' FALLBACK '';
+
 DEFINE FIELD OVERWRITE created_at ON user TYPE datetime
 	DEFAULT time::now();
 

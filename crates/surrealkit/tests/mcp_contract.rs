@@ -170,6 +170,8 @@ fn the_catalog_covers_every_cli_capability() {
 		"rollout_up",
 		"rollout_freeze",
 		"rollout_discard",
+		"compat_status",
+		"compat_raise",
 	] {
 		assert!(names.contains(expected), "missing tool {expected}; have {names:?}");
 	}

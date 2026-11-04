@@ -36,9 +36,9 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                # 3.x's last two minors and the current major. 3.3 tightened auth
-                # handling, which is exactly what these suites hit.
-                surrealdb: ["v3.2.4", "v3.3.0", "v4.0.0"]
+                # SurrealKit 1.0.0-rc.1 needs SurrealDB 4.0 and refuses a 3.x server;
+                # the upgrade job below covers state written on 3.x.
+                surrealdb: ["v4.0.0"]
         env:
             SURREALKIT_TEST_BASE_URL: http://127.0.0.1:8000
             SURREALDB_FOLDER: ${{ github.workspace }}/database
@@ -51,9 +51,9 @@ jobs:
             # namespace- and database-level signin paths were never exercised.
             SURREALKIT_AUTH_TEST_URL: ws://127.0.0.1:8000
             # Points the library's own tests at this server instead of the
-            # embedded engine, which is always the SDK's version (4.0). SurrealQL
-            # differs between minors: 3.2 refuses an ORDER BY on a field a query
-            # does not select, and only a 3.2 server shows that.
+            # embedded engine, which is always the SDK's version (4.0). A server
+            # differs from the embedded engine in places, and only a server
+            # shows that.
             SURREALKIT_TEST_URL: ws://127.0.0.1:8000
             SURREALKIT_TEST_USER: root
             SURREALKIT_TEST_PASS: secret
@@ -217,9 +217,9 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                # The minimum supported server, 3.x's last two minors, and the current
-                # release (the embedded engine's version).
-                surrealdb: ["v3.2.0", "v3.2.4", "v3.3.0", "v4.0.0"]
+                # The minimum supported server, which is also the embedded engine's
+                # version.
+                surrealdb: ["v4.0.0"]
         env:
             SURREALDB_HOST: ws://127.0.0.1:8000
             SURREALDB_NAME: rollout_db
@@ -332,7 +332,7 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                surrealdb: ["v3.2.4", "v3.3.0", "v4.0.0"]
+                surrealdb: ["v4.0.0"]
         env:
             SURREALDB_USER: root
             SURREALDB_PASSWORD: secret
@@ -398,29 +398,26 @@ jobs:
               run: examples/rollout-repro/scenarios/ci_faults.sh
 
     # Upgrade compatibility: state written by each published release since
-    # 0.7.0 (synced schema, baselines, completed rollouts, one in flight) carried
-    # on by this build. 1.0.0-beta.3 and beta.4 never published; beta.5 contains
-    # both.
+    # 0.7.0 (synced schema, baselines, completed rollouts, one in flight) on a
+    # SurrealDB 3.3 datastore, which is then upgraded in place to 4.0 and carried
+    # on by this build. The releases are built on the 3.x SDK and this build needs
+    # 4.0, so the server changes between the two. 1.0.0-beta.3 and beta.4 never
+    # published; beta.5 contains both.
     upgrade_compat:
-        name: Upgrade from ${{ matrix.release }} (SurrealDB ${{ matrix.surrealdb }})
+        name: Upgrade from ${{ matrix.release }} (SurrealDB 3.3.5 to 4.0.0)
         runs-on: ubuntu-22.04
-        timeout-minutes: 20
+        timeout-minutes: 25
         strategy:
             fail-fast: false
             matrix:
-                release: ["v0.7.0", "v1.0.0-beta.1", "v1.0.0-beta.2", "v1.0.0-beta.5"]
-                surrealdb: ["v3.2.4", "v3.3.0", "v4.0.0"]
+                release: ["v0.7.0", "v1.0.0-beta.1", "v1.0.0-beta.2", "v1.0.0-beta.5", "v1.0.0-beta.7"]
         env:
             SURREALDB_HOST: ws://127.0.0.1:8000
             SURREAL_HTTP: http://127.0.0.1:8000
             SURREALDB_USER: root
             SURREALDB_PASSWORD: secret
-        services:
-            surrealdb:
-                image: surrealdb/surrealdb:${{ matrix.surrealdb }}
-                command: start --user root --pass secret memory
-                ports:
-                    - 8000:8000
+            OLD_SERVER: surrealdb/surrealdb:v3.3.5
+            NEW_SERVER: surrealdb/surrealdb:v4.0.0
         steps:
             - name: Checkout repository
               uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -457,8 +454,11 @@ jobs:
                 tar -xzf "/tmp/old/$asset" -C /tmp/old
                 /tmp/old/surrealkit --version
 
-            - name: Wait for SurrealDB
+            - name: Start SurrealDB 3.3 on disk
               run: |
+                set -euo pipefail
+                docker run -d --user root --name surreal-old -p 8000:8000 -v surreal-data:/data \
+                    "$OLD_SERVER" start --user root --pass secret surrealkv:/data/db
                 for _ in $(seq 1 30); do
                     curl -sf -o /dev/null -X POST http://127.0.0.1:8000/signin \
                         -H 'Content-Type: application/json' -d '{"user":"root","pass":"secret"}' && exit 0
@@ -466,9 +466,24 @@ jobs:
                 done
                 exit 1
 
-            - name: Carry the release's state forward
+            - name: Carry the release's state through the server upgrade
               env:
                   OLD_BIN: /tmp/old/surrealkit
+                  # The 3.x to 4.x guide: stop 3.3, start 4.0 on the same files with
+                  # the opt-in. Without it 4.0 refuses to start and leaves them alone.
+                  UPGRADE_SERVER: |
+                    set -euo pipefail
+                    docker stop surreal-old >/dev/null
+                    docker run -d --user root --name surreal-new -p 8000:8000 -v surreal-data:/data \
+                        -e SURREAL_EXPERIMENTAL_UPGRADE_FROM_3X=true \
+                        "$NEW_SERVER" start --user root --pass secret surrealkv:/data/db
+                    for _ in $(seq 1 60); do
+                        curl -sf -o /dev/null -X POST http://127.0.0.1:8000/signin \
+                            -H 'Content-Type: application/json' -d '{"user":"root","pass":"secret"}' && exit 0
+                        sleep 1
+                    done
+                    docker logs surreal-new
+                    exit 1
               run: examples/rollout-repro/upgrade/upgrade_from.sh
 
     # The before/after harness. Separate from rollout_e2e because it builds two

@@ -1,5 +1,6 @@
 #![doc = include_str!("../README.md")]
 
+pub mod compat;
 pub mod compile;
 pub mod config;
 pub mod constants;
@@ -8,6 +9,7 @@ pub mod core;
 // contract and why stdout is off-limits.
 #[cfg(feature = "mcp")]
 pub mod mcp;
+mod migrate;
 pub mod module;
 pub mod paths;
 pub mod progress;

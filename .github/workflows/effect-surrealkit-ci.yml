@@ -174,7 +174,9 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                surrealdb: ["v3.2.4", "v3.3.0"]
+                # `surrealkit test --exec` needs SurrealDB 4.0 from 1.0.0-rc.1, and the
+                # JS SDK this package pins (2.1) supports it.
+                surrealdb: ["v4.0.0"]
         services:
             surrealdb:
                 image: surrealdb/surrealdb:${{ matrix.surrealdb }}

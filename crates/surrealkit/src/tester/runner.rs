@@ -548,7 +548,9 @@ async fn describe_schema(db: &Surreal<Any>) -> Result<BTreeMap<String, String>> 
 	for table in tables {
 		let info = info_object(db, "INFO FOR TABLE $table;", Some(&table)).await?;
 		for (section, items) in &info {
-			if section == "lives" {
+			// `migrations` is SurrealDB's own record of what it ran and when (its
+			// generation numbers), which two routes to the same schema need not share.
+			if section == "lives" || section == "migrations" {
 				continue;
 			}
 			let Some(items) = items.as_object() else {

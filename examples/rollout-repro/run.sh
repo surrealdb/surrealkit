@@ -37,6 +37,13 @@ compose() {
 
 run_image() {
     local source="$1" label="$2"
+    # Each side gets a server it can talk to: 1.0.0-beta.1 is built on the 3.x
+    # SDK, and this working tree needs SurrealDB 4.0.
+    if [ "$label" = before ]; then
+        export SURREALDB_IMAGE="${BEFORE_SURREALDB_IMAGE:-surrealdb/surrealdb:v3.2.4}"
+    else
+        export SURREALDB_IMAGE="${AFTER_SURREALDB_IMAGE:-surrealdb/surrealdb:v4.0.0}"
+    fi
     printf '\n=== building the %s image (%s) ===\n' "$label" "$source"
     compose "$source" build kit-root >/dev/null || die "build failed for $label"
     compose "$source" up -d surrealdb blackhole >/dev/null || die "services failed to start"
