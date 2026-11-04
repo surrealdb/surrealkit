@@ -336,6 +336,11 @@ A target inherits everything it does not set from the ambient configuration
 (`--host`/`--ns`/`--db` and the `SURREALDB_*` variables), so it usually only needs
 `ns` and `db`.
 
+`sync` runs every selected module against every selected target. `setup`, `seed`,
+`status`, `apply` and `typegen` work on one database: the `--target` you name, else
+the `primary` target, else the only declared target, else the ambient connection.
+`--all` or a repeated `--target` is an error for them.
+
 Passwords are read from the environment via `pass_env`. A literal `pass` or
 `password` key in `surrealkit.toml` is rejected, and an unset `pass_env` fails
 before any connection is opened rather than part-way through a fan-out.
