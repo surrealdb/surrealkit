@@ -8,7 +8,7 @@ filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
 Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and
-1.0.0-beta.7 two more (13 and 14). Unreleased changes are 15 to 17.
+1.0.0-beta.7 two more (13 and 14), and 1.0.0-beta.8 five more (15 to 19).
 Upgrading from 0.7.0 or any 1.0 beta carries existing state forward; CI checks
 that against every published release.
 
@@ -322,7 +322,7 @@ discard --keep-snapshots` delete the project's `src/`. Every id `rollout plan`
 writes is already a plain name, so this only affects a manifest whose id was
 edited by hand.
 
-### 15. Typegen reads the selected target and writes atomically (unreleased)
+### 15. Typegen reads the selected target and writes atomically (1.0.0-beta.8)
 
 `surrealkit typegen` used to connect through the ambient connection even when
 `surrealkit.toml` declared targets, so `--target` and `primary = true` were
@@ -342,7 +342,7 @@ formatter only accepts files matching a pattern, make sure that name matches
 too. New opt-ins: `[typegen] strict`, `[typegen] generated_at = false`, and
 `surrealkit typegen --check`.
 
-### 16. Typegen parses every SurrealDB 3.x kind (unreleased)
+### 16. Typegen parses every SurrealDB 3.x kind (1.0.0-beta.8)
 
 These are changes to v1 output that need no opt-in: they are parser fixes.
 `schema.json` and the generated TypeScript change only where the old parser was
@@ -370,7 +370,7 @@ handle, and `FieldType::Literal` has a `literal_type` field. Anything typegen
 still cannot represent is reported as a `Diagnostic`
 (`typegen::generate_with_diagnostics`), and `strict` fails on errors.
 
-### 17. Effect-native typegen (unreleased)
+### 17. Effect-native typegen (1.0.0-beta.8)
 
 Nothing to change. Relative to the parser fixes in entry 16 (and the behaviour
 changes in entry 15), every part is opt-in: with no new configuration,
@@ -405,6 +405,78 @@ section (everything else below is opt-in):
 - `vite-plugin-surrealkit` gains `mode: 'generate'`, which compiles instead of syncing.
 - `surrealkit test --exec <cmd>` runs a command against each prepared suite database
   (and `--schema-from` now wins over a suite's `schema_from`; see the tester section).
+
+### 18. Rollout bookkeeping retries transaction conflicts (1.0.0-beta.8)
+
+Nothing to change. On a distributed SurrealDB, the small writes a rollout makes
+around its steps (taking and releasing the lock, recording each step, moving the
+status) can lose a transaction conflict. One lost conflict used to fail the run
+even when every step had run, and could leave the lock behind. Now:
+
+- Those writes are retried with backoff, up to six attempts, and each retry is
+  logged as a warning.
+- A rollout's record is read and written by its record id rather than by
+  scanning `__rollout`.
+- `rollout start` on a rollout that is `ready_to_complete` does nothing. It used
+  to write the status twice more, and a conflict between the two writes left the
+  rollout back in `running_start`. On a rollout that is `running_complete`, or
+  that failed while completing, `start` now refuses and points at
+  `rollout complete`.
+- `rollout repair` on a `running_start` rollout whose start steps all ran moves it
+  to `ready_to_complete` instead of `failed`.
+- `rollout complete` on a `failed` rollout refuses when its start phase did not
+  finish. Run `rollout start` again first; it carries on from the first step that
+  did not finish.
+- A lock's owner is now `<SURREALKIT_OWNER or surrealkit>/<pid>/<8 hex
+  characters>`. Containers reuse pids, so two CI runs could share the old
+  `surrealkit/<pid>` owner and release each other's lock. A release that fails is
+  reported with the statement that clears the lock, and that statement names the
+  lock's real partition (`lock@<module>` for a named module). A lock row written
+  by an older release is honoured until it expires, as before.
+
+### 19. SurrealDB 4.0, and no RocksDB engine (1.0.0-beta.8)
+
+SurrealKit builds against the SurrealDB 4.0 SDK, so embedded engines (`mem://`,
+`surrealkv://`) are 4.0. It still works with servers from 3.2.0 on, so a 3.x
+server needs no upgrade. CI tests servers 3.2.0, 3.2.4, 3.3.0 and 4.0.0.
+
+If you use SurrealKit as a library, your own `surrealdb` dependency moves to 4.0
+with it. The `Surreal` handle you pass in and the `surrealdb_types` values that
+come back are the 4.0 SDK's types, so a project still on `surrealdb` 3.x does not
+compile until it upgrades.
+
+SurrealDB 4.0 has no RocksDB engine, so the `kv-rocksdb` cargo feature is gone
+and `embedded` enables `kv-surrealkv` and `kv-mem`. A build that named
+`kv-rocksdb` fails to resolve; use `kv-surrealkv` instead.
+
+The embedded engine checks only the `surrealism` experimental capability. It
+gates nothing else, so `DEFINE BUCKET`, `DEFINE CONFIG GRAPHQL` and the GQL
+front-end need no capability. `surrealkit compile --allow-experimental` and
+`[typegen] experimental` still accept `files` and `gql`; they change nothing and
+`provenance.capabilities` still records them.
+
+`surrealkit compile` therefore describes SurrealDB 4.0, and 4.0 differs from 3.3
+where SurrealKit reads it:
+
+- A nested field needs its parent declared first: `DEFINE FIELD prefs.locale
+  ON person` fails unless `prefs` is defined, and so does a nested field in a
+  field with no type. Compile refuses such a schema; against a 3.x server the
+  diagnostic `field-parent-implicit` still reports it.
+- `DEFINE MODULE` defines an extension. The embedded engine needs `DIGEST` on
+  it when it cannot read the archive. Schema document v2 still lists it under
+  `modules` as `mod::<name>`, and does not carry its `digest` and
+  `capabilities`, which compile reports as `definition-unsupported` warnings.
+- `provenance.adapter` is `structure-4.0` for a 4.0 engine, so a document
+  compiled with this version differs from one compiled before (the engine
+  version, the adapter and the declared parents). A project pinned to
+  `[typegen] engine = "3.3"` gets the error `compile-engine-mismatch`.
+- `DEFINE TYPE` is not part of schema document v2. Each one is reported as a
+  `definition-unsupported` warning.
+
+Running the 4.0 engine under a current-thread `#[tokio::test]` runtime overflowed
+Rust's 2 MiB test-thread stack in SurrealKit's own suite (unoptimised builds), so
+`.cargo/config.toml` sets `RUST_MIN_STACK` to 8 MiB. Do the same if your tests
+run the embedded engine and overflow.
 
 ## Opting into multiple schema modules
 
@@ -532,7 +604,7 @@ Two behaviour changes:
   allowed to create. Test those creates with a `sql_expect` case that sets its
   own unique values.
 
-### `--schema-from` wins over the suite, and `--exec` (unreleased)
+### `--schema-from` wins over the suite, and `--exec` (1.0.0-beta.8)
 
 - `surrealkit test --schema-from <source>` now overrides a suite's own
   `schema_from`, as the documentation always said. Before, a suite that set
@@ -644,6 +716,15 @@ From 1.0.0-beta.7:
 | `sync::SyncOpts { .. }` | gains `typegen_json_out` |
 | `variables::TypegenConfig { .. }` | gains `json`; `json_path()` resolves the file |
 | `tester::run_test(..)` | unchanged; `run_test_to(.., format, out)` writes the report to any writer |
+
+From 1.0.0-beta.8:
+
+| 1.0.0-beta.7 | 1.0.0-beta.8 |
+|---|---|
+| `Rollout::start` on a rollout that is ready to complete | returns `Ok` and writes nothing, where it ran the start phase again |
+| `Rollout::start` on a rollout that is completing, or failed while completing | fails, pointing at `complete` |
+| `Rollout::complete` on a rollout that failed before its start phase finished | fails, where it ran the complete phase |
+| `Surreal<Any>` and `surrealdb_types` from `surrealdb` 3.3 | from `surrealdb` 4.0; your own dependency moves to 4.x (19) |
 
 New: `tester::{run_test_report, ReportFormat, RunReport, SuiteReport, CaseReport,
 AssertionReport}`, `typegen::write_json`, `selection::Selection` (the module and

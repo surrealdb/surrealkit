@@ -1,0 +1,21 @@
+---
+source: crates/surrealkit/src/typegen/corpus_v2_tests.rs
+expression: text
+---
+diagnostics:
+info assert-unrecognized person.pattern
+info assert-unrecognized person.shout
+warning definition-unsupported -
+warning definition-unsupported -
+warning field-computed-kind-undeclared person.display
+warning field-computed-kind-undeclared team.members
+warning field-computed-kind-undeclared person.referenced_by
+info field-kind-undeclared person.notes
+warning function-optional-arg-not-trailing fn::optional_first
+info function-return-undeclared fn::double
+error object-without-fields kinds.k_object
+info table-lightweight-relation knows
+info table-view-shape team_size
+info table-view-shape adults
+
+sha256:3197d8c7fbe3ad8cf90b03a3a50e8afd751dc478a0a1f80f837491b7ea68e479

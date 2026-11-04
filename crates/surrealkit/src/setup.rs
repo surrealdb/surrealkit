@@ -149,9 +149,10 @@ mod tests {
 	}
 
 	/// Redefine a field the setup DDL owns, so a later run shows whether it ran:
-	/// running it puts the `datetime` type back.
+	/// running it removes the comment. The type stays as the DDL has it, because SurrealDB 4.0
+	/// refuses to narrow a field of a table that has rows.
 	async fn tamper(db: &Surreal<Any>) {
-		db.query("DEFINE FIELD OVERWRITE updated_at ON __entity TYPE any;")
+		db.query("DEFINE FIELD OVERWRITE updated_at ON __entity TYPE datetime COMMENT 'tampered';")
 			.await
 			.expect("tamper")
 			.check()
@@ -164,7 +165,7 @@ mod tests {
 			.await
 			.expect("info for table");
 		let definition: Option<String> = resp.take(0).expect("take definition");
-		definition.unwrap_or_default().contains("datetime")
+		!definition.unwrap_or_default().contains("tampered")
 	}
 
 	// On SurrealDB 3.2 every `DEFINE INDEX OVERWRITE` rebuilds the index, so the

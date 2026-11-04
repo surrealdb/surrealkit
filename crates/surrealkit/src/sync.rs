@@ -14,7 +14,7 @@ use crate::core::{exec_surql, sha256_hex};
 use crate::module::{Module, Partition};
 use crate::rollout::{
 	ManagedEntityRecord, PartitionWrite, acquire_lock, delete_managed_entities, delete_sync_hashes,
-	load_active_rollout_id, load_managed_entities, release_lock, upsert_managed_entities,
+	finish_locked, load_active_rollout_id, load_managed_entities, upsert_managed_entities,
 	write_partition,
 };
 use crate::schema_state::{
@@ -558,12 +558,7 @@ async fn run_sync_with_files(
 		} else if shared {
 			let lock = acquire_lock(db, layout.module(), "global").await?;
 			let result = prune_managed_entities(db, layout.module(), &stale_entities).await;
-			let release = release_lock(db, &lock).await;
-			match (result, release) {
-				(Err(err), _) => return Err(err),
-				(Ok(_), Err(err)) => return Err(err),
-				(Ok(()), Ok(())) => {}
-			}
+			finish_locked(db, &lock, result).await?;
 			pruned_count = stale_count;
 		} else {
 			prune_managed_entities(db, layout.module(), &stale_entities).await?;

@@ -1,2 +1,7 @@
 [build]
 incremental = true
+
+[env]
+# The 4.0 engine runs on the calling thread under `#[tokio::test]` (a current-thread
+# runtime), and an unoptimised build overflows the 2 MiB test-thread default.
+RUST_MIN_STACK = "8388608"

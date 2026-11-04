@@ -7,11 +7,15 @@
 //! with no adapter is an error (`structure-unsupported-engine`) — the caller then falls back
 //! to [`super::info_v2`].
 //!
-//! Supported: SurrealDB 3.2.x (`structure-3.2`) and 3.3.x (`structure-3.3`). The adapters
-//! differ only where the engines do (section 15): 3.3 adds `lightweight`, `inline`, a module's
+//! Supported: SurrealDB 3.2.x (`structure-3.2`), 3.3.x (`structure-3.3`) and 4.0.x
+//! (`structure-4.0`). The adapters differ only where the engines do (section 15): 3.3 adds `lightweight`, `inline`, a module's
 //! `unsigned`, a sequence's `resume`, a user's `scram`, an access's `context` and a JWT's
 //! `audience` (both reported as `definition-unsupported`), and parenthesises statements in
 //! event `THEN` lists and access `SIGNUP`/`SIGNIN`/`AUTHENTICATE`, which `structure-3.3` removes.
+//! 4.0 reads as 3.3 does and renames modules to extensions (`extensions`, which also carry
+//! `digest` and `capabilities`, both reported as `definition-unsupported`), adds `DEFINE TYPE`
+//! (`types`, reported as `definition-unsupported`) and the bookkeeping `compatibility`, a bucket's
+//! `presign_nonce` and a table's `migrations`, none of which is schema.
 //!
 //! Plain `INFO` text, when the caller has it, is attached to tables and fields as `define`
 //! evidence. It is never the source of a semantic value.
@@ -34,6 +38,8 @@ pub enum Adapter {
 	Structure32,
 	/// SurrealDB 3.3.x.
 	Structure33,
+	/// SurrealDB 4.0.x.
+	Structure40,
 }
 
 impl Adapter {
@@ -44,6 +50,7 @@ impl Adapter {
 		match (parts.next(), parts.next()) {
 			(Some("3"), Some("2")) => Some(Adapter::Structure32),
 			(Some("3"), Some("3")) => Some(Adapter::Structure33),
+			(Some("4"), Some("0")) => Some(Adapter::Structure40),
 			_ => None,
 		}
 	}
@@ -53,13 +60,32 @@ impl Adapter {
 		match self {
 			Adapter::Structure32 => "structure-3.2",
 			Adapter::Structure33 => "structure-3.3",
+			Adapter::Structure40 => "structure-4.0",
 		}
 	}
 
+	/// Whether the engine has what 3.3 added: its keys, and statements written without the
+	/// parentheses 3.2 puts around them.
 	fn is_33(self) -> bool {
-		self == Adapter::Structure33
+		matches!(self, Adapter::Structure33 | Adapter::Structure40)
+	}
+
+	fn is_40(self) -> bool {
+		self == Adapter::Structure40
 	}
 }
+
+/// The keys only 4.0 returns, as `(what, key)` on an object [`Reader::object`] reads. Three are
+/// engine bookkeeping that is not schema: the database's `compatibility` level, a bucket's
+/// `presign_nonce` (random for every definition) and a table's `migrations`, with its
+/// `generation` counter. `extensions` and `types` are definitions, read below.
+const KEYS_40: &[(&str, &str)] = &[
+	("db", "compatibility"),
+	("db", "extensions"),
+	("db", "types"),
+	("bucket", "presign_nonce"),
+	("tableInfo", "migrations"),
+];
 
 /// What one introspection read: `INFO FOR DB STRUCTURE`, and per table `INFO FOR TABLE
 /// STRUCTURE`, plus — optional evidence — the plain `INFO` results.
@@ -81,7 +107,7 @@ struct Reader {
 
 impl Reader {
 	/// The object `value` is, after reporting every key outside `known` (and outside `known33`
-	/// unless the adapter is 3.3).
+	/// unless the adapter is 3.3 or later, and outside [`KEYS_40`] unless it is 4.0).
 	fn object<'v>(
 		&mut self,
 		value: &'v Value,
@@ -96,7 +122,8 @@ impl Reader {
 		};
 		for key in map.keys() {
 			let ok = known.contains(&key.as_str())
-				|| (self.adapter.is_33() && known33.contains(&key.as_str()));
+				|| (self.adapter.is_33() && known33.contains(&key.as_str()))
+				|| (self.adapter.is_40() && KEYS_40.contains(&(what, key.as_str())));
 			if !ok {
 				let mut d = Diagnostic::new(
 					Severity::Error,
@@ -378,28 +405,35 @@ pub(super) fn read(adapter: Adapter, input: &StructureInput<'_>) -> RawSchema {
 			&["unsigned"],
 			None,
 		) {
-			let executable = map
-				.get("executable")
-				.and_then(|e| {
-					r.object(e, "module.executable", &["type", "bucket", "key"], &[], None)
-				})
-				.map(|e| Executable {
-					executable_type: r
-						.string(e, "type", "module.executable", None)
-						.unwrap_or_default(),
-					bucket: r.string(e, "bucket", "module.executable", None),
-					key: r.string(e, "key", "module.executable", None),
-				});
-			raw.modules.push(ModuleDef {
-				name: prefixed("mod::", r.string(map, "name", "module", None).unwrap_or_default()),
-				executable: executable.unwrap_or(Executable {
-					executable_type: String::new(),
-					bucket: None,
-					key: None,
-				}),
-				permissions: r.permission(map, "permissions", "module", None, false),
-				comment: r.string(map, "comment", "module", None),
-			});
+			raw.modules.push(read_module(&mut r, map, "module"));
+		}
+	}
+	// 4.0 calls modules extensions. They keep the document's `mod::` name, the alias 4.0 still
+	// accepts.
+	for e in r.array(db, "extensions", "db", None).to_vec() {
+		if let Some(map) = r.object(
+			&e,
+			"extension",
+			&["name", "executable", "permissions", "comment", "unsigned", "digest", "capabilities"],
+			&[],
+			None,
+		) {
+			let name = r.string(map, "name", "extension", None).unwrap_or_default();
+			// Known, and not modelled: the same warning the plain-INFO reader gives.
+			for clause in ["digest", "capabilities"] {
+				if map.contains_key(clause) {
+					r.diagnostics.push(Diagnostic::new(
+						Severity::Warning,
+						codes::DEFINITION_UNSUPPORTED,
+						format!("module {name}"),
+						format!(
+							"{} is not carried by schema document v2",
+							clause.to_ascii_uppercase()
+						),
+					));
+				}
+			}
+			raw.modules.push(read_module(&mut r, map, "extension"));
 		}
 	}
 	for c in r.array(db, "configs", "db", None).to_vec() {
@@ -423,17 +457,42 @@ pub(super) fn read(adapter: Adapter, input: &StructureInput<'_>) -> RawSchema {
 			});
 		}
 	}
-	for m in r.array(db, "models", "db", None).to_vec() {
-		r.diagnostics.push(Diagnostic::new(
-			Severity::Warning,
-			codes::DEFINITION_UNSUPPORTED,
-			m.to_string(),
-			"INFO FOR DB category `models` is not part of schema document v2",
-		));
+	for category in ["models", "types"] {
+		for m in r.array(db, category, "db", None).to_vec() {
+			r.diagnostics.push(Diagnostic::new(
+				Severity::Warning,
+				codes::DEFINITION_UNSUPPORTED,
+				m.to_string(),
+				format!("INFO FOR DB category `{category}` is not part of schema document v2"),
+			));
+		}
 	}
 
 	raw.diagnostics = r.diagnostics;
 	raw
+}
+
+/// A module (4.0: an extension) from its structure object, which `what` names in diagnostics.
+fn read_module(r: &mut Reader, map: &Map<String, Value>, what: &str) -> ModuleDef {
+	let executable_what = format!("{what}.executable");
+	let executable = map
+		.get("executable")
+		.and_then(|e| r.object(e, &executable_what, &["type", "bucket", "key"], &[], None))
+		.map(|e| Executable {
+			executable_type: r.string(e, "type", &executable_what, None).unwrap_or_default(),
+			bucket: r.string(e, "bucket", &executable_what, None),
+			key: r.string(e, "key", &executable_what, None),
+		});
+	ModuleDef {
+		name: prefixed("mod::", r.string(map, "name", what, None).unwrap_or_default()),
+		executable: executable.unwrap_or(Executable {
+			executable_type: String::new(),
+			bucket: None,
+			key: None,
+		}),
+		permissions: r.permission(map, "permissions", what, None, false),
+		comment: r.string(map, "comment", what, None),
+	}
 }
 
 /// `prefix` + `name`, unless `name` already starts with it.
@@ -955,13 +1014,17 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn adapters_exist_for_3_2_and_3_3_only() {
+	fn adapters_exist_for_3_2_3_3_and_4_0_only() {
 		assert_eq!(Adapter::for_engine("3.2.4"), Some(Adapter::Structure32));
 		assert_eq!(Adapter::for_engine("3.3.0"), Some(Adapter::Structure33));
 		assert_eq!(Adapter::for_engine("3.3.7+build"), Some(Adapter::Structure33));
+		assert_eq!(Adapter::for_engine("4.0.0"), Some(Adapter::Structure40));
+		assert_eq!(Adapter::for_engine("4.0.2+build"), Some(Adapter::Structure40));
 		assert_eq!(Adapter::for_engine("3.4.0"), None);
+		assert_eq!(Adapter::for_engine("4.1.0"), None);
 		assert_eq!(Adapter::for_engine("2.3.10"), None);
 		assert_eq!(Adapter::Structure33.name(), "structure-3.3");
+		assert_eq!(Adapter::Structure40.name(), "structure-4.0");
 	}
 
 	#[test]
@@ -1066,5 +1129,65 @@ mod tests {
 			.map(|d| d.source.as_str())
 			.collect();
 		assert_eq!(unknown, vec!["access.context", "access.kind.jwt.audience"]);
+	}
+
+	/// What 4.0.0 returns for an extension, a type and the database and bucket bookkeeping keys: the 4.0 adapter
+	/// reads them (an extension as a module), and the 3.3 adapter does not know them.
+	#[test]
+	fn four_oh_keys_are_known_on_4_0_and_errors_on_3_3() {
+		let db = serde_json::json!({
+			"compatibility": 4,
+			"buckets": [{
+				"backend": "memory", "name": "avatars", "permissions": true,
+				"presign_nonce": "01a1a2ca-1aaf-7601-b6c8-1699c87398f6", "readonly": false,
+			}],
+			"extensions": [{
+				"capabilities": { "functions": false, "net": false },
+				"comment": "c",
+				"digest": "sha256:00",
+				"executable": { "bucket": "avatars", "key": "/demo.wasm", "type": "surrealism" },
+				"name": "demo",
+				"permissions": true,
+				"unsigned": true,
+			}],
+			"types": [{ "kind": "'sad' | 'ok'", "name": "mood", "permissions": true }],
+		});
+		let input = StructureInput {
+			db: &db,
+			tables: &[],
+			db_info: None,
+			tables_info: &[],
+		};
+		let on_40 = read(Adapter::Structure40, &input);
+		assert!(
+			on_40.diagnostics.iter().all(|d| d.code == codes::DEFINITION_UNSUPPORTED),
+			"{:?}",
+			on_40.diagnostics
+		);
+		let reasons: Vec<&str> = on_40.diagnostics.iter().map(|d| d.reason.as_str()).collect();
+		assert_eq!(
+			reasons,
+			vec![
+				"DIGEST is not carried by schema document v2",
+				"CAPABILITIES is not carried by schema document v2",
+				"INFO FOR DB category `types` is not part of schema document v2",
+			]
+		);
+		assert_eq!(on_40.modules.len(), 1);
+		assert_eq!(on_40.modules[0].name, "mod::demo");
+		assert_eq!(on_40.modules[0].executable.bucket.as_deref(), Some("avatars"));
+		assert_eq!(on_40.buckets.len(), 1);
+
+		let on_33 = read(Adapter::Structure33, &input);
+		let unknown: Vec<&str> = on_33
+			.diagnostics
+			.iter()
+			.filter(|d| d.code == codes::STRUCTURE_UNKNOWN_KEY)
+			.map(|d| d.source.as_str())
+			.collect();
+		assert_eq!(
+			unknown,
+			vec!["db.compatibility", "db.extensions", "db.types", "bucket.presign_nonce"]
+		);
 	}
 }

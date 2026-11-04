@@ -144,7 +144,7 @@ pub fn assemble(snapshot: &Snapshot, origin: Origin) -> Result<SchemaDocument> {
 				codes::STRUCTURE_UNSUPPORTED_ENGINE,
 				snapshot.build.clone().unwrap_or_else(|| snapshot.version.clone()),
 				format!(
-					"SurrealDB {} has no INFO STRUCTURE adapter (supported: 3.2.x, 3.3.x); the \
+					"SurrealDB {} has no INFO STRUCTURE adapter (supported: 3.2.x, 3.3.x, 4.0.x); the \
 					 document was read from plain INFO",
 					snapshot.version
 				),

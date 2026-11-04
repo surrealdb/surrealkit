@@ -349,7 +349,11 @@ export const Provenance = Schema.Struct({
 		build: Schema.optionalKey(Schema.String.check(Schema.isMinLength(1))),
 		mode: Schema.Literals(['embedded', 'remote']),
 	}),
-	adapter: Schema.Literals(['structure-3.2', 'structure-3.3']),
+	adapter: Schema.Literals([
+		'structure-3.2',
+		'structure-3.3',
+		'structure-4.0',
+	]),
 	source: Schema.Union([
 		Schema.Struct({
 			kind: Schema.Literal('compile'),

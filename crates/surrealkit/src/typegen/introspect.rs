@@ -40,9 +40,10 @@ const DB_CATEGORIES: &[&str] = &[
 ];
 
 /// The `INFO FOR TABLE` categories the v1 document models (`events`, `fields`,
-/// `indexes`) or deliberately ignores: `lives` are running live queries and
-/// `tables` the views computed from this one, neither of them schema to type.
-const TABLE_CATEGORIES: &[&str] = &["events", "fields", "indexes", "lives", "tables"];
+/// `indexes`) or deliberately ignores: `lives` are running live queries,
+/// `tables` the views computed from this one, and `migrations` (4.0) the table's change
+/// bookkeeping, none of them schema to type.
+const TABLE_CATEGORIES: &[&str] = &["events", "fields", "indexes", "lives", "migrations", "tables"];
 
 /// Run a query and decode the first result set into a [`serde_json::Value`].
 ///

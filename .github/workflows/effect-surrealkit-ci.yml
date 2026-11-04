@@ -89,7 +89,16 @@ jobs:
                   for f in dist/index.js dist/emitter.js dist/cli.js; do
                       grep -qx "package/$f" <<<"$listing" || { echo "::error::$f is not in the package"; exit 1; }
                   done
-                  npm publish --dry-run
+                  # npm 11 refuses even a dry run over a version already on the
+                  # registry, which is the normal state between releases. The tarball
+                  # check above is what this step is for; the dry run only adds
+                  # something for a version that has not been published yet.
+                  version="$(node -p 'require("./package.json").version')"
+                  if [ -n "$(npm view "effect-surrealkit@$version" version 2>/dev/null)" ]; then
+                      echo "effect-surrealkit@$version is already published; skipping npm publish --dry-run"
+                  else
+                      npm publish --dry-run
+                  fi
 
     generated-ts:
         name: Generated TypeScript compiles (examples/effect-typegen through surrealkit compile)

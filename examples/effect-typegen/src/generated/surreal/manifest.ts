@@ -10,9 +10,9 @@ export const manifest = {
 	source: {
 		kind: "compile",
 		modules: ["default"],
-		surrealkit: "1.0.0-beta.6",
-		engine: "3.3.0",
-		adapter: "structure-3.3",
+		surrealkit: "1.0.0-beta.7",
+		engine: "4.0.0",
+		adapter: "structure-4.0",
 	},
 	tables: ["member_of", "person", "team"],
 	functions: ["fn::greet"],

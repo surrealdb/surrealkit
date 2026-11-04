@@ -35,7 +35,7 @@ The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 12. [Ordering](#12-ordering)
 13. [semanticDigest](#13-semanticdigest)
 14. [Diagnostics](#14-diagnostics)
-15. [Version adapters: 3.2 and 3.3](#15-version-adapters-32-and-33)
+15. [Version adapters: 3.2, 3.3 and 4.0](#15-version-adapters-32-33-and-40)
 16. [Engine hazards](#16-engine-hazards)
 17. [Golden corpus](#17-golden-corpus)
 18. [Design rationale](#18-design-rationale)
@@ -61,8 +61,8 @@ raw SurrealQL ignores and SurrealKit applies. Such a module is ambiguous and get
 `definition-duplicate`; the document then describes what `sync` would deploy, so a
 compile and an introspection of a synced database agree.
 
-Measured against the golden corpus (section 17): applying the golden corpus to SurrealKit's
-embedded 3.3.0 engine and to a `surrealdb/surrealdb:v3.3.0` server produces
+Measured against the golden corpus (section 17), when SurrealKit's embedded engine was 3.3.0:
+applying the golden corpus to that engine and to a `surrealdb/surrealdb:v3.3.0` server produces
 `INFO … STRUCTURE` and plain `INFO` output that is identical value for value, internal
 table ids included. Repeated runs against the same engine version are identical too.
 A hermetic compile and a live introspection on the same engine version therefore yield
@@ -73,7 +73,7 @@ read only through a version-qualified adapter (section 15) that maps each suppor
 engine minor onto this contract. An engine minor without an adapter MUST fail with the
 error diagnostic `structure-unsupported-engine`; a STRUCTURE key the adapter does not
 know MUST produce the error diagnostic `structure-unknown-key` rather than being
-dropped. Supported today: SurrealDB **3.2.x** and **3.3.x**.
+dropped. Supported today: SurrealDB **3.2.x**, **3.3.x** and **4.0.x**.
 
 Plain `INFO` (the `DEFINE …` strings) MAY be captured as evidence in `define`
 properties. It is never the source of a semantic value when STRUCTURE provides one.
@@ -125,7 +125,7 @@ Rules that apply everywhere:
 | --- | --- |
 | `generator` | `{ name: "surrealkit", version, commit? }` |
 | `engine` | `{ version: "3.3.0", build?, mode: "embedded" \| "remote" }`. `version` is the `MAJOR.MINOR.PATCH` part; `build` the full string the engine reports (e.g. `surrealdb-3.2.4+20260803.93ab219`). |
-| `adapter` | `structure-3.2` or `structure-3.3` (section 15), or `info` for the plain-`INFO` fallback (section 1) |
+| `adapter` | `structure-3.2`, `structure-3.3` or `structure-4.0` (section 15), or `info` for the plain-`INFO` fallback (section 1) |
 | `source` | Compile: `{ kind: "compile", modules: [...], files: [{ path, sha256 }] }`. Introspection: `{ kind: "introspect", namespace, database }`. |
 | `capabilities` | `{ experimental: [...], network: false }` — the capabilities the compile engine ran with |
 
@@ -459,9 +459,9 @@ are descriptive metadata, not typed application contracts.
 | `accesses` | `{ name, method, signup?, signin?, authenticate?, refresh?, verify?, subject?, durations, comment? }` | `method` is `record`, `jwt` or `bearer`. `signup`, `signin` and `refresh` (always present, `false` without `WITH REFRESH`) belong to `record`. `authenticate` is the engine-rendered `AUTHENTICATE` expression, for any access method that declares one; omission means no expression was captured. `verify` is `{ alg }` or `{ url }`, for `record` and `jwt` only: a bearer access signs with an engine-internal key that plain `INFO` does not show either. `subject` (`record`/`user`) for bearer. Keys and issuer material are dropped, never copied as `[REDACTED]`. Durations are the engine's normalised strings (`30d` → `4w2d`); null durations are omitted. On SurrealDB 3.3 `CONTEXT` and a JWT `AUDIENCE` are not modelled: both readers report the warning `definition-unsupported` for each. Accesses and users defined `ON NAMESPACE` or `ON ROOT` are outside the database and not part of the document; `compile` reports each one it finds in its engine as `definition-unsupported`. |
 | `analyzers` | `{ name, function?, tokenizers, filters, comment? }` | `function` gets its `fn::` prefix back. Filter and tokenizer order is kept (it is a pipeline). |
 | `sequences` | `{ name, batch, start, timeout? }` | Strings, as the engine reports them. Allocation state (3.3's `resume`) is never copied. |
-| `buckets` | `{ name, backend, readonly, permissions, comment? }` | Requires the experimental `files` capability. Generators MUST NOT embed `backend` in browser output. |
+| `buckets` | `{ name, backend, readonly, permissions, comment? }` | Requires the experimental `files` capability before 4.0. Generators MUST NOT embed `backend` in browser output. |
 | `apis` | `{ path, actions: [{ methods, middleware, permissions, action }], middleware, permissions, comment? }` | Middleware is `[{ name, args }]`, sorted by name; if an action or the API declares more than one middleware, info `api-middleware-order` records that execution order is not preserved through STRUCTURE. |
-| `modules` | `{ name, executable: { type, bucket?, key? }, permissions, comment? }` | `name` gets its `mod::` prefix back. 3.3's `unsigned` flag is not carried: modules are unsigned on every supported version. |
+| `modules` | `{ name, executable: { type, bucket?, key? }, permissions, comment? }` | `name` gets its `mod::` prefix back. 3.3's `unsigned` flag is not carried: modules are unsigned on every supported version. 4.0 calls them extensions; its `digest` and `capabilities` are not carried either (section 15). |
 | `configs` | `{ type: "graphql", tables, functions }` or `{ type: "api", middleware, permissions }` | |
 | `users` | `{ name, roles, durations, comment? }` | Password hashes and SCRAM material are never copied. |
 
@@ -568,10 +568,12 @@ reason, in its configuration. Codes are stable identifiers; reasons are not.
 New codes may be added in minor releases. A consumer MUST treat an unknown code by its
 severity.
 
-## 15. Version adapters: 3.2 and 3.3
+## 15. Version adapters: 3.2, 3.3 and 4.0
 
-Both adapters read the same STRUCTURE shape; differences found by applying the corpus to
-3.2.4 and 3.3.0 (`introspection/3.2.4` vs `introspection/3.3.0`):
+The adapters read the same STRUCTURE shape; differences found by applying the corpus to
+3.2.4, 3.3.0 and 4.0.0 (`introspection/3.2.4`, `introspection/3.3.0` and
+`introspection/4.0.0`, the last from the embedded engine). 4.0 reads as 3.3 does, apart from
+the rows below its own table.
 
 | Area | 3.2.4 | 3.3.0 | Adapter rule |
 | --- | --- | --- | --- |
@@ -585,6 +587,18 @@ Both adapters read the same STRUCTURE shape; differences found by applying the c
 | Array literal into a `set` field | rejected (`Expected set but found [5, 4, 5]`), so `DEFAULT []` on a set field makes every CREATE fail | coerced, deduplicated, sorted | none (data semantics; generators encode sets explicitly) |
 | `option<set<T, N>>` with duplicates | clean error | **server abort** (section 16) | none |
 | Internal table `id` counters | allocation order | allocation order | never copied |
+
+What 4.0.0 changes, relative to 3.3.0 (`structure-4.0`):
+
+| Area | 4.0.0 | Adapter rule |
+| --- | --- | --- |
+| Modules | `DEFINE MODULE` defines an extension, listed as `extensions` (`name` without `ext::`) in place of `modules`, with `digest` and `capabilities` besides `unsigned`. The embedded engine requires `DIGEST` when it cannot read the archive | Same `modules` entry, named `mod::<name>`; `digest` and `capabilities` are not carried and each gives a `definition-unsupported` warning |
+| `DEFINE TYPE` | listed as `types` | not carried; `definition-unsupported` warning per type |
+| `compatibility` | the database's compatibility level | never copied |
+| Bucket `presign_nonce` | random for every definition | never copied |
+| Table `migrations` | `generation` counter, `guaranteed` and `migrations` lists | never copied |
+| Nested field whose parent is not declared | refused (`the field … it is nested in is not defined`), and so is a nested field in a field of type `any` | the `field-parent-implicit` diagnostic arises on 3.x only; the corpus declares the parent in `schema/05_declared_parent.v4.0.surql` |
+| Experimental capabilities | only `surrealism` is gated; `DEFINE BUCKET` needs none | none |
 
 Identical on both versions, and therefore not adapter concerns: field and table STRUCTURE
 keys, `option<T>` rendered as `none | T`, `IN` rendered as `INSIDE`, `[*]` rendered as
@@ -625,26 +639,29 @@ are never applied by the corpus.
 | Path | Contents |
 | --- | --- |
 | `schema/01_tables.surql` … `10_api_config.surql` | Every value kind and every `DEFINE` family typegen needs, applied in file order. Each file is accepted on its own by 3.2.4 and 3.3.0 with default capabilities. |
-| `schema-gated/20_experimental_files.surql` | Buckets and bucket-bound file fields; needs `--allow-experimental=files`. |
-| `schema-gated/30_relations.v3.3.surql` | `LIGHTWEIGHT` and `INLINE`; 3.3 only. |
-| `schema-gated/31_module.v3.2.surql`, `31_module.v3.3.surql` | A Surrealism module in each version's spelling; needs `--allow-experimental=surrealism`. |
+| `schema/05_declared_parent.v4.0.surql` | The nested field `prefs.locale` with its parent declared, which 4.0 requires; 4.0 only. |
+| `schema-gated/05_implicit_parent.v3.surql` | The same nested field with its parent undeclared; 3.2 and 3.3 only. |
+| `schema-gated/20_experimental_files.surql` | Buckets and bucket-bound file fields; needs `--allow-experimental=files` before 4.0. |
+| `schema-gated/30_relations.v3.3.surql` | `LIGHTWEIGHT` and `INLINE`; 3.3 and later. |
+| `schema-gated/31_module.v3.2.surql`, `31_module.v3.3.surql`, `31_module.v4.0.surql` | A Surrealism module in each version's spelling; needs `--allow-experimental=surrealism`. |
 | `corpus.json` | The module list with each entry's engine and capability requirements. |
 | `rejected/` | Statements the engines reject, and the two hazards above. |
 | `semantics/` | Statement-by-statement behaviour evidence with `-- expect:` annotations (`expect[3.2]:` / `expect[3.3]:` for version-specific outcomes). |
 | `introspection/<version>/` | Raw `INFO FOR DB`, `INFO FOR DB STRUCTURE`, and per-table `INFO FOR TABLE` / `STRUCTURE` output, plus `apply-report.json` (all statements accepted with experimental capabilities) and `default-capabilities.apply-report.json` (which statements need them). |
 | `example.v2.json` | A hand-written v2 document for a subset (tables `doc`, `id_object`, `member_of`, `person`, `team` and one or more of every other collection), validated against the JSON Schema and cross-checked value by value against `introspection/3.3.0` and `introspection/3.2.4`. |
 
-Apply order: 3.2.x — `schema/01`…`10`, `schema-gated/20`, `31_module.v3.2`; 3.3.x —
-`schema/01`…`10`, `schema-gated/20`, `30`, `31_module.v3.3`. Each statement is sent on
-its own to a fresh `corpus`/`corpus` database as root.
+Apply order: 3.2.x — `schema/01`…`10`, `schema-gated/05`, `20`, `31_module.v3.2`; 3.3.x —
+`schema/01`…`10`, `schema-gated/05`, `20`, `30`, `31_module.v3.3`; 4.0.x — `schema/01`…`10`
+(with `05_declared_parent.v4.0`), `schema-gated/20`, `30`, `31_module.v4.0`. Each statement is
+sent on its own to a fresh `corpus`/`corpus` database as root.
 
 Gated modules live outside `schema/` on purpose: SurrealKit's own suite
 (`schema_state::tests::splitting_and_preparing_agree_with_surrealdb`) applies every file
 under a `schema/` directory in the repository, alone, to a default-capability engine on
-every CI lane (embedded 3.3.0 and servers 3.2.4 and 3.3.0), and checks that splitting and
-`OVERWRITE` preparation agree with SurrealDB. Every `schema/` file therefore has to be
-self-contained, portable and free of duplicate definitions; the corpus satisfies that
-suite unchanged. The repository-wide splitter-parity test
+every CI lane (embedded 4.0.0 and servers 3.2.4, 3.3.0 and 4.0.0), and checks that splitting
+and `OVERWRITE` preparation agree with SurrealDB. Every `schema/` file therefore has to be
+portable and free of duplicate definitions; the typegen corpus's files are applied after the
+files before them, because 4.0 refuses a nested field whose parent is not declared yet. The repository-wide splitter-parity test
 (`entity_keys_and_hashes_match_the_old_pipeline`) also compares the current splitter with
 the retired one on every `.surql` file, which is why the corpus has no identifier
 containing whitespace: the retired splitter, kept only as that test's oracle, cuts
@@ -653,8 +670,9 @@ containing whitespace: the retired splitter, kept only as that test's oracle, cu
 Snapshots were captured from `surreal` 3.2.4 (`surrealdb-3.2.4+20260803.93ab219`) and the
 `surrealdb/surrealdb:v3.3.0` image, both `memory` engines started with
 `--allow-experimental=files,surrealism`, and repeated with default capabilities for the
-`default-capabilities` reports. The embedded check applied the same files through
-SurrealKit's own `surrealdb` 3.3.0 dependency with `kv-mem`.
+`default-capabilities` reports. The 4.0.0 snapshot was captured from the embedded engine,
+SurrealKit's own `surrealdb` 4.0.0 dependency with `kv-mem`, and the embedded check applies
+the same files again.
 
 Coverage of `INFO … STRUCTURE` against the corpus: every field property the contract uses
 (`kind`, `flexible`, `readonly`, `inline`, `default`, `default_always`, `value`,

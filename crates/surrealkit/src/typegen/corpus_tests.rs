@@ -3,9 +3,10 @@
 //!
 //! Two sources feed the same assembly code:
 //!
-//! - the plain `INFO` snapshots captured from SurrealDB 3.2.4 and 3.3.0, so every engine minor
-//!   the corpus documents is covered on every machine, offline;
-//! - a live engine — the embedded 3.3 engine, or the server at `SURREALKIT_TEST_URL` — with the
+//! - the plain `INFO` snapshots captured from SurrealDB 3.2.4, 3.3.0 and 4.0.0 (the last from
+//!   the embedded engine), so every engine minor the corpus documents is covered on every
+//!   machine, offline;
+//! - a live engine — the embedded 4.0 engine, or the server at `SURREALKIT_TEST_URL` — with the
 //!   corpus applied, which must agree with the snapshot for its version.
 //!
 //! The bar is the strict one: no `unknown` kind anywhere, and no diagnostic of
@@ -19,6 +20,11 @@ use serde_json::Value;
 use super::diagnostics::{Diagnostic, Severity, codes};
 use super::introspect::assemble;
 use super::types::{FieldType, SchemaTypes};
+
+/// The embedded engine's minor, and the version its `introspection/` snapshot was captured
+/// from. A `surrealdb` bump that changes either needs a new capture.
+pub(crate) const EMBEDDED_MINOR: &str = "4.0";
+pub(crate) const EMBEDDED_VERSION: &str = "4.0.0";
 
 pub(crate) fn corpus_dir() -> PathBuf {
 	Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/typegen_corpus")
@@ -216,6 +222,12 @@ fn the_corpus_parses_with_no_unknown_kinds_on_3_3_0() {
 fn the_corpus_parses_with_no_unknown_kinds_on_3_2_4() {
 	let (doc, diagnostics) = from_snapshot("3.2.4");
 	assert_strict_clean("3.2.4", &doc, &diagnostics);
+}
+
+#[test]
+fn the_corpus_parses_with_no_unknown_kinds_on_4_0_0() {
+	let (doc, diagnostics) = from_snapshot("4.0.0");
+	assert_strict_clean("4.0.0", &doc, &diagnostics);
 }
 
 #[test]

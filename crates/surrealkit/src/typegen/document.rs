@@ -63,8 +63,8 @@ impl SchemaDocument {
 pub struct Provenance {
 	pub generator: Generator,
 	pub engine: Engine,
-	/// The adapter that read the engine's schema: `structure-3.2`, `structure-3.3`, or
-	/// `info` for the plain-`INFO` fallback.
+	/// The adapter that read the engine's schema: `structure-3.2`, `structure-3.3`,
+	/// `structure-4.0`, or `info` for the plain-`INFO` fallback.
 	pub adapter: String,
 	pub source: Source,
 	#[serde(default, skip_serializing_if = "Option::is_none")]

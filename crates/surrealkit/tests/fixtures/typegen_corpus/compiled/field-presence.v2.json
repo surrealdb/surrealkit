@@ -1,17 +1,17 @@
 {
   "version": 2,
-  "semanticDigest": "sha256:527262a64ab7f7c89506f2d104d32b0ef3086d303606ff20977b625f2c6a3309",
+  "semanticDigest": "sha256:299548cede4bcbc1040fa3f1bb9310b5cbe887ac41289c1a406faee0d35d5984",
   "provenance": {
     "generator": {
       "name": "surrealkit",
-      "version": "1.0.0-beta.6"
+      "version": "1.0.0-beta.7"
     },
     "engine": {
-      "version": "3.3.0",
-      "build": "surrealdb-3.3.0",
+      "version": "4.0.0",
+      "build": "surrealdb-4.0.0",
       "mode": "embedded"
     },
-    "adapter": "structure-3.3",
+    "adapter": "structure-4.0",
     "source": {
       "kind": "compile",
       "modules": [
@@ -20,7 +20,7 @@
       "files": [
         {
           "path": "semantics/field_presence.defines.surql",
-          "sha256": "3b14b3fe519f58b61e36177564f47ca3125cf4609aac036fe4594282f05e1930"
+          "sha256": "12178a192db8a1c0c21d1f13968728665c9ca718c07115f65db3e4df75e4cedb"
         }
       ]
     },
@@ -137,6 +137,24 @@
       "fields": [
         {
           "path": [
+            "need"
+          ],
+          "kind": {
+            "kind": "object"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD need ON ip TYPE object PERMISSIONS FULL"
+        },
+        {
+          "path": [
             "need",
             "x"
           ],
@@ -153,6 +171,28 @@
             "update": true
           },
           "define": "DEFINE FIELD need.x ON ip TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "pref"
+          ],
+          "kind": {
+            "kind": "object"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "always",
+            "expr": "{  }"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD pref ON ip TYPE object DEFAULT ALWAYS {  } PERMISSIONS FULL"
         },
         {
           "path": [
@@ -603,6 +643,9 @@
           "path": [
             "obj"
           ],
+          "kind": {
+            "kind": "object"
+          },
           "optional": false,
           "flexible": false,
           "readonly": false,
@@ -612,7 +655,7 @@
             "create": true,
             "update": true
           },
-          "define": "DEFINE FIELD obj ON up PERMISSIONS FULL"
+          "define": "DEFINE FIELD obj ON up TYPE object PERMISSIONS FULL"
         },
         {
           "path": [
@@ -650,38 +693,6 @@
   "configs": [],
   "users": [],
   "diagnostics": [
-    {
-      "severity": "info",
-      "code": "field-kind-undeclared",
-      "table": "up",
-      "field": [
-        "obj"
-      ],
-      "source": "DEFINE FIELD obj ON up PERMISSIONS FULL",
-      "reason": "Field has no TYPE clause; it holds any value."
-    },
-    {
-      "severity": "info",
-      "code": "field-parent-implicit",
-      "table": "ip",
-      "field": [
-        "need",
-        "x"
-      ],
-      "source": "need",
-      "reason": "The parent path is not declared; it is an implicit object, required when any child is required."
-    },
-    {
-      "severity": "info",
-      "code": "field-parent-implicit",
-      "table": "ip",
-      "field": [
-        "pref",
-        "locale"
-      ],
-      "source": "pref",
-      "reason": "The parent path is not declared; it is an implicit object, required when any child is required."
-    },
     {
       "severity": "warning",
       "code": "field-value-input-conditional",

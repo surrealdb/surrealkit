@@ -36,9 +36,9 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                # The previous minor's latest patch and the current minor. 3.3
-                # tightened auth handling, which is exactly what these suites hit.
-                surrealdb: ["v3.2.4", "v3.3.0"]
+                # 3.x's last two minors and the current major. 3.3 tightened auth
+                # handling, which is exactly what these suites hit.
+                surrealdb: ["v3.2.4", "v3.3.0", "v4.0.0"]
         env:
             SURREALKIT_TEST_BASE_URL: http://127.0.0.1:8000
             SURREALDB_FOLDER: ${{ github.workspace }}/database
@@ -51,7 +51,7 @@ jobs:
             # namespace- and database-level signin paths were never exercised.
             SURREALKIT_AUTH_TEST_URL: ws://127.0.0.1:8000
             # Points the library's own tests at this server instead of the
-            # embedded engine, which is always the SDK's version (3.3). SurrealQL
+            # embedded engine, which is always the SDK's version (4.0). SurrealQL
             # differs between minors: 3.2 refuses an ORDER BY on a field a query
             # does not select, and only a 3.2 server shows that.
             SURREALKIT_TEST_URL: ws://127.0.0.1:8000
@@ -217,9 +217,9 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                # The minimum supported server, the previous minor's latest patch,
-                # and the current minor (the embedded engine's version).
-                surrealdb: ["v3.2.0", "v3.2.4", "v3.3.0"]
+                # The minimum supported server, 3.x's last two minors, and the current
+                # release (the embedded engine's version).
+                surrealdb: ["v3.2.0", "v3.2.4", "v3.3.0", "v4.0.0"]
         env:
             SURREALDB_HOST: ws://127.0.0.1:8000
             SURREALDB_NAME: rollout_db
@@ -304,6 +304,10 @@ jobs:
             - name: Concurrency — two rollout up runs at once
               run: examples/rollout-repro/scenarios/ci_concurrency.sh
 
+            # Status, step and lock writes that lose a conflict are retried.
+            - name: Conflicts — rollout up while its own rows are rewritten
+              run: examples/rollout-repro/scenarios/ci_conflicts.sh
+
             # After a rollback: run it again, or discard it and plan again.
             - name: Rollback recovery — start again, or discard
               run: examples/rollout-repro/scenarios/ci_rollback_recovery.sh
@@ -328,7 +332,7 @@ jobs:
         strategy:
             fail-fast: false
             matrix:
-                surrealdb: ["v3.2.4", "v3.3.0"]
+                surrealdb: ["v3.2.4", "v3.3.0", "v4.0.0"]
         env:
             SURREALDB_USER: root
             SURREALDB_PASSWORD: secret
@@ -405,6 +409,9 @@ jobs:
             fail-fast: false
             matrix:
                 release: ["v0.7.0", "v1.0.0-beta.1", "v1.0.0-beta.2", "v1.0.0-beta.5"]
+                # Servers the old releases support: each was built against a 3.x SDK
+                # and cannot sync against a 4.0 server, so there is no state for this
+                # build to carry forward there.
                 surrealdb: ["v3.2.4", "v3.3.0"]
         env:
             SURREALDB_HOST: ws://127.0.0.1:8000

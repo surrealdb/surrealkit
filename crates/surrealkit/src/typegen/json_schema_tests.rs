@@ -351,7 +351,11 @@ async fn a_compiled_document_validates() {
 	use crate::schema_state::SchemaFile;
 	let files = super::corpus_tests::corpus_modules()
 		.into_iter()
-		.filter(|m| m.engines.as_ref().is_none_or(|e| e.iter().any(|v| v == "3.3")))
+		.filter(|m| {
+			m.engines
+				.as_ref()
+				.is_none_or(|e| e.iter().any(|v| v == super::corpus_tests::EMBEDDED_MINOR))
+		})
 		.map(|m| {
 			let sql = std::fs::read_to_string(corpus_dir().join(&m.path)).unwrap();
 			CompileModule {

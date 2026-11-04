@@ -74,9 +74,8 @@ templates = ['dep:tempfile']
 mcp = ['templates', 'dep:rmcp']
 kv-mem = ['surrealdb/kv-mem']
 kv-surrealkv = ['surrealdb/kv-surrealkv']
-kv-rocksdb = ['surrealdb/kv-rocksdb']
 # Convenience: a full embedded CLI with every supported local engine.
-embedded = ['kv-surrealkv', 'kv-rocksdb', 'kv-mem']
+embedded = ['kv-surrealkv', 'kv-mem']
 
 [[bin]]
 name = 'surrealkit'
@@ -85,6 +84,8 @@ required-features = ['cli']
 
 [dev-dependencies]
 tempfile = '3'
+# Paused time, so the conflict-retry tests do not sleep through real backoffs.
+tokio = { version = '1.47', features = ['test-util'] }
 test-case = '3'
 insta = { version = '1', features = ['json'] }
 # An in-process MCP client, so the protocol tests drive the real server over an
