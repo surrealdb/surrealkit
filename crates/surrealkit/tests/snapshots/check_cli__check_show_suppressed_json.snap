@@ -1,0 +1,52 @@
+---
+source: crates/surrealkit/tests/check_cli.rs
+expression: stdout(&as_json)
+---
+{
+  "summary": {
+    "passed": true,
+    "schema_files": 2,
+    "query_files": 0,
+    "queries_analyzed": false,
+    "errors": 0,
+    "warnings": 0,
+    "hints": 0,
+    "suppressed": 1,
+    "allowed": 0,
+    "host_read": false,
+    "host_files": 0,
+    "host_queries": 0,
+    "targets_checked": 0,
+    "drift": {}
+  },
+  "diagnostics": [
+    {
+      "code": "K9003",
+      "severity": "error",
+      "message": "Cannot define field `x.y`: the field `x` it is nested in is not defined. Define `x` first",
+      "path": "database/schema/002_bad.surql",
+      "span": {
+        "start": 100,
+        "end": 133,
+        "line": 3,
+        "column": 1,
+        "end_line": 3,
+        "end_column": 34
+      },
+      "statement": 1,
+      "notes": [],
+      "tags": [],
+      "source": "kit",
+      "suppressed": {
+        "directive": {
+          "start": 30,
+          "end": 99,
+          "line": 2,
+          "column": 1,
+          "end_line": 2,
+          "end_column": 70
+        }
+      }
+    }
+  ]
+}

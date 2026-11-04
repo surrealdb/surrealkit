@@ -452,6 +452,53 @@ mod check {
 	}
 
 	#[tokio::test]
+	async fn check_returns_what_a_directive_silenced_only_when_asked() {
+		let dir = written(
+			"",
+			&[
+				("database/schema/a.surql", "DEFINE TABLE t SCHEMAFULL;\n"),
+				(
+					"database/schema/b.surql",
+					"-- surreal: allow(K9003)\nDEFINE FIELD x.y ON t TYPE string;\n",
+				),
+			],
+		);
+		let client = connect(&dir).await;
+		let bare = call(&client, "check", serde_json::json!({})).await;
+		let bare = bare.structured_content.expect("report");
+		assert_eq!(bare["diagnostics"], serde_json::json!([]), "{bare}");
+		assert_eq!(bare["summary"]["suppressed"], 1);
+
+		let result = call(&client, "check", serde_json::json!({"show_suppressed": true})).await;
+		assert_ne!(result.is_error, Some(true), "{result:?}");
+		let shown = result.structured_content.expect("report");
+		assert_eq!(shown["summary"], bare["summary"], "the counts are the same either way");
+		assert_eq!(shown["summary"]["passed"], true, "a silenced finding does not fail it");
+		let diagnostics = shown["diagnostics"].as_array().expect("diagnostics");
+		assert_eq!(diagnostics.len(), 1, "{shown}");
+		assert_eq!(diagnostics[0]["code"], "K9003");
+		assert_eq!(diagnostics[0]["path"], "database/schema/b.surql");
+		assert_eq!(diagnostics[0]["suppressed"]["directive"]["line"], 1, "{shown}");
+		assert_eq!(diagnostics[0]["suppressed"]["directive"]["start"], 0);
+
+		// The query tool takes the same option. A query's own findings come from a checker
+		// this build does not have, so only the shape of the argument is exercised.
+		let result = call(
+			&client,
+			"check_query",
+			serde_json::json!({"query": "SELECT 1;", "show_suppressed": true}),
+		)
+		.await;
+		assert_ne!(result.is_error, Some(true), "{result:?}");
+		let query = result.structured_content.expect("result");
+		assert_eq!(
+			(query["passed"].as_bool(), query["suppressed"].as_u64()),
+			(Some(true), Some(0))
+		);
+		client.cancel().await.expect("shutdown");
+	}
+
+	#[tokio::test]
 	async fn check_without_a_target_connects_to_nothing() {
 		let dir = written(
 			"[target.prod]\nhost = \"ws://127.0.0.1:1\"\nns = \"app\"\ndb = \"prod\"\nprimary = true\n",

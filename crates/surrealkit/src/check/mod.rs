@@ -37,7 +37,10 @@ pub use config::AnalyzeConfig;
 #[cfg(feature = "analyze")]
 pub use project::Prepared;
 #[cfg(feature = "analyze")]
-pub use run::{ExtraFile, Extras, HostCounts, Report, Summary, TargetFindings, run, run_with};
+pub use run::{
+	ExtraFile, Extras, HostCounts, Report, RunOptions, Summary, TargetFindings, run, run_with,
+	run_with_options,
+};
 
 #[cfg(feature = "analyze")]
 mod run {
@@ -49,7 +52,7 @@ mod run {
 
 	use super::discover::{Role, Source, Sources};
 	use super::engine::Engine;
-	use super::finding::{Finding, LineIndex, Severity};
+	use super::finding::{Finding, LineIndex, Severity, Suppressed};
 	use super::policy::{Policy, Suppressions};
 	use crate::variables::TemplateVars;
 
@@ -58,7 +61,9 @@ mod run {
 	pub struct Report {
 		/// The project root.
 		pub root: PathBuf,
-		/// Findings after suppressions and policy, sorted by path, span start and code.
+		/// Findings after suppressions and policy, sorted by path, span start and code. With
+		/// [`RunOptions::show_suppressed`] it also holds the findings a directive silenced, each
+		/// with [`Finding::suppressed`] set; the counts below leave those out.
 		pub findings: Vec<Finding>,
 		/// The text of each file that has a finding, as the spans of its findings index it.
 		pub texts: BTreeMap<PathBuf, String>,
@@ -83,7 +88,7 @@ mod run {
 		pub errors: usize,
 		pub warnings: usize,
 		pub hints: usize,
-		/// Findings an in-source `allow` silenced.
+		/// Findings an in-source `allow` silenced, whether or not the report shows them.
 		pub suppressed: usize,
 		/// Findings policy silenced (`allow` in `[analyze.lints]`, or a code's default).
 		pub allowed: usize,
@@ -140,6 +145,16 @@ mod run {
 		pub queries: usize,
 	}
 
+	/// What a check is asked to do besides check.
+	#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+	pub struct RunOptions {
+		/// Keep the findings a directive silenced in [`Report::findings`], marked by
+		/// [`Finding::suppressed`], with the severity policy gives them. They are counted in
+		/// [`Summary::suppressed`] either way, and in no other count: they never change
+		/// [`Report::passed`]. A silenced finding whose level is `allow` is not kept.
+		pub show_suppressed: bool,
+	}
+
 	/// Resolve `finding`'s severity by policy, and count it, or count it as allowed. Whether it
 	/// is reported.
 	fn settle(
@@ -166,6 +181,17 @@ mod run {
 		}
 	}
 
+	/// Keep `finding`, which a directive silenced, in `findings` with the severity policy gives
+	/// it, unless that level is `allow`. It is not counted: [`Summary::suppressed`] has it.
+	fn keep_suppressed(mut finding: Finding, policy: &Policy, findings: &mut Vec<Finding>) {
+		if let Some(severity) =
+			policy.resolve(finding.code, finding.intrinsic(), finding.default_level())
+		{
+			finding.severity = severity;
+			findings.push(finding);
+		}
+	}
+
 	/// Run one check: each schema file is checked against the schema applied so far and then
 	/// applied, and every query file is checked last. Suppressions are applied to the
 	/// findings first, then policy; a malformed suppression is itself a finding, which goes
@@ -187,6 +213,23 @@ mod run {
 		policy: &Policy,
 		vars: &TemplateVars,
 		extras: Extras,
+	) -> Result<Report> {
+		run_with_options(engine, sources, policy, vars, extras, RunOptions::default()).await
+	}
+
+	/// [`run_with`], with `options`.
+	///
+	/// A finding is silenced when a directive in its file covers its line, or when the backend
+	/// returned it already marked ([`Finding::suppressed`]). Either way it is counted in
+	/// [`Summary::suppressed`] and kept out of the other counts, and it is in the report only with
+	/// [`RunOptions::show_suppressed`].
+	pub async fn run_with_options<E: Engine>(
+		engine: &mut E,
+		sources: &Sources,
+		policy: &Policy,
+		vars: &TemplateVars,
+		extras: Extras,
+		options: RunOptions,
 	) -> Result<Report> {
 		// Each finding with the index of the target it belongs to, when it does.
 		let mut found: Vec<(Finding, Option<usize>)> = Vec::new();
@@ -239,15 +282,24 @@ mod run {
 			..Summary::default()
 		};
 		let mut findings = Vec::new();
-		for (finding, target) in found {
-			let line = indexes
-				.get(finding.path.as_path())
-				.map_or(1, |index| index.position(finding.span.start).0);
-			let silenced = suppressions
-				.get(finding.path.as_path())
-				.is_some_and(|read| read.suppresses(&finding, line));
-			if silenced {
+		for (mut finding, target) in found {
+			if finding.suppressed.is_none() {
+				let line = indexes
+					.get(finding.path.as_path())
+					.map_or(1, |index| index.position(finding.span.start).0);
+				let directive = suppressions
+					.get(finding.path.as_path())
+					.and_then(|read| read.suppressing(&finding, line))
+					.map(|directive| directive.span.clone());
+				finding.suppressed = directive.map(|directive| Suppressed {
+					directive,
+				});
+			}
+			if finding.suppressed.is_some() {
 				summary.suppressed += 1;
+				if options.show_suppressed {
+					keep_suppressed(finding, policy, &mut findings);
+				}
 			} else if settle(finding, policy, &mut summary, &mut findings)
 				&& let Some(name) = target.map(|index| targets[index])
 			{
@@ -428,6 +480,107 @@ mod tests {
 		assert_eq!(report.findings[0].span, 30..33);
 	}
 
+	/// The report of `-- surreal: allow(K9003)` over two `K9003` findings, the first of them
+	/// covered, with `options`. With `engine_marked` the second arrives already marked as
+	/// silenced, as a backend that applies suppressions itself returns it.
+	async fn silenced_report(policy: &Policy, options: RunOptions, engine_marked: bool) -> Report {
+		let mut mock = Mock::default();
+		let text = "-- surreal: allow(K9003)\nBAD;\nBAD;\n";
+		mock.on_apply.push(at("a", K9003, 25..28));
+		let (name, second) = at("a", K9003, 30..33);
+		let second = if engine_marked {
+			second.with_suppressed(0..24)
+		} else {
+			second
+		};
+		mock.on_apply.push((name, second));
+		let sources = sources(vec![source("a", text, Role::Schema)], vec![]);
+		run_with_options(
+			&mut mock,
+			&sources,
+			policy,
+			&TemplateVars::default(),
+			Extras::default(),
+			options,
+		)
+		.await
+		.expect("the check runs")
+	}
+
+	const SHOW: RunOptions = RunOptions {
+		show_suppressed: true,
+	};
+
+	#[tokio::test]
+	async fn a_suppressed_finding_keeps_its_directive_when_shown_and_counts_the_same() {
+		let policy = policy("");
+		let hidden = silenced_report(&policy, RunOptions::default(), false).await;
+		let shown = silenced_report(&policy, SHOW, false).await;
+		assert_eq!(hidden.summary, shown.summary, "the flag changes no count");
+		assert_eq!(shown.summary.suppressed, 1);
+		assert_eq!((shown.summary.errors, shown.summary.warnings), (1, 0));
+		assert_eq!(hidden.findings.len(), 1);
+		assert!(hidden.findings.iter().all(|f| f.suppressed.is_none()));
+
+		assert_eq!(shown.findings.len(), 2);
+		let silenced = &shown.findings[0];
+		assert_eq!(silenced.span, 25..28);
+		assert_eq!(silenced.suppressed.as_ref().map(|s| s.directive.clone()), Some(0..24));
+		assert_eq!(silenced.severity, Severity::Error, "policy still grades it");
+		assert!(shown.findings[1].suppressed.is_none());
+		assert!(!shown.passed(), "the reported error fails it; the silenced one is not counted");
+	}
+
+	#[tokio::test]
+	async fn a_shown_suppressed_finding_never_fails_the_check() {
+		let mut mock = Mock::default();
+		let text = "-- surreal: allow(K9003)\nBAD;\n";
+		mock.on_apply.push(at("a", K9003, 25..28));
+		let sources = sources(vec![source("a", text, Role::Schema)], vec![]);
+		let report = run_with_options(
+			&mut mock,
+			&sources,
+			&policy(""),
+			&TemplateVars::default(),
+			Extras::default(),
+			SHOW,
+		)
+		.await
+		.unwrap();
+		assert_eq!(report.findings.len(), 1);
+		assert_eq!((report.summary.errors, report.summary.suppressed), (0, 1));
+		assert!(report.passed());
+		assert_eq!(report.texts.len(), 1, "the file of a shown finding is in the report");
+	}
+
+	#[tokio::test]
+	async fn a_finding_the_backend_marked_suppressed_is_counted_and_filtered_like_ours() {
+		let policy = policy("");
+		let hidden = silenced_report(&policy, RunOptions::default(), true).await;
+		let shown = silenced_report(&policy, SHOW, true).await;
+		// Our directive silences the first; the backend's mark silences the second.
+		assert_eq!((hidden.summary.suppressed, hidden.summary.errors), (2, 0));
+		assert!(hidden.findings.is_empty());
+		assert_eq!(hidden.summary, shown.summary);
+		assert_eq!(shown.findings.len(), 2);
+		assert!(shown.findings.iter().all(|f| f.suppressed.is_some()));
+		assert_eq!(shown.findings[1].suppressed.as_ref().map(|s| s.directive.clone()), Some(0..24));
+		assert!(shown.passed());
+	}
+
+	#[tokio::test]
+	async fn a_silenced_finding_at_level_allow_is_counted_suppressed_and_never_returned() {
+		let shown = silenced_report(&policy("[lints]\nK9003 = \"allow\"\n"), SHOW, false).await;
+		// Policy allows both; the covered one is counted as suppressed, as it always was,
+		// and the other as allowed.
+		assert!(shown.findings.is_empty());
+		assert_eq!((shown.summary.suppressed, shown.summary.allowed), (1, 1));
+
+		let shown = silenced_report(&policy("[lints]\nK9003 = \"warn\"\n"), SHOW, false).await;
+		assert_eq!(shown.findings[0].severity, Severity::Warning, "graded like any finding");
+		assert_eq!((shown.summary.warnings, shown.summary.suppressed), (1, 1));
+	}
+
 	#[tokio::test]
 	async fn a_malformed_directive_is_l7013_through_policy_and_suppresses_nothing() {
 		let text = "-- surreal: allow(*)\nBAD;\n";
@@ -474,6 +627,36 @@ mod tests {
 			text: text.to_string(),
 			comments,
 		}
+	}
+
+	#[tokio::test]
+	async fn a_host_finding_silenced_by_a_comment_is_shown_with_that_comment() {
+		let host = "// surreal: allow(K9201) reason=\"x\"\nA;\n";
+		let at_a = host.find("A;").unwrap();
+		let directive_end = host.find('\n').unwrap();
+		let extras = || Extras {
+			files: vec![extra("h.ts", host, Some(std::iter::once(0..directive_end).collect()))],
+			findings: vec![at("h.ts", Code::kit(9201), at_a..at_a + 1).1],
+			..Extras::default()
+		};
+		let (mut mock, sources, vars) =
+			(Mock::default(), sources(vec![], vec![]), TemplateVars::default());
+		let hidden = run_with(&mut mock, &sources, &policy(""), &vars, extras()).await.unwrap();
+		assert!(hidden.findings.is_empty());
+		let shown = run_with_options(&mut mock, &sources, &policy(""), &vars, extras(), SHOW)
+			.await
+			.unwrap();
+		assert_eq!(hidden.summary, shown.summary);
+		assert_eq!(shown.summary.suppressed, 1);
+		let [finding] = shown.findings.as_slice() else {
+			panic!("one finding: {:?}", shown.findings);
+		};
+		assert_eq!(finding.code, Code::kit(9201));
+		assert_eq!(
+			finding.suppressed.as_ref().map(|s| s.directive.clone()),
+			Some(0..host.find('\n').unwrap())
+		);
+		assert!(shown.passed());
 	}
 
 	#[tokio::test]

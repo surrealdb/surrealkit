@@ -15,7 +15,7 @@ use super::discover::{Role, Source, Sources, discover_schema};
 use super::engine::SchemaApply;
 use super::policy::Policy;
 use super::render::{self, JsonFinding};
-use super::run;
+use super::{Extras, RunOptions, run, run_with_options};
 use crate::project::ProjectConfig;
 use crate::selection::select_modules;
 use crate::variables::TemplateVars;
@@ -34,13 +34,16 @@ pub struct QueryCheckRequest {
 	pub target: Option<String>,
 	/// `--schema` modules, intersected with the target's when both are given.
 	pub schema: Vec<String>,
+	/// Also return the findings a `-- surreal: allow(...)` in the query silenced, each with
+	/// `suppressed.directive` set. `suppressed` counts them either way.
+	pub show_suppressed: bool,
 }
 
 /// What checking one query found.
 #[derive(Debug, Serialize)]
 pub struct QueryCheck {
 	/// The findings in the query, in the same shape as an entry of `check --json`'s
-	/// `diagnostics`. Spans, lines and columns are within the query text, and `path` is the
+	/// `diagnostics`, plus the silenced ones when the request asked for them. Spans, lines and columns are within the query text, and `path` is the
 	/// request's name.
 	pub diagnostics: Vec<JsonFinding>,
 	/// Whether no finding is an error.
@@ -143,7 +146,7 @@ pub async fn check_query(
 		role: Role::Query,
 		module: None,
 	};
-	let checked = run(
+	let checked = run_with_options(
 		&mut engine,
 		&Sources {
 			root: root.to_path_buf(),
@@ -153,6 +156,10 @@ pub async fn check_query(
 		},
 		&policy,
 		vars,
+		Extras::default(),
+		RunOptions {
+			show_suppressed: request.show_suppressed,
+		},
 	)
 	.await?;
 

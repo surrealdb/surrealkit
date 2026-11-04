@@ -708,7 +708,11 @@ struct Watching {
 
 impl Watching {
 	fn start(root: &Path) -> Self {
-		let mut child = command(root, &["watch"])
+		Self::start_with(root, &["watch"])
+	}
+
+	fn start_with(root: &Path, args: &[&str]) -> Self {
+		let mut child = command(root, args)
 			.stdout(Stdio::piped())
 			.stderr(Stdio::piped())
 			.spawn()
@@ -787,4 +791,113 @@ fn watch_runs_again_when_a_schema_file_changes() {
 	assert!(seen, "run 2 never reported the error: {text}");
 	assert!(text.contains("database/schema/002_bad.surql"), "the reason names the file: {text}");
 	assert!(text.contains("1 error"), "{text}");
+}
+
+/// A project whose one K9003 is silenced by a directive with a reason.
+fn silenced() -> TempDir {
+	let bad = "DEFINE FIELD b ON t TYPE int;\n\
+		-- surreal: allow(K9003) reason=\"the parent comes in a later release\"\n\
+		DEFINE FIELD x.y ON t TYPE string;\n";
+	project("", &[("001_base.surql", BASE), ("002_bad.surql", bad)])
+}
+
+#[test]
+fn show_suppressed_shows_what_a_directive_silenced_in_every_format() {
+	let dir = silenced();
+	let plain = surrealkit(dir.path(), &["check"]);
+	assert_eq!(plain.status.code(), Some(0), "{}", stderr(&plain));
+	assert_eq!(
+		stderr(&plain),
+		"checked 2 schema files and 0 query files: 0 errors, 0 warnings, 1 suppressed\n"
+	);
+
+	let human = surrealkit(dir.path(), &["check", "--show-suppressed"]);
+	assert_eq!(human.status.code(), Some(0), "the exit code is the same: {}", stderr(&human));
+	assert_eq!(stdout(&human), "");
+	assert!(stderr(&human).starts_with("suppressed[K9003]: "), "{}", stderr(&human));
+	assert!(stderr(&human).ends_with("0 errors, 0 warnings, 1 suppressed\n"), "{}", stderr(&human));
+	insta::assert_snapshot!("check_show_suppressed_human", stderr(&human));
+
+	let bare = surrealkit(dir.path(), &["-j", "check"]);
+	assert_eq!(json(&bare)["diagnostics"], serde_json::json!([]));
+	let as_json = surrealkit(dir.path(), &["--json", "check", "--show-suppressed"]);
+	assert_eq!(as_json.status.code(), Some(0), "{}", stderr(&as_json));
+	assert_eq!(stderr(&as_json), "");
+	let report = json(&as_json);
+	assert_eq!(report["summary"], json(&bare)["summary"], "the counts do not move");
+	assert_eq!(report["summary"]["suppressed"], 1);
+	assert_eq!(report["diagnostics"][0]["suppressed"]["directive"]["line"], 2);
+	insta::assert_snapshot!("check_show_suppressed_json", stdout(&as_json));
+
+	let bare = surrealkit(dir.path(), &["check", "--format", "sarif"]);
+	assert_eq!(json(&bare)["runs"][0]["results"], serde_json::json!([]));
+	let sarif = surrealkit(dir.path(), &["check", "--format", "sarif", "--show-suppressed"]);
+	assert_eq!(sarif.status.code(), Some(0), "{}", stderr(&sarif));
+	assert_eq!(json(&sarif)["runs"][0]["results"][0]["suppressions"][0]["kind"], "inSource");
+	insta::assert_snapshot!(
+		"check_show_suppressed_sarif",
+		stdout(&sarif).replace(VERSION, "<version>")
+	);
+}
+
+#[test]
+fn show_suppressed_changes_neither_the_exit_code_nor_the_other_findings() {
+	// One K9003 is silenced and one is not: the flag adds a block and the exit code stays 1.
+	let schema = [
+		("001_base.surql", BASE),
+		("002_bad.surql", "-- surreal: allow(K9003)\nDEFINE FIELD x.y ON t TYPE string;\n"),
+		("003_bad.surql", "DEFINE FIELD p.q ON t TYPE string;\n"),
+	];
+	let dir = project("", &schema);
+	let without = surrealkit(dir.path(), &["-j", "check"]);
+	let with = surrealkit(dir.path(), &["-j", "check", "--show-suppressed"]);
+	assert_eq!((without.status.code(), with.status.code()), (Some(1), Some(1)));
+	assert_eq!(json(&without)["summary"], json(&with)["summary"]);
+	let shown = json(&with);
+	let diagnostics = shown["diagnostics"].as_array().expect("diagnostics");
+	assert_eq!(diagnostics.len(), 2, "{shown}");
+	let only: Vec<_> = diagnostics.iter().filter(|d| d.get("suppressed").is_none()).collect();
+	assert_eq!(only.len(), 1);
+	assert_eq!(json(&without)["diagnostics"], serde_json::Value::Array(vec![only[0].clone()]));
+	assert_eq!(shown["summary"]["errors"], 1);
+}
+
+#[test]
+fn a_host_finding_a_comment_silenced_is_shown_with_show_suppressed() {
+	let dir = project(HOST_CONFIG, &[("001_base.surql", BASE)]);
+	write(&dir.path().join("src/app.ts"), APP_TS);
+	let human = surrealkit(dir.path(), &["check", "--show-suppressed"]);
+	assert_eq!(human.status.code(), Some(1), "the unsilenced K9201 still fails it");
+	let text = stderr(&human);
+	assert!(text.contains("suppressed[K9201]: "), "{text}");
+	assert!(text.contains("= note: suppressed by the directive at src/app.ts:7"), "{text}");
+	assert!(text.contains("error[K9201]: "), "{text}");
+	assert!(text.ends_with("read 1 host file holding 3 queries\n"), "{text}");
+
+	let report = json(&surrealkit(dir.path(), &["-j", "check", "--show-suppressed"]));
+	assert_eq!(report["summary"]["suppressed"], 1);
+	assert_eq!(report["summary"]["errors"], 1);
+	let silenced: Vec<_> = report["diagnostics"]
+		.as_array()
+		.expect("diagnostics")
+		.iter()
+		.filter(|d| d.get("suppressed").is_some())
+		.collect();
+	assert_eq!(silenced.len(), 1, "{report}");
+	assert_eq!(silenced[0]["code"], "K9201");
+	assert_eq!(silenced[0]["path"], "src/app.ts");
+	assert_eq!(silenced[0]["span"]["line"], 8);
+	assert_eq!(silenced[0]["suppressed"]["directive"]["line"], 7);
+}
+
+#[test]
+fn watch_takes_show_suppressed() {
+	let dir = silenced();
+	let watching = Watching::start_with(dir.path(), &["watch", "--show-suppressed"]);
+	assert!(
+		watching.wait(Duration::from_secs(90), |text| text.contains("1 suppressed"), || {}),
+		"run 1 never finished: {}",
+		watching.text()
+	);
+	assert!(watching.text().contains("suppressed[K9003]"), "{}", watching.text());
 }

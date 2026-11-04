@@ -268,6 +268,8 @@ pub struct Directive {
 	pub rejected: bool,
 	/// The line whose findings it silences.
 	pub line: usize,
+	/// The byte range of the directive's comment in the file, without trailing whitespace.
+	pub span: Range<usize>,
 }
 
 impl Directive {
@@ -330,11 +332,12 @@ impl Suppressions {
 			} else {
 				line
 			};
-			let Some(mut directive) = parse_directive(&text[range.clone()], covers) else {
+			let span = range.start..range.start + text[range.clone()].trim_end().len();
+			let Some(mut directive) = parse_directive(&text[range.clone()], covers, span.clone())
+			else {
 				continue;
 			};
 			directive.rejected = policy.requires_reason() && directive.reason.is_none();
-			let span = range.start..range.start + text[range.clone()].trim_end().len();
 			// A fault of the directive as a whole is one finding and hides the targets', which
 			// were not read as a list.
 			if let Some(why) = &directive.fault {
@@ -384,9 +387,15 @@ impl Suppressions {
 	/// Whether a directive silences `finding`, which starts at `line` of the file. A directive
 	/// names rendered codes, and it silences only a finding with one of them.
 	pub fn suppresses(&self, finding: &Finding, line: usize) -> bool {
+		self.suppressing(finding, line).is_some()
+	}
+
+	/// The first directive that silences `finding`, which starts at `line` of the file: the one
+	/// [`suppresses`](Self::suppresses) found.
+	pub fn suppressing(&self, finding: &Finding, line: usize) -> Option<&Directive> {
 		self.directives
 			.iter()
-			.any(|directive| directive.line == line && directive.silences(finding.code))
+			.find(|directive| directive.line == line && directive.silences(finding.code))
 	}
 }
 
@@ -405,13 +414,13 @@ fn directive_finding(path: &Path, span: Range<usize>, message: String, help: &st
 }
 
 /// `None` when `comment` is not a suppression directive; otherwise the directive, which covers
-/// `line`.
+/// `line` and sits at `span` of the file.
 ///
 /// A directive is a `--`, `//` or `#` comment whose body starts with `surreal:` or
 /// `surrealql-analyzer:`, then `allow`, optional whitespace and `(`. Any other comment,
 /// including one that merely starts with the prefix, or has `allowx` or `allow E1002`, is an
 /// ordinary comment.
-fn parse_directive(comment: &str, line: usize) -> Option<Directive> {
+fn parse_directive(comment: &str, line: usize, span: Range<usize>) -> Option<Directive> {
 	let body = comment
 		.strip_prefix("--")
 		.or_else(|| comment.strip_prefix("//"))
@@ -445,6 +454,7 @@ fn parse_directive(comment: &str, line: usize) -> Option<Directive> {
 		fault,
 		rejected: false,
 		line,
+		span,
 	};
 	if let Some(after) = after {
 		match parse_reason(after) {
@@ -860,7 +870,7 @@ mod tests {
 			);
 		}
 		let directive =
-			parse_directive("-- surreal: allow(E1002) reason=\"a \\\"b\\\"\"", 0).unwrap();
+			parse_directive("-- surreal: allow(E1002) reason=\"a \\\"b\\\"\"", 0, 0..0).unwrap();
 		assert_eq!(directive.reason.as_deref(), Some("a \"b\""));
 		assert_eq!(directive.fault, None);
 	}
@@ -972,6 +982,32 @@ mod tests {
 		let finding = Finding::kit(K9003, "m", PathBuf::from("/p/a.surql"), start..text.len());
 		let line = LineIndex::new(text).position(finding.span.start).0;
 		assert!(suppressions.suppresses(&finding, line));
+	}
+
+	#[test]
+	fn the_directive_that_silences_a_finding_is_found_with_its_span() {
+		let text =
+			"-- surreal: allow(K9003)   \nDEFINE FIELD a ON t;\nx; -- surreal: allow(K9003)\n";
+		let (suppressions, _) = read(text, "");
+		let directive = "-- surreal: allow(K9003)";
+		let finding = |code: Code, at: usize| {
+			let finding = Finding::kit(code, "m", PathBuf::from("/p/a.surql"), at..at + 1);
+			(finding, LineIndex::new(text).position(at).0)
+		};
+		// An own-line directive covers the next line; its span leaves out trailing whitespace.
+		let (own, line) = finding(K9003, text.find("DEFINE").unwrap());
+		let found = suppressions.suppressing(&own, line).expect("covered");
+		assert_eq!(found.span, 0..directive.len());
+		assert!(suppressions.suppresses(&own, line));
+		// A trailing directive covers its own line.
+		let (trailing, line) = finding(K9003, text.find("x;").unwrap());
+		let found = suppressions.suppressing(&trailing, line).expect("covered");
+		let start = text.rfind(directive).unwrap();
+		assert_eq!(found.span, start..start + directive.len());
+		// Another code is not silenced.
+		let (other, line) = finding(Code::kit(9001), text.find("DEFINE").unwrap());
+		assert!(suppressions.suppressing(&other, line).is_none());
+		assert!(!suppressions.suppresses(&other, line));
 	}
 
 	/// The suppressions and findings for the one-line directive `-- surreal: <body>`.
@@ -1231,7 +1267,8 @@ mod tests {
 	}
 
 	fn directive(comment: &str) -> Directive {
-		parse_directive(comment, 0).unwrap_or_else(|| panic!("{comment:?} is a directive"))
+		parse_directive(comment, 0, 0..comment.len())
+			.unwrap_or_else(|| panic!("{comment:?} is a directive"))
 	}
 
 	#[test]

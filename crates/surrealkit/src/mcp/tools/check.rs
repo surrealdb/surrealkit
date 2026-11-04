@@ -15,9 +15,9 @@ use rmcp::{schemars, tool, tool_router};
 use serde::Deserialize;
 
 use super::WorkRequest;
-use crate::check::Prepared;
 use crate::check::query::{QueryCheck, QueryCheckRequest, check_query};
 use crate::check::render::{self, JsonReport};
+use crate::check::{Prepared, RunOptions};
 use crate::mcp::SurrealKitMcp;
 use crate::mcp::context::CallContext;
 use crate::mcp::result::run_captured;
@@ -54,6 +54,10 @@ pub struct CheckQueryInput {
 	/// Template variables substituted into `${VAR}` placeholders.
 	#[serde(default)]
 	pub vars: HashMap<String, String>,
+	/// Also return the findings a `-- surreal: allow(...)` in the query silenced, each with
+	/// `suppressed.directive`. They count in `suppressed` either way. Default: false.
+	#[serde(default)]
+	pub show_suppressed: bool,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -74,6 +78,11 @@ pub struct CheckInput {
 	/// Template variables substituted into `${VAR}` placeholders.
 	#[serde(default)]
 	pub vars: HashMap<String, String>,
+	/// Also return the findings a `-- surreal: allow(...)` directive silenced, each with
+	/// `suppressed.directive`. They count in `summary.suppressed` either way and never affect
+	/// `passed`. Default: false.
+	#[serde(default)]
+	pub show_suppressed: bool,
 }
 
 /// The shared part of a call's input as the request every tool resolves its context from.
@@ -126,8 +135,9 @@ impl SurrealKitMcp {
 		description = "Check one SurrealQL query against the project's schema files, the way \
 		               `surrealkit check` checks a file: under the [analyze] policy in \
 		               surrealkit.toml and the `-- surreal: allow(...)` suppressions in the \
-		               query's own comments. It never executes the query and never connects \
-		               to a database. A `target` only selects the modules that [target.<name>] \
+		               query's own comments (`show_suppressed: true` also returns the \
+		               findings those comments silenced, marked `suppressed`). It never \
+		               executes the query and never connects to a database. A `target` only selects the modules that [target.<name>] \
 		               accepts as the schema; it is not connected to. The result has the \
 		               findings in the shape of `check --json`'s diagnostics, with spans and \
 		               lines within the query. `analyzed: false` means the query itself was \
@@ -163,6 +173,7 @@ impl SurrealKitMcp {
 					name: input.name,
 					target: input.target,
 					schema: input.schema,
+					show_suppressed: input.show_suppressed,
 				};
 				check_query(&ctx.project, &ctx.root, &ctx.folder, &vars, &request).await
 			},
@@ -179,7 +190,9 @@ impl SurrealKitMcp {
 		               when [typegen.queries] is set, and the findings of every other .surql \
 		               file, graded by [analyze] policy and suppressions. The result is the \
 		               `check --json` document: `summary` and `diagnostics`; `passed` is \
-		               false when a finding is an error. Without `target` it reads files and \
+		               false when a finding is an error. `show_suppressed: true` also \
+		               returns the findings a suppression directive silenced, each with \
+		               `suppressed.directive`; they never affect `passed`. Without `target` it reads files and \
 		               connects to nothing. With `target` it also compares the files with \
 		               that [target.<name>] database (drift, the K91xx findings): that \
 		               connects to it and only reads, schema and SurrealKit's own metadata, \
@@ -228,7 +241,11 @@ impl SurrealKitMcp {
 					false,
 					vars,
 				)?;
-				let report = prepared.run(&ctx.root, &ctx.folder, &targets).await?;
+				let options = RunOptions {
+					show_suppressed: input.show_suppressed,
+				};
+				let report =
+					prepared.run_with_options(&ctx.root, &ctx.folder, &targets, options).await?;
 				Ok(render::json(&report, &ctx.root))
 			},
 		)

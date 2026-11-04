@@ -90,6 +90,11 @@ eprint!("{}", render::human(&report, &root, false));
 assert!(report.passed());
 ```
 
+`check::run_with_options` and `Prepared::run_with_options` take a `RunOptions`; with
+`show_suppressed` the report also holds the findings a directive silenced, each with
+`Finding::suppressed` set (a backend that applies suppressions itself marks its own with
+`Finding::with_suppressed`). The counts are the same either way.
+
 `render::json` and `render::sarif` return serialisable documents. The backend this build
 ships, `SchemaApply`, applies the schema as `surrealkit compile` does and reports what the
 engine rejects; query analysis arrives with the engine's checker (the SDK's `Surreal::check`,

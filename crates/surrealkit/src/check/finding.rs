@@ -242,6 +242,16 @@ impl Source {
 	}
 }
 
+/// What silenced a finding: the suppression directive that matched it.
+///
+/// A suppressed finding is not an error, a warning or a hint, and the counts leave it out. It
+/// exists in a report only when the check was asked to show what directives silence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Suppressed {
+	/// The byte range of the directive's comment, in the same file as the finding.
+	pub directive: Range<usize>,
+}
+
 /// One thing a check found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
@@ -260,6 +270,11 @@ pub struct Finding {
 	/// The checker that reported it. The constructors say [`Source::Kit`]; a backend that
 	/// converts the engine's findings says otherwise with [`with_source`](Self::with_source).
 	pub source: Source,
+	/// The directive that silenced it, when one did. A backend that applies suppressions itself
+	/// returns the findings it silenced already marked, with
+	/// [`with_suppressed`](Self::with_suppressed); a check counts and filters by this field
+	/// whoever set it.
+	pub suppressed: Option<Suppressed>,
 	intrinsic: Severity,
 	default_level: Level,
 }
@@ -284,6 +299,7 @@ impl Finding {
 			notes: Vec::new(),
 			tags: Vec::new(),
 			source: Source::Kit,
+			suppressed: None,
 			intrinsic,
 			default_level,
 		}
@@ -312,6 +328,16 @@ impl Finding {
 	#[must_use]
 	pub fn with_source(mut self, source: Source) -> Self {
 		self.source = source;
+		self
+	}
+
+	/// With `directive`, the byte range of the comment in this finding's file, as the directive
+	/// that silenced it.
+	#[must_use]
+	pub fn with_suppressed(mut self, directive: Range<usize>) -> Self {
+		self.suppressed = Some(Suppressed {
+			directive,
+		});
 		self
 	}
 
@@ -481,6 +507,20 @@ mod tests {
 		assert_eq!(serde_json::to_value(Source::Kit).unwrap(), "kit");
 		assert_eq!(serde_json::to_value(Source::Engine).unwrap(), "engine");
 		assert_eq!((Source::Kit.as_str(), Source::Engine.as_str()), ("kit", "engine"));
+	}
+
+	#[test]
+	fn a_finding_is_not_suppressed_until_a_directive_is_named() {
+		let finding = Finding::kit(K9003, "m", PathBuf::from("/p/a.surql"), 5..9);
+		assert_eq!(finding.suppressed, None);
+		let silenced = finding.with_suppressed(0..4);
+		assert_eq!(
+			silenced.suppressed,
+			Some(Suppressed {
+				directive: 0..4
+			})
+		);
+		assert_eq!(silenced.span, 5..9, "the finding keeps its own span");
 	}
 
 	#[test]

@@ -330,10 +330,21 @@ enum Commands {
 		/// Keep running, and check again whenever a source file or surrealkit.toml changes.
 		#[arg(long)]
 		watch: bool,
+		/// Also show the findings a `-- surreal: allow(...)` directive silenced.
+		///
+		/// Each reads `suppressed[CODE]` and names its directive; in JSON it has
+		/// `suppressed.directive`, and in SARIF `suppressions`. They are counted in
+		/// `summary.suppressed` with or without the flag, and never change the exit code.
+		#[arg(long)]
+		show_suppressed: bool,
 	},
 	/// Check the project's SurrealQL again on every change, until interrupted.
 	#[cfg(feature = "analyze")]
-	Watch,
+	Watch {
+		/// Also show the findings a `-- surreal: allow(...)` directive silenced.
+		#[arg(long)]
+		show_suppressed: bool,
+	},
 	/// Serve SurrealKit's capabilities to an AI agent over the Model Context
 	/// Protocol, on stdio. The MCP host launches this; you rarely run it by hand.
 	#[cfg(feature = "mcp")]
@@ -558,6 +569,7 @@ fn check_opts(
 	args: &Cli,
 	folder: &str,
 	targets: Vec<surrealkit::project::Target>,
+	show_suppressed: bool,
 ) -> Result<check_cli::Opts> {
 	Ok(check_cli::Opts {
 		folder: folder.to_string(),
@@ -566,6 +578,7 @@ fn check_opts(
 		no_deps: args.no_deps,
 		vars: args.var.iter().map(|s| parse_var_flag(s)).collect::<Result<_>>()?,
 		targets,
+		show_suppressed,
 	})
 }
 
@@ -725,12 +738,14 @@ async fn run_offline(args: &Cli) -> Result<Option<i32>> {
 		Commands::Check {
 			format,
 			watch,
+			show_suppressed,
 		} => {
 			if *watch {
 				reject_target_watch(args)?;
 				warn_unused_connection_flags("check", args);
 				reject_json_watch(args, "--watch")?;
-				return Ok(Some(check_cli::watch(&check_opts(args, &folder, Vec::new())?).await?));
+				let opts = check_opts(args, &folder, Vec::new(), *show_suppressed)?;
+				return Ok(Some(check_cli::watch(&opts).await?));
 			}
 			// `--target` is what makes a check connect; without it the connection flags do
 			// nothing, as they never did.
@@ -739,14 +754,18 @@ async fn run_offline(args: &Cli) -> Result<Option<i32>> {
 			}
 			let format = check_cli::resolve_format(args.json, *format)?;
 			let targets = drift_targets(args)?;
-			Ok(Some(check_cli::check(&check_opts(args, &folder, targets)?, format).await?))
+			let opts = check_opts(args, &folder, targets, *show_suppressed)?;
+			Ok(Some(check_cli::check(&opts, format).await?))
 		}
 		#[cfg(feature = "analyze")]
-		Commands::Watch => {
+		Commands::Watch {
+			show_suppressed,
+		} => {
 			reject_target_watch(args)?;
 			warn_unused_connection_flags("watch", args);
 			reject_json_watch(args, "watch")?;
-			Ok(Some(check_cli::watch(&check_opts(args, &folder, Vec::new())?).await?))
+			let opts = check_opts(args, &folder, Vec::new(), *show_suppressed)?;
+			Ok(Some(check_cli::watch(&opts).await?))
 		}
 		_ => Ok(None),
 	}
@@ -1559,7 +1578,9 @@ async fn run(args: Cli) -> Result<i32> {
 		Commands::Check {
 			..
 		}
-		| Commands::Watch => bail!("check runs before connection settings are read"),
+		| Commands::Watch {
+			..
+		} => bail!("check runs before connection settings are read"),
 	}
 
 	Ok(0)

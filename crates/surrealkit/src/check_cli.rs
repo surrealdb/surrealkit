@@ -13,7 +13,7 @@ use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
 use notify::{EventKind, RecursiveMode, Watcher};
 use surrealkit::check::discover::Ignore;
-use surrealkit::check::{Prepared, Report, render};
+use surrealkit::check::{Prepared, Report, RunOptions, render};
 use surrealkit::project::{ProjectConfig, Target};
 use surrealkit::variables::{TemplateVars, build_project_vars, load_typegen_config};
 use tokio::sync::mpsc::unbounded_channel;
@@ -64,6 +64,8 @@ pub struct Opts {
 	/// The targets `--target` names, resolved: each is compared with the files. Empty for a
 	/// check that connects to nothing.
 	pub targets: Vec<Target>,
+	/// `--show-suppressed`: also show the findings a directive silenced.
+	pub show_suppressed: bool,
 }
 
 /// What a run reads from `surrealkit.toml`, loaded again when the file changes.
@@ -82,7 +84,10 @@ fn load(opts: &Opts) -> Result<Prepared> {
 /// project, with the targets in `opts` compared with the files. The one function `watch` calls
 /// for every change, which has no target.
 async fn run_once(loaded: &Prepared, opts: &Opts, root: &Path) -> Result<Report> {
-	loaded.run(root, &opts.folder, &opts.targets).await
+	let options = RunOptions {
+		show_suppressed: opts.show_suppressed,
+	};
+	loaded.run_with_options(root, &opts.folder, &opts.targets, options).await
 }
 
 /// Colour on stderr: when it is a terminal and `NO_COLOR` is unset or empty.
@@ -95,7 +100,9 @@ fn color() -> bool {
 /// reached, is an `Err`.
 ///
 /// Human output goes to stderr whole, like rustc's, so redirecting stdout cannot hide an
-/// error. JSON and SARIF are one document on stdout and nothing else.
+/// error. JSON and SARIF are one document on stdout and nothing else. With
+/// `opts.show_suppressed` the report also holds what a directive silenced, which changes no
+/// count and not the exit code.
 pub async fn check(opts: &Opts, format: CheckFormat) -> Result<i32> {
 	let root = std::env::current_dir().context("reading the working directory")?;
 	let loaded = load(opts)?;

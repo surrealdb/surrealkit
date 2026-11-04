@@ -13,7 +13,7 @@ use super::discover::{Ignore, discover};
 use super::drift::{ConfigFile, DriftIgnore, Env, check_targets};
 use super::engine::SchemaApply;
 use super::policy::Policy;
-use super::{ExtraFile, Extras, Report, run_with};
+use super::{ExtraFile, Extras, Report, RunOptions, run_with_options};
 use crate::module::Module;
 use crate::project::{ProjectConfig, Target};
 use crate::selection::select_modules;
@@ -77,6 +77,18 @@ impl Prepared {
 	/// `targets` is empty for a check that connects to nothing; each target named is
 	/// connected to and read, and nothing is written.
 	pub async fn run(&self, root: &Path, folder: &str, targets: &[Target]) -> Result<Report> {
+		self.run_with_options(root, folder, targets, RunOptions::default()).await
+	}
+
+	/// [`run`](Self::run), with `options`: `show_suppressed` keeps what a directive silenced in
+	/// the report's findings, marked as suppressed, and changes no count.
+	pub async fn run_with_options(
+		&self,
+		root: &Path,
+		folder: &str,
+		targets: &[Target],
+		options: RunOptions,
+	) -> Result<Report> {
 		let sources = discover(&self.project, folder, root, &self.modules, &self.project.analyze)?;
 		if sources.schema.is_empty() && sources.queries.is_empty() {
 			let dirs: Vec<String> = sources
@@ -128,7 +140,7 @@ impl Prepared {
 			});
 		}
 		let mut engine = SchemaApply::new(&self.experimental).await?;
-		run_with(&mut engine, &sources, &self.policy, &self.vars, extras).await
+		run_with_options(&mut engine, &sources, &self.policy, &self.vars, extras, options).await
 	}
 }
 

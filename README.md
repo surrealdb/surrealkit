@@ -656,6 +656,7 @@ surrealkit check                    # findings on stderr, like rustc; exit 1 on 
 surrealkit check --format json      # one JSON document on stdout (same as -j/--json)
 surrealkit check --format sarif     # one SARIF 2.1.0 document on stdout, for code scanning
 surrealkit check --target prod      # also compare the files with the database `[target.prod]` names
+surrealkit check --show-suppressed  # also show the findings a `-- surreal: allow(...)` silenced
 surrealkit watch                    # check again on every change, until Ctrl-C
 surrealkit check --watch            # the same
 ```
@@ -682,6 +683,36 @@ is `kit` for SurrealKit's own checker and `engine` for the SurrealDB engine's ch
 build every finding is `kit`. The human output does not show it. `summary.suppressed` counts the
 findings SurrealKit itself suppressed; findings the engine's checker suppresses are not counted
 until the engine reports them.
+
+**Showing what a suppression silenced.** A finding a `-- surreal: allow(...)` comment silences
+is counted in `summary.suppressed` and left out of the report. `--show-suppressed`, on `check`
+and on `watch`, also shows those findings, in each format:
+
+```text
+suppressed[K9003]: Cannot define field `x.y`: the field `x` it is nested in is not defined. Define `x` first
+ --> database/schema/002_bad.surql:3:1
+  |
+3 | DEFINE FIELD x.y ON t TYPE string;
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  = note: suppressed by the directive at database/schema/002_bad.surql:2
+```
+
+- JSON: the diagnostic gains `"suppressed": {"directive": {...}}`, where the directive is the
+  comment's span in the same shape as the diagnostic's own `span` (`start`, `end`, `line`,
+  `column`, `end_line`, `end_column`). A diagnostic a directive did not silence has no
+  `suppressed` key, and without the flag no diagnostic has one, so the document is the one
+  `check` always printed.
+- SARIF: the result gains `"suppressions": [{"kind": "inSource"}]`, SARIF 2.1.0's own form for
+  a suppression in the source. It keeps its `level`.
+- Human: as above, `suppressed[CODE]` in place of the severity, and the note names the file and
+  line of the directive.
+
+A suppressed finding is in none of the error, warning and hint counts and never changes the exit
+code, and `summary.suppressed` counts the same with the flag and without it. Only a directive
+silences a finding in this sense: a finding at level `allow` is never shown, and counts in
+`summary.allowed`. The MCP tools `check` and `check_query` take the same option as
+`show_suppressed: true`, and the library as `RunOptions { show_suppressed: true }`
+(`check::run_with_options` and `Prepared::run_with_options`).
 
 **What it finds in this build.** SurrealKit applies each schema file, in order, to a
 throwaway in-memory engine, the way `compile` does (no network, no scripting), one
