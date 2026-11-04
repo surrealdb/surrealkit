@@ -35,7 +35,7 @@ The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 12. [Ordering](#12-ordering)
 13. [semanticDigest](#13-semanticdigest)
 14. [Diagnostics](#14-diagnostics)
-15. [Version adapters: 3.2, 3.3 and 4.0](#15-version-adapters-32-33-and-40)
+15. [Version adapters: 3.2, 3.3, 4.0 and 4.1](#15-version-adapters-32-33-40-and-41)
 16. [Engine hazards](#16-engine-hazards)
 17. [Golden corpus](#17-golden-corpus)
 18. [Design rationale](#18-design-rationale)
@@ -74,7 +74,7 @@ read only through a version-qualified adapter (section 15) that maps each suppor
 engine minor onto this contract. An engine minor without an adapter MUST fail with the
 error diagnostic `structure-unsupported-engine`; a STRUCTURE key the adapter does not
 know MUST produce the error diagnostic `structure-unknown-key` rather than being
-dropped. Supported today: SurrealDB **3.2.x**, **3.3.x** and **4.0.x**.
+dropped. Supported today: SurrealDB **3.2.x**, **3.3.x**, **4.0.x** and **4.1.x**.
 
 Plain `INFO` (the `DEFINE …` strings) MAY be captured as evidence in `define`
 properties. It is never the source of a semantic value when STRUCTURE provides one.
@@ -133,7 +133,7 @@ Rules that apply everywhere:
 | --- | --- |
 | `generator` | `{ name: "surrealkit", version, commit? }` |
 | `engine` | `{ version: "3.3.0", build?, mode: "embedded" \| "remote" }`. `version` is the `MAJOR.MINOR.PATCH` part; `build` the full string the engine reports (e.g. `surrealdb-3.2.4+20260803.93ab219`). |
-| `adapter` | `structure-3.2`, `structure-3.3` or `structure-4.0` (section 15), or `info` for the plain-`INFO` fallback (section 1) |
+| `adapter` | `structure-3.2`, `structure-3.3`, `structure-4.0` or `structure-4.1` (section 15), or `info` for the plain-`INFO` fallback (section 1) |
 | `source` | Compile: `{ kind: "compile", modules: [...], files: [{ path, sha256 }] }`. Introspection: `{ kind: "introspect", namespace, database }`. |
 | `capabilities` | `{ experimental: [...], network: false }` — the capabilities the compile engine ran with |
 
@@ -601,12 +601,13 @@ reason, in its configuration. Codes are stable identifiers; reasons are not.
 New codes may be added in minor releases. A consumer MUST treat an unknown code by its
 severity.
 
-## 15. Version adapters: 3.2, 3.3 and 4.0
+## 15. Version adapters: 3.2, 3.3, 4.0 and 4.1
 
 The adapters read the same STRUCTURE shape; differences found by applying the corpus to
 3.2.4, 3.3.0 and 4.0.0 (`introspection/3.2.4`, `introspection/3.3.0` and
 `introspection/4.0.0`, the last from the embedded engine). 4.0 reads as 3.3 does, apart from
-the rows below its own table.
+the rows below its own table. 4.1 reads as 4.0 does: `structure-4.1` is `structure-4.0` under
+its own name, because 4.1 returns the same STRUCTURE keys.
 
 | Area | 3.2.4 | 3.3.0 | Adapter rule |
 | --- | --- | --- | --- |

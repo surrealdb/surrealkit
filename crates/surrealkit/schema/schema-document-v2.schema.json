@@ -123,7 +123,7 @@
 				},
 				"adapter": {
 					"description": "The version-qualified INFO STRUCTURE adapter that produced the document, or `info` for the plain-INFO fallback used on an engine minor without one.",
-					"enum": ["structure-3.2", "structure-3.3", "structure-4.0", "info"]
+					"enum": ["structure-3.2", "structure-3.3", "structure-4.0", "structure-4.1", "info"]
 				},
 				"source": {
 					"oneOf": [
