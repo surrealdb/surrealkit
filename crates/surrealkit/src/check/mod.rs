@@ -17,6 +17,8 @@ mod config;
 #[cfg(feature = "analyze")]
 pub mod discover;
 #[cfg(feature = "analyze")]
+pub mod drift;
+#[cfg(feature = "analyze")]
 pub mod engine;
 #[cfg(feature = "analyze")]
 pub mod finding;

@@ -678,6 +678,50 @@ sync runs inside an already-selected namespace/database. Provision these out-of-
 	Ok((entities, operations))
 }
 
+/// A `DEFINE` statement of a schema file and the catalog entity it defines.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DefinedEntity {
+	pub key: EntityKey,
+	/// Byte range of the statement in the file's text, without its `;`.
+	pub span: std::ops::Range<usize>,
+	/// Index of the statement among the file's top-level statements.
+	pub statement: usize,
+}
+
+/// The entity each `DEFINE` of `text` defines, with its statement's position, in file order.
+///
+/// Names are read the way the catalog reads them, from the text after `vars` is substituted, so
+/// `DEFINE TABLE ${PREFIX}_t` is the table the engine got. A file that does not split into
+/// statements has none: the check reports that file itself.
+pub(crate) fn defined_entities(
+	text: &str,
+	vars: &crate::variables::TemplateVars,
+) -> Vec<DefinedEntity> {
+	let Ok(statements) = crate::surql_scan::scan(text) else {
+		return Vec::new();
+	};
+	let mut out = Vec::new();
+	for (statement, stmt) in statements.iter().enumerate() {
+		if !stmt.is_word(text, 0, "DEFINE") {
+			continue;
+		}
+		let applied = vars.apply(stmt.text(text)).unwrap_or_else(|_| stmt.text(text).to_string());
+		let Ok(parsed) = crate::surql_scan::scan(&applied) else {
+			continue;
+		};
+		let Some(entity) = parsed.first().and_then(|first| parse_define_entity(first, &applied))
+		else {
+			continue;
+		};
+		out.push(DefinedEntity {
+			key: entity.key(),
+			span: stmt.span.clone(),
+			statement,
+		});
+	}
+	out
+}
+
 /// Whether a recorded name or scope is a fragment of a quoted identifier.
 ///
 /// Before 1.0.0-beta.6 the catalog split statements on whitespace, so

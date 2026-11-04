@@ -18,6 +18,7 @@ use serde::Deserialize;
 /// ignore = ["dist", "src/generated"]
 /// warnings_as_errors = false
 /// require_suppression_reason = true
+/// drift_ignore = ["audit_log", "person.legacy_id"]
 ///
 /// [analyze.lints]
 /// "7xxx" = "warn"
@@ -50,6 +51,11 @@ pub struct AnalyzeConfig {
 	/// bare number `1002`) or a family wildcard (`7xxx`, `7XXX`, `7*`, `10xxx`).
 	#[serde(default)]
 	pub lints: BTreeMap<String, String>,
+	/// Tables and fields that are intentionally not managed by SurrealKit, as `table` or
+	/// `table.field` (a name with a `.` is a field path). `check --target` does not report them
+	/// as `K9105` or `K9106` on any target. A table entry covers the table's fields too.
+	#[serde(default)]
+	pub drift_ignore: Vec<String>,
 }
 
 #[cfg(test)]
@@ -60,9 +66,11 @@ mod tests {
 	fn the_section_parses_every_key() {
 		let project = ProjectConfig::parse(
 			"[analyze]\nignore = [\"dist\"]\nwarnings_as_errors = true\n\
-			 require_suppression_reason = true\n[analyze.lints]\n\"7xxx\" = \"warn\"\n",
+			 require_suppression_reason = true\ndrift_ignore = [\"audit\", \"t.f\"]\n\
+			 [analyze.lints]\n\"7xxx\" = \"warn\"\n",
 		)
 		.expect("parses");
+		assert_eq!(project.analyze.drift_ignore, vec!["audit", "t.f"]);
 		assert_eq!(project.analyze.ignore, vec!["dist"]);
 		assert!(project.analyze.warnings_as_errors);
 		assert!(project.analyze.require_suppression_reason);

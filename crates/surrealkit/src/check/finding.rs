@@ -122,6 +122,28 @@ pub const K9001: Code = Code::kit(9001);
 pub const K9002: Code = Code::kit(9002);
 /// A schema statement the engine rejected when applying it.
 pub const K9003: Code = Code::kit(9003);
+/// Drift: a table the files define is missing on the target.
+pub const K9101: Code = Code::kit(9101);
+/// Drift: a table's definition differs between the files and the target (schemafull or
+/// schemaless, a relation's `in` and `out`, a view, `DROP`, and so on).
+pub const K9102: Code = Code::kit(9102);
+/// Drift: a field the files define is missing on the target.
+pub const K9103: Code = Code::kit(9103);
+/// Drift: a field differs between the files and the target (its kind, optionality, default or
+/// value, `READONLY`, a computed expression, `FLEXIBLE`, a reference, and so on).
+pub const K9104: Code = Code::kit(9104);
+/// Drift: on the target and recorded as managed by SurrealKit, but no longer in the files:
+/// removed from the schema and not yet synced. A warning.
+pub const K9105: Code = Code::kit(9105);
+/// Drift: on the target and never managed by SurrealKit, as in a shared database or one
+/// another writer changes. A warning.
+pub const K9106: Code = Code::kit(9106);
+/// Drift: the target runs another engine minor than the one SurrealKit embeds, so only
+/// normalised facts were compared. A hint.
+pub const K9107: Code = Code::kit(9107);
+/// Host code: an untagged template literal with `${…}` passed to a query method, which splices
+/// the value into the SurrealQL text.
+pub const K9201: Code = Code::kit(9201);
 /// A suppression directive that is malformed, or that has no reason when one is required.
 ///
 /// This is the engine's own code, not a SurrealKit one: it is a warning by default.
@@ -133,6 +155,16 @@ pub fn describe(code: Code) -> Option<&'static str> {
 		K9001 => Some("The file cannot be split into statements"),
 		K9002 => Some("A template variable the statement uses is not set"),
 		K9003 => Some("The engine rejected a schema statement"),
+		K9101 => Some("A table the files define is missing on the target"),
+		K9102 => Some("A table's definition differs between the files and the target"),
+		K9103 => Some("A field the files define is missing on the target"),
+		K9104 => Some("A field differs between the files and the target"),
+		K9105 => Some("On the target and managed by SurrealKit, but no longer in the files"),
+		K9106 => Some("On the target and not managed by SurrealKit"),
+		K9107 => {
+			Some("The target runs another engine minor, so only normalised facts were compared")
+		}
+		K9201 => Some("A value is interpolated into a query string"),
 		_ => None,
 	}
 }
@@ -360,6 +392,11 @@ mod tests {
 		assert_eq!(Code::from_number(8001).to_string(), "E8001", "8xxx is retired: the fallback");
 		assert_eq!(Code::from_number(15001).to_string(), "E15001", "outside the catalog");
 		assert_eq!(Code::kit(9001).to_string(), "K9001");
+		assert_eq!(
+			[K9101, K9102, K9103, K9104, K9105, K9106, K9107, K9201].map(|code| code.to_string()),
+			["K9101", "K9102", "K9103", "K9104", "K9105", "K9106", "K9107", "K9201"]
+		);
+		assert!(K9201.is_kit() && K9201.family() == 9, "9xxx is SurrealKit's family");
 		assert_eq!(L7013.to_string(), "L7013");
 	}
 
@@ -377,6 +414,9 @@ mod tests {
 		assert!(describe(K9001).is_some());
 		assert!(describe(K9002).is_some());
 		assert!(describe(K9003).is_some());
+		for code in [K9101, K9102, K9103, K9104, K9105, K9106, K9107, K9201] {
+			assert!(describe(code).is_some(), "{code}");
+		}
 		assert!(describe(L7013).is_none());
 	}
 
