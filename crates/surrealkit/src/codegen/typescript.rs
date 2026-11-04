@@ -30,6 +30,7 @@ const HOST_PARAM_PREFIX: &str = "__host";
 
 /// The SDK names the module can import, in import order.
 const SDK_NAMES: &[&str] = &[
+	"BoundQuery",
 	"DateTime",
 	"Decimal",
 	"Duration",
@@ -42,6 +43,7 @@ const SDK_NAMES: &[&str] = &[
 	"GeometryMultiPolygon",
 	"GeometryPoint",
 	"GeometryPolygon",
+	"QueryLike",
 	"Range",
 	"RecordId",
 	"SurrealQueryable",
@@ -98,7 +100,7 @@ pub fn render(queries: &[QueryEntry], types: &[TypeDef], opts: &RenderOptions) -
 		opts,
 		types,
 		expanding: Vec::new(),
-		used: BTreeSet::from(["SurrealQueryable"]),
+		used: BTreeSet::from(["BoundQuery", "QueryLike", "SurrealQueryable"]),
 	};
 	let registry = emitter.registry(queries);
 	let names = query_names(queries);
@@ -132,15 +134,30 @@ const TYPED_CLIENT: &str = "\
 declare const queryable: SurrealQueryable;
 /** The SDK's `Query<R>`, which it does not export by name. */
 export type QueryOf<R extends unknown[]> = ReturnType<typeof queryable.query<R>>;
-type BindingsArg<K extends keyof Queries> = {} extends Queries[K][\"params\"]
-  ? [bindings?: Queries[K][\"params\"]]
-  : [bindings: Queries[K][\"params\"]];
-/** `query()` typed by exact query text; other text falls through to the SDK's own overloads. */
+type ParamsOf<K extends keyof Queries> = Queries[K][\"params\"];
+/** A query that reads no parameter takes no bindings; one whose parameters are all optional may omit them. */
+type BindingsArg<K extends keyof Queries> = [keyof ParamsOf<K>] extends [never]
+  ? [bindings?: Record<string, never>]
+  : {} extends ParamsOf<K>
+    ? [bindings?: ParamsOf<K>]
+    : [bindings: ParamsOf<K>];
+/** Query text that is not a key of `Queries`; a known text is `never`, so it cannot reach the untyped overload. */
+type UnknownText<S extends string> = S extends keyof Queries ? never : S;
+/**
+ * `query()` typed by exact query text: a known text gets the registry's result type and must be
+ * given its parameters' types. Any other text, and the SDK's other forms, keep the SDK's own types.
+ */
 export interface TypedQueryable {
   query<K extends keyof Queries>(query: K, ...bindings: BindingsArg<K>): QueryOf<Queries[K][\"result\"]>;
+  query<R extends unknown[] = unknown[], S extends string = string>(
+    query: UnknownText<S>,
+    bindings?: Record<string, unknown>,
+  ): QueryOf<R>;
+  query<R extends unknown[] = unknown[]>(query: BoundQuery<R>): QueryOf<R>;
+  query<R extends unknown[] = unknown[]>(queries: readonly QueryLike[]): QueryOf<R>;
 }
 /** A client whose `query()` returns the registry's result type for known query text. */
-export type Typed<T extends SurrealQueryable> = TypedQueryable & T;
+export type Typed<T extends SurrealQueryable> = Omit<T, \"query\"> & TypedQueryable;
 ";
 
 fn query_names(queries: &[QueryEntry]) -> String {
@@ -1055,7 +1072,7 @@ mod tests {
 		for want in [
 			"export type Queries = {};",
 			"export type QueryNames = {};",
-			"import type { SurrealQueryable } from \"surrealdb\";",
+			"import type { BoundQuery, QueryLike, SurrealQueryable } from \"surrealdb\";",
 		] {
 			assert!(out.contains(want), "missing `{want}` in {out}");
 		}
@@ -1075,7 +1092,7 @@ mod tests {
 		let import = out.lines().find(|line| line.starts_with("import type")).expect("import line");
 		assert_eq!(
 			import,
-			"import type { DateTime, RecordId, SurrealQueryable } from \"surrealdb\";"
+			"import type { BoundQuery, DateTime, QueryLike, RecordId, SurrealQueryable } from \"surrealdb\";"
 		);
 	}
 

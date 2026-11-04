@@ -245,6 +245,21 @@ export async function main() {
   const first: { name: string; email: string } = rows[0];
   void first;
 
+  // A known text must be given its parameters' types; it never falls through to the SDK's
+  // untyped overload.
+  // @ts-expect-error a parameter of the wrong type
+  await db.query("SELECT name, email FROM user WHERE name = $name LIMIT $limit", { name: 1 });
+  // @ts-expect-error a required parameter left out
+  await db.query("SELECT name, email FROM user WHERE name = $name LIMIT $limit");
+  // @ts-expect-error a binding for a query that reads no parameter
+  await db.query("SELECT * FROM event", { nope: 1 });
+  // Other text, and text only known at run time, keep the SDK's own types.
+  const [elsewhere] = await db.query<[number[]]>("SELECT * FROM elsewhere", { x: 1 });
+  const counts: number[] = elsewhere;
+  const dynamic: string = "SELECT 1";
+  await db.query(dynamic, { x: 1 });
+  void counts;
+
   const [row] = await db.query("SELECT * FROM ONLY user:alice");
   if (row) {
     const bio: string | undefined = row.bio;
