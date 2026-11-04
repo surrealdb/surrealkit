@@ -29,7 +29,7 @@
 import type { Uuid } from 'surrealdb';
 
 import { SurrealQueryError } from './error.js';
-import { type LivePlan, planLive } from './plan.js';
+import { type LiveManifest, type LivePlan, planLive } from './plan.js';
 import { hasId, type LiveMessageLike, reconcile, share } from './reconcile.js';
 import type { ParamsArg, Preloaded, QueryText } from './types.js';
 import { cleanParams, decodeValue, encodeValue, queryKey } from './values.js';
@@ -85,6 +85,13 @@ export interface QueryCacheOptions {
 	 * filter (SurrealDB 3.3 does not), or when no update ever does.
 	 */
 	trustWhere?: boolean;
+	/**
+	 * The engine's live entries: the generated module's `liveQueries`. A query
+	 * with an entry is planned from it, so the engine (not the text) decides
+	 * which clauses are refused and whether a record leaving a `WHERE` is
+	 * notified.
+	 */
+	live?: LiveManifest;
 }
 
 /** What the cache holds, for tests and debugging. */
@@ -136,6 +143,7 @@ export class QueryCache {
 	readonly #db: SurrealLike;
 	readonly #gcTime: number;
 	readonly #trustWhere: boolean;
+	#manifest: LiveManifest;
 	readonly #entries = new Map<string, Entry>();
 	readonly #offConnected: (() => void) | undefined;
 	#live = 0;
@@ -144,9 +152,19 @@ export class QueryCache {
 		this.#db = db;
 		this.#gcTime = options.gcTime ?? DEFAULT_GC_TIME;
 		this.#trustWhere = options.trustWhere ?? false;
+		this.#manifest = options.live ?? {};
 		this.#offConnected = db.subscribe?.('connected', () =>
 			this.#reconnected(),
 		);
+	}
+
+	/**
+	 * Adds the engine's live entries. Entries made before this keep their
+	 * plan, so call it before the first live query (in the root layout or
+	 * provider).
+	 */
+	useLive(manifest: LiveManifest): void {
+		this.#manifest = { ...this.#manifest, ...manifest };
 	}
 
 	/** The client this cache runs queries on. */
@@ -281,7 +299,12 @@ export class QueryCache {
 				params: clean,
 				plan:
 					kind === 'live'
-						? planLive(text, { trustWhere: this.#trustWhere })
+						? planLive(text, {
+								trustWhere: this.#trustWhere,
+								entry: Object.hasOwn(this.#manifest, text)
+									? this.#manifest[text]
+									: undefined,
+							})
 						: undefined,
 				state: pendingState(kind),
 				listeners: new Set(),
@@ -600,13 +623,19 @@ const caches = new WeakMap<object, QueryCache>();
 
 /**
  * The cache for a client. There is one per client, which is what lets every
- * component on a connection share entries and live queries.
+ * component on a connection share entries and live queries. `options` apply
+ * when the cache is made; a later `live` manifest is added to it.
  */
-export function cacheFor(db: SurrealLike): QueryCache {
+export function cacheFor(
+	db: SurrealLike,
+	options?: QueryCacheOptions,
+): QueryCache {
 	let cache = caches.get(db);
 	if (!cache) {
-		cache = new QueryCache(db);
+		cache = new QueryCache(db, options);
 		caches.set(db, cache);
+	} else if (options?.live) {
+		cache.useLive(options.live);
 	}
 	return cache;
 }

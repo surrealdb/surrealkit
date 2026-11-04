@@ -20,11 +20,19 @@
  *
  * Every binding (the core, `svelte-surrealkit`, `react-surrealkit`) reads the
  * same `Register`, so one augmentation types them all.
+ *
+ * When the engine types live queries, the generated module also exports
+ * `LiveQueries` (its types) and `liveQueries` (the same entries as a value).
+ * Register the type as `liveQueries: LiveQueries`, so a query `LIVE SELECT`
+ * refuses in a way re-running cannot serve is a type error, and pass the
+ * value to the bindings (`setSurreal(db, { live: liveQueries })`) so they
+ * subscribe as the engine described.
  */
 
 /**
  * The augmentation point. `queries` is the generated `Queries` registry;
- * `strict: true` rejects text that is not in it.
+ * `liveQueries` is the generated `LiveQueries`, when there is one; `strict:
+ * true` rejects text that is not in `queries`.
  */
 // biome-ignore lint/suspicious/noEmptyInterface: augmented by the application.
 export interface Register {}
@@ -41,6 +49,13 @@ export type RegisteredQueries = Register extends {
 }
 	? Q
 	: Record<never, RegistryEntry>;
+
+/** The registered `LiveQueries`, or an empty one when none is registered. */
+export type RegisteredLiveQueries = Register extends {
+	liveQueries: infer L extends Record<string, unknown>;
+}
+	? L
+	: Record<never, unknown>;
 
 /** Whether text outside the registry is rejected. */
 export type IsStrict = Register extends { strict: true } ? true : false;
@@ -119,10 +134,24 @@ export interface LiveTextError {
 	readonly [liveError]: 'a live query must be one SELECT whose result is an array of rows';
 }
 
-/** `Q` itself when it can be live, otherwise an unsatisfiable `Q`. */
+/** Whether the engine reports that re-running cannot serve `Q` live. */
+type RefusedLive<Q extends string> = Q extends keyof RegisteredLiveQueries
+	? RegisteredLiveQueries[Q] extends { refusal: { windowable: false } }
+		? true
+		: false
+	: false;
+
+/**
+ * `Q` itself when it can be live, otherwise an unsatisfiable `Q`. A query
+ * can be live when its result is one array of rows and the engine (when it
+ * has typed live queries) does not refuse it in a way re-running cannot
+ * serve.
+ */
 export type LiveText<Q extends string> = [LiveRowOf<Q>] extends [never]
 	? Q & LiveTextError
-	: Q;
+	: RefusedLive<Q> extends true
+		? Q & LiveTextError
+		: Q;
 
 /**
  * One live notification for a row type: `CREATE`, `UPDATE` and `DELETE`

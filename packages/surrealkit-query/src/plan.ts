@@ -25,6 +25,11 @@
  *
  * A text that is not exactly one SELECT with one target, or that selects
  * `FROM ONLY`, cannot be live at all.
+ *
+ * When the engine has typed the query, its {@link LiveEntry} decides instead
+ * of the text: the refused clauses, whether re-running the SELECT serves
+ * them, the `LIVE SELECT` it described, and what a record leaving the
+ * `WHERE` produces on that engine.
  */
 
 /** The plan for one live SELECT. */
@@ -121,13 +126,69 @@ export function topLevelTokens(text: string): Token[] {
 	return tokens;
 }
 
+/**
+ * What the engine reports about one SELECT made live. The generated module's
+ * `liveQueries` holds one per query text.
+ */
+export interface LiveEntry {
+	/** The `LIVE SELECT` the engine typed notifications for. */
+	readonly query?: string;
+	/**
+	 * What a record that an update moves out of the `WHERE` produces: a
+	 * `DELETE` notification, or nothing. Absent without a `WHERE`.
+	 */
+	readonly exit?: 'delete' | 'silent';
+	/** Present when `LIVE SELECT` refuses the query as written. */
+	readonly refusal?: {
+		/** The refused clauses, in source order (`"ORDER BY"`, `"LIMIT"`, …). */
+		readonly clauses: readonly string[];
+		/** Whether re-running the SELECT serves every refused clause. */
+		readonly windowable: boolean;
+	};
+}
+
+/** The engine's live entries, keyed by plain SELECT text. */
+export type LiveManifest = Readonly<Record<string, LiveEntry>>;
+
 export interface PlanOptions {
-	/** Apply notifications of a `LIVE … WHERE` directly; see {@link planLive}. */
+	/**
+	 * Apply notifications of a `LIVE … WHERE` directly; see {@link planLive}.
+	 * Used only for text without a {@link LiveEntry}.
+	 */
 	readonly trustWhere?: boolean;
+	/** The engine's entry for the text, which takes precedence over the text. */
+	readonly entry?: LiveEntry | undefined;
 }
 
 /** Plans `text` as a live query. */
 export function planLive(text: string, options: PlanOptions = {}): LivePlan {
+	const fromText = planText(text, options.trustWhere === true);
+	const entry = options.entry;
+	if (!entry) return fromText;
+	if (entry.refusal && !entry.refusal.windowable) {
+		const clauses = entry.refusal.clauses.join(', ');
+		return unsupported(`LIVE SELECT refuses ${clauses || 'this query'}`);
+	}
+	const snapshot = text.trim().replace(/;\s*$/, '').trimEnd();
+	const silent = entry.exit === 'silent';
+	const windowed = [
+		...(entry.refusal?.clauses ?? []),
+		...(silent ? ['WHERE'] : []),
+	];
+	const described = entry.query ?? `LIVE ${snapshot}`;
+	if (windowed.length === 0) {
+		return { mode: 'keyed', liveText: described, snapshot, windowed: [] };
+	}
+	// A record leaving the filter notifies nothing, so watch the whole target:
+	// the text's own unfiltered watcher, when the text could be planned.
+	const watcher = silent ? planText(text, false) : undefined;
+	const unfiltered =
+		watcher?.mode === 'window' ? watcher.liveText : described;
+	return { mode: 'window', liveText: unfiltered, snapshot, windowed };
+}
+
+function planText(text: string, trustWhere: boolean): LivePlan {
+	const options = { trustWhere };
 	const snapshot = text.trim().replace(/;\s*$/, '').trimEnd();
 	const tokens = topLevelTokens(snapshot);
 	if (tokens[0]?.value !== 'SELECT') {

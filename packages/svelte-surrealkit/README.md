@@ -54,6 +54,8 @@ Peer dependencies: `svelte` 5.7 or later, and `surrealdb` 2.1.1 or later.
 
    The server render does not subscribe, so it does not need a connected client.
 
+   When the generated module exports `liveQueries` (SurrealDB 4.1 and later), pass it: `setSurreal(db, { live: liveQueries })`. Live queries then subscribe as the engine describes them. See [the core README](../surrealkit-query/README.md#with-the-engines-live-entries).
+
 ## Components
 
 `<Query>` runs a query once. `<LiveQuery>` keeps the rows current.

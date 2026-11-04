@@ -14,17 +14,32 @@
  */
 
 import { createContext, type ReactNode, useContext } from 'react';
-import type { SurrealLike } from 'surrealkit-query';
+import {
+	cacheFor,
+	type LiveManifest,
+	type SurrealLike,
+} from 'surrealkit-query';
 
 const ClientContext = createContext<SurrealLike | null>(null);
 
 export interface SurrealProviderProps {
 	client: SurrealLike;
+	/**
+	 * The generated `liveQueries`, so live queries subscribe as the engine
+	 * described them.
+	 */
+	live?: LiveManifest;
 	children?: ReactNode;
 }
 
 /** Makes `client` the client of every hook below it. */
-export function SurrealProvider({ client, children }: SurrealProviderProps) {
+export function SurrealProvider({
+	client,
+	live,
+	children,
+}: SurrealProviderProps) {
+	// Before any child renders, so every entry is planned with the manifest.
+	cacheFor(client, live ? { live } : undefined);
 	return (
 		<ClientContext.Provider value={client}>
 			{children}

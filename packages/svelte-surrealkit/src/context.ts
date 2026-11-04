@@ -7,13 +7,25 @@
  * request and every user.
  */
 
-import type { SurrealLike } from 'surrealkit-query';
+import {
+	cacheFor,
+	type QueryCacheOptions,
+	type SurrealLike,
+} from 'surrealkit-query';
 import { getContext, hasContext, setContext } from 'svelte';
 
 const KEY = Symbol.for('svelte-surrealkit.client');
 
-/** Makes `db` the client of every query in this component and below. */
-export function setSurreal(db: SurrealLike): SurrealLike {
+/**
+ * Makes `db` the client of every query in this component and below.
+ * `options` configure the client's cache; pass the generated `liveQueries`
+ * as `live` so live queries subscribe as the engine described them.
+ */
+export function setSurreal(
+	db: SurrealLike,
+	options?: QueryCacheOptions,
+): SurrealLike {
+	cacheFor(db, options);
 	return setContext(KEY, db);
 }
 

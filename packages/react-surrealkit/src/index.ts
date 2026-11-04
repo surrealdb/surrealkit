@@ -2,6 +2,7 @@ export {
 	cacheFor,
 	type DataOf,
 	isPreloaded,
+	type LiveManifest,
 	type LiveRowOf,
 	type ParamsOf,
 	type Preloaded,

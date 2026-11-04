@@ -476,3 +476,46 @@ describe('no leaked live queries', () => {
 		expect(cache.stats()).toMatchObject({ observed: 0, live: 0 });
 	});
 });
+
+describe('an engine live manifest', () => {
+	it('subscribes with the engine text and applies notifications by id', async () => {
+		const db = new MockDb();
+		db.select = () => users('ada');
+		const text = "SELECT * FROM user WHERE team = 'red'";
+		const cache = new QueryCache(db, {
+			live: { [text]: { query: `LIVE ${text}`, exit: 'delete' } },
+		});
+		const live = cache.observeLive<Row>(text);
+		const off = live.subscribe(() => {});
+		await settle();
+		expect(db.ran(/^LIVE/)).toEqual([`LIVE ${text}`]);
+		db.emit('user', {
+			action: 'CREATE',
+			recordId: 'user:cy',
+			value: { id: 'user:cy', name: 'cy' },
+		});
+		expect(live.get().data).toEqual(users('ada', 'cy'));
+		expect(db.ran(/^SELECT/)).toHaveLength(1);
+		off();
+	});
+
+	it('is added by cacheFor after the cache exists', async () => {
+		const { cacheFor } = await import('../src/index.js');
+		const db = new MockDb();
+		const text = 'SELECT * FROM user';
+		cacheFor(db);
+		cacheFor(db, {
+			live: {
+				[text]: { refusal: { clauses: ['ONLY'], windowable: false } },
+			},
+		});
+		const live = cacheFor(db).observeLive(text);
+		const off = live.subscribe(() => {});
+		await settle();
+		expect(live.get()).toMatchObject({
+			status: 'error',
+			error: { code: 'unsupported' },
+		});
+		off();
+	});
+});

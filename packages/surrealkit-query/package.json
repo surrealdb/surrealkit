@@ -29,7 +29,7 @@
 		"prepare": "tsup",
 		"lint": "biome ci .",
 		"test": "vitest run",
-		"typecheck": "tsc --noEmit && tsc --noEmit -p test/types && tsc --noEmit -p test/types-strict"
+		"typecheck": "tsc --noEmit && tsc --noEmit -p test/types && tsc --noEmit -p test/types-strict && tsc --noEmit -p test/types-live"
 	},
 	"keywords": [
 		"surrealdb",

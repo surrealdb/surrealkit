@@ -34,6 +34,24 @@ Every binding reads this registration. After it:
 
 To make unknown query text a compile error, add `strict: true` to `Register`.
 
+When the engine types live queries, the generated module also exports `LiveQueries` (a type) and `liveQueries` (the same entries as a value). Register the type, and pass the value to the bindings:
+
+```ts
+declare module 'surrealkit-query' {
+	interface Register {
+		queries: Queries;
+		liveQueries: LiveQueries;
+	}
+}
+```
+
+```ts
+setSurreal(db, { live: liveQueries });          // svelte-surrealkit
+<SurrealProvider client={db} live={liveQueries}> // react-surrealkit
+```
+
+A live query that the engine refuses, where running the `SELECT` again cannot serve the refused clause, is then a compile error. Examples are `FROM ONLY` and several targets.
+
 > NOTE: The module augmentation must name `surrealkit-query`, also when you import the bindings only.
 
 ## How a live query works
@@ -73,6 +91,21 @@ A keyed query whose rows have no `id` (for example `SELECT name FROM user`) also
 `WHERE` is in window mode because the engine does not notify a record that an update moves out of the filter (SurrealDB 3.3). If you apply notifications directly, that record stays in the rows. Set `trustWhere: true` on the cache to apply `WHERE` notifications by id when your engine sends them, or when no update moves a record out of the filter.
 
 Both modes watch only the records of the target. A change to any other record does not update the rows, even when the query reads it. This includes a record that `FETCH` joins, a record that a graph traversal (`->knows->person`) reaches, and a record that a subquery reads. A notification for the target's own record does carry the current fetched values.
+
+### With the engine's live entries
+
+When the bindings have `liveQueries`, the engine's entry for a query decides its mode, not the text:
+
+| Engine entry | Mode | Subscription |
+| --- | --- | --- |
+| No refusal, no `WHERE` | Keyed | The entry's `query`, as written. |
+| No refusal, `exit: "delete"` | Keyed | The entry's `query`, as written. |
+| No refusal, `exit: "silent"` | Window | `LIVE SELECT * FROM <target>`, because a record leaving the filter is not notified. |
+| `refusal.windowable: true`, `exit` absent or `"delete"` | Window | The entry's `query`, as written. |
+| `refusal.windowable: true`, `exit: "silent"` | Window | `LIVE SELECT * FROM <target>`. |
+| `refusal.windowable: false` | Not live | None. The types reject it, and at run time it is an `unsupported` error. |
+
+`exit` is what the engine sends when an update moves a record out of the `WHERE`. The engine checks it on its own build. `trustWhere` applies only to queries without an entry.
 
 These queries cannot be live, and go to the error state with the code `unsupported`:
 

@@ -144,6 +144,23 @@ describe('<LiveQuery>', () => {
 	});
 });
 
+describe('setSurreal live', () => {
+	it('subscribes with the engine text from the manifest', async () => {
+		const db = database();
+		const text = "SELECT * FROM user WHERE team = 'red'";
+		const view = render(Live, {
+			db,
+			q: text,
+			live: { [text]: { query: `LIVE ${text}`, exit: 'delete' } },
+		});
+		await settle();
+		expect(db.ran(/^LIVE/)).toEqual([`LIVE ${text}`]);
+		view.unmount();
+		await settle();
+		expect(db.open.size).toBe(0);
+	});
+});
+
 describe('<Query>', () => {
 	it('runs again when params change', async () => {
 		const db = database();

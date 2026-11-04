@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { SurrealLike } from 'surrealkit-query';
+	import type { LiveManifest, SurrealLike } from 'surrealkit-query';
 
 	import { LiveQuery, setSurreal } from '../../src/index.js';
 
@@ -10,15 +10,17 @@
 		q,
 		params,
 		copies = 1,
+		live,
 	}: {
 		db: SurrealLike;
 		q: string;
 		params?: Record<string, unknown>;
 		copies?: number;
+		live?: LiveManifest;
 	} = $props();
 
 	// svelte-ignore state_referenced_locally
-	setSurreal(db);
+	setSurreal(db, live ? { live } : undefined);
 
 	const asRows = (rows: unknown[]) => rows as Row[];
 </script>

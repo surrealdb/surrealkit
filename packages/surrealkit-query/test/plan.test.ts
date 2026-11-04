@@ -113,3 +113,100 @@ describe('planLive', () => {
 		expect(planLive('  SELECT * FROM user ;  \n').mode).toBe('keyed');
 	});
 });
+
+describe('planLive with an engine entry', () => {
+	const PAGE = 'SELECT * FROM user WHERE active ORDER BY name LIMIT $lim';
+
+	it('keys an accepted query and subscribes with the engine text', () => {
+		expect(
+			planLive('SELECT * FROM user WHERE active', {
+				entry: {
+					query: 'LIVE SELECT * FROM user WHERE active',
+					exit: 'delete',
+				},
+			}),
+		).toEqual({
+			mode: 'keyed',
+			liveText: 'LIVE SELECT * FROM user WHERE active',
+			snapshot: 'SELECT * FROM user WHERE active',
+			windowed: [],
+		});
+	});
+
+	it('windows a silent exit, watching the whole target', () => {
+		expect(
+			planLive('SELECT * FROM user WHERE active', {
+				entry: {
+					query: 'LIVE SELECT * FROM user WHERE active',
+					exit: 'silent',
+				},
+			}),
+		).toEqual({
+			mode: 'window',
+			liveText: 'LIVE SELECT * FROM user',
+			snapshot: 'SELECT * FROM user WHERE active',
+			windowed: ['WHERE'],
+		});
+	});
+
+	it('windows a windowable refusal with the engine text when exits notify', () => {
+		expect(
+			planLive(PAGE, {
+				entry: {
+					query: 'LIVE SELECT * FROM user WHERE active',
+					exit: 'delete',
+					refusal: {
+						clauses: ['ORDER BY', 'LIMIT'],
+						windowable: true,
+					},
+				},
+			}),
+		).toEqual({
+			mode: 'window',
+			liveText: 'LIVE SELECT * FROM user WHERE active',
+			snapshot: PAGE,
+			windowed: ['ORDER BY', 'LIMIT'],
+		});
+	});
+
+	it('windows a windowable refusal unfiltered when exits are silent', () => {
+		const plan = planLive(PAGE, {
+			entry: {
+				query: 'LIVE SELECT * FROM user WHERE active',
+				exit: 'silent',
+				refusal: { clauses: ['ORDER BY', 'LIMIT'], windowable: true },
+			},
+		});
+		expect(plan).toMatchObject({
+			mode: 'window',
+			liveText: 'LIVE SELECT * FROM user',
+			windowed: ['ORDER BY', 'LIMIT', 'WHERE'],
+		});
+	});
+
+	it('refuses what the engine says re-running cannot serve', () => {
+		expect(
+			planLive('SELECT * FROM a, b', {
+				entry: {
+					refusal: { clauses: ['FROM a, b'], windowable: false },
+				},
+			}),
+		).toEqual({
+			mode: 'unsupported',
+			reason: 'LIVE SELECT refuses FROM a, b',
+		});
+	});
+
+	it('follows the engine over trustWhere', () => {
+		const plan = planLive('SELECT * FROM user WHERE active', {
+			trustWhere: true,
+			entry: {
+				query: 'LIVE SELECT * FROM user WHERE active',
+				exit: 'silent',
+			},
+		});
+		expect(plan.mode !== 'unsupported' && plan.liveText).toBe(
+			'LIVE SELECT * FROM user',
+		);
+	});
+});

@@ -48,6 +48,8 @@ Peer dependencies: `react` 18.3 or later, and `surrealdb` 2.1.1 or later.
    }
    ```
 
+   When the generated module exports `liveQueries` (SurrealDB 4.1 and later), pass it as `live={liveQueries}`. Live queries then subscribe as the engine describes them. See [the core README](../surrealkit-query/README.md#with-the-engines-live-entries).
+
 ## Hooks
 
 | Hook | Result |
