@@ -6,6 +6,10 @@ pub mod compile;
 pub mod config;
 pub mod constants;
 pub mod core;
+// The SurrealQL host code sends to the engine, found with tree-sitter. `check` lints it and
+// `generate` types it.
+#[cfg(feature = "host-queries")]
+pub mod host_queries;
 // The MCP server. stdio transport; see the module docs for the statelessness
 // contract and why stdout is off-limits.
 #[cfg(feature = "mcp")]
