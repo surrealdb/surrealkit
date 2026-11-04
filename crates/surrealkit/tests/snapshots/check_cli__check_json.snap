@@ -12,7 +12,12 @@ expression: stdout(&as_json)
     "warnings": 0,
     "hints": 0,
     "suppressed": 0,
-    "allowed": 0
+    "allowed": 0,
+    "host_read": false,
+    "host_files": 0,
+    "host_queries": 0,
+    "targets_checked": 0,
+    "drift": {}
   },
   "diagnostics": [
     {

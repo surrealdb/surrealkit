@@ -12,7 +12,12 @@ expression: "pretty(&json(&report(), Path::new(\"/proj\")))"
     "warnings": 1,
     "hints": 1,
     "suppressed": 2,
-    "allowed": 1
+    "allowed": 1,
+    "host_read": false,
+    "host_files": 0,
+    "host_queries": 0,
+    "targets_checked": 0,
+    "drift": {}
   },
   "diagnostics": [
     {

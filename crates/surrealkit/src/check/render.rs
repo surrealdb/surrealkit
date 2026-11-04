@@ -4,7 +4,7 @@
 //! directory, for the CLI), with `/` separators on every platform, and `..` where the file is
 //! not under it. Lines and columns are 1-based and columns count Unicode scalar values.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;
 use std::path::{Component, Path};
 
@@ -132,6 +132,28 @@ pub fn human(report: &Report, base: &Path, color: bool) -> String {
 			count(s.query_files, "query file", "query files"),
 		));
 	}
+	if s.host_read {
+		out.push_str(&format!(
+			"read {} holding {}\n",
+			count(s.host_files, "host file", "host files"),
+			count(s.host_queries, "query", "queries"),
+		));
+	}
+	if s.targets_checked > 0 {
+		let targets: Vec<String> = s
+			.drift
+			.iter()
+			.map(|(name, n)| match n {
+				0 => format!("{name} (no drift)"),
+				n => format!("{name} ({})", count(*n, "finding", "findings")),
+			})
+			.collect();
+		out.push_str(&format!(
+			"compared the files with {}: {}\n",
+			count(s.targets_checked, "target", "targets"),
+			targets.join(", ")
+		));
+	}
 	out
 }
 
@@ -242,6 +264,11 @@ pub struct JsonSummary {
 	pub hints: usize,
 	pub suppressed: usize,
 	pub allowed: usize,
+	pub host_read: bool,
+	pub host_files: usize,
+	pub host_queries: usize,
+	pub targets_checked: usize,
+	pub drift: BTreeMap<String, usize>,
 }
 
 /// The report as JSON: `{"summary": {...}, "diagnostics": [...]}`, in the field order below.
@@ -283,6 +310,11 @@ pub fn json(report: &Report, base: &Path) -> JsonReport {
 			hints: s.hints,
 			suppressed: s.suppressed,
 			allowed: s.allowed,
+			host_read: s.host_read,
+			host_files: s.host_files,
+			host_queries: s.host_queries,
+			targets_checked: s.targets_checked,
+			drift: s.drift.clone(),
 		},
 		diagnostics,
 	}
@@ -595,6 +627,7 @@ mod tests {
 				hints: 1,
 				suppressed: 2,
 				allowed: 1,
+				..Summary::default()
 			},
 		}
 	}
@@ -674,6 +707,37 @@ mod tests {
 		);
 		report.summary.query_files = 3;
 		assert!(human(&report, Path::new("/proj"), false).contains("3 query files were found"));
+	}
+
+	#[test]
+	fn the_summary_says_what_host_code_and_targets_added() {
+		let mut report = Report {
+			root: "/proj".into(),
+			findings: Vec::new(),
+			texts: BTreeMap::new(),
+			summary: Summary::default(),
+		};
+		let plain = human(&report, Path::new("/proj"), false);
+		assert_eq!(plain, "checked 0 schema files and 0 query files: 0 errors, 0 warnings\n");
+		report.summary.host_read = true;
+		report.summary.host_files = 2;
+		report.summary.host_queries = 1;
+		report.summary.targets_checked = 2;
+		report.summary.drift = BTreeMap::from([("prod".to_string(), 3), ("stage".to_string(), 0)]);
+		let text = human(&report, Path::new("/proj"), false);
+		assert!(text.contains("read 2 host files holding 1 query\n"), "{text}");
+		assert!(
+			text.contains(
+				"compared the files with 2 targets: prod (3 findings), stage (no drift)\n"
+			),
+			"{text}"
+		);
+		let value = serde_json::to_value(json(&report, Path::new("/proj"))).expect("json");
+		let summary = &value["summary"];
+		assert_eq!(summary["host_files"], 2);
+		assert_eq!(summary["host_queries"], 1);
+		assert_eq!(summary["targets_checked"], 2);
+		assert_eq!(summary["drift"]["prod"], 3);
 	}
 
 	#[test]

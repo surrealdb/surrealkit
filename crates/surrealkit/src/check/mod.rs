@@ -29,11 +29,12 @@ pub mod render;
 
 pub use config::AnalyzeConfig;
 #[cfg(feature = "analyze")]
-pub use run::{Report, Summary, run};
+pub use run::{ExtraFile, Extras, HostCounts, Report, Summary, TargetFindings, run, run_with};
 
 #[cfg(feature = "analyze")]
 mod run {
 	use std::collections::BTreeMap;
+	use std::ops::Range;
 	use std::path::{Path, PathBuf};
 
 	use anyhow::Result;
@@ -78,17 +79,72 @@ mod run {
 		pub suppressed: usize,
 		/// Findings policy silenced (`allow` in `[analyze.lints]`, or a code's default).
 		pub allowed: usize,
+		/// Whether host code was read: `[typegen.queries] sources` is set and this build reads
+		/// host code.
+		pub host_read: bool,
+		/// The host files that hold at least one query.
+		pub host_files: usize,
+		/// The queries found in host code.
+		pub host_queries: usize,
+		/// How many targets were compared with the files (`check --target`).
+		pub targets_checked: usize,
+		/// For each target compared, how many drift findings it has after suppressions and
+		/// policy.
+		pub drift: BTreeMap<String, usize>,
 	}
 
-	/// Resolve `finding`'s severity by policy, and count it, or count it as allowed.
+	/// A file, besides the schema and query files, that findings point at.
+	#[derive(Debug, Clone)]
+	pub struct ExtraFile {
+		/// Absolute.
+		pub path: PathBuf,
+		pub text: String,
+		/// The byte ranges of the file's comments, where its suppression directives are; `None`
+		/// for a file that has no suppressions.
+		pub comments: Option<Vec<Range<usize>>>,
+	}
+
+	/// The findings of one target compared with the files.
+	#[derive(Debug, Clone)]
+	pub struct TargetFindings {
+		pub target: String,
+		pub findings: Vec<Finding>,
+	}
+
+	/// What a check found beyond the schema and query files: host code, and targets compared
+	/// with the files. Every finding goes through suppressions and policy like the rest.
+	#[derive(Debug, Clone, Default)]
+	pub struct Extras {
+		/// The files the findings below point at.
+		pub files: Vec<ExtraFile>,
+		/// Findings that belong to no target.
+		pub findings: Vec<Finding>,
+		/// Whether host code was read, and how much of it.
+		pub host: Option<HostCounts>,
+		/// Each target compared, with its findings.
+		pub targets: Vec<TargetFindings>,
+	}
+
+	/// What reading host code found.
+	#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+	pub struct HostCounts {
+		pub files: usize,
+		pub queries: usize,
+	}
+
+	/// Resolve `finding`'s severity by policy, and count it, or count it as allowed. Whether it
+	/// is reported.
 	fn settle(
 		mut finding: Finding,
 		policy: &Policy,
 		summary: &mut Summary,
 		findings: &mut Vec<Finding>,
-	) {
+	) -> bool {
 		match policy.resolve(finding.code, finding.intrinsic(), finding.default_level()) {
-			None => summary.allowed += 1,
+			None => {
+				summary.allowed += 1;
+				false
+			}
 			Some(severity) => {
 				finding.severity = severity;
 				match severity {
@@ -97,6 +153,7 @@ mod run {
 					Severity::Hint => summary.hints += 1,
 				}
 				findings.push(finding);
+				true
 			}
 		}
 	}
@@ -111,18 +168,40 @@ mod run {
 		policy: &Policy,
 		vars: &TemplateVars,
 	) -> Result<Report> {
-		let mut found: Vec<Finding> = Vec::new();
+		run_with(engine, sources, policy, vars, Extras::default()).await
+	}
+
+	/// [`run`], with the findings of host code and of targets compared with the files, which go
+	/// through the same suppressions, policy and report.
+	pub async fn run_with<E: Engine>(
+		engine: &mut E,
+		sources: &Sources,
+		policy: &Policy,
+		vars: &TemplateVars,
+		extras: Extras,
+	) -> Result<Report> {
+		// Each finding with the index of the target it belongs to, when it does.
+		let mut found: Vec<(Finding, Option<usize>)> = Vec::new();
 		for source in &sources.schema {
-			found.extend(engine.check(source, vars).await?);
-			found.extend(engine.apply(source, vars).await?);
+			found.extend(engine.check(source, vars).await?.into_iter().map(|f| (f, None)));
+			found.extend(engine.apply(source, vars).await?.into_iter().map(|f| (f, None)));
 		}
 		for source in &sources.queries {
-			found.extend(engine.check(source, vars).await?);
+			found.extend(engine.check(source, vars).await?.into_iter().map(|f| (f, None)));
+		}
+		found.extend(extras.findings.into_iter().map(|f| (f, None)));
+		let mut targets: Vec<&str> = Vec::new();
+		for (index, target) in extras.targets.iter().enumerate() {
+			targets.push(&target.target);
+			found.extend(target.findings.iter().cloned().map(|f| (f, Some(index))));
 		}
 
 		let files: Vec<&Source> = sources.schema.iter().chain(&sources.queries).collect();
+		let mut texts_of: Vec<(&Path, &str)> =
+			files.iter().map(|s| (s.path.as_path(), s.text.as_str())).collect();
+		texts_of.extend(extras.files.iter().map(|f| (f.path.as_path(), f.text.as_str())));
 		let indexes: BTreeMap<&Path, LineIndex<'_>> =
-			files.iter().map(|s| (s.path.as_path(), LineIndex::new(&s.text))).collect();
+			texts_of.iter().map(|(path, text)| (*path, LineIndex::new(text))).collect();
 		let mut suppressions: BTreeMap<&Path, Suppressions> = BTreeMap::new();
 		let mut directives: Vec<Finding> = Vec::new();
 		for source in &files {
@@ -130,15 +209,29 @@ mod run {
 			suppressions.insert(source.path.as_path(), read);
 			directives.extend(malformed);
 		}
+		for file in &extras.files {
+			let Some(comments) = &file.comments else {
+				continue;
+			};
+			let (read, malformed) =
+				Suppressions::from_comments(&file.path, &file.text, comments, policy);
+			suppressions.insert(file.path.as_path(), read);
+			directives.extend(malformed);
+		}
 
 		let mut summary = Summary {
 			schema_files: sources.schema.iter().filter(|s| s.role == Role::Schema).count(),
 			query_files: sources.queries.len(),
 			queries_analyzed: engine.analyzes(),
+			host_read: extras.host.is_some(),
+			host_files: extras.host.map_or(0, |host| host.files),
+			host_queries: extras.host.map_or(0, |host| host.queries),
+			targets_checked: targets.len(),
+			drift: targets.iter().map(|name| ((*name).to_string(), 0)).collect(),
 			..Summary::default()
 		};
 		let mut findings = Vec::new();
-		for finding in found {
+		for (finding, target) in found {
 			let line = indexes
 				.get(finding.path.as_path())
 				.map_or(1, |index| index.position(finding.span.start).0);
@@ -147,8 +240,10 @@ mod run {
 				.is_some_and(|read| read.suppresses(&finding, line));
 			if silenced {
 				summary.suppressed += 1;
-			} else {
-				settle(finding, policy, &mut summary, &mut findings);
+			} else if settle(finding, policy, &mut summary, &mut findings)
+				&& let Some(name) = target.map(|index| targets[index])
+			{
+				*summary.drift.entry(name.to_string()).or_insert(0) += 1;
 			}
 		}
 		for finding in directives {
@@ -157,10 +252,10 @@ mod run {
 		findings
 			.sort_by(|a, b| (&a.path, a.span.start, a.code).cmp(&(&b.path, b.span.start, b.code)));
 
-		let texts = files
+		let texts = texts_of
 			.iter()
-			.filter(|source| findings.iter().any(|f| f.path == source.path))
-			.map(|source| (source.path.clone(), source.text.clone()))
+			.filter(|(path, _)| findings.iter().any(|f| f.path == *path))
+			.map(|(path, text)| ((*path).to_path_buf(), (*text).to_string()))
 			.collect();
 		Ok(Report {
 			root: sources.root.clone(),
@@ -363,5 +458,87 @@ mod tests {
 			report.summary.errors, 1,
 			"an own-line directive covers the next line, not its own"
 		);
+	}
+
+	fn extra(name: &str, text: &str, comments: Option<Vec<Range<usize>>>) -> ExtraFile {
+		ExtraFile {
+			path: std::path::PathBuf::from(format!("/p/{name}")),
+			text: text.to_string(),
+			comments,
+		}
+	}
+
+	#[tokio::test]
+	async fn extras_are_suppressed_settled_and_counted_per_target() {
+		let host = "// surreal: allow(K9201)\nA;\nB;\n";
+		let config = "[target.prod]\n[target.stage]\n";
+		let warning = |name: &str, span: Range<usize>| {
+			Finding::new(
+				Code::kit(9105),
+				Severity::Warning,
+				Level::Warn,
+				"m",
+				std::path::PathBuf::from(format!("/p/{name}")),
+				span,
+			)
+		};
+		let (host_a, host_b) = (host.find("A;").unwrap(), host.find("B;").unwrap());
+		let extras = Extras {
+			files: vec![
+				extra("h.ts", host, Some(vec![0..24])),
+				// No comments: a directive-looking line here suppresses nothing.
+				extra("surrealkit.toml", config, None),
+			],
+			findings: vec![
+				at("h.ts", Code::kit(9201), host_a..host_a + 1).1,
+				at("h.ts", Code::kit(9201), host_b..host_b + 1).1,
+			],
+			host: Some(HostCounts {
+				files: 1,
+				queries: 2,
+			}),
+			targets: vec![
+				TargetFindings {
+					target: "prod".into(),
+					findings: vec![
+						warning("surrealkit.toml", 0..13),
+						warning("surrealkit.toml", 0..13),
+					],
+				},
+				TargetFindings {
+					target: "stage".into(),
+					findings: vec![],
+				},
+			],
+		};
+		let mut mock = Mock::default();
+		let sources = sources(vec![], vec![]);
+		let warn = policy("[lints]\nK9105 = \"warn\"\n");
+		let report =
+			run_with(&mut mock, &sources, &warn, &TemplateVars::default(), extras).await.unwrap();
+		let summary = &report.summary;
+		assert_eq!(summary.suppressed, 1, "the directive covers the next line of the host file");
+		assert_eq!((summary.errors, summary.warnings), (1, 2));
+		assert_eq!((summary.host_read, summary.host_files, summary.host_queries), (true, 1, 2));
+		assert_eq!(summary.targets_checked, 2);
+		assert_eq!(summary.drift["prod"], 2);
+		assert_eq!(summary.drift["stage"], 0);
+		assert_eq!(report.texts.len(), 2, "host file and config: the files with findings");
+
+		// A target whose findings policy allows still counts as compared, with none reported.
+		let quiet = policy("[lints]\nK9105 = \"allow\"\n");
+		let extras = Extras {
+			files: vec![extra("surrealkit.toml", config, None)],
+			targets: vec![TargetFindings {
+				target: "prod".into(),
+				findings: vec![warning("surrealkit.toml", 0..13)],
+			}],
+			..Extras::default()
+		};
+		let report =
+			run_with(&mut mock, &sources, &quiet, &TemplateVars::default(), extras).await.unwrap();
+		assert_eq!((report.summary.targets_checked, report.summary.drift["prod"]), (1, 0));
+		assert_eq!(report.summary.allowed, 1);
+		assert!(!report.summary.host_read);
 	}
 }
