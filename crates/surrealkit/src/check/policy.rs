@@ -167,21 +167,34 @@ pub struct Suppressions {
 }
 
 impl Suppressions {
-	/// The directives in `text`, and the `L7013` findings for the ones that are malformed or,
-	/// when `policy` requires a reason, have none. A file that does not scan has no
+	/// The directives in the SurrealQL `text`, and the `L7013` findings for the ones that are
+	/// malformed or, when `policy` requires a reason, have none. A file that does not scan has no
 	/// suppressions (it already carries its own finding).
 	///
-	/// Comments come from the scanner, so a `--` inside a string is not one, and block comments
-	/// are not read. A directive on a line of its own silences matching findings that start on
+	/// Comments come from the SurrealQL scanner, so a `--` inside a string is not one, and block
+	/// comments are not read. A directive on a line of its own silences matching findings that start on
 	/// the next line; one that trails code silences those that start on its own line.
 	pub fn read(path: &Path, text: &str, policy: &Policy) -> (Self, Vec<Finding>) {
 		let Ok(comments) = crate::surql_scan::scan_comments(text) else {
 			return (Self::default(), Vec::new());
 		};
+		Self::from_comments(path, text, &comments, policy)
+	}
+
+	/// The directives in the `comments` of `text`, byte ranges of it that another lexer found,
+	/// with the same findings as [`read`](Self::read). A host-language file passes the comment
+	/// ranges its grammar yields; only a `//` line comment can be a directive there, and a `/* */`
+	/// block is never read.
+	pub fn from_comments(
+		path: &Path,
+		text: &str,
+		comments: &[Range<usize>],
+		policy: &Policy,
+	) -> (Self, Vec<Finding>) {
 		let index = LineIndex::new(text);
 		let mut directives = Vec::new();
 		let mut findings = Vec::new();
-		for range in comments {
+		for range in comments.iter().cloned() {
 			let Some(parsed) = parse_directive(&text[range.clone()]) else {
 				continue;
 			};
@@ -706,6 +719,49 @@ mod tests {
 				"the directive still suppresses"
 			);
 		}
+	}
+
+	/// The suppressions of host-language `text`, whose comment ranges `comments` gives.
+	#[cfg(feature = "host-queries")]
+	fn read_host(text: &str, comments: Vec<Range<usize>>) -> (Suppressions, Vec<Finding>) {
+		Suppressions::from_comments(Path::new("/p/a.ts"), text, &comments, &policy_with(""))
+	}
+
+	#[cfg(feature = "host-queries")]
+	#[test]
+	fn host_comment_ranges_feed_the_same_reader() {
+		let text = "// surreal: allow(K9201) reason=\"x\"\ndb.query(`a ${b}`);\ndb.query(`c ${d}`); // surreal: allow(9201)\n";
+		let ranges = crate::host_queries::comments("a.ts", text);
+		let (suppressions, findings) = read_host(text, ranges);
+		assert!(findings.is_empty(), "{findings:?}");
+		let code = Code::kit(9201);
+		assert!(silenced(&suppressions, text, code, text.find("db.query").unwrap()), "next line");
+		assert!(silenced(&suppressions, text, code, text.rfind("db.query").unwrap()), "own line");
+		assert!(!silenced(&suppressions, text, K9003, text.find("db.query").unwrap()));
+	}
+
+	#[cfg(feature = "host-queries")]
+	#[test]
+	fn a_host_block_comment_or_a_directive_in_a_string_is_not_read() {
+		let text = "/* surreal: allow(K9201) */\nconst s = \"// surreal: allow(K9201)\";\ndb.query(`a ${b}`);\n";
+		let ranges = crate::host_queries::comments("a.ts", text);
+		let (suppressions, findings) = read_host(text, ranges);
+		assert!(findings.is_empty());
+		for at in [text.find("const").unwrap(), text.find("db.query").unwrap()] {
+			assert!(!silenced(&suppressions, text, Code::kit(9201), at));
+		}
+	}
+
+	#[cfg(feature = "host-queries")]
+	#[test]
+	fn a_malformed_host_directive_is_l7013_at_the_comment() {
+		let text = "// surreal: allow(*)\ndb.query(`a ${b}`);\n";
+		let ranges = crate::host_queries::comments("a.ts", text);
+		let (suppressions, findings) = read_host(text, ranges);
+		assert_eq!(findings.len(), 1);
+		assert_eq!(findings[0].code, L7013);
+		assert_eq!(findings[0].span, 0..text.find('\n').unwrap());
+		assert!(!silenced(&suppressions, text, Code::kit(9201), text.find("db.query").unwrap()));
 	}
 
 	#[test]
