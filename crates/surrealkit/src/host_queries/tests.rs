@@ -295,7 +295,8 @@ fn comments_are_the_grammars_comment_nodes() {
 
 #[test]
 fn tsx_comments_are_found_with_the_jsx_grammar() {
-	let source = "// head\nexport const W = () => <div>{/* in jsx */ db.query(\"S\")}</div>; // tail\n";
+	let source =
+		"// head\nexport const W = () => <div>{/* in jsx */ db.query(\"S\")}</div>; // tail\n";
 	assert_eq!(comment_texts("w.tsx", source), ["// head", "/* in jsx */", "// tail"]);
 	assert_eq!(comment_texts("w.jsx", source), ["// head", "/* in jsx */", "// tail"]);
 }
