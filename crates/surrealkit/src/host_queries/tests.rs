@@ -329,9 +329,22 @@ fn unknown_extensions_parse_as_typescript() {
 
 #[test]
 fn scan_skips_declaration_files_and_build_output() {
-	assert!(is_source_file(Path::new("src/a.ts")));
-	assert!(is_source_file(Path::new("src/A.SVELTE")));
-	assert!(!is_source_file(Path::new("src/types.d.ts")));
-	assert!(!is_source_file(Path::new("src/readme.md")));
-	assert!(!is_source_file(Path::new("src/noext")));
+	assert!(is_source(Path::new("src/a.ts")));
+	assert!(is_source(Path::new("src/A.SVELTE")));
+	assert!(!is_source(Path::new("src/types.d.ts")));
+	assert!(!is_source(Path::new("src/readme.md")));
+	assert!(!is_source(Path::new("src/noext")));
+}
+
+#[test]
+fn is_source_judges_the_directories_below_the_root() {
+	assert!(is_source(Path::new("app.ts")));
+	assert!(is_source(Path::new("routes/+page.svelte")));
+	assert!(!is_source(Path::new("node_modules/pkg/index.js")));
+	assert!(!is_source(Path::new("web/dist/app.js")));
+	assert!(!is_source(Path::new(".svelte-kit/generated/root.js")));
+	assert!(!is_source(Path::new(".hidden/h.ts")));
+	assert!(!is_source(Path::new("lib/.cache/x.ts")));
+	// The file's own name is not a directory: a dotfile with a source extension is read.
+	assert!(is_source(Path::new("src/.eslintrc.js")));
 }
