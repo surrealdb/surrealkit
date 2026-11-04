@@ -70,6 +70,12 @@ database, so the database options (`targets`, `all`, `syncArgs`,
   reloads (held-back updates are logged; reload to apply them). Without
   `generatedDirs`, every successful generation reloads. Set
   `reloadOnGenerate: false` to reload only for held-back updates.
+- A change to a file under `generatedDirs` while the plugin is not generating,
+  such as `surrealkit compile` or `compile --watch` run in another terminal,
+  sends one full reload (a burst of files gives one), whatever
+  `reloadOnGenerate` says: the per-file update is suppressed, so the page
+  would otherwise keep running against the old module. A file whose
+  modification time and size did not move does not reload.
 - With `include: ['build']`, `vite build` generates before bundling and fails
   if generation fails (`failBuildOnError`).
 - Editing a query regenerates its types, like editing a schema file: see
