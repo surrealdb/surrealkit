@@ -96,7 +96,17 @@ fn run_against(root: &Path, ambient: &str, args: &[&str]) -> Output {
 
 #[test]
 fn each_single_database_command_connects_to_the_named_target() {
-	for command in [["setup"].as_slice(), &["seed"], &["status"], &["apply", "apply.surql"]] {
+	// `compat raise` takes `--yes` and no `--wait`: it connects before it looks at
+	// `--yes`, and without `--wait` it has nothing to poll, so the connect timeout
+	// is the only wait.
+	for command in [
+		["setup"].as_slice(),
+		&["seed"],
+		&["status"],
+		&["apply", "apply.surql"],
+		&["compat", "status"],
+		&["compat", "raise", "--yes"],
+	] {
 		let temp = TempDir::new().expect("tempdir");
 		let (ambient, stop_ambient, ambient_server) = silent_server();
 		let (target, stop_target, target_server) = silent_server();

@@ -337,7 +337,7 @@ A target inherits everything it does not set from the ambient configuration
 `ns` and `db`.
 
 `sync` runs every selected module against every selected target. `setup`, `seed`,
-`status`, `apply` and `typegen` work on one database: the `--target` you name, else
+`status`, `apply`, `compat` and `typegen` work on one database: the `--target` you name, else
 the `primary` target, else the only declared target, else the ambient connection.
 `--all` or a repeated `--target` is an error for them.
 
