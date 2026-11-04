@@ -27,9 +27,15 @@ pub mod host;
 #[cfg(feature = "analyze")]
 pub mod policy;
 #[cfg(feature = "analyze")]
+pub mod project;
+#[cfg(feature = "analyze")]
+pub mod query;
+#[cfg(feature = "analyze")]
 pub mod render;
 
 pub use config::AnalyzeConfig;
+#[cfg(feature = "analyze")]
+pub use project::Prepared;
 #[cfg(feature = "analyze")]
 pub use run::{ExtraFile, Extras, HostCounts, Report, Summary, TargetFindings, run, run_with};
 

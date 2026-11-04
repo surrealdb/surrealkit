@@ -280,25 +280,26 @@ pub struct JsonReport {
 	pub diagnostics: Vec<JsonFinding>,
 }
 
+/// One finding of `report` as a diagnostic of [`json`]'s document, its path shown relative to
+/// `base`. Lines and columns are read in the finding's file as `report` holds it.
+pub fn json_finding(report: &Report, finding: &Finding, base: &Path) -> JsonFinding {
+	let index = index_of(report, finding);
+	JsonFinding {
+		code: finding.code,
+		severity: finding.severity,
+		message: finding.message.clone(),
+		path: display_path(base, &finding.path),
+		span: span_of(&index, &finding.span),
+		statement: finding.statement,
+		notes: finding.notes.iter().map(|note| json_note(&index, note)).collect(),
+		tags: finding.tags.clone(),
+	}
+}
+
 pub fn json(report: &Report, base: &Path) -> JsonReport {
 	let s = &report.summary;
-	let diagnostics = report
-		.findings
-		.iter()
-		.map(|finding| {
-			let index = index_of(report, finding);
-			JsonFinding {
-				code: finding.code,
-				severity: finding.severity,
-				message: finding.message.clone(),
-				path: display_path(base, &finding.path),
-				span: span_of(&index, &finding.span),
-				statement: finding.statement,
-				notes: finding.notes.iter().map(|note| json_note(&index, note)).collect(),
-				tags: finding.tags.clone(),
-			}
-		})
-		.collect();
+	let diagnostics =
+		report.findings.iter().map(|finding| json_finding(report, finding, base)).collect();
 	JsonReport {
 		summary: JsonSummary {
 			passed: report.passed(),
