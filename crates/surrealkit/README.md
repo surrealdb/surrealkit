@@ -54,8 +54,9 @@ let config = ServerConfig::new(std::env::current_dir()?, DbOverrides::default(),
 serve_stdio(SurrealKitMcp::new(config)).await?;
 ```
 
-SurrealKit builds against SurrealDB 4.0, so the embedded engines are 4.0. CI
-tests it against servers 3.2.4, 3.3.0 and 4.0.0. It needs Rust 1.95.
+SurrealKit builds against SurrealDB 4.0, so the embedded engines are 4.0. It
+needs a SurrealDB 4.0 or later server, and refuses an older one; use
+1.0.0-beta.8 with 3.x. It needs Rust 1.95.
 
 > You do not need these features to target an embedded engine from a library:
 > cargo unifies features across the dependency graph, so enabling e.g.
@@ -295,6 +296,8 @@ Each [`RolloutStep`] carries exactly one action, built with a constructor — in
 | `RolloutStep::run_sql(id, phase, sql)` | Run data-mutation SQL (must be safe to re-run) |
 | `RolloutStep::assert_sql(id, phase, sql, expect)` | Assert a query's output equals `expect` |
 | `RolloutStep::remove_entities(id, phase, entities)` | `REMOVE … IF EXISTS` the given objects |
+| `RolloutStep::revert_migration(id, table, field, name, using)` | Rollback only: re-apply the field's definition from before `start`, migrating each value back with `using` |
+| `RolloutStep::await_migrations(id, phase, tables)` | Wait until SurrealDB has rewritten and checked `tables` after a migration |
 
 DDL is made safe to re-apply by [`schema_state::prepare_schema_sql`]: `OVERWRITE`
 for every kind but `DEFINE SEQUENCE`, which is applied with `IF NOT EXISTS`
