@@ -546,6 +546,38 @@ fn a_svelte_query_attribute_with_a_brace_is_k9201_at_the_brace() {
 }
 
 #[test]
+fn a_preload_second_argument_with_a_substitution_is_k9201() {
+	let dir = project(HOST_CONFIG, &[("001_base.surql", BASE)]);
+	let page = "\
+export const load = async ({ locals: { db } }) => ({
+	people: await preload(db, `SELECT * FROM person WHERE id = ${id}`),
+	posts: await preload(db, \"SELECT * FROM post\"),
+	swapped: await preload(`SELECT ${first}`, db),
+});
+";
+	write(&dir.path().join("src/+page.server.ts"), page);
+	let human = surrealkit(dir.path(), &["check"]);
+	assert_eq!(human.status.code(), Some(1), "{}", stderr(&human));
+	let text = stderr(&human);
+	assert!(text.contains(" --> src/+page.server.ts:2:"), "{text}");
+	assert!(text.contains("read 1 host file holding 2 queries"), "{text}");
+
+	let report = json(&surrealkit(dir.path(), &["-j", "check"]));
+	assert_eq!(report["diagnostics"].as_array().map(Vec::len), Some(1));
+	assert_eq!(report["diagnostics"][0]["code"], "K9201");
+	assert_eq!(report["diagnostics"][0]["path"], "src/+page.server.ts");
+
+	// `functions` can move the argument: with `arg = 0` the first argument is the query.
+	write(
+		&dir.path().join("surrealkit.toml"),
+		"[typegen.queries]\nsources = [\"src\"]\nfunctions = [{ name = \"preload\", arg = 0 }]\n",
+	);
+	let moved = surrealkit(dir.path(), &["check"]);
+	assert_eq!(moved.status.code(), Some(1), "{}", stderr(&moved));
+	assert!(stderr(&moved).contains(" --> src/+page.server.ts:4:"), "{}", stderr(&moved));
+}
+
+#[test]
 fn without_queries_sources_no_host_code_is_read() {
 	let dir = project("", &[("001_base.surql", BASE)]);
 	write(&dir.path().join("src/app.ts"), APP_TS);

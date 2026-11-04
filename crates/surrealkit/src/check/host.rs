@@ -13,7 +13,7 @@ use anyhow::{Context, Result};
 
 use super::finding::{Finding, K9201, Note, NoteKind};
 use super::{ExtraFile, HostCounts};
-use crate::host_queries::{self, HostQuery, HostQuerySource, Queries};
+use crate::host_queries::{self, HostQuery, HostQuerySource, Queries, QueryFunction};
 use crate::variables::QueriesConfig;
 
 /// What reading the host code found.
@@ -37,8 +37,15 @@ pub fn lint(root: &Path, config: &QueriesConfig) -> Result<HostLint> {
 	fn names(list: &[String]) -> Vec<&str> {
 		list.iter().map(String::as_str).collect()
 	}
-	let (methods, functions, components) =
-		(names(&config.methods), names(&config.functions), names(&config.components));
+	let (methods, components) = (names(&config.methods), names(&config.components));
+	let functions: Vec<QueryFunction<'_>> = config
+		.functions
+		.iter()
+		.map(|function| QueryFunction {
+			name: &function.name,
+			arg: function.arg,
+		})
+		.collect();
 	let queries = Queries {
 		methods: &methods,
 		functions: &functions,
@@ -277,6 +284,41 @@ db.query(`SELECT ${id}`);
 			[("Comp.vue".to_string(), "${three}"), ("Page.svelte".to_string(), "${two}")]
 		);
 		assert_eq!(report.summary.suppressed, 1, "`one` is covered from inside the script block");
+	}
+
+	#[test]
+	fn the_default_function_config_is_the_default_function_list() {
+		let defaults = QueriesConfig::default();
+		let configured: Vec<QueryFunction<'_>> = defaults
+			.functions
+			.iter()
+			.map(|function| QueryFunction {
+				name: &function.name,
+				arg: function.arg,
+			})
+			.collect();
+		assert_eq!(configured, host_queries::DEFAULT_FUNCTIONS);
+	}
+
+	#[test]
+	fn an_interpolation_in_the_second_argument_of_preload_is_k9201_at_the_substitution() {
+		let text = "\
+preload(db, `SELECT * FROM person WHERE id = ${id}`);
+preload(`SELECT * FROM person WHERE id = ${id}`, db);
+preload(db, \"SELECT * FROM person\");
+kit.preload(db, `SELECT ${x}`);
+";
+		let dir = project(&[("src/+page.server.ts", text)]);
+		let linted = lint(dir.path(), &config(&["src"])).expect("lint");
+		let spans: Vec<(usize, &str)> = linted
+			.findings
+			.iter()
+			.map(|f| (text[..f.span.start].matches('\n').count() + 1, &text[f.span.clone()]))
+			.collect();
+		assert_eq!(spans, [(1, "${id}"), (4, "${x}")]);
+		assert!(linted.findings.iter().all(|f| f.code == K9201));
+		assert!(linted.findings[0].notes[0].message.contains("`surql` tag"));
+		assert_eq!(linted.counts.queries, 3);
 	}
 
 	#[test]
