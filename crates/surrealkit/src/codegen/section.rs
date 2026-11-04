@@ -677,6 +677,13 @@ mod tests {
 			)],
 			..Collected::default()
 		};
+		// Whether the embedded engine types queries is a property of the `surrealdb` this crate
+		// is built with; the test holds for either.
+		let built = crate::compile::build(std::slice::from_ref(&module), &CompileOpts::default())
+			.await
+			.unwrap();
+		let can_type =
+			engine::types_document(&built.db, &collected.inputs()).await.unwrap().is_some();
 		let with = compile(
 			std::slice::from_ref(&module),
 			&CompileOpts {
@@ -686,7 +693,7 @@ mod tests {
 		)
 		.await
 		.unwrap();
-		assert!(with.document.queries.is_empty());
+		// The section is outside the digest either way.
 		assert_eq!(with.document.semantic_digest, plain.document.semantic_digest);
 		let added: Vec<&Diagnostic> = with
 			.document
@@ -694,8 +701,19 @@ mod tests {
 			.iter()
 			.filter(|d| !plain.document.diagnostics.contains(d))
 			.collect();
-		assert_eq!(added.len(), 1);
-		assert_eq!(added[0].code, codes::QUERIES_UNSUPPORTED_ENGINE);
-		assert_eq!(with.document.without_queries(), plain.document);
+		if can_type {
+			assert!(added.iter().all(|d| d.code != codes::QUERIES_UNSUPPORTED_ENGINE), "{added:?}");
+			let [entry] = with.document.queries.as_slice() else {
+				panic!("one typed entry: {:?}", with.document.queries);
+			};
+			assert_eq!(entry.key, "SELECT name FROM person");
+			assert!(entry.error.is_none(), "{entry:?}");
+			assert!(!entry.statements.is_empty());
+		} else {
+			assert!(with.document.queries.is_empty());
+			assert_eq!(added.len(), 1);
+			assert_eq!(added[0].code, codes::QUERIES_UNSUPPORTED_ENGINE);
+			assert_eq!(with.document.without_queries(), plain.document);
+		}
 	}
 }

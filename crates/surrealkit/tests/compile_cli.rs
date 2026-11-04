@@ -538,23 +538,51 @@ fn write_queries_project(root: &Path, with_queries: bool) {
 	write(&root.join("src/app.ts"), "db.query(\"SELECT * FROM person\");\n");
 }
 
+/// Whether the embedded engine, the `surrealdb` this build links, types queries: the same
+/// question `compile` asks it, through the same seam.
+fn the_embedded_engine_types_queries() -> bool {
+	let runtime =
+		tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime");
+	runtime.block_on(async {
+		let db = surrealdb::engine::any::connect("mem://").await.expect("embedded engine");
+		db.use_ns("probe").use_db("probe").await.expect("namespace");
+		surrealkit::codegen::engine::types_document(&db, &[(None, "RETURN 1".to_string())])
+			.await
+			.expect("ask the engine")
+			.is_some()
+	})
+}
+
 #[test]
 fn queries_on_an_engine_that_cannot_type_them_warn_and_change_nothing_else() {
+	// On an engine that can type queries, the same project is typed and not warned about.
+	let can_type = the_embedded_engine_types_queries();
 	let with = tempfile::TempDir::new().expect("tempdir");
 	write_queries_project(with.path(), true);
 	let (code, text) = surrealkit(with.path(), &["compile"]);
 	assert_eq!(code, Some(0), "{text}");
 	let json = fs::read_to_string(with.path().join("out/schema.json")).expect("schema.json");
 	let doc: serde_json::Value = serde_json::from_str(&json).expect("json");
-	assert!(doc.get("queries").is_none(), "the engine gave no queries");
 	let codes: Vec<&str> = doc["diagnostics"]
 		.as_array()
 		.unwrap()
 		.iter()
 		.map(|d| d["code"].as_str().unwrap())
 		.collect();
-	assert!(codes.contains(&"queries-unsupported-engine"), "{codes:?}");
-	// The per-query module is written, with an empty registry.
+	if can_type {
+		let keys: Vec<&str> = doc["queries"]
+			.as_array()
+			.expect("the engine typed the queries")
+			.iter()
+			.map(|q| q["key"].as_str().unwrap())
+			.collect();
+		assert!(keys.contains(&"ListPeople"), "{keys:?}");
+		assert!(!codes.contains(&"queries-unsupported-engine"), "{codes:?}");
+	} else {
+		assert!(doc.get("queries").is_none(), "the engine gave no queries");
+		assert!(codes.contains(&"queries-unsupported-engine"), "{codes:?}");
+	}
+	// The per-query module is written, with an empty registry when nothing was typed.
 	assert!(fs::read_to_string(with.path().join("src/queries.ts")).unwrap().contains("Queries"));
 	let (code, text) = surrealkit(with.path(), &["compile", "--check"]);
 	assert_eq!(code, Some(0), "{text}");
@@ -567,10 +595,11 @@ fn queries_on_an_engine_that_cannot_type_them_warn_and_change_nothing_else() {
 	let stdin = |dir: &Path, name: &str| fs::read(dir.join(format!("out/{name}.stdin"))).unwrap();
 	assert_eq!(stdin(with.path(), "plain"), stdin(without.path(), "plain"));
 	assert_eq!(stdin(with.path(), "typed"), json.as_bytes());
-	assert!(
+	assert_eq!(
 		String::from_utf8(stdin(with.path(), "typed"))
 			.unwrap()
-			.contains("queries-unsupported-engine")
+			.contains("queries-unsupported-engine"),
+		!can_type
 	);
 	assert!(!String::from_utf8(stdin(with.path(), "plain")).unwrap().contains("queries-"));
 }
