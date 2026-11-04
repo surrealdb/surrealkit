@@ -212,6 +212,8 @@ pub struct TypegenConfig {
 	/// (`docs/typegen/external-emitters.md`).
 	#[serde(default)]
 	pub emit: std::collections::BTreeMap<String, EmitterConfig>,
+	/// `[typegen.queries]`: where the project's host code sends queries from.
+	pub queries: Option<QueriesConfig>,
 	/// Error diagnostic codes that do not fail generation, each with the reason it is
 	/// acceptable: `acknowledge = { "kind-unrecognized" = "…" }`. The diagnostics stay in the
 	/// document, and external emitters receive the list.
@@ -228,6 +230,32 @@ pub struct EmitterConfig {
 	pub command: EmitterCommand,
 	/// The directory the emitter's files go to. SurrealKit owns it.
 	pub out: PathBuf,
+}
+
+/// The `[typegen.queries]` section: where the project's queries are.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct QueriesConfig {
+	/// Host-code roots (files or directories) searched for queries passed to a client.
+	/// Needs the `host-queries` feature.
+	#[serde(default)]
+	pub sources: Vec<PathBuf>,
+	/// The client methods whose first argument is a query (default `["query"]`).
+	#[serde(default = "default_query_methods")]
+	pub methods: Vec<String>,
+}
+
+fn default_query_methods() -> Vec<String> {
+	vec!["query".to_string()]
+}
+
+impl Default for QueriesConfig {
+	fn default() -> Self {
+		Self {
+			sources: Vec::new(),
+			methods: default_query_methods(),
+		}
+	}
 }
 
 /// An emitter command as written in `surrealkit.toml`.
@@ -248,6 +276,17 @@ impl EmitterCommand {
 }
 
 impl TypegenConfig {
+	/// `[typegen.queries]`, validated: the methods are not empty names.
+	pub fn queries_config(&self) -> Result<Option<QueriesConfig>> {
+		let Some(queries) = &self.queries else {
+			return Ok(None);
+		};
+		if queries.methods.iter().any(|method| method.trim().is_empty()) {
+			bail!("[typegen.queries] methods: a method name is empty");
+		}
+		Ok(Some(queries.clone()))
+	}
+
 	/// `[typegen] acknowledge`, validated: every code and every reason is non-empty.
 	pub fn acknowledgements(&self) -> Result<std::collections::BTreeMap<String, String>> {
 		for (code, reason) in &self.acknowledge {
@@ -842,6 +881,17 @@ mod tests {
 			..TypegenConfig::default()
 		};
 		assert_eq!(cfg.json_path().unwrap(), expected.map(PathBuf::from));
+	}
+
+	#[test]
+	fn queries_default_to_the_query_method_and_reject_an_empty_one() {
+		let parse = |raw: &str| toml::from_str::<TypegenConfig>(raw).unwrap();
+		let cfg = parse("[queries]\n").queries_config().unwrap().unwrap();
+		assert_eq!(cfg.methods, ["query"]);
+		assert!(cfg.sources.is_empty());
+		let err = parse("[queries]\nmethods = [\" \"]\n").queries_config().unwrap_err();
+		assert!(err.to_string().contains("a method name is empty"), "{err}");
+		assert!(toml::from_str::<TypegenConfig>("[queries]\nfiles = []\n").is_err());
 	}
 
 	#[test]
