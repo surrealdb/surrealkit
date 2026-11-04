@@ -14,8 +14,8 @@
 	const db = getSurreal() as Typed<Surreal>;
 
 	// GROUP ALL is not a live clause either, so this count re-runs on each
-	// change to the table.
-	const total = createLive('SELECT count() AS total FROM person GROUP ALL');
+	// change to the table. It starts from the server's count.
+	const total = createLive(() => data.count);
 	const count = $derived(total.data[0]?.total ?? 0);
 
 	async function add() {
@@ -31,6 +31,7 @@
 
 <main>
 	<h1>People</h1>
+	<form method="POST" action="?/signout"><button type="submit">Sign out</button></form>
 
 	<form onsubmit={(event) => (event.preventDefault(), add())}>
 		<input bind:value={name} placeholder="name" aria-label="name" />

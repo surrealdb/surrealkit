@@ -118,6 +118,19 @@ The first page renders from the payload. In the browser the component opens its 
 
 > WARNING: Use a client for each request in `load` (for example, one made in `hooks.server.ts` and put on `locals`), and close it after the request. A module-level server client is shared by every user.
 
+## Signing in
+
+Connect both the browser and the server as the signed-in user, with record access (`DEFINE ACCESS … TYPE RECORD`). Table permissions then apply to every query, including live queries.
+
+1. Sign in on the server, in a form action: `db.signin({ namespace, database, access, variables })` returns the user's access token. Store it in an `httpOnly` cookie.
+2. In `hooks.server.ts`, connect a client for each request with that token (`authentication: token`), put it on `locals`, and close it after the request.
+3. Give the token to the page from `+layout.server.ts`. In `+layout.svelte`, connect the browser's client with it and call `setSurreal(db)`.
+4. When the user signs in or out, call `db.authenticate(token)` or `db.invalidate()` in the browser, then `cacheFor(db).reset()`, so no rows from the previous user stay on screen.
+
+> WARNING: Root, namespace and database credentials must never reach the browser. Do not put them in `PUBLIC_*` or `VITE_*` variables. A browser client signed in as root can read and change everything.
+
+[examples/svelte-live](../../examples/svelte-live) implements this pattern.
+
 ## Live queries and pagination
 
 Only some `SELECT` clauses can be live. A query with a clause that is not live, such as `ORDER BY`, `LIMIT` or `START`, runs its `SELECT` again on each change. The [surrealkit-query README](../surrealkit-query/README.md#which-clauses-are-live) has the full table and the lifecycle.

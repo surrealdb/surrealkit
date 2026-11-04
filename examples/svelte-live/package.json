@@ -4,7 +4,7 @@
 	"type": "module",
 	"description": "svelte-surrealkit: typed queries and live queries in SvelteKit, with SSR seeding and live pagination",
 	"scripts": {
-		"db": "surreal start --unauthenticated --bind 127.0.0.1:8000 memory",
+		"db": "surreal start --user root --pass root --bind 127.0.0.1:8000 memory",
 		"seed": "node scripts/seed.mjs",
 		"dev": "vite dev",
 		"build": "vite build",
