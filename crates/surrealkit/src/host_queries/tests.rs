@@ -329,9 +329,463 @@ fn unknown_extensions_parse_as_typescript() {
 
 #[test]
 fn scan_skips_declaration_files_and_build_output() {
-	assert!(is_source_file(Path::new("src/a.ts")));
-	assert!(is_source_file(Path::new("src/A.SVELTE")));
-	assert!(!is_source_file(Path::new("src/types.d.ts")));
-	assert!(!is_source_file(Path::new("src/readme.md")));
-	assert!(!is_source_file(Path::new("src/noext")));
+	assert!(is_source(Path::new("src/a.ts")));
+	assert!(is_source(Path::new("src/A.SVELTE")));
+	assert!(!is_source(Path::new("src/types.d.ts")));
+	assert!(!is_source(Path::new("src/readme.md")));
+	assert!(!is_source(Path::new("src/noext")));
+}
+
+#[test]
+fn is_source_judges_the_directories_below_the_root() {
+	assert!(is_source(Path::new("app.ts")));
+	assert!(is_source(Path::new("routes/+page.svelte")));
+	assert!(!is_source(Path::new("node_modules/pkg/index.js")));
+	assert!(!is_source(Path::new("web/dist/app.js")));
+	assert!(!is_source(Path::new(".svelte-kit/generated/root.js")));
+	assert!(!is_source(Path::new(".hidden/h.ts")));
+	assert!(!is_source(Path::new("lib/.cache/x.ts")));
+	// The file's own name is not a directory: a dotfile with a source extension is read.
+	assert!(is_source(Path::new("src/.eslintrc.js")));
+}
+
+fn all(file: &str, source: &str) -> Vec<HostQuery> {
+	extract_with(file, source, &Queries::DEFAULT)
+}
+
+fn all_texts(file: &str, source: &str) -> Vec<String> {
+	all(file, source).into_iter().map(|query| query.text).collect()
+}
+
+fn all_only(file: &str, source: &str) -> HostQuery {
+	let mut queries = all(file, source);
+	assert_eq!(queries.len(), 1, "expected one query in {source:?}: {queries:#?}");
+	queries.remove(0)
+}
+
+#[test]
+fn bare_and_namespaced_function_calls_carry_a_query() {
+	let source = "
+createQuery(\"A\");
+svelte.createQuery('B');
+kit.useQuery(`C ${x}`);
+useLive<Row>(\"D\");
+const q = useQuery(\"E\", { id });
+";
+	let queries = all("a.ts", source);
+	assert_eq!(
+		queries.iter().map(|query| query.text.as_str()).collect::<Vec<_>>(),
+		["A", "B", "C $__host0", "D", "E"]
+	);
+	assert_eq!(queries[0].source, HostQuerySource::Function("createQuery".to_string()));
+	assert_eq!(queries[2].source, HostQuerySource::Function("useQuery".to_string()));
+	assert_eq!(queries[2].method, "useQuery");
+	assert_eq!(&source[queries[2].substitutions[0].host_range.clone()], "${x}");
+	// `extract` reads member calls named by `methods` only.
+	assert!(extract("a.ts", source, DEFAULT_METHODS).is_empty());
+}
+
+#[test]
+fn a_bare_query_call_and_a_non_literal_first_argument_are_not_queries() {
+	let source = "
+query(\"bare\");
+createQuery(sql);
+createQuery();
+createQuery(\"a\" + \"b\");
+createQuery(sql, \"SELECT 1\");
+other(\"not listed\");
+db['createQuery'](\"computed\");
+";
+	assert!(all("a.ts", source).is_empty());
+	// A method still needs a receiver, and wins over a function of the same name.
+	let both = Queries {
+		methods: &["query"],
+		functions: &["query"],
+		..Queries::DEFAULT
+	};
+	let found = extract_with("a.ts", "query(\"F\"); db.query(\"M\");", &both);
+	assert_eq!(
+		found.iter().map(|query| query.source.clone()).collect::<Vec<_>>(),
+		[
+			HostQuerySource::Function("query".to_string()),
+			HostQuerySource::Method("query".to_string())
+		]
+	);
+}
+
+#[test]
+fn function_calls_are_found_in_script_blocks() {
+	let svelte =
+		"<script>\n\tconst people = createQuery(\"SELECT * FROM person\", { });\n</script>\n";
+	let query = all_only("p.svelte", svelte);
+	assert_eq!(query.text, "SELECT * FROM person");
+	assert_eq!((query.line, query.column), (2, 30));
+	assert_eq!(&svelte[query.host_range], "SELECT * FROM person");
+	assert_eq!(all_texts("c.vue", "<script setup>\nconst r = useQuery(\"V\");\n</script>"), ["V"]);
+	assert_eq!(all_texts("p.astro", "---\nconst r = useLive(\"A\");\n---\n<p/>"), ["A"]);
+}
+
+#[test]
+fn jsx_attributes_carry_a_query() {
+	let source = "\
+const a = <Query q=\"SELECT * FROM person WHERE a &gt; 1 &amp;&amp; b = &#39;x&#39;\" />;
+const b = <LiveQuery q={\"SELECT 1\"}></LiveQuery>;
+const c = <Kit.Query q={`SELECT ${x} FROM t`} />;
+const d = <Query q={sql} />;
+const e = <Other q=\"no\" />;
+const f = <QueryList q=\"no\" />;
+const g = <Query q=\"a\\nb\" />;
+const h = <Query other=\"no\" q={f(\"x\")} />;
+const i = <Query q=\"SELECT 'a > b'\"
+	params={{ a: 1 }} />;
+";
+	let queries = all("w.tsx", source);
+	let texts: Vec<&str> = queries.iter().map(|query| query.text.as_str()).collect();
+	assert_eq!(
+		texts,
+		[
+			"SELECT * FROM person WHERE a > 1 && b = 'x'",
+			"SELECT 1",
+			"SELECT $__host0 FROM t",
+			"a\\nb",
+			"SELECT 'a > b'"
+		]
+	);
+	assert_eq!(all_texts("w.jsx", source), texts);
+	assert_eq!(
+		queries[0].source,
+		HostQuerySource::Attribute {
+			component: "Query".to_string(),
+			attribute: "q".to_string()
+		}
+	);
+	assert_eq!(queries[1].method, "LiveQuery");
+	let Some(HostQuerySource::Attribute {
+		component,
+		..
+	}) = queries.get(2).map(|query| query.source.clone())
+	else {
+		panic!("expected an attribute");
+	};
+	assert_eq!(component, "Query", "a member name matches on its last segment");
+
+	assert_eq!(&source[queries[0].host_range.clone()].len(), &queries[0].host_range.len());
+	assert_eq!(
+		&source[queries[0].host_range.clone()],
+		"SELECT * FROM person WHERE a &gt; 1 &amp;&amp; b = &#39;x&#39;"
+	);
+	assert_eq!((queries[0].line, queries[0].column), (1, 21));
+	assert_eq!(&source[queries[1].host_range.clone()], "SELECT 1");
+	assert_eq!((queries[1].line, queries[1].column), (2, 26));
+	assert_eq!(&source[queries[2].substitutions[0].host_range.clone()], "${x}");
+	// A JSX attribute string has no backslash escapes.
+	assert_eq!(&source[queries[3].host_range.clone()], "a\\nb");
+	assert_eq!((queries[4].line, queries[4].column), (9, 21));
+	// Without a component list, or for a custom attribute, nothing matches.
+	assert!(extract("w.tsx", source, DEFAULT_METHODS).is_empty());
+	let custom = Queries {
+		attribute: "sql",
+		..Queries::DEFAULT
+	};
+	assert!(extract_with("w.tsx", source, &custom).is_empty());
+	let found = extract_with("w.tsx", "<Query sql=\"S\" q=\"no\" />", &custom);
+	assert_eq!(found.len(), 1);
+	assert_eq!(found[0].text, "S");
+}
+
+#[test]
+fn tsx_function_calls_and_attributes_come_in_document_order() {
+	let source = "export const V = () => { const { data } = useQuery(\"SELECT * FROM person\"); return <Query q={\"SELECT name FROM person\"} />; };";
+	assert_eq!(all_texts("v.tsx", source), ["SELECT * FROM person", "SELECT name FROM person"]);
+}
+
+const SVELTE: &str = "\
+<script>
+	const people = createQuery(\"SELECT * FROM person\", { });
+</script>
+
+<Query q=\"SELECT * FROM person WHERE age > {min} AND n = &quot;x&quot;\" params={{ min }} />
+<LiveQuery q={`SELECT * FROM post`} />
+<Query
+	q='SELECT * FROM t'
+	params={{ a: 1 }}
+>
+	<p>hi</p>
+</Query>
+<Query q={sql} />
+<QueryList q=\"SELECT list\" />
+<!-- <Query q=\"SELECT commented\" /> -->
+<Other title=\"a > b\" q=\"SELECT other\" />
+<Foo data=\"<Query q='SELECT nested'>\" />
+<Query q=\"SELECT 'a > b'\" />
+<Query q={ \"SELECT {nested} }\" } />
+<Query q={`SELECT ${fn({ a: \"}\" })} FROM t`} />
+<Kit.LiveQuery q=\"SELECT member\" />
+<style>.a { color: red }</style>
+<Query {q} {...rest} q={sql + \"x\"} />
+";
+
+#[test]
+fn svelte_attributes_in_every_form() {
+	let queries = all("Bindings.svelte", SVELTE);
+	let texts: Vec<&str> = queries.iter().map(|query| query.text.as_str()).collect();
+	assert_eq!(
+		texts,
+		[
+			"SELECT * FROM person",
+			"SELECT * FROM person WHERE age > $__host0 AND n = \"x\"",
+			"SELECT * FROM post",
+			"SELECT * FROM t",
+			"SELECT 'a > b'",
+			"SELECT {nested} }",
+			"SELECT $__host0 FROM t",
+			"SELECT member",
+		]
+	);
+	for query in &queries[1..] {
+		assert!(matches!(query.source, HostQuerySource::Attribute { .. }), "{query:?}");
+	}
+
+	let interpolated = &queries[1];
+	assert_eq!(
+		&SVELTE[interpolated.host_range.clone()],
+		"SELECT * FROM person WHERE age > {min} AND n = &quot;x&quot;"
+	);
+	assert_eq!(&SVELTE[interpolated.substitutions[0].host_range.clone()], "{min}");
+	assert_eq!((interpolated.line, interpolated.column), (5, 11));
+
+	// A `>` and braces in a quoted value, and nested braces and strings in an expression, do not
+	// end the tag.
+	assert_eq!(&SVELTE[queries[4].host_range.clone()], "SELECT 'a > b'");
+	assert_eq!(&SVELTE[queries[5].host_range.clone()], "SELECT {nested} }");
+	assert_eq!(&SVELTE[queries[6].substitutions[0].host_range.clone()], "${fn({ a: \"}\" })}");
+
+	// The multi-line tag.
+	assert_eq!(&SVELTE[queries[3].host_range.clone()], "SELECT * FROM t");
+	assert_eq!((queries[3].line, queries[3].column), (8, 5));
+}
+
+#[test]
+fn a_component_name_must_match_exactly() {
+	let source =
+		"<QueryList q=\"A\" /><MyQuery q=\"B\" /><Query q=\"C\" /><Query2 q=\"D\"></Query2>";
+	assert_eq!(all_texts("p.svelte", source), ["C"]);
+	assert_eq!(all_texts("p.vue", source), ["C"]);
+	assert_eq!(all_texts("p.astro", source), ["C"]);
+	let custom = Queries {
+		components: &["QueryList"],
+		..Queries::DEFAULT
+	};
+	let found = extract_with("p.svelte", source, &custom);
+	assert_eq!(found.len(), 1);
+	assert_eq!(found[0].text, "A");
+}
+
+#[test]
+fn self_closing_and_paired_tags_both_read() {
+	let source =
+		"<Query q=\"A\"/><Query q=\"B\"></Query><Query q=\"C\">text</Query><Query\n\tq=\"D\"\n/>";
+	assert_eq!(all_texts("p.svelte", source), ["A", "B", "C", "D"]);
+}
+
+#[test]
+fn markup_attribute_ranges_and_positions_index_the_whole_file() {
+	let source = "<p/>\n<Query q=\"SELECT 1\" />\n";
+	let query = all_only("p.svelte", source);
+	assert_eq!(query.host_range, 15..23);
+	assert_eq!((query.line, query.column), (2, 11));
+	assert_eq!(&source[query.host_range.clone()], query.text);
+	assert!(query.keyable());
+
+	let single = all_only("p.vue", "<template>\n  <Query q='SELECT 2' />\n</template>");
+	assert_eq!((single.line, single.column), (2, 13));
+	let empty = all_only("p.svelte", "<Query q=\"\" />");
+	assert_eq!(empty.text, "");
+	assert_eq!(empty.host_range, 10..10);
+}
+
+#[test]
+fn html_references_decode_with_a_span_round_trip() {
+	let source = "<Query q=\"a &amp; b &#x41; &lt;&#60; &#39;é&bogus; &#0; & &#xZZ;\" />";
+	let query = all_only("p.vue", source);
+	assert_eq!(query.text, "a & b A << 'é&bogus; &#0; & &#xZZ;");
+	assert!(query.keyable());
+
+	let ampersand = 2;
+	assert_eq!(host_text(source, &query, ampersand..ampersand + 1), "&amp;");
+	let referenced = source.find("&amp;").expect("reference present");
+	assert_eq!(query.embed_offset(referenced), Some(ampersand));
+	assert_eq!(query.embed_offset(referenced + 4), Some(ampersand));
+	assert_eq!(query.host_offset(ampersand), referenced);
+
+	let b = query.text.find('b').expect("b present");
+	assert_eq!(&source[query.host_offset(b)..][..1], "b");
+	let upper_a = query.text.find('A').expect("A present");
+	assert_eq!(host_text(source, &query, upper_a..upper_a + 1), "&#x41;");
+	let angle = query.text.find('<').expect("< present");
+	assert_eq!(host_text(source, &query, angle..angle + 2), "&lt;&#60;");
+	let quote = query.text.find('\'').expect("' present");
+	assert_eq!(host_text(source, &query, quote..quote + 1), "&#39;");
+	// Unknown and malformed references stay as written.
+	let bogus = query.text.find("&bogus;").expect("bogus present");
+	assert_eq!(host_text(source, &query, bogus..bogus + 7), "&bogus;");
+	// Every byte of the contents is covered by the span map.
+	for host in query.host_range.clone() {
+		assert!(query.embed_offset(host).is_some(), "byte {host} is unmapped");
+	}
+
+	let jsx = "const q = <Query q=\"x &quot;y&quot;\" />;";
+	let query = all_only("w.tsx", jsx);
+	assert_eq!(query.text, "x \"y\"");
+	assert_eq!(host_text(jsx, &query, 2..3), "&quot;");
+}
+
+#[test]
+fn a_svelte_brace_inside_quotes_is_a_substitution() {
+	let source = "<Query q=\"SELECT * FROM person WHERE name = '{name}' AND a = {a + 1}\" />";
+	let query = all_only("p.svelte", source);
+	assert_eq!(query.text, "SELECT * FROM person WHERE name = '$__host0' AND a = $__host1");
+	assert!(!query.keyable());
+	let [first, second] = query.substitutions.as_slice() else {
+		panic!("expected two substitutions");
+	};
+	assert_eq!(&source[first.host_range.clone()], "{name}");
+	assert_eq!(&source[second.host_range.clone()], "{a + 1}");
+	assert_eq!(&query.text[first.text_range.clone()], "$__host0");
+	assert_eq!(host_text(source, &query, first.text_range.clone()), "{name}");
+	assert_eq!(query.embed_offset(first.host_range.start + 1), None);
+	let quote = query.text.find("' AND").expect("quote present");
+	assert_eq!(&source[query.host_offset(quote)..][..1], "'");
+
+	// A quote inside the braces does not close the value; in Vue and Astro a brace is text.
+	let nested = "<Query q=\"SELECT {fn(\"x\")} FROM t\" />";
+	assert_eq!(all_only("p.svelte", nested).text, "SELECT $__host0 FROM t");
+	assert_eq!(all_only("p.vue", "<Query q=\"SELECT {x} FROM t\" />").text, "SELECT {x} FROM t");
+	assert_eq!(all_only("p.astro", "<Query q=\"SELECT {x} FROM t\" />").text, "SELECT {x} FROM t");
+}
+
+#[test]
+fn vue_bound_attributes_are_javascript() {
+	let source = "\
+<template>
+	<Query q=\"SELECT * FROM person WHERE a &lt; 1\" />
+	<Query :q=\"`SELECT * FROM t WHERE id = ${id}`\" />
+	<LiveQuery v-bind:q=\"'SELECT 2'\" />
+	<Query :q=\"sql\" />
+	<Query :q=\"'a' + b\" />
+	<Query q=\"SELECT {{ not }} interpolated\" />
+	<QueryList :q=\"'x'\" />
+	<Query @q=\"'no'\" :other=\"'no'\" />
+</template>
+<script setup>
+const r = useQuery(\"SELECT 3\");
+</script>
+";
+	let queries = all("Bindings.vue", source);
+	assert_eq!(
+		queries.iter().map(|query| query.text.as_str()).collect::<Vec<_>>(),
+		[
+			"SELECT * FROM person WHERE a < 1",
+			"SELECT * FROM t WHERE id = $__host0",
+			"SELECT 2",
+			"SELECT {{ not }} interpolated",
+			"SELECT 3",
+		]
+	);
+	let template = &queries[1];
+	assert_eq!(&source[template.host_range.clone()], "SELECT * FROM t WHERE id = ${id}");
+	assert_eq!(&source[template.substitutions[0].host_range.clone()], "${id}");
+	assert_eq!(&source[queries[2].host_range.clone()], "SELECT 2");
+	assert_eq!((queries[2].line, queries[2].column), (4, 24));
+}
+
+#[test]
+fn astro_attributes_in_every_form() {
+	let source = "\
+---
+const a = useQuery(\"SELECT frontmatter\");
+const s = '<Query q=\"in a string\" />';
+---
+<Query q=\"SELECT * FROM person WHERE a &amp; b\" />
+<Query q={\"SELECT braces\"} />
+<Query q=`SELECT ${x} tpl` />
+<ul>{items.map((i) => <LiveQuery q={`SELECT ${i}`} />)}</ul>
+<Query q={sql} />
+<Query q=sql />
+<script>
+	const live = createLive(\"SELECT script\");
+</script>
+";
+	assert_eq!(
+		all_texts("bindings.astro", source),
+		[
+			"SELECT frontmatter",
+			"SELECT * FROM person WHERE a & b",
+			"SELECT braces",
+			"SELECT $__host0 tpl",
+			"SELECT $__host0",
+			"SELECT script",
+		]
+	);
+	let queries = all("bindings.astro", source);
+	assert_eq!(&source[queries[3].host_range.clone()], "SELECT ${x} tpl");
+	assert_eq!(&source[queries[3].substitutions[0].host_range.clone()], "${x}");
+	assert_eq!(&source[queries[2].host_range.clone()], "SELECT braces");
+}
+
+#[test]
+fn script_style_and_comment_regions_are_not_markup() {
+	let source = "\
+<script>
+	const s = '<Query q=\"in script\" />';
+</script>
+<SCRIPT lang=\"ts\">const t = '<Query q=\"in upper\" />';</SCRIPT>
+<script type=\"text/template\"><Query q=\"in template script\" /></script>
+<style>/* <Query q=\"in style\" /> */</style>
+<!-- <Query q=\"in comment\" /> -->
+<!-- unterminated comments do not matter after this one -->
+<Query q=\"real\" />
+";
+	assert_eq!(all_texts("p.svelte", source), ["real"]);
+	assert_eq!(all_texts("p.vue", source), ["real"]);
+	assert_eq!(all_texts("p.astro", source), ["real"]);
+	// An unterminated tag, quote or brace ends the scan of that tag, not of the file.
+	assert!(all_texts("p.svelte", "<Query q=\"never closed />").is_empty());
+	assert_eq!(all_texts("p.svelte", "<Query q=\"A\" /><Query q={ unclosed"), ["A"]);
+}
+
+#[test]
+fn markup_is_not_read_without_components_or_in_other_hosts() {
+	let source = "<Query q=\"SELECT 1\" />";
+	assert!(extract("p.svelte", source, DEFAULT_METHODS).is_empty());
+	assert!(all("p.ts", source).is_empty());
+	let none = Queries {
+		components: &[],
+		..Queries::DEFAULT
+	};
+	assert!(extract_with("p.svelte", source, &none).is_empty());
+}
+
+#[test]
+fn comments_include_javascript_comments_in_template_braces() {
+	let svelte = "\
+<!-- // not a comment -->
+{/* surreal: allow(K9201) */}
+<p>// text</p>
+<Query q={ // line
+	`SELECT 1` } title=\"{a /* inline */}\" />
+{#if x}<b>{'// string'}</b>{/if}
+<script>
+// script
+</script>
+";
+	let found: Vec<&str> =
+		comments("p.svelte", svelte).into_iter().map(|range| &svelte[range]).collect();
+	assert_eq!(found, ["/* surreal: allow(K9201) */", "// line", "/* inline */", "// script"]);
+
+	let astro = "---\n// front\n---\n<p>{/* in astro */ x}</p>\n<!-- // html -->\n";
+	assert_eq!(comment_texts("p.astro", astro), ["// front", "/* in astro */"]);
+	// A Vue template has no `{…}` expressions here.
+	let vue = "<template><p>{{ x /* in vue */ }}</p></template>\n<script>\n// s\n</script>\n";
+	assert_eq!(comment_texts("c.vue", vue), ["// s"]);
 }

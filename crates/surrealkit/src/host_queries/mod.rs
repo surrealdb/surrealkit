@@ -1,9 +1,16 @@
 //! Finds the SurrealQL queries host code sends to the engine.
 //!
-//! A query is a **string or template literal** passed as the first argument of a method call such
-//! as `db.query("SELECT * FROM person")`. The callee is matched on its method name alone, so
-//! `db.query(…)`, `this.db.query(…)` and `tx.query(…)` all count, while a bare `query(…)` or a
-//! call whose first argument is not a literal does not.
+//! A query is a **string or template literal** in one of three places:
+//!
+//! - the first argument of a method call such as `db.query("SELECT * FROM person")`. The callee is
+//!   matched on its method name alone, so `db.query(…)`, `this.db.query(…)` and `tx.query(…)` all
+//!   count, while a bare `query(…)` or a call whose first argument is not a literal does not;
+//! - the first argument of a call to a configured function such as `createQuery(…)` or
+//!   `useQuery(…)`, bare or as a member (`svelte.createQuery(…)`);
+//! - the query attribute of a configured component in markup (`<Query q="…" />`), in JSX and in
+//!   Svelte, Vue and Astro templates.
+//!
+//! [`Queries`] names what to look for and [`HostQuery::source`] records which form matched.
 //!
 //! Only a literal survives into the type system, so only a literal can key an entry of the
 //! generated registry: [`HostQuery::text`] is the literal's JavaScript runtime value, which is the
@@ -11,11 +18,13 @@
 //! parameter, and the span map on [`HostQuery`] keeps every byte of the extracted text addressable
 //! in the host file.
 //!
-//! Plain TypeScript and JavaScript files are parsed directly. Svelte, Vue and Astro files are
-//! unwrapped to their script blocks first, with offsets shifted back into the whole file.
+//! Plain TypeScript, JavaScript, TSX and JSX files are parsed directly. Svelte, Vue and Astro files
+//! are unwrapped to their script blocks first, with offsets shifted back into the whole file, and
+//! their templates are read by a small markup scanner.
 
 mod frameworks;
 mod literal;
+mod markup;
 mod typescript;
 
 use std::collections::BTreeSet;
@@ -35,12 +44,45 @@ pub const HOST_PARAM_PREFIX: &str = "__host";
 /// The method names that carry a query when none are configured.
 pub const DEFAULT_METHODS: &[&str] = &["query"];
 
+/// The bare function names that carry a query when none are configured.
+pub const DEFAULT_FUNCTIONS: &[&str] = &["createQuery", "createLive", "useQuery", "useLive"];
+
+/// The markup components whose attribute carries a query when none are configured.
+pub const DEFAULT_COMPONENTS: &[&str] = &["Query", "LiveQuery"];
+
+/// The attribute of a component that carries its query when none is configured.
+pub const DEFAULT_ATTRIBUTE: &str = "q";
+
+/// What to look for: the names that mark a literal as a query.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Queries<'a> {
+	/// Method names: `receiver.method("…")` carries a query. A bare `method("…")` does not.
+	pub methods: &'a [&'a str],
+	/// Function names: `function("…")` and `receiver.function("…")` carry a query.
+	pub functions: &'a [&'a str],
+	/// Markup component names, compared exactly. A member name such as `<Kit.Query>` matches on
+	/// its last segment.
+	pub components: &'a [&'a str],
+	/// The attribute of a component that carries the query.
+	pub attribute: &'a str,
+}
+
+impl Queries<'static> {
+	/// The defaults of `[typegen.queries]`.
+	pub const DEFAULT: Self = Self {
+		methods: DEFAULT_METHODS,
+		functions: DEFAULT_FUNCTIONS,
+		components: DEFAULT_COMPONENTS,
+		attribute: DEFAULT_ATTRIBUTE,
+	};
+}
+
 /// Extensions [`scan`] reads.
-const SOURCE_EXTENSIONS: &[&str] =
+pub const SOURCE_EXTENSIONS: &[&str] =
 	&["ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx", "svelte", "vue", "astro"];
 
 /// Directories [`scan`] never descends into, besides hidden ones.
-const SKIPPED_DIRECTORIES: &[&str] = &[
+pub const SKIPPED_DIRECTORIES: &[&str] = &[
 	"node_modules",
 	"dist",
 	"build",
@@ -64,12 +106,43 @@ pub struct HostQuery {
 	pub line: u32,
 	/// 1-based column of `host_range.start`, counted in chars.
 	pub column: u32,
-	/// The client method the query was passed to (`query`, `run`, …).
+	/// The name that matched: the client method (`query`, `run`, …), the function (`useQuery`) or
+	/// the component (`Query`). [`Self::source`] says which, and carries the rest.
 	pub method: String,
+	/// Which form of [`Queries`] found the query.
+	pub source: HostQuerySource,
 	/// The `${…}` substitutions that became parameters, in order.
 	pub substitutions: Vec<Substitution>,
 	/// Map from `text` offsets to host offsets: one entry per copied run or decoded escape.
 	segments: Vec<Segment>,
+}
+
+/// The place a query was found, and the name that matched there.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HostQuerySource {
+	/// The first argument of `receiver.method("…")`, with the method name.
+	Method(String),
+	/// The first argument of `function("…")` or `receiver.function("…")`, with the function name.
+	Function(String),
+	/// The attribute of a markup element: `<Component attribute="…">`. `attribute` is the
+	/// configured name, whatever form the host spells it in (`:q` in a Vue template).
+	Attribute {
+		component: String,
+		attribute: String,
+	},
+}
+
+impl HostQuerySource {
+	/// The name that matched: the method, the function or the component.
+	pub fn name(&self) -> &str {
+		match self {
+			Self::Method(name) | Self::Function(name) => name,
+			Self::Attribute {
+				component,
+				..
+			} => component,
+		}
+	}
 }
 
 /// A `${…}` substitution rewritten into a parameter.
@@ -100,6 +173,28 @@ impl Segment {
 }
 
 impl HostQuery {
+	/// A query read from `source[host_range]`, whose line and column are worked out here.
+	fn new(
+		source: &str,
+		text: String,
+		host_range: Range<usize>,
+		origin: HostQuerySource,
+		substitutions: Vec<Substitution>,
+		segments: Vec<Segment>,
+	) -> Self {
+		let (line, column) = line_and_column(source, host_range.start);
+		Self {
+			text,
+			host_range,
+			line,
+			column,
+			method: origin.name().to_string(),
+			source: origin,
+			substitutions,
+			segments,
+		}
+	}
+
 	/// Whether `text` equals the literal's runtime string, so it can key the type registry.
 	///
 	/// A query with substitutions only has a runtime value once the host fills them in.
@@ -210,17 +305,49 @@ fn script_regions(file_name: &str, source: &str) -> Vec<(Range<usize>, bool)> {
 	}
 }
 
-/// Extracts the queries from one host source, dispatching on the extension of `file_name`.
+/// Which markup syntax a file's template is written in, `None` for a file with no template.
+fn markup_flavor(file_name: &str) -> Option<markup::Flavor> {
+	match extension_of(Path::new(file_name)).as_str() {
+		"svelte" => Some(markup::Flavor::Svelte),
+		"vue" => Some(markup::Flavor::Vue),
+		"astro" => Some(markup::Flavor::Astro),
+		_ => None,
+	}
+}
+
+/// Extracts the queries passed to the method calls named by `methods`, normally
+/// [`DEFAULT_METHODS`], from one host source, dispatching on the extension of `file_name`.
 ///
-/// `methods` are the method names that carry a query, normally [`DEFAULT_METHODS`]. Results are in
-/// document order.
+/// Bare function calls and markup attributes are not read; [`extract_with`] reads them. Results
+/// are in document order.
 pub fn extract(file_name: &str, source: &str, methods: &[&str]) -> Vec<HostQuery> {
-	let mut queries: Vec<HostQuery> = script_regions(file_name, source)
+	extract_with(
+		file_name,
+		source,
+		&Queries {
+			methods,
+			functions: &[],
+			components: &[],
+			attribute: DEFAULT_ATTRIBUTE,
+		},
+	)
+}
+
+/// Extracts the queries `queries` names from one host source: method calls, function calls, and
+/// component attributes in JSX and in Svelte, Vue and Astro templates. Results are in document
+/// order.
+pub fn extract_with(file_name: &str, source: &str, queries: &Queries<'_>) -> Vec<HostQuery> {
+	let mut found: Vec<HostQuery> = script_regions(file_name, source)
 		.into_iter()
-		.flat_map(|(content, tsx)| typescript::extract(source, content, tsx, methods))
+		.flat_map(|(content, tsx)| typescript::extract(source, content, tsx, queries))
 		.collect();
-	queries.sort_by_key(|query| (query.host_range.start, query.host_range.end));
-	queries
+	if let Some(flavor) = markup_flavor(file_name)
+		&& !queries.components.is_empty()
+	{
+		found.extend(markup::scan(flavor, source, queries).queries);
+	}
+	found.sort_by_key(|query| (query.host_range.start, query.host_range.end));
+	found
 }
 
 /// The byte ranges of the comments in one host source, in document order, as the TypeScript grammar
@@ -228,13 +355,21 @@ pub fn extract(file_name: &str, source: &str, methods: &[&str]) -> Vec<HostQuery
 /// string or template literal.
 ///
 /// A Svelte, Vue or Astro file yields the comments of its script regions, with offsets shifted into
-/// the whole file the way [`extract`] shifts query offsets. Markup comments are not included.
+/// the whole file the way [`extract`] shifts query offsets. In a Svelte or Astro template it also
+/// yields the JavaScript comments inside `{…}` expressions, in the text and in attribute values.
+/// HTML comments (`<!-- -->`) are not included, and neither is anything in a Vue template.
 pub fn comments(file_name: &str, source: &str) -> Vec<Range<usize>> {
 	let mut found: Vec<Range<usize>> = script_regions(file_name, source)
 		.into_iter()
 		.flat_map(|(content, tsx)| typescript::comments(source, content, tsx))
 		.collect();
+	if let Some(flavor) = markup_flavor(file_name) {
+		for expression in markup::scan(flavor, source, &Queries::DEFAULT).expressions {
+			found.extend(typescript::comments(source, expression, true));
+		}
+	}
 	found.sort_by_key(|range| (range.start, range.end));
+	found.dedup();
 	found
 }
 
@@ -245,7 +380,8 @@ pub struct FoundQuery {
 	pub query: HostQuery,
 }
 
-/// Extracts the queries from every source file under `roots`.
+/// Extracts the queries passed to the method calls named by `methods` from every source file under
+/// `roots`, as [`extract`] does for one source.
 ///
 /// A root is a file or a directory, walked recursively. Files with a TypeScript, JavaScript,
 /// Svelte, Vue or Astro extension are read; `.d.ts` files, hidden directories and build output
@@ -258,6 +394,24 @@ pub struct FoundQuery {
 ///
 /// Fails when a root does not exist, or a source file cannot be read.
 pub fn scan(roots: &[PathBuf], methods: &[&str]) -> Result<Vec<FoundQuery>> {
+	scan_with(
+		roots,
+		&Queries {
+			methods,
+			functions: &[],
+			components: &[],
+			attribute: DEFAULT_ATTRIBUTE,
+		},
+	)
+}
+
+/// Extracts the queries `queries` names from every source file under `roots`, with [`scan`]'s
+/// rules for what is read and in what order.
+///
+/// # Errors
+///
+/// Fails when a root does not exist, or a source file cannot be read.
+pub fn scan_with(roots: &[PathBuf], queries: &Queries<'_>) -> Result<Vec<FoundQuery>> {
 	let mut files = BTreeSet::new();
 	for root in roots {
 		if !root.exists() {
@@ -276,7 +430,12 @@ pub fn scan(roots: &[PathBuf], methods: &[&str]) -> Result<Vec<FoundQuery>> {
 					continue;
 				}
 			};
-			if entry.file_type().is_file() && is_source_file(entry.path()) {
+			// A root that is itself a file is judged by its own name.
+			let relative = match entry.depth() {
+				0 => Path::new(entry.file_name()),
+				_ => entry.path().strip_prefix(root).unwrap_or(entry.path()),
+			};
+			if entry.file_type().is_file() && is_source(relative) {
 				files.insert(entry.into_path());
 			}
 		}
@@ -291,7 +450,7 @@ pub fn scan(roots: &[PathBuf], methods: &[&str]) -> Result<Vec<FoundQuery>> {
 			continue;
 		};
 		let name = file.to_string_lossy();
-		for query in extract(&name, &source, methods) {
+		for query in extract_with(&name, &source, queries) {
 			found.push(FoundQuery {
 				file: file.clone(),
 				query,
@@ -310,16 +469,33 @@ fn is_skipped_directory(entry: &walkdir::DirEntry) -> bool {
 	if !entry.file_type().is_dir() {
 		return false;
 	}
-	let name = entry.file_name().to_string_lossy();
-	name.starts_with('.') || SKIPPED_DIRECTORIES.contains(&name.as_ref())
+	is_skipped_name(&entry.file_name().to_string_lossy())
 }
 
-fn is_source_file(path: &Path) -> bool {
+/// Whether a directory of this name is one [`scan`] never descends into: hidden, or one of
+/// [`SKIPPED_DIRECTORIES`].
+fn is_skipped_name(name: &str) -> bool {
+	name.starts_with('.') || SKIPPED_DIRECTORIES.contains(&name)
+}
+
+/// Whether [`scan`] reads the file at `path`, which is relative to the root being scanned: a
+/// [`SOURCE_EXTENSIONS`] file that is not a `.d.ts` declaration, with no directory between the
+/// root and the file that is hidden or one of [`SKIPPED_DIRECTORIES`]. A path given relative to
+/// another directory is judged by every directory it names, so pass it relative to the root.
+pub fn is_source(path: &Path) -> bool {
 	let is_declaration = path
 		.file_name()
 		.and_then(OsStr::to_str)
 		.is_some_and(|name| name.to_ascii_lowercase().ends_with(".d.ts"));
-	!is_declaration && SOURCE_EXTENSIONS.contains(&extension_of(path).as_str())
+	let in_skipped_directory = path.parent().is_some_and(|parent| {
+		parent.components().any(|component| match component {
+			std::path::Component::Normal(name) => is_skipped_name(&name.to_string_lossy()),
+			_ => false,
+		})
+	});
+	!is_declaration
+		&& !in_skipped_directory
+		&& SOURCE_EXTENSIONS.contains(&extension_of(path).as_str())
 }
 
 /// The lowercased extension of `path`, empty when there is none.

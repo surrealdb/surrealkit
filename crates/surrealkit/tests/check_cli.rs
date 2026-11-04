@@ -516,6 +516,36 @@ fn host_code_with_an_interpolated_query_is_k9201() {
 }
 
 #[test]
+fn a_svelte_query_attribute_with_a_brace_is_k9201_at_the_brace() {
+	let dir = project(HOST_CONFIG, &[("001_base.surql", BASE)]);
+	let page = "\
+<h1>People</h1>
+<Query q=\"SELECT * FROM person WHERE name = '{name}'\" />
+<Query q=\"SELECT * FROM person WHERE age > $min\" params={{ min }} />
+<script>
+	const all = createQuery(\"SELECT * FROM person\");
+</script>
+";
+	write(&dir.path().join("src/Page.svelte"), page);
+	let human = surrealkit(dir.path(), &["check"]);
+	assert_eq!(human.status.code(), Some(1), "{}", stderr(&human));
+	let text = stderr(&human);
+	assert!(text.contains("error[K9201]: `${…}` interpolated into a query string"), "{text}");
+	assert!(text.contains(" --> src/Page.svelte:2:46\n"), "{text}");
+	let source_line = "2 | <Query q=\"SELECT * FROM person WHERE name = '{name}'\" />";
+	let carets = format!("  | {}{}", " ".repeat(45), "^".repeat("{name}".len()));
+	assert!(text.contains(&format!("{source_line}\n{carets}\n")), "{text}");
+	assert!(text.contains("= help: pass `params` instead of interpolating"), "{text}");
+	assert!(text.contains("read 1 host file holding 3 queries"), "{text}");
+
+	let as_json = surrealkit(dir.path(), &["-j", "check"]);
+	let report = json(&as_json);
+	assert_eq!(report["diagnostics"].as_array().map(Vec::len), Some(1));
+	assert_eq!(report["diagnostics"][0]["code"], "K9201");
+	assert_eq!(report["diagnostics"][0]["path"], "src/Page.svelte");
+}
+
+#[test]
 fn without_queries_sources_no_host_code_is_read() {
 	let dir = project("", &[("001_base.surql", BASE)]);
 	write(&dir.path().join("src/app.ts"), APP_TS);

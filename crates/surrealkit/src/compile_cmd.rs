@@ -169,49 +169,21 @@ impl Plan {
 	}
 }
 
-// TEMPORARY. `surrealkit check`'s branch makes `host_queries::scan`'s rule public as
-// `host_queries::is_source` and `pub` `SOURCE_EXTENSIONS` / `SKIPPED_DIRECTORIES`. Replace the
-// next three items with those, and delete them. `is_source` takes the path relative to the
-// scanned root (a root that is a file: its file name), the way the real one does.
+// Host code is read by `host_queries`' rule, so the watch set, `--watch-paths` and the scan agree
+// on which files hold queries. A build without `host-queries` reads no host code.
+#[cfg(all(feature = "watch", feature = "host-queries"))]
+use crate::host_queries::is_source;
+#[cfg(feature = "host-queries")]
+use crate::host_queries::{SKIPPED_DIRECTORIES, SOURCE_EXTENSIONS};
 
-/// The extensions of the host code `[typegen.queries] sources` reads.
-const SOURCE_EXTENSIONS: &[&str] =
-	&["ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx", "svelte", "vue", "astro"];
+#[cfg(not(feature = "host-queries"))]
+const SOURCE_EXTENSIONS: &[&str] = &[];
+#[cfg(not(feature = "host-queries"))]
+const SKIPPED_DIRECTORIES: &[&str] = &[];
 
-/// The directories host code is never read from, besides hidden ones.
-const SKIPPED_DIRECTORIES: &[&str] = &[
-	"node_modules",
-	"dist",
-	"build",
-	"target",
-	".svelte-kit",
-	".next",
-	".nuxt",
-	".astro",
-	".output",
-];
-
-/// Whether `relative` (below a scanned root) is a file of host code: an extension in
-/// [`SOURCE_EXTENSIONS`], not a `.d.ts` declaration, and no directory in it hidden or in
-/// [`SKIPPED_DIRECTORIES`].
-#[cfg(feature = "watch")]
-fn is_source(relative: &Path) -> bool {
-	let Some(name) = relative.file_name().and_then(|name| name.to_str()) else {
-		return false;
-	};
-	let lowered = name.to_ascii_lowercase();
-	if lowered.ends_with(".d.ts") {
-		return false;
-	}
-	let extension = lowered.rsplit_once('.').map_or("", |(_, extension)| extension);
-	if !SOURCE_EXTENSIONS.contains(&extension) {
-		return false;
-	}
-	let directories = relative.parent().into_iter().flat_map(Path::components);
-	!directories.into_iter().any(|component| {
-		let name = component.as_os_str().to_string_lossy();
-		name.starts_with('.') || SKIPPED_DIRECTORIES.contains(&name.as_ref())
-	})
+#[cfg(all(feature = "watch", not(feature = "host-queries")))]
+fn is_source(_relative: &Path) -> bool {
+	false
 }
 
 /// The files a compile reads and writes, as configured: relative to the working directory
@@ -707,7 +679,7 @@ mod watching {
 mod tests {
 	use super::*;
 
-	#[cfg(feature = "watch")]
+	#[cfg(all(feature = "watch", feature = "host-queries"))]
 	#[test]
 	fn host_code_is_read_by_extension_without_declarations_or_build_output() {
 		for yes in ["a.ts", "A.SVELTE", "lib/a.mjs", "src/routes/+page.svelte", ".hidden.ts"] {

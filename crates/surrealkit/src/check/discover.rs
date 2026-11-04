@@ -242,6 +242,56 @@ fn read(path: &Path) -> Result<String> {
 	fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))
 }
 
+/// `folder` as the absolute, normalized path the layout is built from: a relative `folder` is
+/// under `root`.
+fn folder_under(root: &Path, folder: &str) -> String {
+	normalize(&if Path::new(folder).is_absolute() {
+		PathBuf::from(folder)
+	} else {
+		root.join(folder)
+	})
+	.to_string_lossy()
+	.into_owned()
+}
+
+/// The schema directory of each of `modules` under `folder`, normalized, in the same order.
+fn schema_dirs(project: &ProjectConfig, folder: &str, modules: &[Module]) -> Vec<PathBuf> {
+	modules
+		.iter()
+		.map(|module| normalize(&project.layout_for(folder, module).schema_dir()))
+		.collect()
+}
+
+/// The schema files of `modules`, each read from its directory in `dirs` (the same order), in
+/// the order they apply.
+fn read_schema(folder: &str, modules: &[Module], dirs: &[PathBuf]) -> Result<Vec<Source>> {
+	let mut schema = Vec::new();
+	for (module, dir) in modules.iter().zip(dirs) {
+		for path in crate::schema_state::schema_file_paths(folder, dir)? {
+			schema.push(Source {
+				text: read(&path)?,
+				path: normalize(&path),
+				role: Role::Schema,
+				module: Some(module.name().to_string()),
+			});
+		}
+	}
+	Ok(schema)
+}
+
+/// The schema files of `modules` alone, in the order they apply: what [`discover`] reads as
+/// [`Sources::schema`], without walking the project for queries. A relative `folder` is under
+/// `root`; no path here is resolved against the process working directory.
+pub fn discover_schema(
+	project: &ProjectConfig,
+	folder: &str,
+	root: &Path,
+	modules: &[Module],
+) -> Result<Vec<Source>> {
+	let folder = folder_under(&normalize(root), folder);
+	read_schema(&folder, modules, &schema_dirs(project, &folder, modules))
+}
+
 /// Find the files a check reads.
 ///
 /// `root` is the project root; a relative `folder` is under it. `modules` are the selected
@@ -260,34 +310,16 @@ pub fn discover(
 	config: &AnalyzeConfig,
 ) -> Result<Sources> {
 	let root = normalize(root);
-	let folder_path = normalize(&if Path::new(folder).is_absolute() {
-		PathBuf::from(folder)
-	} else {
-		root.join(folder)
-	});
-	let folder_str = folder_path.to_string_lossy().into_owned();
+	let folder_str = folder_under(&root, folder);
 	let ignore = Ignore::from_config(config)?;
 
-	let mut schema_dirs = Vec::new();
+	let schema_dirs = schema_dirs(project, &folder_str, modules);
 	let mut relative_dirs = Vec::new();
-	for module in modules {
-		let dir = normalize(&project.layout_for(&folder_str, module).schema_dir());
-		relative_dirs.push((module.name().to_string(), root_relative(&root, &dir, module.name())?));
-		schema_dirs.push(dir);
+	for (module, dir) in modules.iter().zip(&schema_dirs) {
+		relative_dirs.push((module.name().to_string(), root_relative(&root, dir, module.name())?));
 	}
 	reject_ignored_schema_dir(&ignore, &relative_dirs)?;
-
-	let mut schema = Vec::new();
-	for (module, dir) in modules.iter().zip(&schema_dirs) {
-		for path in crate::schema_state::schema_file_paths(&folder_str, dir)? {
-			schema.push(Source {
-				text: read(&path)?,
-				path: normalize(&path),
-				role: Role::Schema,
-				module: Some(module.name().to_string()),
-			});
-		}
-	}
+	let schema = read_schema(&folder_str, modules, &schema_dirs)?;
 
 	// A declared module's directories are never queries, selected or not.
 	let mut every: Vec<Module> = modules.to_vec();

@@ -299,6 +299,50 @@ pub async fn types(request: &Request, source: Source<'_>, opts: &RenderOptions) 
 	Ok(report(request, &document, opts))
 }
 
+/// What the static check of one query reads: the project, its folder and template variables, and
+/// the modules the schema is made of (a target's, or `--schema`'s). Nothing connects.
+#[cfg(feature = "analyze")]
+pub struct CheckScope<'a> {
+	pub project: &'a crate::project::ProjectConfig,
+	/// The project root, which the schema files are found under.
+	pub root: &'a std::path::Path,
+	pub folder: &'a str,
+	pub vars: &'a crate::variables::TemplateVars,
+	pub target: Option<String>,
+	pub schema: Vec<String>,
+}
+
+/// Fills `report.findings` with the query's static-check diagnostics (`check::query`). When the
+/// check cannot run, `findings` stays absent and a note says why: the typing stands on its own.
+#[cfg(feature = "analyze")]
+pub async fn check(report: &mut Report, request: &Request, scope: CheckScope<'_>) {
+	let check_request = crate::check::query::QueryCheckRequest {
+		text: request.query.clone(),
+		name: request.name.clone(),
+		target: scope.target,
+		schema: scope.schema,
+	};
+	let checked = crate::check::query::check_query(
+		scope.project,
+		scope.root,
+		scope.folder,
+		scope.vars,
+		&check_request,
+	)
+	.await;
+	let findings = checked.and_then(|found| {
+		found
+			.diagnostics
+			.iter()
+			.map(|finding| serde_json::to_value(finding).map_err(Into::into))
+			.collect::<Result<Vec<Value>>>()
+	});
+	match findings {
+		Ok(findings) => report.findings = Some(findings),
+		Err(err) => report.notes.push(format!("the static check did not run: {err:#}")),
+	}
+}
+
 /// What a parameter's type comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "lowercase")]

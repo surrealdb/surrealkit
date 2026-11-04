@@ -236,6 +236,17 @@ enum Commands {
 	},
 	/// Show the rollouts recorded in the database, and what is still pending.
 	Status,
+	/// Show or raise the database's compatibility level (SurrealDB 4.0).
+	///
+	/// At level 4 a SCHEMAFULL table with records refuses a field change they
+	/// might not fit unless the DEFINE FIELD has MIGRATE EXISTING ROWS, and
+	/// REMOVE FIELD clears the field's values. A database a 3.x datastore created
+	/// stays at level 3 until it is raised.
+	#[command(arg_required_else_help = true)]
+	Compat {
+		#[command(subcommand)]
+		command: CompatCommands,
+	},
 	/// Run one SurrealQL file against the database, with template variables.
 	Apply {
 		/// The `.surql` file to run.
@@ -437,6 +448,26 @@ enum Commands {
 /// global `-t/--target`. That collision silently ate the rollout id in
 /// 1.0.0-beta.1 (`unknown target "<rollout-id>"`) and hid `--target` from these
 /// subcommands entirely. `no_subcommand_shadows_a_global_arg_id` pins it.
+#[derive(Subcommand, Debug)]
+enum CompatCommands {
+	/// Show the level, and what SurrealDB is still doing to each table.
+	Status,
+	/// Raise the database to compatibility level 4.
+	Raise {
+		/// Wait for SurrealDB to check every SCHEMAFULL table, and report the
+		/// fields whose records do not fit, with the schema file to change.
+		#[arg(long)]
+		wait: bool,
+		/// How long `--wait` waits, in seconds.
+		#[arg(long, value_name = "SECS", default_value_t = 3600)]
+		timeout_secs: u64,
+		/// Confirm the change. It alters what REMOVE FIELD does, and SurrealDB
+		/// documents no way back.
+		#[arg(long)]
+		yes: bool,
+	},
+}
+
 #[derive(Subcommand, Debug)]
 enum RolloutCommands {
 	/// Record an existing database's schema as the starting point for rollouts.
@@ -663,6 +694,10 @@ fn print_types(report: &surrealkit::codegen::query_types::Report, json: bool) {
 	for note in &report.notes {
 		eprintln!("note: {note}");
 	}
+	for finding in report.findings.iter().flatten() {
+		let field = |key: &str| finding.get(key).and_then(|v| v.as_str()).unwrap_or_default();
+		eprintln!("{} {}: {}", field("severity"), field("code"), field("message"));
+	}
 }
 
 /// The commands that read only files: `compile`, `typegen --from`, `check` and `watch`. They
@@ -737,7 +772,8 @@ async fn run_offline(args: &Cli) -> Result<Option<i32>> {
 			// Nothing is written, so no output setting may refuse the command.
 			let plan = Plan::load(&compile_args, true, false)?;
 			let opts = types_render_options(&plan.typegen)?;
-			let report = surrealkit::codegen::query_types::types(
+			#[cfg_attr(not(feature = "analyze"), expect(unused_mut))]
+			let mut report = surrealkit::codegen::query_types::types(
 				&request,
 				surrealkit::codegen::query_types::Source::Project {
 					plan: &plan,
@@ -746,6 +782,23 @@ async fn run_offline(args: &Cli) -> Result<Option<i32>> {
 				&opts,
 			)
 			.await?;
+			#[cfg(feature = "analyze")]
+			{
+				let root = std::env::current_dir()?;
+				surrealkit::codegen::query_types::check(
+					&mut report,
+					&request,
+					surrealkit::codegen::query_types::CheckScope {
+						project: &plan.project,
+						root: &root,
+						folder: &folder,
+						vars: &plan.compile.vars,
+						target: None,
+						schema: args.schema.clone(),
+					},
+				)
+				.await;
+			}
 			print_types(&report, args.json);
 			Ok(Some(0))
 		}
@@ -1456,6 +1509,30 @@ async fn run(args: Cli) -> Result<i32> {
 			let db = connect(&cfg).await?;
 			rollout::run_status(&db, &folder, None).await?;
 		}
+		Commands::Compat {
+			command,
+		} => {
+			let db = connect(selection.single_target()?.cfg()).await?;
+			match command {
+				CompatCommands::Status => surrealkit::compat::run_compat_status(&db).await?,
+				CompatCommands::Raise {
+					wait,
+					timeout_secs,
+					yes,
+				} => {
+					surrealkit::compat::run_compat_raise(
+						&db,
+						&folder,
+						surrealkit::compat::CompatRaiseOpts {
+							wait,
+							timeout: std::time::Duration::from_secs(timeout_secs),
+							yes,
+						},
+					)
+					.await?
+				}
+			}
+		}
 		Commands::Apply {
 			path,
 		} => {
@@ -1536,12 +1613,36 @@ async fn run(args: Cli) -> Result<i32> {
 			let opts = types_render_options(&typegen_cfg)?;
 			let target = selection.typegen_target(schema_selection_used)?;
 			let db = connect(target.cfg()).await?;
-			let report = surrealkit::codegen::query_types::types(
+			#[cfg_attr(not(feature = "analyze"), expect(unused_mut))]
+			let mut report = surrealkit::codegen::query_types::types(
 				&request,
 				surrealkit::codegen::query_types::Source::Live(&db),
 				&opts,
 			)
 			.await?;
+			#[cfg(feature = "analyze")]
+			{
+				let project = surrealkit::project::ProjectConfig::load(None)?;
+				let root = std::env::current_dir()?;
+				let pairs =
+					args.var.iter().map(|s| parse_var_flag(s)).collect::<Result<Vec<_>>>()?;
+				let vars = surrealkit::variables::TemplateVars {
+					vars: surrealkit::variables::build_project_vars(&pairs, None)?,
+				};
+				surrealkit::codegen::query_types::check(
+					&mut report,
+					&request,
+					surrealkit::codegen::query_types::CheckScope {
+						project: &project,
+						root: &root,
+						folder: &folder,
+						vars: &vars,
+						target: Some(target.name().to_string()),
+						schema: args.schema.clone(),
+					},
+				)
+				.await;
+			}
 			print_types(&report, json);
 		}
 		Commands::Typegen {

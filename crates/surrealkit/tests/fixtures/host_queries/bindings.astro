@@ -1,0 +1,11 @@
+---
+const people = createQuery("SELECT * FROM person");
+---
+
+<Query q="SELECT * FROM post WHERE title = &quot;a&quot;" />
+<LiveQuery q={"SELECT * FROM tag"} />
+<Query q=`SELECT * FROM note WHERE owner = ${owner}` />
+<Other q="SELECT * FROM other" />
+<Query q={sql} />
+<Query q="SELECT * FROM log WHERE body = 'a > b'" />
+<!-- <Query q="SELECT * FROM commented" /> -->

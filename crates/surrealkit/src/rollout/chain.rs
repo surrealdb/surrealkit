@@ -17,7 +17,9 @@ use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 use surrealdb_types::SurrealValue;
 
-use super::{LoadedRolloutSpec, RolloutPhase, RolloutStatus, load_rollout_spec, string_field};
+use super::{
+	LoadedRolloutSpec, RolloutPhase, RolloutStatus, load_rollout_spec, phase_recorded, string_field,
+};
 use crate::constants::rollouts_dir;
 use crate::module::Module;
 use crate::schema_state::{
@@ -292,13 +294,7 @@ impl Ledger {
 			let Some(id) = string_field(&row, "id") else {
 				continue;
 			};
-			let reached_complete =
-				row.get("steps").and_then(|v| v.as_array()).is_some_and(|steps| {
-					steps.iter().any(|step| {
-						step.get("phase").and_then(|v| v.as_str())
-							== Some(RolloutPhase::Complete.as_str())
-					})
-				});
+			let reached_complete = phase_recorded(&row, RolloutPhase::Complete);
 			ledger.rows.insert(
 				id,
 				LedgerRow {

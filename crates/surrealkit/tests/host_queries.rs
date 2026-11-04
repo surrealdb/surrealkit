@@ -5,7 +5,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use surrealkit::host_queries::{DEFAULT_METHODS, FoundQuery, scan};
+use surrealkit::host_queries::{
+	DEFAULT_METHODS, FoundQuery, HostQuerySource, Queries, scan, scan_with,
+};
 
 fn hosts() -> PathBuf {
 	Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/host_queries")
@@ -43,6 +45,96 @@ fn scan_reads_every_host_kind_in_file_order() {
 			("widget.tsx", "SELECT * FROM widget"),
 		]
 	);
+}
+
+#[test]
+fn scan_with_the_defaults_reads_bare_calls_and_component_attributes() {
+	let found = scan_with(&[hosts()], &Queries::DEFAULT).expect("scan succeeds");
+	let owned = texts(&found);
+	let seen: Vec<(&str, &str)> = owned.iter().map(|(file, text)| (file.as_str(), *text)).collect();
+
+	assert_eq!(
+		seen,
+		[
+			("Bindings.svelte", "SELECT * FROM person"),
+			("Bindings.svelte", "SELECT * FROM person WHERE age > $__host0"),
+			("Bindings.svelte", "SELECT * FROM post"),
+			("Bindings.svelte", "SELECT * FROM tag"),
+			("Bindings.svelte", "SELECT * FROM note WHERE body = 'a > b'"),
+			("Bindings.vue", "SELECT * FROM person WHERE age > 18"),
+			("Bindings.vue", "SELECT * FROM post WHERE author = $__host0"),
+			("Bindings.vue", "SELECT * FROM tag"),
+			("Bindings.vue", "SELECT * FROM note WHERE body = 'a > b'"),
+			("Bindings.vue", "SELECT * FROM comment"),
+			("Comp.vue", "SELECT * FROM comment"),
+			("Page.svelte", "SELECT * FROM post"),
+			("Page.svelte", "SELECT * FROM post:1"),
+			("app.ts", "SELECT name FROM person"),
+			("app.ts", "SELECT * FROM person WHERE age >= $age"),
+			("app.ts", "SELECT * FROM person WHERE age > $__host0"),
+			("bindings.astro", "SELECT * FROM person"),
+			("bindings.astro", "SELECT * FROM post WHERE title = \"a\""),
+			("bindings.astro", "SELECT * FROM tag"),
+			("bindings.astro", "SELECT * FROM note WHERE owner = $__host0"),
+			("bindings.astro", "SELECT * FROM log WHERE body = 'a > b'"),
+			("bindings.jsx", "SELECT * FROM person"),
+			("bindings.jsx", "SELECT * FROM post"),
+			("bindings.jsx", "SELECT * FROM tag WHERE id = $__host0"),
+			("bindings.jsx", "SELECT * FROM log WHERE body = 'a > b'"),
+			("bindings.tsx", "SELECT * FROM person"),
+			("bindings.tsx", "SELECT * FROM post WHERE age > 18"),
+			("bindings.tsx", "SELECT * FROM tag"),
+			("bindings.tsx", "SELECT * FROM note"),
+			("bindings.tsx", "SELECT * FROM log WHERE body = 'a > b'"),
+			("page.astro", "SELECT * FROM comment"),
+			("page.astro", "SELECT * FROM comment WHERE flagged"),
+			("widget.tsx", "SELECT * FROM widget"),
+		]
+	);
+}
+
+#[test]
+fn scan_with_records_where_each_query_was_found() {
+	let found = scan_with(&[hosts().join("Bindings.svelte")], &Queries::DEFAULT).expect("scan");
+	let sources: Vec<HostQuerySource> =
+		found.iter().map(|found| found.query.source.clone()).collect();
+	let attribute = |component: &str| HostQuerySource::Attribute {
+		component: component.to_string(),
+		attribute: "q".to_string(),
+	};
+	assert_eq!(
+		sources,
+		[
+			HostQuerySource::Function("createQuery".to_string()),
+			attribute("Query"),
+			attribute("LiveQuery"),
+			attribute("Query"),
+			attribute("Query"),
+		]
+	);
+}
+
+#[test]
+fn scan_with_positions_index_the_host_file() {
+	let found = scan_with(&[hosts()], &Queries::DEFAULT).expect("scan succeeds");
+	for found in &found {
+		let source = fs::read_to_string(&found.file).expect("fixture is UTF-8");
+		let query = &found.query;
+		let contents = &source[query.host_range.clone()];
+		let line = source.lines().nth(query.line as usize - 1).expect("line exists");
+		assert_eq!(
+			line.chars().nth(query.column as usize - 1),
+			contents.chars().next(),
+			"{}:{}:{}",
+			found.file.display(),
+			query.line,
+			query.column,
+		);
+		for substitution in &query.substitutions {
+			let hole = &source[substitution.host_range.clone()];
+			assert!(hole.starts_with(['{', '$']) && hole.ends_with('}'), "{hole}");
+		}
+	}
 }
 
 #[test]

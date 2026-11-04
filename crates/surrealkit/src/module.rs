@@ -51,6 +51,9 @@ pub enum Partition {
 	Schema,
 	/// Advisory locks.
 	Lock,
+	/// The `MIGRATE EXISTING ROWS` clauses SurrealKit has run, keyed
+	/// `table:name`, so a name reused for another transform is caught.
+	Migration,
 	/// Database-wide metadata. Never module-qualified.
 	Meta,
 }
@@ -62,6 +65,7 @@ impl Partition {
 			Self::Sync => "sync",
 			Self::Schema => "schema",
 			Self::Lock => "lock",
+			Self::Migration => "migration",
 			Self::Meta => "meta",
 		}
 	}

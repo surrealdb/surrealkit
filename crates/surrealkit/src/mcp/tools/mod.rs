@@ -11,6 +11,8 @@
 //! confirmation prompt would be wrong for half the actions -- and that prompt is
 //! the entire reason to ship annotations.
 
+#[cfg(feature = "analyze")]
+pub mod check;
 pub mod rollout;
 
 use std::collections::BTreeMap;
@@ -137,6 +139,29 @@ pub struct SeedInput {
 	/// `confirm`, because re-running inserts against a populated database.
 	#[serde(default)]
 	pub force: bool,
+	#[serde(default)]
+	pub confirm: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CompatStatusInput {
+	#[serde(flatten)]
+	pub work: WorkRequest,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct CompatRaiseInput {
+	#[serde(flatten)]
+	pub work: WorkRequest,
+	/// Wait for SurrealDB to check every SCHEMAFULL table, and report the fields
+	/// whose records do not fit, with the schema file to change.
+	#[serde(default)]
+	pub wait: bool,
+	/// How long `wait` waits, in seconds. One hour by default.
+	#[serde(default)]
+	pub timeout_secs: Option<u64>,
+	/// Required: raising the level changes what REMOVE FIELD does, and there is
+	/// no documented way back.
 	#[serde(default)]
 	pub confirm: bool,
 }
@@ -408,7 +433,11 @@ pub(super) fn contain_rollout_selector(ctx: &CallContext, selector: &str) -> Res
 /// `#[tool_router]` generates a private associated function, visible only inside
 /// this module, so the server constructor goes through here.
 pub(super) fn router() -> rmcp::handler::server::router::tool::ToolRouter<SurrealKitMcp> {
-	SurrealKitMcp::tool_router() + rollout::router()
+	let router = SurrealKitMcp::tool_router() + rollout::router();
+	// The check tools need the `analyze` feature, which `mcp` does not imply.
+	#[cfg(feature = "analyze")]
+	let router = router + check::router();
+	router
 }
 
 #[tool_router(router = tool_router)]
@@ -724,6 +753,92 @@ impl SurrealKitMcp {
 
 	/// Execute one `.surql` file.
 	#[tool(
+		name = "compat_status",
+		description = "Show the database's SurrealDB compatibility level (3 or 4), and for \
+		               each table the MIGRATE EXISTING ROWS migrations it has run, the fields \
+		               every record fits, and what SurrealDB is still rewriting or checking.",
+		annotations(
+			title = "Compatibility status",
+			read_only_hint = true,
+			destructive_hint = false,
+			idempotent_hint = true,
+			open_world_hint = true
+		)
+	)]
+	pub async fn compat_status(
+		&self,
+		Parameters(input): Parameters<CompatStatusInput>,
+	) -> CallToolResult {
+		let server = self.clone();
+		run_captured(
+			|report: &TargetOutcome| report.summarize("compat status"),
+			|| async move {
+				let ctx = server.context(&input.work)?;
+				let selection = ctx.selection(&input.work)?;
+				let (db, target) = connect_single(&selection).await?;
+				crate::compat::run_compat_status(&db).await?;
+				Ok(TargetOutcome::of(&target))
+			},
+		)
+		.await
+	}
+
+	#[tool(
+		name = "compat_raise",
+		description = "Raise the database to SurrealDB compatibility level 4 (ALTER DATABASE \
+		               COMPATIBILITY 4). At level 4 a SCHEMAFULL table with records refuses a \
+		               field change they might not fit unless the DEFINE FIELD has MIGRATE \
+		               EXISTING ROWS, and REMOVE FIELD clears the field's values. Requires \
+		               confirm: true. wait: true waits for SurrealDB to check every table and \
+		               reports what does not fit.",
+		annotations(
+			title = "Raise compatibility level",
+			read_only_hint = false,
+			destructive_hint = true,
+			idempotent_hint = true,
+			open_world_hint = true
+		)
+	)]
+	pub async fn compat_raise(
+		&self,
+		Parameters(input): Parameters<CompatRaiseInput>,
+	) -> CallToolResult {
+		if !input.confirm {
+			return error::confirmation_required(
+				"compat_raise",
+				"the selected database target",
+				"raises the database to compatibility level 4.",
+				"At level 4, REMOVE FIELD clears the values a field held, and a field change \
+				 its records might not fit is refused without MIGRATE EXISTING ROWS. SurrealDB \
+				 documents no way back.",
+				Some("call `compat_status` first to see the current level"),
+			);
+		}
+		let server = self.clone();
+		run_captured(
+			|report: &TargetOutcome| report.summarize("compat raise"),
+			|| async move {
+				let ctx = server.context(&input.work)?;
+				let selection = ctx.selection(&input.work)?;
+				let _guard = server.lock_folder(&ctx.folder).await;
+				let (db, target) = connect_single(&selection).await?;
+				crate::compat::run_compat_raise(
+					&db,
+					&ctx.folder,
+					crate::compat::CompatRaiseOpts {
+						wait: input.wait,
+						timeout: std::time::Duration::from_secs(input.timeout_secs.unwrap_or(3600)),
+						yes: true,
+					},
+				)
+				.await?;
+				Ok(TargetOutcome::of(&target))
+			},
+		)
+		.await
+	}
+
+	#[tool(
 		name = "apply",
 		description = "Execute a .surql file against the target database after ${VAR} \
 		               substitution. The path is relative to the project root; absolute \
@@ -896,7 +1011,8 @@ impl SurrealKitMcp {
 					.queries_config()?
 					.map(|config| config.render_options())
 					.unwrap_or_default();
-				if input.work.target.is_empty() {
+				#[cfg_attr(not(feature = "analyze"), expect(unused_mut))]
+				let mut report = if input.work.target.is_empty() {
 					// The project's own schema on the embedded engine: no target is
 					// resolved and nothing connects. Compile's own plan, rooted at this
 					// call's project.
@@ -927,15 +1043,30 @@ impl SurrealKitMcp {
 						},
 						&opts,
 					)
-					.await
+					.await?
 				} else {
 					let selection = ctx.selection(&input.work)?;
 					let target = selection.typegen_target(!input.work.schema.is_empty())?;
 					let db = connect(target.cfg())
 						.await
 						.with_context(|| format!("connecting to target {:?}", target.name()))?;
-					types(&request, Source::Live(&db), &opts).await
-				}
+					types(&request, Source::Live(&db), &opts).await?
+				};
+				#[cfg(feature = "analyze")]
+				crate::codegen::query_types::check(
+					&mut report,
+					&request,
+					crate::codegen::query_types::CheckScope {
+						project: &ctx.project,
+						root: &ctx.root,
+						folder: &ctx.folder,
+						vars: &ctx.vars,
+						target: input.work.target.first().cloned(),
+						schema: input.work.schema.clone(),
+					},
+				)
+				.await;
+				Ok(report)
 			},
 		)
 		.await

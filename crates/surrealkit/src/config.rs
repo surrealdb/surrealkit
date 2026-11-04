@@ -471,6 +471,7 @@ pub async fn connect(cfg: &DbCfg) -> Result<Surreal<Any>> {
 	})
 	.await?;
 
+	crate::core::ensure_supported_server(&db).await?;
 	Ok(db)
 }
 

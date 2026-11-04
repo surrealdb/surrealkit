@@ -14,6 +14,15 @@
 #
 #   SURREALDB_HOST / SURREAL_HTTP  the server (default 127.0.0.1:8000)
 #   NEW_BIN                        this build (default target/debug/surrealkit)
+#   UPGRADE_SERVER                 a command that upgrades the server between the
+#                                  two releases. When set, every old-release step
+#                                  runs first; then this build checks that it
+#                                  refuses the old server, the command runs, and
+#                                  this build carries the state on. Releases up to
+#                                  1.0.0-beta.8 are built on the 3.x SDK and need
+#                                  a 3.x server, and this build needs 4.0, so CI
+#                                  writes the state on 3.3 and upgrades the
+#                                  datastore to 4.0 in place.
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -83,13 +92,20 @@ SQL
 }
 
 # --- sync ---------------------------------------------------------------------
+sync_old() {
 NS="upgrade_sync_$TAG"
 fresh "$NS"
+SYNC_WORK="$WORK"
 old "$NS" sync >/dev/null 2>&1 || fail "the old release could not sync"
 sql "$NS" "CREATE person:ann SET name = 'Ann', age = 30;" >/dev/null
 before="$(catalog "$NS")"
 
 sql "$NS" "CREATE \`audit log\`:one SET note = 'kept';" >/dev/null
+}
+
+sync_new() {
+NS="upgrade_sync_$TAG"
+cd "$SYNC_WORK"
 new "$NS" sync >/tmp/upgrade_sync.log 2>&1 || fail "sync after the upgrade failed: $(cat /tmp/upgrade_sync.log)"
 grep -qiE "pruned [1-9]|would prune" /tmp/upgrade_sync.log && fail "the upgrade pruned something"
 after="$(catalog "$NS")"
@@ -108,10 +124,13 @@ echo "DEFINE TABLE added SCHEMALESS;" > database/schema/added.surql
 new "$NS" sync >/dev/null
 catalog "$NS" | jq -e 'index("table::added")' >/dev/null || fail "a new file was not applied after the upgrade"
 ok "sync applies changes after the upgrade"
+}
 
 # --- rollouts: completed history and one in flight -----------------------------
+rollout_old() {
 NS="upgrade_rollout_$TAG"
 fresh "$NS"
+ROLLOUT_WORK="$WORK"
 old "$NS" sync >/dev/null 2>&1
 old "$NS" rollout baseline >/dev/null 2>&1 || fail "the old release could not baseline"
 sql "$NS" "CREATE person:bob SET name = 'Bob', age = 41;" >/dev/null
@@ -128,7 +147,12 @@ old "$NS" rollout plan --name second >/dev/null 2>&1
 SECOND="$(id_named second)"
 old_rollout_run "$NS" rollout start "$SECOND" >/dev/null 2>&1 || fail "the old release could not start $SECOND"
 [ "$(status_of "$NS" "$SECOND")" = ready_to_complete ] || fail "setup: $SECOND should be in flight"
+}
 
+rollout_new() {
+NS="upgrade_rollout_$TAG"
+cd "$ROLLOUT_WORK"
+SECOND="$(id_named second)"
 new "$NS" rollout status >/tmp/upgrade_status.log 2>&1 || fail "status failed: $(cat /tmp/upgrade_status.log)"
 new "$NS" rollout complete "$SECOND" >/tmp/upgrade_complete.log 2>&1 \
     || fail "completing the old release's in-flight rollout failed: $(cat /tmp/upgrade_complete.log)"
@@ -150,18 +174,71 @@ expected="$(jq -c '[.entities[] | "\(.kind):\(.scope // ""):\(.name)"] | sort' d
 [ "$(catalog "$NS")" = "$expected" ] || fail "catalog $(catalog "$NS") differs from the plan $expected"
 [ "$(sql "$NS" "SELECT VALUE name FROM person:bob;")" = '["Bob"]' ] || fail "data was lost"
 ok "a new frozen rollout runs after the old release's history with up"
+}
 
 # --- rollouts: an in-flight rollout rolled back after the upgrade --------------
+rollback_old() {
 NS="upgrade_rollback_$TAG"
 fresh "$NS"
+ROLLBACK_WORK="$WORK"
 old "$NS" sync >/dev/null 2>&1
 old "$NS" rollout baseline >/dev/null 2>&1
 echo "DEFINE TABLE invoice SCHEMALESS;" > database/schema/invoice.surql
 old "$NS" rollout plan --name only >/dev/null 2>&1
 ONLY="$(id_named only)"
 old_rollout_run "$NS" rollout start "$ONLY" >/dev/null 2>&1
+}
+
+rollback_new() {
+NS="upgrade_rollback_$TAG"
+cd "$ROLLBACK_WORK"
+ONLY="$(id_named only)"
 new "$NS" rollout rollback "$ONLY" >/tmp/upgrade_rollback.log 2>&1 \
     || fail "rolling back the old release's rollout failed: $(cat /tmp/upgrade_rollback.log)"
 [ "$(status_of "$NS" "$ONLY")" = rolled_back ] || fail "$ONLY should be rolled back"
 sql "$NS" "INFO FOR DB;" | jq -e '.tables | has("invoice") | not' >/dev/null || fail "rollback left the table"
 ok "a rollout the old release started rolls back after the upgrade"
+}
+
+# 1.0.0-beta.1's rollout commands that take an id never worked, so its rollout
+# steps above run on this build. Across a server upgrade this build cannot reach
+# the old server, and beta.1 has no rollout state of its own to carry forward.
+rollouts_from_old() { [ "$OLD_VERSION" != "1.0.0-beta.1" ]; }
+
+if [ -n "${UPGRADE_SERVER:-}" ]; then
+    sync_old
+    if rollouts_from_old; then
+        rollout_old
+        rollback_old
+    fi
+    if new "upgrade_sync_$TAG" status >/tmp/upgrade_refused.log 2>&1; then
+        fail "this build ran against the old server: $(cat /tmp/upgrade_refused.log)"
+    fi
+    grep -q "needs SurrealDB 4.0" /tmp/upgrade_refused.log \
+        || fail "this build did not say why it refused the old server: $(cat /tmp/upgrade_refused.log)"
+    ok "this build refuses the 3.x server and says why"
+    bash -c "$UPGRADE_SERVER" || fail "upgrading the server failed"
+    sync_new
+    if rollouts_from_old; then
+        rollout_new
+        rollback_new
+    else
+        ok "skipped the rollout sections: $OLD_VERSION could not run them on its own"
+    fi
+    new "upgrade_sync_$TAG" compat status >/tmp/upgrade_compat.log 2>&1 \
+        || fail "compat status failed: $(cat /tmp/upgrade_compat.log)"
+    grep -q "compatibility level 3" /tmp/upgrade_compat.log \
+        || fail "an upgraded database should stay at level 3: $(cat /tmp/upgrade_compat.log)"
+    new "upgrade_sync_$TAG" compat raise --wait --yes --timeout-secs 120 >/tmp/upgrade_raise.log 2>&1 \
+        || fail "raising the upgraded database to level 4 failed: $(cat /tmp/upgrade_raise.log)"
+    new "upgrade_sync_$TAG" sync >/tmp/upgrade_sync_l4.log 2>&1 \
+        || fail "sync at level 4 failed: $(cat /tmp/upgrade_sync_l4.log)"
+    ok "the upgraded database stays at level 3, raises to 4, and still syncs"
+else
+    sync_old
+    sync_new
+    rollout_old
+    rollout_new
+    rollback_old
+    rollback_new
+fi

@@ -1,9 +1,10 @@
 //! Lints of the SurrealQL host code sends: the queries [`host_queries`]
 //! finds in TypeScript, JavaScript, Svelte, Vue and Astro sources.
 //!
-//! One rule, `K9201`: a template literal with `${…}` passed to a query method splices the value
-//! into the SurrealQL text. A `surql`-tagged template is a call expression, not a literal, so
-//! the extractor never reads it and the rule never fires on it.
+//! One rule, `K9201`: a template literal with `${…}` passed to a query method or function, or a
+//! `{…}` interpolated into a Svelte query attribute, splices the value into the SurrealQL text. A
+//! `surql`-tagged template is a call expression, not a literal, so the extractor never reads it
+//! and the rule never fires on it.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -12,7 +13,7 @@ use anyhow::{Context, Result};
 
 use super::finding::{Finding, K9201, Note, NoteKind};
 use super::{ExtraFile, HostCounts};
-use crate::host_queries::{self, HostQuery};
+use crate::host_queries::{self, HostQuery, HostQuerySource, Queries};
 use crate::variables::QueriesConfig;
 
 /// What reading the host code found.
@@ -25,16 +26,27 @@ pub struct HostLint {
 	pub counts: HostCounts,
 }
 
-/// Read the host code under `config.sources` (relative to `root`) and report each `${…}`
-/// interpolated into a query as `K9201`, at the substitution.
+/// Read the host code under `config.sources` (relative to `root`) and report each `${…}` (or
+/// Svelte `{…}`) interpolated into a query as `K9201`, at the substitution. Queries are the method
+/// calls, function calls and component attributes `config` names.
 ///
 /// `counts.files` is the files that hold at least one query. A source that does not exist, or a
 /// file that cannot be read, is an error.
 pub fn lint(root: &Path, config: &QueriesConfig) -> Result<HostLint> {
 	let roots: Vec<PathBuf> = config.sources.iter().map(|source| root.join(source)).collect();
-	let methods: Vec<&str> = config.methods.iter().map(String::as_str).collect();
+	fn names(list: &[String]) -> Vec<&str> {
+		list.iter().map(String::as_str).collect()
+	}
+	let (methods, functions, components) =
+		(names(&config.methods), names(&config.functions), names(&config.components));
+	let queries = Queries {
+		methods: &methods,
+		functions: &functions,
+		components: &components,
+		attribute: &config.attribute,
+	};
 	let mut by_file: BTreeMap<PathBuf, Vec<HostQuery>> = BTreeMap::new();
-	for found in host_queries::scan(&roots, &methods)? {
+	for found in host_queries::scan_with(&roots, &queries)? {
 		by_file.entry(found.file).or_default().push(found.query);
 	}
 
@@ -42,15 +54,19 @@ pub fn lint(root: &Path, config: &QueriesConfig) -> Result<HostLint> {
 	for (path, queries) in by_file {
 		lint.counts.files += 1;
 		lint.counts.queries += queries.len();
-		let substitutions: Vec<_> =
-			queries.iter().flat_map(|query| query.substitutions.iter()).collect();
-		if substitutions.is_empty() {
+		if queries.iter().all(|query| query.substitutions.is_empty()) {
 			continue;
 		}
 		let text = std::fs::read_to_string(&path)
 			.with_context(|| format!("reading {}", path.display()))?;
-		for substitution in substitutions {
-			lint.findings.push(interpolation(&path, substitution.host_range.clone()));
+		for query in &queries {
+			for substitution in &query.substitutions {
+				lint.findings.push(interpolation(
+					&path,
+					substitution.host_range.clone(),
+					&query.source,
+				));
+			}
 		}
 		let comments = host_queries::comments(&path.to_string_lossy(), &text);
 		lint.files.push(ExtraFile {
@@ -62,7 +78,19 @@ pub fn lint(root: &Path, config: &QueriesConfig) -> Result<HostLint> {
 	Ok(lint)
 }
 
-fn interpolation(path: &Path, span: std::ops::Range<usize>) -> Finding {
+fn interpolation(path: &Path, span: std::ops::Range<usize>, source: &HostQuerySource) -> Finding {
+	let help = match source {
+		HostQuerySource::Attribute {
+			component,
+			attribute,
+		} => format!(
+			"pass `params` instead of interpolating: write `$name` in the `{attribute}` of \
+			 `<{component}>` and give the value in its `params`"
+		),
+		HostQuerySource::Method(_) | HostQuerySource::Function(_) => "pass it as a parameter \
+			(`$name` with a bindings object) or build the query with the SDK's `surql` tag"
+			.to_string(),
+	};
 	Finding::kit(
 		K9201,
 		"`${…}` interpolated into a query string: the value is spliced into the SurrealQL text",
@@ -71,9 +99,7 @@ fn interpolation(path: &Path, span: std::ops::Range<usize>) -> Finding {
 	)
 	.with_note(Note {
 		kind: NoteKind::Help,
-		message: "pass it as a parameter (`$name` with a bindings object) or build the query with \
-		          the SDK's `surql` tag"
-			.to_string(),
+		message: help,
 		span: None,
 		replacement: None,
 	})
@@ -251,6 +277,47 @@ db.query(`SELECT ${id}`);
 			[("Comp.vue".to_string(), "${three}"), ("Page.svelte".to_string(), "${two}")]
 		);
 		assert_eq!(report.summary.suppressed, 1, "`one` is covered from inside the script block");
+	}
+
+	#[test]
+	fn function_and_attribute_queries_are_linted_with_their_own_help() {
+		let vue = "<template>\n  <Query :q=\"`SELECT ${a}`\" />\n</template>\n<script setup>\nconst r = useQuery(`SELECT ${b}`);\n</script>\n";
+		let dir = project(&[("web/Comp.vue", vue)]);
+		let linted = lint(dir.path(), &config(&["web"])).expect("lint");
+		let spans: Vec<&str> = linted.findings.iter().map(|f| &vue[f.span.clone()]).collect();
+		assert_eq!(spans, ["${a}", "${b}"]);
+		assert!(linted.findings[0].notes[0].message.starts_with("pass `params` instead of"));
+		assert!(linted.findings[0].notes[0].message.contains("`<Query>`"));
+		assert!(linted.findings[1].notes[0].message.contains("`surql` tag"));
+		assert_eq!(linted.counts.queries, 2);
+
+		let mut off = config(&["web"]);
+		off.functions.clear();
+		off.components.clear();
+		assert!(lint(dir.path(), &off).expect("lint").findings.is_empty());
+	}
+
+	#[tokio::test]
+	async fn a_line_comment_in_a_svelte_brace_suppresses_the_next_line() {
+		let text = "\
+<Query q={
+	// surreal: allow(K9201) reason=\"validated\"
+	`SELECT * FROM t WHERE a = ${a}`
+} />
+<Query q={
+	`SELECT * FROM t WHERE b = ${b}`
+} />
+";
+		let dir = project(&[("web/Page.svelte", text)]);
+		let report = check(dir.path(), &["web"], "").await;
+		assert_eq!(report.summary.suppressed, 1);
+		let spans: Vec<&str> = report
+			.findings
+			.iter()
+			.filter(|f| f.code == K9201)
+			.map(|f| &text[f.span.clone()])
+			.collect();
+		assert_eq!(spans, ["${b}"]);
 	}
 
 	#[tokio::test]
