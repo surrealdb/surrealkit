@@ -185,35 +185,57 @@ impl HostQuery {
 	}
 }
 
+/// The regions of a host source that hold script: the whole file for TypeScript and JavaScript,
+/// the script blocks of a Svelte, Vue or Astro file. Each is a byte range of `source` and whether
+/// it needs the JSX grammar.
+fn script_regions(file_name: &str, source: &str) -> Vec<(Range<usize>, bool)> {
+	match extension_of(Path::new(file_name)).as_str() {
+		"svelte" | "vue" => frameworks::script_blocks(source)
+			.into_iter()
+			.map(|block| (block.content, block.tsx))
+			.collect(),
+		"astro" => {
+			let frontmatter = frameworks::astro_frontmatter(source);
+			let scripts_from = frontmatter.as_ref().map_or(0, |content| content.end);
+			let mut regions: Vec<(Range<usize>, bool)> =
+				frontmatter.map(|content| (content, false)).into_iter().collect();
+			for block in frameworks::script_blocks(&source[scripts_from..]) {
+				let content = block.content.start + scripts_from..block.content.end + scripts_from;
+				regions.push((content, block.tsx));
+			}
+			regions
+		}
+		"tsx" | "jsx" => vec![(0..source.len(), true)],
+		_ => vec![(0..source.len(), false)],
+	}
+}
+
 /// Extracts the queries from one host source, dispatching on the extension of `file_name`.
 ///
 /// `methods` are the method names that carry a query, normally [`DEFAULT_METHODS`]. Results are in
 /// document order.
 pub fn extract(file_name: &str, source: &str, methods: &[&str]) -> Vec<HostQuery> {
-	let extension = extension_of(Path::new(file_name));
-	let mut queries = match extension.as_str() {
-		"svelte" | "vue" => frameworks::script_blocks(source)
-			.into_iter()
-			.flat_map(|block| typescript::extract(source, block.content, block.tsx, methods))
-			.collect(),
-		"astro" => {
-			let frontmatter = frameworks::astro_frontmatter(source);
-			let mut found = frontmatter
-				.clone()
-				.map(|content| typescript::extract(source, content, false, methods))
-				.unwrap_or_default();
-			let scripts_from = frontmatter.map_or(0, |content| content.end);
-			for block in frameworks::script_blocks(&source[scripts_from..]) {
-				let content = block.content.start + scripts_from..block.content.end + scripts_from;
-				found.extend(typescript::extract(source, content, block.tsx, methods));
-			}
-			found
-		}
-		"tsx" | "jsx" => typescript::extract(source, 0..source.len(), true, methods),
-		_ => typescript::extract(source, 0..source.len(), false, methods),
-	};
+	let mut queries: Vec<HostQuery> = script_regions(file_name, source)
+		.into_iter()
+		.flat_map(|(content, tsx)| typescript::extract(source, content, tsx, methods))
+		.collect();
 	queries.sort_by_key(|query| (query.host_range.start, query.host_range.end));
 	queries
+}
+
+/// The byte ranges of the comments in one host source, in document order, as the TypeScript grammar
+/// finds them: `//` line comments and `/* */` blocks, but not what only looks like one inside a
+/// string or template literal.
+///
+/// A Svelte, Vue or Astro file yields the comments of its script regions, with offsets shifted into
+/// the whole file the way [`extract`] shifts query offsets. Markup comments are not included.
+pub fn comments(file_name: &str, source: &str) -> Vec<Range<usize>> {
+	let mut found: Vec<Range<usize>> = script_regions(file_name, source)
+		.into_iter()
+		.flat_map(|(content, tsx)| typescript::comments(source, content, tsx))
+		.collect();
+	found.sort_by_key(|range| (range.start, range.end));
+	found
 }
 
 /// A query and the file it was found in.
