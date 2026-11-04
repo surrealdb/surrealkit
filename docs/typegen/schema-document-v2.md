@@ -781,6 +781,7 @@ cannot type queries (SurrealDB before 4.1) gives no `queries` and the warning
 | `sources` | Where the query comes from, sorted by `path`, then `span.start`. A named query has one; an inline query has one per call site that passes the same text. `path` is relative to the directory the `[typegen.queries]` paths resolve against (the one SurrealKit runs in), `/`-separated. `span` is a UTF-8 byte range in the file: the query text of a named query, the literal's contents for an inline one. `line` and `column` are 1-based, of `span.start`; `column` counts Unicode scalar values. `method` (host only) is the client method the text was passed to. |
 | `statements` | One per top-level statement, in source order: every statement, `BEGIN`, `COMMIT`, `CANCEL`, `USE` and `OPTION` included, has exactly one slot in the response, so `statements[i]` describes slot `i`. |
 | `params` | Each `$name` the query reads without binding it, that is neither a `DEFINE PARAM` nor a session parameter, sorted by name. Names start without `$`. A `__host`-prefixed parameter is filled by the host-language template, not by the caller. |
+| `error` | Present when the engine could not type this query: `{ "code", "message", "span"? }`, the engine's code and message, and `span`, a UTF-8 byte range `[start, end)` within `text` of the part at fault. The entry has empty `statements` and no `params`; the diagnostic `query-invalid` names it. Other entries are unaffected. |
 
 A statement:
 
@@ -791,6 +792,8 @@ A statement:
 | `certainty` | `fact`: an engine invariant guarantees the kind. `hint`: the kind is declared but unproven (a schemaless or `FLEXIBLE` field, a computed field, anything inferred as `any`). |
 | `exact` | `false` when the engine approximated part of the kind with `any`. The kind is still a sound supertype of the result. |
 | `open` | Positions inside `kind` where an object admits undeclared keys, as path segments (section 6): `[]` is the kind itself, `"*"` steps into an array or set element, any other segment is an object-literal field. A path passes through `option` and `union`. |
+| `live` | What a live subscription to the statement delivers (below). Present on every top-level `SELECT` that `LIVE SELECT` can run, computed as if the statement began with `LIVE`, and on a `LIVE SELECT` statement. Its `kind` stays the `SELECT`'s result, or `uuid` for a `LIVE SELECT`. Absent on other statements and on a nested `SELECT`. |
+| `liveRefusal` | Present when `LIVE SELECT` cannot run the `SELECT` as written (below). |
 
 Each statement's kind assumes that every earlier statement of the query succeeded. After a
 statement fails, the kinds of the statements after it are not guaranteed.
@@ -802,6 +805,40 @@ parameter's kind is inferred from how the query uses it, so it is always a hint.
 Kinds are v2 kinds, so they carry what any target language needs: an `int`'s `width` and
 `signed`, an `enum`'s labels in order, and a `named` kind that refers to `types`. A kind this
 SurrealKit does not know is `unknown`, with the warning `query-kind-unrecognized`.
+
+### Live subscriptions
+
+A statement's `live` describes the subscription that its `live.query` opens:
+
+```jsonc
+"live": {
+  "diff": false,                     // true: the value of a notification is a patch array
+  "query": "LIVE SELECT * FROM user WHERE team = $team",
+  "exit": "silent",                  // only with a WHERE
+  "watch": "LIVE SELECT id FROM user",   // only with exit "silent"
+  "notifications": [ {
+    "action": "CREATE",              // CREATE, UPDATE, DELETE, KILLED, in this order
+    "record": { "kind": "record", "tables": ["user"] },
+    "result": { "kind": "objectLiteral", "fields": [ … ] },
+    "certainty": "fact",
+    "open": []
+  } ]
+}
+```
+
+| Property | Meaning |
+| --- | --- |
+| `diff` | Whether the subscription delivers patches (`LIVE SELECT DIFF`): each notification's `result` is then the patch array's kind. |
+| `query` | The text to subscribe with. For a `SELECT` with a windowable `liveRefusal`, it is the reduced query: the `SELECT` without the refused clauses. |
+| `exit` | How a record that stops matching the `WHERE` is reported: `delete` as a `DELETE` notification, `silent` not at all. Absent without a `WHERE`. |
+| `watch` | With `exit: "silent"`, the text that watches the same targets without the `WHERE`, which a client uses to see the records that leave the filter. |
+| `notifications` | One per action the subscription can deliver, ordered CREATE, UPDATE, DELETE, KILLED. `record` is the kind of the record id and `result` the kind of the value; both are value kinds, so a NONE variant is an `option`. `open` is a statement's `open` for `result`. `KILLED` ends the subscription and carries no record. |
+
+A `liveRefusal` is `{ "code", "message", "clauses", "windowable" }`: the engine's code and message,
+and the clauses `LIVE SELECT` does not accept (`ORDER BY`, `LIMIT`, `ONLY`, …). With `windowable: true`
+the `SELECT` can still be served by watching the reduced query and running the `SELECT` again on
+each change, and the statement carries both `liveRefusal` and the `live` of the reduced query. With
+`windowable: false` it cannot, and there is no `live`.
 
 ### Query files
 
@@ -833,7 +870,7 @@ file and line in `reason`:
 | `query-name-duplicate` | Two named queries share a name, in one file or across files. |
 | `query-text-unnamed` | A file has a statement before its first marker. |
 | `query-text-empty` | A marker is followed by no text. |
-| `query-invalid` | The engine cannot type the query (it does not parse, or the engine refuses it). |
+| `query-invalid` | The engine cannot type the query (it does not parse, or the engine refuses it). The entry carries the engine's `error`; the diagnostic's `reason` holds its code and message, `source` is the query text and `span` the engine's, when it gave one. |
 
 A diagnostic about one query names it with `"query": "<key>"`.
 

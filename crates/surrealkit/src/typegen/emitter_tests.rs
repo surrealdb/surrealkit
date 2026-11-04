@@ -459,8 +459,11 @@ async fn documents_with_and_without_queries() -> (super::SchemaDocument, super::
 			certainty: Certainty::Fact,
 			exact: true,
 			open: Vec::new(),
+			live: None,
+			live_refusal: None,
 		}],
 		params: Vec::new(),
+		error: None,
 	}];
 	typed.diagnostics.extend([
 		Diagnostic::new(Severity::Warning, codes::QUERY_KIND_UNRECOGNIZED, "x", "a kind")
