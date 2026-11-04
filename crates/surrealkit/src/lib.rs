@@ -5,6 +5,9 @@ pub mod check;
 // host-code query extraction that feeds it.
 pub mod codegen;
 pub mod compile;
+// The `compile` command's configuration, the files it reads and writes, and `compile --watch`.
+#[doc(hidden)]
+pub mod compile_cmd;
 pub mod config;
 pub mod constants;
 pub mod core;
@@ -37,6 +40,9 @@ mod test_db;
 pub mod tester;
 pub mod typegen;
 pub mod variables;
+// File-change watching, for the commands that run again when a file changes.
+#[cfg(feature = "watch")]
+pub mod watch;
 
 // Re-exported dependencies used in the public API surface.
 pub use anyhow;

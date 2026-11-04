@@ -374,6 +374,21 @@ pub fn produce(
 	folder: &str,
 	opts: &TypegenOpts,
 ) -> Result<()> {
+	produce_with(v1, v2, folder, opts, None).map(|_| ())
+}
+
+/// [`produce`], returning the outputs it changed: each file written, and each emitter's
+/// directory when it wrote or removed a file there. Nothing is returned for a `check`.
+/// `level` is the log level of the per-file progress lines; `None` is `info`, or `debug` when
+/// the JSON goes to stdout.
+#[doc(hidden)]
+pub fn produce_with(
+	v1: &SchemaTypes,
+	v2: Option<&SchemaDocument>,
+	folder: &str,
+	opts: &TypegenOpts,
+	level: Option<log::Level>,
+) -> Result<Vec<PathBuf>> {
 	// The JSON is v2 when that is the configured version and there is one to write.
 	let json_v2 = v2.filter(|_| opts.schema_version == SchemaVersion::V2);
 	let json_path = if opts.stdout {
@@ -388,7 +403,7 @@ pub fn produce(
 		}
 		log::Level::Debug
 	} else {
-		log::Level::Info
+		level.unwrap_or(log::Level::Info)
 	};
 	let ts_path = opts.ts_out.as_deref().map(typescript_file);
 	let outputs = Outputs {
@@ -407,17 +422,20 @@ pub fn produce(
 		},
 	)?;
 	if opts.check {
-		return check_with(&artifacts, &rendered.plans, &rendered.failed);
+		check_with(&artifacts, &rendered.plans, &rendered.failed)?;
+		return Ok(Vec::new());
 	}
 	// Refuse before writing anything, so a strict failure leaves every output as it was.
 	for plan in &rendered.plans {
 		emitters::preflight(plan, opts.strict)?;
 	}
-	publish(&artifacts, progress, OnWriteError::Propagate)?;
+	let mut changed = publish(&artifacts, progress, OnWriteError::Propagate)?;
 	for plan in &rendered.plans {
-		emitters::publish(plan, progress)?;
+		if emitters::publish(plan, progress)? {
+			changed.push(plan.out.clone());
+		}
 	}
-	Ok(())
+	Ok(changed)
 }
 
 /// The per-query TypeScript module `[typegen.queries] typescript` asks for, rendered from the
@@ -697,7 +715,7 @@ pub async fn regenerate_after_sync(
 		publish(&artifacts, log::Level::Info, on_error)?;
 		for plan in &ready {
 			match emitters::publish(plan, log::Level::Info) {
-				Ok(()) => {}
+				Ok(_) => {}
 				Err(err) if strict => return Err(err),
 				Err(err) => log::error!("typegen: {err:#}"),
 			}
@@ -823,11 +841,18 @@ fn format_typescript(
 	}
 }
 
-fn publish(artifacts: &[Artifact], level: log::Level, on_error: OnWriteError) -> Result<()> {
+/// Publishes every artifact and returns the paths it wrote.
+fn publish(
+	artifacts: &[Artifact],
+	level: log::Level,
+	on_error: OnWriteError,
+) -> Result<Vec<PathBuf>> {
+	let mut written = Vec::new();
 	for artifact in artifacts {
 		match output::write_atomic(&artifact.path, &artifact.bytes) {
 			Ok(WriteOutcome::Written) => {
 				log::log!(level, "typegen: wrote {}", artifact.path.display());
+				written.push(artifact.path.clone());
 			}
 			Ok(WriteOutcome::Unchanged) => {
 				log::log!(level, "typegen: {} is up to date", artifact.path.display());
@@ -838,7 +863,7 @@ fn publish(artifacts: &[Artifact], level: log::Level, on_error: OnWriteError) ->
 			},
 		}
 	}
-	Ok(())
+	Ok(written)
 }
 
 /// Compare every output with the file on disk; fail listing each one that is

@@ -595,3 +595,83 @@ fn a_bad_query_file_fails_a_strict_compile_and_is_logged_by_a_lenient_one() {
 	assert_eq!(code, Some(1), "{text}");
 	assert!(text.contains("nowhere"), "{text}");
 }
+
+/// The stdout of `surrealkit compile --watch-paths` in `dir`: one JSON document and nothing else.
+fn watch_paths(dir: &Path, extra: &[&str]) -> serde_json::Value {
+	let output = Command::new(env!("CARGO_BIN_EXE_surrealkit"))
+		.current_dir(dir)
+		.env_clear()
+		.env("RUST_MIN_STACK", "8388608")
+		.args(["compile", "--watch-paths"])
+		.args(extra)
+		.output()
+		.expect("run surrealkit");
+	assert_eq!(output.status.code(), Some(0), "{}", String::from_utf8_lossy(&output.stderr));
+	serde_json::from_slice(&output.stdout).expect("stdout is one JSON document")
+}
+
+/// The contract the Vite plugin reads: the files a compile reads and writes, from the
+/// configuration alone, with no compile.
+#[test]
+fn watch_paths_prints_the_files_a_compile_reads_and_writes() {
+	let tmp = tempfile::TempDir::new().expect("tempdir");
+	// Nothing here exists but the configuration: no schema file, no source directory.
+	write(
+		&tmp.path().join("surrealkit.toml"),
+		"[schema.core]\n[schema.auth]\ndepends_on = [\"core\"]\n\n[typegen]\nschema_version = 2\n\
+		 json = \"generated/schema.json\"\ntypescript = \"src/generated/types.ts\"\n\n\
+		 [typegen.queries]\nfiles = [\"database/queries\"]\nsources = [\"src\", \"app/page.ts\"]\n\
+		 typescript = \"src/generated/queries.ts\"\n\n[typegen.emit.surreal]\ncommand = \"true\"\n\
+		 out = \"src/generated/surreal\"\n",
+	);
+	let paths = watch_paths(tmp.path(), &[]);
+	assert_eq!(
+		paths,
+		serde_json::json!({
+			"version": 1,
+			"schema": ["database/modules/core/schema", "database/modules/auth/schema"],
+			"config": ["surrealkit.toml", ".env", ".env.local"],
+			"queryFiles": ["database/queries"],
+			"querySources": ["src", "app/page.ts"],
+			"queryExtensions":
+				["ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx", "svelte", "vue", "astro"],
+			"queryIgnoredDirectories": [
+				"node_modules", "dist", "build", "target", ".svelte-kit", ".next", ".nuxt",
+				".astro", ".output"
+			],
+			"outputs": [
+				"generated/schema.json",
+				"src/generated/types.ts",
+				"src/generated/queries.ts",
+				"src/generated/surreal"
+			],
+		})
+	);
+	// Nothing was compiled or written.
+	assert!(!tmp.path().join("generated").exists());
+
+	// `--schema` selects, and `--out` is where the JSON goes.
+	let one = watch_paths(tmp.path(), &["--schema", "core", "--out", "elsewhere/doc.json"]);
+	assert_eq!(one["schema"], serde_json::json!(["database/modules/core/schema"]));
+	assert_eq!(one["outputs"][0], "elsewhere/doc.json");
+}
+
+#[test]
+fn watch_paths_has_every_array_for_a_project_with_no_configuration() {
+	let tmp = tempfile::TempDir::new().expect("tempdir");
+	let paths = watch_paths(tmp.path(), &["--folder", "db"]);
+	assert_eq!(paths["schema"], serde_json::json!(["db/schema"]));
+	assert_eq!(paths["config"], serde_json::json!(["surrealkit.toml", ".env", ".env.local"]));
+	assert_eq!(paths["queryFiles"], serde_json::json!([]));
+	assert_eq!(paths["querySources"], serde_json::json!([]));
+	assert_eq!(paths["outputs"], serde_json::json!(["db/types/schema.json"]));
+}
+
+#[test]
+fn watch_paths_needs_a_configuration_compile_would_accept() {
+	let tmp = tempfile::TempDir::new().expect("tempdir");
+	write(&tmp.path().join("surrealkit.toml"), "[typegen]\njson = \"out/schema.json\"\n");
+	let (code, text) = surrealkit(tmp.path(), &["compile", "--watch-paths"]);
+	assert_eq!(code, Some(1), "{text}");
+	assert!(text.contains("schema_version = 2"), "{text}");
+}

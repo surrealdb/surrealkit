@@ -246,9 +246,7 @@ pub fn assemble(
 	(entries, diagnostics)
 }
 
-/// Types `collected` against `db` and sets `document.queries`, adding the diagnostics to
-/// `document.diagnostics`, which stay in canonical order. The digest is outside the section, so
-/// it does not change.
+/// Types `collected` against `db` and sets `document.queries`, as [`apply`] does.
 pub async fn attach(
 	db: &Surreal<Any>,
 	collected: &Collected,
@@ -260,12 +258,20 @@ pub async fn attach(
 	} else {
 		engine::types_document(db, &inputs).await?
 	};
-	let (entries, diagnostics) = assemble(collected, types.as_ref());
+	apply(document, collected, types.as_ref());
+	Ok(())
+}
+
+/// [`assemble`]s `collected` with `types` and sets `document.queries`, adding the diagnostics
+/// to `document.diagnostics`, which stay in canonical order. The digest is outside the section,
+/// so it does not change. `types` is what [`engine::types_document`] returned for
+/// [`Collected::inputs`], or the same assembled from earlier answers.
+pub fn apply(document: &mut SchemaDocument, collected: &Collected, types: Option<&TypesDocument>) {
+	let (entries, diagnostics) = assemble(collected, types);
 	document.queries = entries;
 	document.diagnostics.extend(diagnostics);
 	document.diagnostics =
 		crate::typegen::sort_diagnostics(std::mem::take(&mut document.diagnostics));
-	Ok(())
 }
 
 #[cfg(test)]

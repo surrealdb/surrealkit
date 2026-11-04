@@ -11,18 +11,19 @@ use anyhow::{Context, Result, bail};
 use clap::builder::BoolishValueParser;
 use clap::{ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand};
 use rust_dotenv::dotenv::DotEnv;
+use surrealkit::compile_cmd::Plan;
 use surrealkit::config::{DbCfg, DbOverrides, connect};
 use surrealkit::core::exec_surql;
 use surrealkit::progress::CaptureLogger;
 use surrealkit::project::ProjectConfig;
 use surrealkit::rollout::{self, RolloutExecutionOpts, RolloutPlanOpts, RolloutUpOpts};
-use surrealkit::selection::{Selection, select_modules};
+use surrealkit::selection::Selection;
 use surrealkit::setup::force_setup;
 use surrealkit::sync::{self, SyncOpts};
 use surrealkit::templates::{self, InitOpts};
 use surrealkit::tester::{ReportFormat, TestOpts, run_test_to};
 use surrealkit::typegen::{TypegenOpts, run_typegen};
-use surrealkit::variables::{TemplateVars, build_project_vars, build_vars, parse_var_flag};
+use surrealkit::variables::{TemplateVars, build_vars, parse_var_flag};
 
 #[cfg(feature = "analyze")]
 use crate::check_cli::CheckFormat;
@@ -396,6 +397,16 @@ enum Commands {
 		/// `[typegen] experimental`: surrealism, and files and gql, which change nothing.
 		#[arg(long = "allow-experimental", value_name = "FEATURE", value_delimiter = ',')]
 		allow_experimental: Vec<String>,
+		/// Keep running, and compile again whenever a schema file, `surrealkit.toml`,
+		/// `.env`, a query file or host code changes. A change to a query types only that
+		/// query. Until Ctrl-C.
+		#[cfg(feature = "watch")]
+		#[arg(long, conflicts_with_all = ["check", "stdout", "watch_paths"])]
+		watch: bool,
+		/// Print the files a compile reads and writes, as one JSON object, and exit
+		/// without compiling. For tools that watch the project themselves.
+		#[arg(long = "watch-paths", conflicts_with_all = ["check", "stdout"])]
+		watch_paths: bool,
 	},
 }
 
@@ -600,58 +611,40 @@ async fn run_offline(args: &Cli) -> Result<Option<i32>> {
 			check,
 			lenient,
 			allow_experimental,
+			#[cfg(feature = "watch")]
+			watch,
+			watch_paths,
 		} => {
 			warn_unused_connection_flags("compile", args);
-			let project = ProjectConfig::load(None)?;
-			let modules = select_modules(&project, &args.schema, args.all, args.no_deps)?;
-			let typegen_cfg = surrealkit::variables::load_typegen_config(None)?;
-			// `sync` and `typegen` write the configured JSON in the configured version; compile
-			// writing v2 there would make the commands overwrite one another.
-			if out.is_none()
-				&& !*stdout && typegen_cfg.json_path()?.is_some()
-				&& typegen_cfg.schema_version()? != surrealkit::typegen::SchemaVersion::V2
-			{
-				anyhow::bail!(
-					"compile writes schema document v2, but [typegen] json is the v1 document \
-					 `sync` and `typegen` write (schema_version is 1 unless set); set [typegen] \
-					 schema_version = 2 so that every command writes v2 there, or pass --out or \
-					 --stdout"
-				);
-			}
 			let raw_vars: Vec<(String, String)> =
 				args.var.iter().map(|s| parse_var_flag(s)).collect::<anyhow::Result<_>>()?;
-			let queries = surrealkit::typegen::queries_opts(&typegen_cfg)?;
-			let mut experimental = typegen_cfg.experimental.clone();
-			experimental.extend(allow_experimental.iter().cloned());
+			let compile_args = surrealkit::compile_cmd::CompileArgs {
+				folder: folder.clone(),
+				schemas: args.schema.clone(),
+				all: args.all,
+				no_deps: args.no_deps,
+				vars: raw_vars,
+				out: out.clone(),
+				compact: *compact,
+				lenient: *lenient,
+				allow_experimental: allow_experimental.clone(),
+			};
+			if *watch_paths {
+				let plan = Plan::load(&compile_args, *stdout, *check)?;
+				println!("{}", plan.watch_set(&folder)?.to_json());
+				return Ok(Some(0));
+			}
+			#[cfg(feature = "watch")]
+			if *watch {
+				return Ok(Some(surrealkit::compile_cmd::watch(&compile_args).await?));
+			}
+			let plan = Plan::load(&compile_args, *stdout, *check)?.collect()?;
 			surrealkit::compile::run_compile(
-				&project,
+				&plan.project,
 				&folder,
-				&modules,
-				&surrealkit::compile::CompileOpts {
-					experimental,
-					// Files and flags only: no SURREALKIT_VAR_* from the environment.
-					vars: TemplateVars {
-						vars: build_project_vars(&raw_vars, None)?,
-					},
-					expected_engine: typegen_cfg.engine.clone(),
-					queries: queries.as_ref().map(|q| q.collected.clone()),
-				},
-				&TypegenOpts {
-					out: out.clone().or(typegen_cfg.json_path()?),
-					stdout: *stdout,
-					pretty: !compact,
-					ts_out: typegen_cfg.typescript_path()?,
-					ts_format: typegen_cfg.format.clone(),
-					strict: !lenient,
-					check: *check,
-					omit_generated_at: true,
-					schema_version: surrealkit::typegen::SchemaVersion::V2,
-					emitters: typegen_cfg.emitters()?,
-					acknowledge: typegen_cfg.acknowledgements()?,
-					// --lenient tolerates diagnostics, never an emitter that cannot run.
-					emitter_failures_fatal: true,
-					queries,
-				},
+				&plan.modules,
+				&plan.compile,
+				&plan.outputs,
 			)
 			.await?;
 			Ok(Some(0))

@@ -503,6 +503,7 @@ a throwaway embedded in-memory engine, then reads that engine back:
 ```bash
 surrealkit compile                       # writes [typegen] json (schema_version = 2), else database/types/schema.json
 surrealkit compile --check               # CI: fail when the committed outputs are stale
+surrealkit compile --watch               # regenerate on every change, until Ctrl-C
 surrealkit --schema billing compile      # billing and the modules it depends on
 surrealkit compile --allow-experimental surrealism
 ```
@@ -625,6 +626,68 @@ section only when they opt in with `queries = true` in their `[typegen.emit.<nam
 The engine types the queries without running them, which needs SurrealDB 4.1. On an older
 engine `compile` and `typegen` report the warning `queries-unsupported-engine` and write no
 `queries`.
+
+#### `compile --watch`
+
+`surrealkit compile --watch` (also `generate --watch`) compiles, then regenerates the outputs
+whenever a file a compile reads changes, until Ctrl-C. It writes exactly what `surrealkit compile`
+writes, atomically, and leaves a file whose bytes did not change alone. It does not combine with
+`--check` or `--stdout`, and needs the `watch` cargo feature (on in the default build).
+
+```bash
+surrealkit compile --watch
+```
+
+```
+compile: schema changed (database/schema/person.surql): 7 queries typed, wrote generated/schema.json, src/generated/queries.ts
+compile: queries changed (src/routes/+page.svelte): 1 of 7 re-typed, wrote src/generated/queries.ts
+compile: queries changed (src/a.ts and 2 more): 0 of 7 re-typed, nothing changed on disk
+```
+
+It watches the selected modules' schema directories (`.surql`), `surrealkit.toml`, `.env` and
+`.env.local`, the `[typegen.queries] files` directories (`.surql`), and the `[typegen.queries]
+sources` roots (host code, by the rule `check` and `compile` read it with). It does not watch what a
+run writes: the JSON, the TypeScript files and every emitter's `out` directory, so writing them
+starts nothing.
+
+- A change to a schema file, `surrealkit.toml` or `.env*` reads the configuration again, compiles
+  from a fresh engine and types every query again. A `surrealkit.toml` that no longer parses is
+  reported, the previous one is kept, and the watch goes on.
+- A change to a query file or host code collects the queries again and types only those whose text
+  is new, against the engine of the last schema that compiled. A query that was edited is a new
+  text, so it is typed again; one that was not is not. The result is what a one-shot `compile` of
+  the same files gives.
+- The first compile runs exactly as `compile` does, and when it fails the error is reported and
+  the watch starts anyway, so the file can be fixed. Every later run that fails logs one `error`
+  line with the cause and leaves the previous outputs in place. A query change before any schema
+  has compiled says the schema has to compile first.
+- The exit code is 0 after Ctrl-C, and an error only when the file watcher itself fails.
+
+`surrealkit compile --watch-paths` prints the files a compile reads and writes as one JSON object on
+stdout and exits 0, without compiling and in a build without the `watch` feature. It reads the
+configuration and honours `--schema`, `--all`, `--folder` and `--out`, so a tool that watches the
+project itself (the Vite plugin) asks the same question `--watch` answers:
+
+```json
+{
+  "version": 1,
+  "schema": ["database/schema", "database/modules/auth/schema"],
+  "config": ["surrealkit.toml", ".env", ".env.local"],
+  "queryFiles": ["database/queries"],
+  "querySources": ["src"],
+  "queryExtensions": ["ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx", "svelte", "vue", "astro"],
+  "queryIgnoredDirectories": ["node_modules", "dist", "build", "target", ".svelte-kit", ".next", ".nuxt", ".astro", ".output"],
+  "outputs": ["generated/schema.json", "src/generated/queries.ts", "src/generated/surreal"]
+}
+```
+
+Paths are relative to the current directory and `/`-separated, as configured; each array is present
+and is empty when nothing is configured. `schema` holds directories (watch the `.surql` files in
+them), `config` holds files, `queryFiles` directories of `.surql` files, `querySources` files and
+directories of host code, and `outputs` files and directories that must not start a rebuild. A
+host file counts when its extension is in `queryExtensions`, it is not a `.d.ts` declaration, and
+no directory between the source root and the file is hidden (starts with `.`) or in
+`queryIgnoredDirectories`. `version` changes only when a field changes meaning.
 
 ### Effect schemas
 

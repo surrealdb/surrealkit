@@ -778,5 +778,9 @@ A document without `[typegen.queries]` is unchanged, byte for byte, and `queries
 receives the document it received before. `surrealkit generate` is another name for
 `surrealkit compile`.
 
+`surrealkit compile --watch` keeps compiling as the schema, the query files or the host code
+change, and types only the queries whose text changed; `compile --watch-paths` prints the files
+it reads and writes as JSON, for tools that watch the project themselves.
+
 For library users: `TypegenOpts` and `CompileOpts` gain a `queries` field (`None` keeps the
 current behaviour), `SchemaDocument` gains `queries`, and `Diagnostic` gains `query`.

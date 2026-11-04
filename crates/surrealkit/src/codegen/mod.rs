@@ -7,8 +7,9 @@
 //! typed client over it. [`query_files`] reads named queries from `.surql` files, and [`section`]
 //! collects them and the queries host code sends ([`crate::host_queries`]) and assembles the
 //! section.
-//! [`engine`] is the seam to the engine's query typing. Table types are not rendered here: the
-//! built-in typegen output owns them.
+//! [`engine`] is the seam to the engine's query typing, and [`watch_cache`] keeps its answers
+//! between the runs of `compile --watch`. Table types are not rendered here: the built-in typegen
+//! output owns them.
 
 pub mod document;
 pub mod engine;
@@ -18,3 +19,4 @@ pub mod query_files;
 pub mod section;
 pub mod typescript;
 pub mod v2;
+pub mod watch_cache;
