@@ -927,7 +927,7 @@ async fn run(args: Cli) -> Result<i32> {
 			},
 		)?,
 		Commands::Setup => {
-			let db = connect(&cfg).await?;
+			let db = connect(selection.single_target()?.cfg()).await?;
 			force_setup(&db, &folder).await?;
 		}
 		Commands::Sync {
@@ -1207,7 +1207,7 @@ async fn run(args: Cli) -> Result<i32> {
 		Commands::Seed {
 			force,
 		} => {
-			let db = connect(&cfg).await?;
+			let db = connect(selection.single_target()?.cfg()).await?;
 			surrealkit::Seed::from_dir(folder.clone())
 				.vars(template_vars)
 				.force(force)
@@ -1215,13 +1215,13 @@ async fn run(args: Cli) -> Result<i32> {
 				.await?;
 		}
 		Commands::Status => {
-			let db = connect(&cfg).await?;
+			let db = connect(selection.single_target()?.cfg()).await?;
 			rollout::run_status(&db, &folder, None).await?;
 		}
 		Commands::Apply {
 			path,
 		} => {
-			let db = connect(&cfg).await?;
+			let db = connect(selection.single_target()?.cfg()).await?;
 			let sql = std::fs::read_to_string(&path)?;
 			let sql = template_vars.apply(&sql)?;
 			exec_surql(&db, &sql).await?;

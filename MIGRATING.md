@@ -8,7 +8,7 @@ filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
 Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and
-1.0.0-beta.7 two more (13 and 14), and 1.0.0-beta.8 five more (15 to 19).
+1.0.0-beta.7 two more (13 and 14), and 1.0.0-beta.8 six more (15 to 20).
 Upgrading from 0.7.0 or any 1.0 beta carries existing state forward; CI checks
 that against every published release.
 
@@ -477,6 +477,23 @@ Running the 4.0 engine under a current-thread `#[tokio::test]` runtime overflowe
 Rust's 2 MiB test-thread stack in SurrealKit's own suite (unoptimised builds), so
 `.cargo/config.toml` sets `RUST_MIN_STACK` to 8 MiB. Do the same if your tests
 run the embedded engine and overflow.
+
+### 20. `setup`, `seed`, `status` and `apply` connect to the selected target (1.0.0-beta.8)
+
+These four commands used to connect through the ambient connection (the
+`SURREALDB_*` environment, `.env` and the connection flags) even when
+`surrealkit.toml` declared targets, so `--target` was accepted and ignored:
+`seed -t staging` seeded the ambient database, and `apply -t prod` ran its file
+there. They now resolve their database like `sync`, `rollout` and `typegen`:
+`--target`, else the `primary` target, else the only declared target, else the
+ambient connection.
+
+- A project with a `primary` target, or exactly one declared target, now runs
+  these commands against that target when no `--target` is given. Pass
+  `--target` to pick another, or remove the `[target.*]` section if the ambient
+  connection is the database you meant.
+- These commands work on one database. `--all`, or `--target` given more than
+  once, is now an error that says so, instead of being ignored.
 
 ## Opting into multiple schema modules
 
