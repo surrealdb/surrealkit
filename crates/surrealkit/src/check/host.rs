@@ -238,19 +238,40 @@ db.query(`SELECT * FROM user WHERE id = ${id}`);
 ";
 		let dir = project(&[("src/app.ts", text)]);
 		let report = check(dir.path(), &["src"], "require_suppression_reason = true\n").await;
-		assert_eq!(report.summary.suppressed, 2);
+		// The trailing directive has no reason, and a reason is required: it is one L7013 and
+		// suppresses nothing, so the finding on its line is reported too.
+		assert_eq!(report.summary.suppressed, 1);
 		let spans: Vec<&str> = report.findings.iter().map(|f| &text[f.span.clone()]).collect();
-		let (lines, user) = (&report.findings, text.rfind("${id}").unwrap());
+		let lines = &report.findings;
+		let from_post = text.find("FROM post").unwrap();
+		let post = from_post + text[from_post..].find("${id}").unwrap();
+		let user = text.rfind("${id}").unwrap();
 		assert_eq!(
 			lines.iter().filter(|f| f.code == K9201).map(|f| f.span.start).collect::<Vec<_>>(),
-			[user],
+			[post, user],
 			"{spans:?}"
 		);
-		// The trailing directive has no reason, and a reason is required: a warning that still
-		// suppresses.
 		let reasonless: Vec<_> = lines.iter().filter(|f| f.code.to_string() == "L7013").collect();
 		assert_eq!(reasonless.len(), 1);
 		assert!(text[reasonless[0].span.clone()].starts_with("// surreal: allow(K9201)"));
+	}
+
+	#[tokio::test]
+	async fn a_host_directive_without_a_required_reason_suppresses_nothing() {
+		let text = "\
+// surreal: allow(K9201)
+db.query(`SELECT * FROM person WHERE id = ${id}`);
+";
+		let dir = project(&[("src/app.ts", text)]);
+		let required = check(dir.path(), &["src"], "require_suppression_reason = true\n").await;
+		assert_eq!(required.summary.suppressed, 0);
+		let codes: Vec<String> = required.findings.iter().map(|f| f.code.to_string()).collect();
+		assert_eq!(codes, ["L7013", "K9201"]);
+		assert!(!required.passed(), "the K9201 it would have hidden is an error");
+		// Without the requirement the same directive suppresses.
+		let optional = check(dir.path(), &["src"], "").await;
+		assert_eq!(optional.summary.suppressed, 1);
+		assert!(optional.findings.is_empty(), "{:#?}", optional.findings);
 	}
 
 	#[tokio::test]

@@ -794,7 +794,9 @@ lexing, so a `--` inside a string is not one, and block comments are not read.
 `L7013` is a warning. A bad target is one `L7013` for that target, and the other targets in the
 comment still apply. A fault of the whole comment (a missing `)`, an empty list, an unclosed
 reason, text after the reason) is one `L7013`, and the comment suppresses nothing. With
-`require_suppression_reason`, a comment without a reason is one `L7013` too, but still suppresses.
+`require_suppression_reason`, a comment without a reason is one `L7013` too, and it suppresses
+nothing either: the findings it names are reported, as the engine's checker reports them. This
+holds for `.surql` and host files alike. Without the setting, a reason is optional.
 
 ### Drift
 

@@ -153,7 +153,8 @@ pub const K9107: Code = Code::kit(9107);
 /// Host code: an untagged template literal with `${…}` passed to a query method, which splices
 /// the value into the SurrealQL text.
 pub const K9201: Code = Code::kit(9201);
-/// A suppression directive that is malformed, or that has no reason when one is required.
+/// A suppression directive that is malformed, or that has no reason when one is required. Either
+/// way the directive suppresses nothing.
 ///
 /// This is the engine's own code, not a SurrealKit one: it is a warning by default.
 pub const L7013: Code = Code::from_number(7013);

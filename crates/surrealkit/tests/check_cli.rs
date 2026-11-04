@@ -159,17 +159,50 @@ fn a_suppression_comment_silences_the_finding_it_covers() {
 }
 
 #[test]
-fn a_missing_reason_is_l7013_when_one_is_required_and_still_suppresses() {
+fn a_missing_reason_is_l7013_when_one_is_required_and_suppresses_nothing() {
 	let bad = "DEFINE FIELD b ON t TYPE int;\n-- surreal: allow(K9003)\nDEFINE FIELD x.y ON t TYPE string;\n";
 	let schema = [("001_base.surql", BASE), ("002_bad.surql", bad)];
 	let dir = project("[analyze]\nrequire_suppression_reason = true\n", &schema);
 	let output = surrealkit(dir.path(), &["-j", "check"]);
-	assert_eq!(output.status.code(), Some(0));
+	assert_eq!(output.status.code(), Some(1), "the K9003 under the directive is reported");
 	let report = json(&output);
-	assert_eq!(report["summary"]["suppressed"], 1);
+	assert_eq!(report["summary"]["suppressed"], 0);
 	assert_eq!(report["summary"]["warnings"], 1);
-	assert_eq!(report["diagnostics"][0]["code"], "L7013");
-	assert_eq!(report["diagnostics"][0]["severity"], "warning");
+	assert_eq!(report["summary"]["errors"], 1);
+	let diagnostics = report["diagnostics"].as_array().unwrap();
+	assert_eq!(diagnostics[0]["code"], "L7013");
+	assert_eq!(diagnostics[0]["severity"], "warning");
+	assert_eq!(diagnostics[1]["code"], "K9003");
+
+	// Without the requirement the same file passes, and the directive suppresses.
+	let relaxed = project("", &schema);
+	let output = surrealkit(relaxed.path(), &["-j", "check"]);
+	assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+	assert_eq!(json(&output)["summary"]["suppressed"], 1);
+}
+
+#[test]
+fn a_missing_reason_in_a_host_file_is_l7013_when_one_is_required_and_suppresses_nothing() {
+	let config = format!("{HOST_CONFIG}[analyze]\nrequire_suppression_reason = true\n");
+	let dir = project(&config, &[("001_base.surql", BASE)]);
+	let app = "\
+export async function find(db, id) {
+	// surreal: allow(K9201)
+	return db.query(`SELECT * FROM t WHERE a = ${id}`);
+}
+";
+	write(&dir.path().join("src/app.ts"), app);
+	let output = surrealkit(dir.path(), &["-j", "check"]);
+	assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+	let report = json(&output);
+	assert_eq!(report["summary"]["suppressed"], 0);
+	let codes: Vec<&str> = report["diagnostics"]
+		.as_array()
+		.unwrap()
+		.iter()
+		.filter_map(|d| d["code"].as_str())
+		.collect();
+	assert_eq!(codes, vec!["L7013", "K9201"]);
 }
 
 #[test]

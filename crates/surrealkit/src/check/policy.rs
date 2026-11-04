@@ -262,6 +262,10 @@ pub struct Directive {
 	/// reason, or an empty list. A directive with a fault suppresses nothing. A bad target or a
 	/// missing reason is not a fault of this kind.
 	pub fault: Option<String>,
+	/// Whether policy refuses the directive: it has no reason and `require_suppression_reason` is
+	/// set. The engine treats such a directive as rejected, so it suppresses nothing, and
+	/// [`Suppressions`] reports it as one `L7013`. It is set when the directive is read.
+	pub rejected: bool,
 	/// The line whose findings it silences.
 	pub line: usize,
 }
@@ -274,9 +278,10 @@ impl Directive {
 	}
 
 	/// Whether the directive silences `code`, a finding's code on the line it covers. A
-	/// directive with a fault silences nothing.
+	/// directive with a fault, or one that policy rejects for want of a reason, silences nothing.
 	fn silences(&self, code: Code) -> bool {
 		self.fault.is_none()
+			&& !self.rejected
 			&& self.targets.iter().any(|target| target.code.as_ref().is_ok_and(|c| *c == code))
 	}
 }
@@ -290,7 +295,8 @@ pub struct Suppressions {
 impl Suppressions {
 	/// The directives in the SurrealQL `text`, and the `L7013` findings for their faults: one
 	/// per directive that is malformed as a whole, one per bad target in a directive that is not,
-	/// and one per directive that has no reason when `policy` requires one. A file that does not
+	/// and one per directive that has no reason when `policy` requires one, which is then
+	/// [rejected](Directive::rejected) and suppresses nothing. A file that does not
 	/// scan has no suppressions (it already carries its own finding).
 	///
 	/// Comments come from the SurrealQL scanner, so a `--` inside a string is not one, and block
@@ -324,9 +330,10 @@ impl Suppressions {
 			} else {
 				line
 			};
-			let Some(directive) = parse_directive(&text[range.clone()], covers) else {
+			let Some(mut directive) = parse_directive(&text[range.clone()], covers) else {
 				continue;
 			};
+			directive.rejected = policy.requires_reason() && directive.reason.is_none();
 			let span = range.start..range.start + text[range.clone()].trim_end().len();
 			// A fault of the directive as a whole is one finding and hides the targets', which
 			// were not read as a list.
@@ -348,13 +355,14 @@ impl Suppressions {
 						));
 					}
 				}
-				if policy.requires_reason() && directive.reason.is_none() {
+				if directive.rejected {
 					findings.push(directive_finding(
 						path,
 						span,
-						"the suppression has no reason, and `require_suppression_reason` is set"
+						"the suppression has no reason, and `require_suppression_reason` is set, \
+						 so it suppresses nothing"
 							.to_string(),
-						"add `reason=\"...\"` after the list",
+						"add `reason=\"...\"` after the list for it to take effect",
 					));
 				}
 			}
@@ -435,6 +443,7 @@ fn parse_directive(comment: &str, line: usize) -> Option<Directive> {
 		targets,
 		reason: None,
 		fault,
+		rejected: false,
 		line,
 	};
 	if let Some(after) = after {
@@ -857,7 +866,7 @@ mod tests {
 	}
 
 	#[test]
-	fn a_missing_reason_is_l7013_only_when_one_is_required_and_still_suppresses() {
+	fn a_missing_reason_is_l7013_only_when_one_is_required_and_then_suppresses_nothing() {
 		let text = "-- surreal: allow(E1002)\nx";
 		let (_, findings) = read(text, "");
 		assert!(findings.is_empty());
@@ -867,10 +876,19 @@ mod tests {
 			assert_eq!(findings[0].code, L7013);
 			assert!(findings[0].message.contains("no reason"));
 			assert!(
-				silenced(&suppressions, text, Code::from_number(1002), text.len() - 1),
-				"the directive still suppresses"
+				!silenced(&suppressions, text, Code::from_number(1002), text.len() - 1),
+				"the directive is rejected and suppresses nothing"
 			);
 		}
+	}
+
+	#[test]
+	fn a_directive_without_a_reason_suppresses_when_none_is_required() {
+		let text = "-- surreal: allow(E1002)\nx";
+		let (suppressions, findings) = read(text, "");
+		assert!(findings.is_empty());
+		assert!(!suppressions.directives()[0].rejected);
+		assert!(silenced(&suppressions, text, Code::from_number(1002), text.len() - 1));
 	}
 
 	/// The suppressions of host-language `text`, whose comment ranges `comments` gives.
@@ -914,6 +932,27 @@ mod tests {
 		assert_eq!(findings[0].code, L7013);
 		assert_eq!(findings[0].span, 0..text.find('\n').unwrap());
 		assert!(!silenced(&suppressions, text, Code::kit(9201), text.find("db.query").unwrap()));
+	}
+
+	#[cfg(feature = "host-queries")]
+	#[test]
+	fn a_host_directive_without_a_required_reason_is_l7013_and_suppresses_nothing() {
+		let text = "// surreal: allow(K9201)\ndb.query(`a ${b}`);\n";
+		let ranges = crate::host_queries::comments("a.ts", text);
+		let policy = policy_with("require_suppression_reason = true\n");
+		let (suppressions, findings) =
+			Suppressions::from_comments(Path::new("/p/a.ts"), text, &ranges, &policy);
+		assert_eq!(findings.len(), 1, "{findings:?}");
+		assert_eq!(findings[0].code, L7013);
+		assert!(findings[0].message.contains("suppresses nothing"));
+		assert!(!silenced(&suppressions, text, Code::kit(9201), text.find("db.query").unwrap()));
+		// With a reason it applies.
+		let text = "// surreal: allow(K9201) reason=\"x\"\ndb.query(`a ${b}`);\n";
+		let ranges = crate::host_queries::comments("a.ts", text);
+		let (suppressions, findings) =
+			Suppressions::from_comments(Path::new("/p/a.ts"), text, &ranges, &policy);
+		assert!(findings.is_empty(), "{findings:?}");
+		assert!(silenced(&suppressions, text, Code::kit(9201), text.find("db.query").unwrap()));
 	}
 
 	#[test]
@@ -1105,13 +1144,13 @@ mod tests {
 	}
 
 	#[test]
-	fn a_missing_reason_is_one_l7013_per_directive_not_per_target() {
+	fn a_missing_reason_is_one_l7013_per_directive_not_per_target_and_every_target_is_refused() {
 		let toml = "require_suppression_reason = true\n";
 		let (text, suppressions, findings) = read_body("allow(E1002, K9201)", toml);
 		assert_eq!(findings.len(), 1, "{findings:?}");
 		assert!(findings[0].message.contains("no reason"));
 		for code in [E1002, Code::kit(9201)] {
-			assert!(silenced(&suppressions, &text, code, text.len() - 1), "{code}");
+			assert!(!silenced(&suppressions, &text, code, text.len() - 1), "{code}");
 		}
 		// A bad target and a missing reason are two faults.
 		let (_, _, findings) = read_body("allow(E1002, 9201)", toml);
