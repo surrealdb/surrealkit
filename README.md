@@ -693,7 +693,7 @@ applies:
 | `K9105` | drift: on the target and recorded as managed by SurrealKit, but no longer in the files (removed, not yet synced) | warn |
 | `K9106` | drift: on the target and never managed by SurrealKit (a shared database, or another writer) | warn |
 | `K9107` | drift: the target runs another engine minor than the embedded one, so only normalised facts were compared | hint |
-| `K9201` | host code: an untagged template literal with `${…}` passed to a query method | deny |
+| `K9201` | host code: a value interpolated into a query string (an untagged `${…}`, or `{…}` in a Svelte `q`) | deny |
 | `L7013` | a malformed or reasonless suppression comment (below) | warn |
 
 The `K` family is `9xxx`, and `9xxx` is the only wildcard over it, so per-code keys tune the
@@ -859,8 +859,31 @@ sources = ["src"]         # files or directories, relative to the project root
 methods = ["query"]       # the client methods whose first argument is a query (the default)
 ```
 
-The one lint is `K9201`: a template literal with `${…}` passed to a query method splices the value
-into the SurrealQL text. Each `${…}` is a finding, at the substitution. Pass the value as a
+A query is a string or template literal in one of three places:
+
+- the first argument of a call to a method in `methods`, such as `db.query("…")` (default
+  `["query"]`; a bare `query("…")` does not count);
+- the first argument of a call to a function in `functions`, bare or namespaced, such as
+  `createQuery("…")` or `kit.useQuery("…")` (default `["createQuery", "createLive",
+  "useQuery", "useLive"]`);
+- the `attribute` of a component in `components`, such as `<Query q="…">` (default
+  `components = ["Query", "LiveQuery"]`, `attribute = "q"`).
+
+The attribute forms that are read:
+
+| Host | Forms |
+|---|---|
+| TSX, JSX | `q="…"`, `q={"…"}`, ``q={`…`}`` |
+| Svelte | `q="…"`, where each `{…}` is an interpolation, and `q={…}` |
+| Vue | `q="…"`, and `:q="…"` / `v-bind:q="…"` read as JavaScript |
+| Astro | `q="…"`, `q={…}` and ``q=`…` `` |
+
+An attribute's value counts only when it is one string or template literal. HTML character
+references in plain attribute text are decoded.
+
+The one lint is `K9201`: a value interpolated into the query text, a `${…}` in a template literal
+or a `{…}` inside a Svelte attribute's quotes, splices the value into the SurrealQL. Each one is a
+finding, at the substitution. Pass the value as a
 parameter instead (`db.query("… WHERE id = $id", { id })`), or build the query with the SDK's
 `surql` tag, which is a call, not a literal, and is never flagged. A string with no `${…}`, and a
 query built any other way, is not read.
@@ -874,7 +897,7 @@ db.query(`SELECT * FROM person WHERE id = ${id}`);        // suppressed
 
 Suppressions in host files are `//` line comments, found by the TypeScript grammar (so a `//`
 inside a string is not one, and `/* */` blocks are not read); in a Svelte, Vue or Astro file
-they are the comments of a script block. The summary counts the host files that hold a query and
+they are the comments of a script block, or of a `{…}` expression in a Svelte or Astro template. The summary counts the host files that hold a query and
 the queries (`host_files`, `host_queries`; `host_read` says whether host code was read at all).
 With no `sources`, or a build without `host-queries`, the lint does nothing. `watch` does not
 re-run when host code changes.
