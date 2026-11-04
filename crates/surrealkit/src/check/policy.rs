@@ -47,29 +47,35 @@ pub const SUPPRESSION_PREFIX: &str = "surreal:";
 pub const ANALYZER_SUPPRESSION_PREFIX: &str = "surrealql-analyzer:";
 
 /// The accepted forms of a lint key, for the messages that reject one.
-const KEY_FORMS: &str = "a code such as E2001 or L7001, a bare number such as 2001, or a family \
-	wildcard: 7xxx, 7XXX or 7*";
+const KEY_FORMS: &str = "a code such as E2001, L7001 or C10001, a bare number such as 2001 or \
+	10001, or a family wildcard: 7xxx, 7XXX or 7* (10xxx and 10* for a five-digit family)";
 
-/// The number a code spelling names: `E2001`, `L7001`, `S0001`, `K9003` or the bare `2001`. The
-/// letter must be one of the catalog's prefixes; whether the code exists is the engine's call.
+/// The number a code spelling names: `E2001`, `L7001`, `S0001`, `K9003`, `C10001` or the bare
+/// `2001`. The letter must be one of the catalog's prefixes (`S`, `E`, `L`, `K`, `C`, `A`, `M`,
+/// `D`, `P`) and the number has four or five digits; whether the code exists is the engine's
+/// call.
 fn parse_code(text: &str) -> Option<u16> {
 	let digits = match text.chars().next()? {
-		'E' | 'L' | 'S' | 'K' => &text[1..],
+		'S' | 'E' | 'L' | 'K' | 'C' | 'A' | 'M' | 'D' | 'P' => &text[1..],
 		_ => text,
 	};
-	if digits.len() != 4 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+	if !matches!(digits.len(), 4 | 5) || !digits.bytes().all(|b| b.is_ascii_digit()) {
 		return None;
 	}
 	digits.parse().ok()
 }
 
-/// The family a wildcard names: `7xxx`, `7XXX` or `7*`.
+/// The family a wildcard names: `N` of one or two digits, then `xxx`, `XXX` or `*`, as in `7xxx`,
+/// `7*` and `10xxx`. The family is the number's thousands.
 fn parse_family(text: &str) -> Option<u16> {
-	let digit = text.chars().next().filter(char::is_ascii_digit)?;
-	match &text[1..] {
-		"xxx" | "XXX" | "*" => digit.to_digit(10).and_then(|d| u16::try_from(d).ok()),
-		_ => None,
+	let digits = text
+		.strip_suffix("xxx")
+		.or_else(|| text.strip_suffix("XXX"))
+		.or_else(|| text.strip_suffix('*'))?;
+	if !matches!(digits.len(), 1 | 2) || !digits.bytes().all(|b| b.is_ascii_digit()) {
+		return None;
 	}
+	digits.parse().ok()
 }
 
 /// The severity policy: `[analyze]` parsed once.
@@ -429,14 +435,99 @@ mod tests {
 
 	#[test]
 	fn a_bad_key_is_a_configuration_error_that_lists_the_forms() {
-		for key in
-			["E2", "E20010", "X2001", "e2001", "7x", "77xxx", "xxxx", "*", "unused-let", "2xx"]
-		{
+		for key in [
+			"E2",
+			"E200100",
+			"X2001",
+			"e2001",
+			"7x",
+			"777xxx",
+			"xxxx",
+			"*",
+			"unused-let",
+			"2xx",
+			"7xx",
+			"10xx",
+			"C100",
+			"C1000100",
+			"10",
+			"XX7xxx",
+		] {
 			let error = policy(&format!("[lints]\n{key:?} = \"warn\"\n")).expect_err(key);
 			let message = format!("{error:#}");
 			assert!(message.contains(&format!("{key:?}")), "names the key: {message}");
 			assert!(message.contains("7xxx"), "lists the forms: {message}");
+			assert!(message.contains("C10001"), "has a five-digit example: {message}");
 		}
+	}
+
+	#[test]
+	fn five_digit_codes_and_families_are_keys() {
+		for (key, number) in [
+			("C10001", 10001),
+			("10001", 10001),
+			("A11001", 11001),
+			("M12001", 12001),
+			("D13001", 13001),
+			("P14001", 14001),
+			("E7001", 7001),
+		] {
+			let policy = policy_with(&format!("[lints]\n{key:?} = \"allow\"\n"));
+			assert_eq!(
+				policy.resolve(Code::from_number(number), Error, Level::Deny),
+				None,
+				"{key}"
+			);
+			assert_eq!(
+				policy.resolve(Code::from_number(number + 1), Error, Level::Deny),
+				Some(Error),
+				"{key} is one code"
+			);
+		}
+		for key in ["10xxx", "10XXX", "10*"] {
+			let policy = policy_with(&format!("[lints]\n{key:?} = \"warn\"\n"));
+			for number in [10001, 10999] {
+				assert_eq!(
+					policy.resolve(Code::from_number(number), Error, Level::Deny),
+					Some(Warning),
+					"{key} covers {number}"
+				);
+			}
+			for number in [1002, 9101, 11001, 14001] {
+				assert_eq!(
+					policy.resolve(Code::from_number(number), Error, Level::Deny),
+					Some(Error),
+					"{key} leaves {number} alone"
+				);
+			}
+		}
+		// `1xxx` is family 1 and never reaches 10xxx to 14xxx.
+		let one = policy_with("[lints]\n\"1xxx\" = \"allow\"\n");
+		assert_eq!(one.resolve(Code::from_number(1002), Error, Level::Deny), None);
+		assert_eq!(one.resolve(Code::from_number(10001), Error, Level::Deny), Some(Error));
+		// A family wildcard has one or two digits, and `9xxx` is the only one over SurrealKit's
+		// codes.
+		let kit = policy_with("[lints]\n\"9xxx\" = \"warn\"\n");
+		assert_eq!(kit.resolve(K9003, Error, Level::Deny), Some(Warning));
+		assert_eq!(kit.resolve(Code::from_number(1002), Error, Level::Deny), Some(Error));
+		let wide = policy_with("[lints]\n\"77xxx\" = \"allow\"\n");
+		assert_eq!(wide.resolve(Code::from_number(7001), Error, Level::Deny), Some(Error));
+	}
+
+	#[test]
+	fn an_exact_five_digit_entry_beats_its_family() {
+		let policy = policy_with("[lints]\n\"10xxx\" = \"deny\"\nC10001 = \"allow\"\n");
+		assert_eq!(policy.resolve(Code::from_number(10001), Warning, Level::Warn), None);
+		assert_eq!(policy.resolve(Code::from_number(10002), Warning, Level::Warn), Some(Error));
+	}
+
+	#[test]
+	fn a_suppression_names_a_five_digit_code() {
+		let text = "-- surreal: allow(C10001) reason=\"x\"\nSELECT 1;\n";
+		let (suppressions, findings) = read(text, "");
+		assert!(findings.is_empty(), "{findings:?}");
+		assert!(silenced(&suppressions, text, Code::from_number(10001), text.len() - 3));
+		assert!(!silenced(&suppressions, text, Code::from_number(1000), text.len() - 3));
 	}
 
 	#[test]
