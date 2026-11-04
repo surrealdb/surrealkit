@@ -93,3 +93,10 @@ void text;
 const db = new Surreal();
 cacheFor(db);
 void preloadQuery(db, 'SELECT kind FROM event');
+
+// A client typed by the generated module is a client the cache accepts.
+import type { Typed } from './queries.js';
+
+declare const typed: Typed<Surreal>;
+cacheFor(typed);
+void preloadQuery(typed, 'SELECT kind FROM event');
