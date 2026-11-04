@@ -1,0 +1,28 @@
+{
+	"name": "surrealkit-example-svelte-live",
+	"private": true,
+	"type": "module",
+	"description": "svelte-surrealkit: typed queries and live queries in SvelteKit, with SSR seeding and live pagination",
+	"scripts": {
+		"db": "surreal start --unauthenticated --bind 127.0.0.1:8000 memory",
+		"seed": "node scripts/seed.mjs",
+		"dev": "vite dev",
+		"build": "vite build",
+		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
+		"types": "surrealkit compile"
+	},
+	"dependencies": {
+		"surrealdb": "2.1.1",
+		"surrealkit-query": "file:../../packages/surrealkit-query",
+		"svelte-surrealkit": "file:../../packages/svelte-surrealkit"
+	},
+	"devDependencies": {
+		"@sveltejs/adapter-node": "^5.4.0",
+		"@sveltejs/kit": "^2.48.5",
+		"@sveltejs/vite-plugin-svelte": "^6.2.4",
+		"svelte": "^5.43.8",
+		"svelte-check": "^4.3.4",
+		"typescript": "^5.9.3",
+		"vite": "^7.3.0"
+	}
+}

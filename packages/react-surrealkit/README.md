@@ -1,0 +1,109 @@
+# react-surrealkit
+
+Use `react-surrealkit` to show typed SurrealQL queries and live queries in React and Next.js. The query text types its rows and parameters, from the module that `surreal kit compile` generates.
+
+```tsx
+'use client';
+import { useLive } from 'react-surrealkit';
+
+export function People({ start }: { start: number }) {
+	const people = useLive('SELECT * FROM person ORDER BY name LIMIT $lim START $start', { lim: 10, start });
+	return <ul>{people.data.map((p) => <li key={String(p.id)}>{p.name}</li>)}</ul>;
+}
+```
+
+When `start` changes, the old live query is killed and the next page opens. When the component unmounts, its live query is killed.
+
+## Install
+
+```bash
+npm install react-surrealkit surrealdb
+```
+
+Peer dependencies: `react` 18.3 or later, and `surrealdb` 2.1.1 or later.
+
+## Set up
+
+1. Register the generated queries in a `.d.ts` file the compiler includes:
+
+   ```ts
+   import type { Queries } from './generated/queries';
+
+   declare module 'surrealkit-query' {
+   	interface Register {
+   		queries: Queries;
+   	}
+   }
+   ```
+
+2. Give the browser's client to every hook:
+
+   ```tsx
+   'use client';
+   import { SurrealProvider } from 'react-surrealkit';
+   import { db } from './db';
+
+   export function Providers({ children }: { children: React.ReactNode }) {
+   	return <SurrealProvider client={db}>{children}</SurrealProvider>;
+   }
+   ```
+
+## Hooks
+
+| Hook | Result |
+| --- | --- |
+| `useQuery(q, params?, options?)` | Runs the query once. `data` is the query's result. |
+| `useLive(q, params?, options?)` | Keeps the rows current. `data` is always an array. |
+
+Both return `data`, `error`, `status`, `loading` and `refetch()`. `params` is required when the query has a required parameter. `options.client` overrides the provider's client.
+
+The hooks follow parameters by value: a new object with equal values does not run the query again. Hooks that show the same query and parameters share one live query. React's strict mode does not open a second one.
+
+## Next.js App Router
+
+Run the query in a Server Component with `preload` from `react-surrealkit/server`, and give the payload to a client component. You write the query text once:
+
+```tsx
+// app/people/page.tsx
+import { preload } from 'react-surrealkit/server';
+import { getDb } from '@/lib/db.server';
+import { People } from './people';
+
+export default async function Page() {
+	const people = await preload(await getDb(), 'SELECT * FROM person ORDER BY name LIMIT $lim START $start', {
+		lim: 10,
+		start: 0,
+	});
+	return <People people={people} />;
+}
+```
+
+```tsx
+// app/people/people.tsx
+'use client';
+import { type Preloaded, useLive } from 'react-surrealkit';
+
+type Page = 'SELECT * FROM person ORDER BY name LIMIT $lim START $start';
+
+export function People({ people }: { people: Preloaded<Page> }) {
+	const live = useLive(people);
+	return <ul>{live.data.map((p) => <li key={String(p.id)}>{p.name}</li>)}</ul>;
+}
+```
+
+The first render uses the payload. In the browser the hook opens its live query. The payload holds plain strings, so it crosses the Server Component boundary, and SDK values such as `RecordId` arrive as themselves.
+
+> WARNING: On the server, use a client for each request (for example, React's `cache()` around the connect). A module-level server client is shared by every user.
+
+## Live queries and pagination
+
+Only some `SELECT` clauses can be live. A query with a clause that is not live, such as `ORDER BY`, `LIMIT` or `START`, runs its `SELECT` again on each change. The [surrealkit-query README](../surrealkit-query/README.md#which-clauses-are-live) has the full table and the lifecycle.
+
+## Development
+
+```bash
+bun install
+bun run test         # hook tests, against a mocked engine
+bun run typecheck    # includes the type goldens in test/types
+bun run build
+```
