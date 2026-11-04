@@ -3,6 +3,7 @@ export {
 	isPreloaded,
 	type LiveSubscriptionLike,
 	type Observable,
+	preload,
 	preloadedParams,
 	preloadQuery,
 	QueryCache,

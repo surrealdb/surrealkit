@@ -31,7 +31,7 @@ import type { Uuid } from 'surrealdb';
 import { SurrealQueryError } from './error.js';
 import { type LivePlan, planLive } from './plan.js';
 import { hasId, type LiveMessageLike, reconcile, share } from './reconcile.js';
-import type { Preloaded } from './types.js';
+import type { ParamsArg, Preloaded, QueryText } from './types.js';
 import { cleanParams, decodeValue, encodeValue, queryKey } from './values.js';
 
 /** A live subscription, as the SDK's `LiveSubscription` provides it. */
@@ -286,6 +286,9 @@ export class QueryCache {
 				gcTimer: undefined,
 			};
 			this.#entries.set(key, entry);
+			// An entry made by a render that never subscribes (a server render)
+			// is collected like a stopped one.
+			this.#scheduleGc(entry);
 		}
 		return entry;
 	}
@@ -614,6 +617,26 @@ export async function preloadQuery<Q extends string>(
 		params: clean ? encodeValue(clean) : undefined,
 		data: encodeValue(result),
 	};
+}
+
+/**
+ * Runs a registered query on the server and returns a payload for the
+ * client: pass it as `q` to a component, rune or hook, which renders its
+ * result at once and is typed from the registry by its text.
+ *
+ * ```ts
+ * // +page.server.ts
+ * export const load = async ({ locals }) => ({
+ * 	users: await preload(locals.db, 'SELECT * FROM user LIMIT $lim', { lim: 10 }),
+ * });
+ * ```
+ */
+export function preload<Q extends QueryText>(
+	db: Pick<SurrealLike, 'query'>,
+	q: Q,
+	...args: ParamsArg<Q>
+): Promise<Preloaded<Q>> {
+	return preloadQuery(db, q, args[0]);
 }
 
 /** Whether `value` is a {@link Preloaded} payload. */

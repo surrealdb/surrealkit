@@ -5,7 +5,7 @@ export {
 	type LiveRowOf,
 	type ParamsOf,
 	type Preloaded,
-	preloadQuery as preload,
+	preload,
 	type QueryCache,
 	type QueryStatus,
 	type QueryText,
