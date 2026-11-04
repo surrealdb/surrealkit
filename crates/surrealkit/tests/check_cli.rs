@@ -190,6 +190,50 @@ fn a_malformed_directive_is_l7013_and_suppresses_nothing() {
 }
 
 #[test]
+fn a_bad_target_in_a_list_is_one_l7013_and_the_good_target_still_suppresses() {
+	// `K9003` is kit-owned and valid, `E1002` is the engine's, and the bare `9201` is a kit target
+	// that is not a rendered code.
+	let bad = "DEFINE FIELD b ON t TYPE int;\n\
+		-- surreal: allow(K9003, E1002, 9201)\n\
+		DEFINE FIELD x.y ON t TYPE string;\n";
+	let schema = [("001_base.surql", BASE), ("002_bad.surql", bad)];
+	let output = surrealkit(project("", &schema).path(), &["-j", "check"]);
+	assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+	let report = json(&output);
+	assert_eq!(report["summary"]["suppressed"], 1, "K9003 was suppressed");
+	let diagnostics = report["diagnostics"].as_array().unwrap();
+	assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+	assert_eq!(diagnostics[0]["code"], "L7013");
+	assert_eq!(diagnostics[0]["path"], "database/schema/002_bad.surql");
+	assert_eq!(diagnostics[0]["span"]["line"], 2, "at the directive");
+	let message = diagnostics[0]["message"].as_str().unwrap();
+	assert!(message.contains("`9201`") && message.contains("K9201"), "{message}");
+}
+
+#[test]
+fn a_bad_target_in_a_host_directive_is_one_l7013_and_the_good_target_still_suppresses() {
+	let dir = project(HOST_CONFIG, &[("001_base.surql", BASE)]);
+	let app = "\
+export async function find(db, id) {
+	// surreal: allow(E1002, K9201, K9xxx) reason=\"id is a validated integer\"
+	return db.query(`SELECT * FROM t WHERE a = ${id}`);
+}
+";
+	write(&dir.path().join("src/app.ts"), app);
+	let output = surrealkit(dir.path(), &["-j", "check"]);
+	assert_eq!(output.status.code(), Some(0), "{}", stdout(&output));
+	let report = json(&output);
+	assert_eq!(report["summary"]["suppressed"], 1, "K9201 was suppressed");
+	let diagnostics = report["diagnostics"].as_array().unwrap();
+	assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+	assert_eq!(diagnostics[0]["code"], "L7013");
+	assert_eq!(diagnostics[0]["path"], "src/app.ts");
+	assert_eq!(diagnostics[0]["span"]["line"], 2, "at the directive");
+	let message = diagnostics[0]["message"].as_str().unwrap();
+	assert!(message.contains("`K9xxx`") && message.contains("no wildcards"), "{message}");
+}
+
+#[test]
 fn a_bad_lint_key_or_level_is_an_error_not_a_finding() {
 	for config in ["[analyze.lints]\n\"E20\" = \"warn\"\n", "[analyze.lints]\nE1002 = \"loud\"\n"] {
 		let dir = project(config, &[("001_base.surql", BASE)]);

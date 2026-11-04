@@ -5,8 +5,9 @@
 //!
 //! - [`Policy`] resolves the severity a finding is reported with, from `[analyze.lints]`,
 //!   `warnings_as_errors` and the code's own default.
-//! - [`Suppressions`] reads `-- surreal: allow(E1002) reason="..."` comments, which silence
-//!   one code on one line.
+//! - [`Suppressions`] reads `-- surreal: allow(E1002, K9201) reason="..."` comments, which
+//!   silence the rendered codes they list on one line. SurrealKit owns the `K` and 9-family
+//!   targets and the engine owns the rest ([`Owner`]).
 
 use std::collections::BTreeMap;
 use std::ops::Range;
@@ -15,7 +16,7 @@ use std::path::Path;
 use anyhow::{Result, bail};
 
 use super::config::AnalyzeConfig;
-use super::finding::{Code, Finding, L7013, LineIndex, Note, NoteKind, Severity};
+use super::finding::{Code, Finding, L7013, LineIndex, Note, NoteKind, Severity, describe};
 
 /// What a code does when no more specific rule names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,12 +153,132 @@ impl Policy {
 	}
 }
 
-/// One valid `allow(...)` directive.
+/// Who reads a suppression target.
+///
+/// SurrealKit reads the targets it owns, and the engine's checker reads the rest. The engine
+/// skips every kit-owned target silently: it neither suppresses with it nor reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Owner {
+	/// A target whose first character is `K` or `k`, or one in the 9 family: a bare number of
+	/// four digits starting with `9`, `9xxx`, `9XXX` or `9*`.
+	Kit,
+	/// Every other target.
+	Engine,
+}
+
+/// One target of an `allow(...)` list, as written.
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Directive {
-	number: u16,
+pub struct Target {
+	/// The target's text, trimmed.
+	pub text: String,
+	/// Who reads it. Known for a bad target too.
+	pub owner: Owner,
+	/// The rendered code it names, or why it is not one. A kit target is `K` and four digits
+	/// that `finding.rs` defines; an engine target is a letter from `S`, `E`, `L`, `C`, `A`,
+	/// `M`, `D` or `P` and four or five digits. The kit letter may be lowercase, and the code
+	/// then has the capital.
+	pub code: Result<Code, String>,
+}
+
+impl Target {
+	/// Classify and validate one target, `text` trimmed of whitespace.
+	fn parse(text: &str) -> Self {
+		let owner = if owned_by_kit(text) {
+			Owner::Kit
+		} else {
+			Owner::Engine
+		};
+		let code = match owner {
+			Owner::Kit => kit_code(text),
+			Owner::Engine => engine_code(text),
+		};
+		Self {
+			text: text.to_string(),
+			owner,
+			code,
+		}
+	}
+}
+
+/// Whether SurrealKit owns the target `text`: it starts with `K` or `k`, or it is in the 9
+/// family (`9201`, `9xxx`, `9XXX`, `9*`).
+fn owned_by_kit(text: &str) -> bool {
+	text.starts_with(['K', 'k'])
+		|| matches!(text, "9xxx" | "9XXX" | "9*")
+		|| (text.len() == 4 && text.starts_with('9') && text.bytes().all(|b| b.is_ascii_digit()))
+}
+
+/// The kit code a kit-owned target names: `K` or `k`, four digits, and a code `finding.rs`
+/// defines.
+fn kit_code(text: &str) -> Result<Code, String> {
+	let digits = text.strip_prefix(['K', 'k']).unwrap_or("");
+	if digits.len() == 4
+		&& digits.bytes().all(|b| b.is_ascii_digit())
+		&& let Ok(number) = digits.parse()
+	{
+		let code = Code::kit(number);
+		return describe(code)
+			.map(|_| code)
+			.ok_or_else(|| format!("`{text}` is not a SurrealKit code"));
+	}
+	Err(format!(
+		"`{text}` is a SurrealKit target, and SurrealKit takes one rendered code such as K9201: \
+		 no bare numbers and no wildcards"
+	))
+}
+
+/// The engine code an engine-owned target names: a letter from `S`, `E`, `L`, `C`, `A`, `M`,
+/// `D` or `P`, then four or five digits. The letter is as written and is not checked against
+/// the number; whether the code exists is the engine's call.
+fn engine_code(text: &str) -> Result<Code, String> {
+	let mut chars = text.chars();
+	if let Some(letter @ ('S' | 'E' | 'L' | 'C' | 'A' | 'M' | 'D' | 'P')) = chars.next() {
+		let digits = chars.as_str();
+		if matches!(digits.len(), 4 | 5)
+			&& digits.bytes().all(|b| b.is_ascii_digit())
+			&& let Ok(number) = digits.parse()
+		{
+			return Ok(Code::new(letter, number));
+		}
+	}
+	Err(format!(
+		"`{text}` is not a rendered engine code: write a letter and its four or five digits, such \
+		 as E1002 or C10001, with no bare numbers, `*`, family wildcards or lint names"
+	))
+}
+
+/// One `allow(...)` comment: its targets, reason and scope.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Directive {
+	/// The targets in the order written, good and bad. For a directive with a [`fault`] they
+	/// are what could be read from the list: the targets between the `(` and the first `)`
+	/// (or the end of the comment), split at commas, with empty ones left out.
+	///
+	/// [`fault`]: Self::fault
+	pub targets: Vec<Target>,
+	/// The text of `reason="..."`, when there is one that is not blank.
+	pub reason: Option<String>,
+	/// Why the directive as a whole is malformed: bad syntax, an unclosed reason, text after the
+	/// reason, or an empty list. A directive with a fault suppresses nothing. A bad target or a
+	/// missing reason is not a fault of this kind.
+	pub fault: Option<String>,
 	/// The line whose findings it silences.
-	line: usize,
+	pub line: usize,
+}
+
+impl Directive {
+	/// Whether any target is the engine's, valid or not. The engine reads such a directive, so
+	/// it is the engine that reports the directive's faults.
+	pub fn has_engine_target(&self) -> bool {
+		self.targets.iter().any(|target| target.owner == Owner::Engine)
+	}
+
+	/// Whether the directive silences `code`, a finding's code on the line it covers. A
+	/// directive with a fault silences nothing.
+	fn silences(&self, code: Code) -> bool {
+		self.fault.is_none()
+			&& self.targets.iter().any(|target| target.code.as_ref().is_ok_and(|c| *c == code))
+	}
 }
 
 /// The suppression directives of one file.
@@ -167,9 +288,10 @@ pub struct Suppressions {
 }
 
 impl Suppressions {
-	/// The directives in the SurrealQL `text`, and the `L7013` findings for the ones that are
-	/// malformed or, when `policy` requires a reason, have none. A file that does not scan has no
-	/// suppressions (it already carries its own finding).
+	/// The directives in the SurrealQL `text`, and the `L7013` findings for their faults: one
+	/// per directive that is malformed as a whole, one per bad target in a directive that is not,
+	/// and one per directive that has no reason when `policy` requires one. A file that does not
+	/// scan has no suppressions (it already carries its own finding).
 	///
 	/// Comments come from the SurrealQL scanner, so a `--` inside a string is not one, and block
 	/// comments are not read. A directive on a line of its own silences matching findings that start on
@@ -195,42 +317,48 @@ impl Suppressions {
 		let mut directives = Vec::new();
 		let mut findings = Vec::new();
 		for range in comments.iter().cloned() {
-			let Some(parsed) = parse_directive(&text[range.clone()]) else {
+			let (line, _) = index.position(range.start);
+			let own_line = text[index.line_start(line)..range.start].trim().is_empty();
+			let covers = if own_line {
+				line + 1
+			} else {
+				line
+			};
+			let Some(directive) = parse_directive(&text[range.clone()], covers) else {
 				continue;
 			};
 			let span = range.start..range.start + text[range.clone()].trim_end().len();
-			let (line, _) = index.position(range.start);
-			let own_line = text[index.line_start(line)..range.start].trim().is_empty();
-			match parsed {
-				Err(why) => findings.push(directive_finding(
+			// A fault of the directive as a whole is one finding and hides the targets', which
+			// were not read as a list.
+			if let Some(why) = &directive.fault {
+				findings.push(directive_finding(
 					path,
 					span,
 					format!("malformed suppression directive: {why}"),
-					"write `-- surreal: allow(E1002) reason=\"...\"`: one code, and a reason in \
-					 double quotes",
-				)),
-				Ok((number, reason)) => {
-					if policy.requires_reason() && reason.is_none() {
+					DIRECTIVE_HELP,
+				));
+			} else {
+				for target in &directive.targets {
+					if let Err(why) = &target.code {
 						findings.push(directive_finding(
 							path,
-							span,
-							format!(
-								"the suppression of {number:04} has no reason, and \
-								 `require_suppression_reason` is set"
-							),
-							"add `reason=\"...\"` after the code",
+							span.clone(),
+							format!("malformed suppression directive: {why}"),
+							DIRECTIVE_HELP,
 						));
 					}
-					directives.push(Directive {
-						number,
-						line: if own_line {
-							line + 1
-						} else {
-							line
-						},
-					});
+				}
+				if policy.requires_reason() && directive.reason.is_none() {
+					findings.push(directive_finding(
+						path,
+						span,
+						"the suppression has no reason, and `require_suppression_reason` is set"
+							.to_string(),
+						"add `reason=\"...\"` after the list",
+					));
 				}
 			}
+			directives.push(directive);
 		}
 		(
 			Self {
@@ -240,13 +368,23 @@ impl Suppressions {
 		)
 	}
 
-	/// Whether a directive silences `finding`, which starts at `line` of the file.
+	/// Every directive in the file, in order, including those with a fault.
+	pub fn directives(&self) -> &[Directive] {
+		&self.directives
+	}
+
+	/// Whether a directive silences `finding`, which starts at `line` of the file. A directive
+	/// names rendered codes, and it silences only a finding with one of them.
 	pub fn suppresses(&self, finding: &Finding, line: usize) -> bool {
 		self.directives
 			.iter()
-			.any(|directive| directive.number == finding.code.number() && directive.line == line)
+			.any(|directive| directive.line == line && directive.silences(finding.code))
 	}
 }
+
+/// The help under every `L7013` for a directive.
+const DIRECTIVE_HELP: &str = "write `-- surreal: allow(E1002, K9201) reason=\"...\"`: rendered \
+	codes, no wildcards, and a reason in double quotes";
 
 fn directive_finding(path: &Path, span: Range<usize>, message: String, help: &str) -> Finding {
 	Finding::new(L7013, Severity::Warning, Level::Warn, message, path.to_path_buf(), span)
@@ -258,13 +396,14 @@ fn directive_finding(path: &Path, span: Range<usize>, message: String, help: &st
 		})
 }
 
-/// `None` when `comment` is not a suppression directive; otherwise the code number and the
-/// reason, or why it is malformed.
+/// `None` when `comment` is not a suppression directive; otherwise the directive, which covers
+/// `line`.
 ///
 /// A directive is a `--`, `//` or `#` comment whose body starts with `surreal:` or
-/// `surrealql-analyzer:` and then the word `allow`. Any other comment, including one that
-/// merely starts with the prefix, is an ordinary comment.
-fn parse_directive(comment: &str) -> Option<Result<(u16, Option<String>), String>> {
+/// `surrealql-analyzer:`, then `allow`, optional whitespace and `(`. Any other comment,
+/// including one that merely starts with the prefix, or has `allowx` or `allow E1002`, is an
+/// ordinary comment.
+fn parse_directive(comment: &str, line: usize) -> Option<Directive> {
 	let body = comment
 		.strip_prefix("--")
 		.or_else(|| comment.strip_prefix("//"))
@@ -274,35 +413,46 @@ fn parse_directive(comment: &str) -> Option<Result<(u16, Option<String>), String
 		.strip_prefix(ANALYZER_SUPPRESSION_PREFIX)
 		.or_else(|| body.strip_prefix(SUPPRESSION_PREFIX))?
 		.trim_start();
-	let rest = rest.strip_prefix("allow")?;
-	if rest.starts_with(|c: char| c.is_alphanumeric() || c == '_') {
-		return None;
+	let rest = rest.strip_prefix("allow")?.trim_start().strip_prefix('(')?;
+	let rest = rest.trim_end();
+	let (list, after) = match rest.split_once(')') {
+		Some((list, after)) => (list, Some(after)),
+		None => (rest, None),
+	};
+	let parts: Vec<&str> = list.split(',').map(str::trim).collect();
+	let targets: Vec<Target> =
+		parts.iter().filter(|part| !part.is_empty()).map(|part| Target::parse(part)).collect();
+	let fault = if after.is_none() {
+		Some("the `)` after the targets is missing".to_string())
+	} else if targets.is_empty() {
+		Some("`allow()` names no code".to_string())
+	} else if targets.len() < parts.len() {
+		Some("a target is empty: remove the stray `,`".to_string())
+	} else {
+		None
+	};
+	let mut directive = Directive {
+		targets,
+		reason: None,
+		fault,
+		line,
+	};
+	if let Some(after) = after {
+		match parse_reason(after) {
+			Ok(reason) => directive.reason = reason,
+			Err(why) => {
+				directive.fault.get_or_insert(why);
+			}
+		}
 	}
-	Some(parse_allow(rest.trim_end()))
+	Some(directive)
 }
 
-/// The text after `allow`: `(<code>) [reason="<text>"]`.
-fn parse_allow(rest: &str) -> Result<(u16, Option<String>), String> {
-	let rest = rest.trim_start();
-	let Some(rest) = rest.strip_prefix('(') else {
-		return Err("expected `(` after `allow`".to_string());
-	};
-	let Some((target, after)) = rest.split_once(')') else {
-		return Err("the `)` after the code is missing".to_string());
-	};
-	let target = target.trim();
-	if target.is_empty() {
-		return Err("`allow()` names no code".to_string());
-	}
-	let Some(number) = parse_code(target) else {
-		return Err(format!(
-			"`{target}` is not one code: name one code such as E1002 (not `*`, a family or a lint \
-			 name)"
-		));
-	};
+/// The text after the closing `)`: nothing, or `reason="<text>"`. A blank reason is `None`.
+fn parse_reason(after: &str) -> Result<Option<String>, String> {
 	let after = after.trim();
 	if after.is_empty() {
-		return Ok((number, None));
+		return Ok(None);
 	}
 	let Some(reason) = after
 		.strip_prefix("reason")
@@ -311,7 +461,7 @@ fn parse_allow(rest: &str) -> Result<(u16, Option<String>), String> {
 		.map(str::trim_start)
 		.and_then(|rest| rest.strip_prefix('"'))
 	else {
-		return Err(format!("`{after}` follows the code; only `reason=\"...\"` may"));
+		return Err(format!("`{after}` follows the targets; only `reason=\"...\"` may"));
 	};
 	let mut text = String::new();
 	let mut chars = reason.chars();
@@ -333,8 +483,7 @@ fn parse_allow(rest: &str) -> Result<(u16, Option<String>), String> {
 	if !chars.as_str().trim().is_empty() {
 		return Err(format!("`{}` follows the reason", chars.as_str().trim()));
 	}
-	let reason = Some(text).filter(|text| !text.trim().is_empty());
-	Ok((number, reason))
+	Ok(Some(text).filter(|text| !text.trim().is_empty()))
 }
 
 #[cfg(test)]
@@ -596,13 +745,13 @@ mod tests {
 	#[test]
 	fn several_directives_each_cover_their_own_code() {
 		// Stacking two own-line directives covers only the line below the second.
-		let text = "-- surreal: allow(K9001)\n-- surreal: allow(K9003)\nDEFINE X; -- surreal: allow(9002)\n";
+		let text = "-- surreal: allow(K9001)\n-- surreal: allow(K9003)\nDEFINE X; -- surreal: allow(K9002)\n";
 		let (suppressions, findings) = read(text, "");
 		assert!(findings.is_empty());
 		let statement = text.find("DEFINE").unwrap();
 		assert!(silenced(&suppressions, text, K9003, statement));
 		assert!(!silenced(&suppressions, text, Code::kit(9001), statement));
-		assert!(silenced(&suppressions, text, Code::kit(9002), statement), "a bare number");
+		assert!(silenced(&suppressions, text, Code::kit(9002), statement), "a trailing K code");
 	}
 
 	#[test]
@@ -642,6 +791,11 @@ mod tests {
 		for text in [
 			"-- surreal: this is the surreal docs link\nx",
 			"-- surreal: allowance(E1002)\nx",
+			"-- surreal: allowx(E1002)\nx",
+			"-- surreal: allow_(E1002)\nx",
+			"-- surreal: allow E1002\nx",
+			"-- surreal: allow\nx",
+			"-- surreal: note\nx",
 			"-- allow(E1002)\nx",
 			"-- note: surreal: allow(E1002)\nx",
 		] {
@@ -660,8 +814,6 @@ mod tests {
 			"allow(unused_let)",
 			"allow()",
 			"allow(E1002",
-			"allow E1002",
-			"allow(E1002, E1003)",
 			"allow(E1002) because",
 			"allow(E1002) reason=no",
 			"allow(E1002) reason=\"open",
@@ -698,10 +850,10 @@ mod tests {
 				"{text:?}"
 			);
 		}
-		assert_eq!(
-			parse_allow("(E1002) reason=\"a \\\"b\\\"\""),
-			Ok((1002, Some("a \"b\"".to_string())))
-		);
+		let directive =
+			parse_directive("-- surreal: allow(E1002) reason=\"a \\\"b\\\"\"", 0).unwrap();
+		assert_eq!(directive.reason.as_deref(), Some("a \"b\""));
+		assert_eq!(directive.fault, None);
 	}
 
 	#[test]
@@ -730,7 +882,7 @@ mod tests {
 	#[cfg(feature = "host-queries")]
 	#[test]
 	fn host_comment_ranges_feed_the_same_reader() {
-		let text = "// surreal: allow(K9201) reason=\"x\"\ndb.query(`a ${b}`);\ndb.query(`c ${d}`); // surreal: allow(9201)\n";
+		let text = "// surreal: allow(K9201) reason=\"x\"\ndb.query(`a ${b}`);\ndb.query(`c ${d}`); // surreal: allow(k9201)\n";
 		let ranges = crate::host_queries::comments("a.ts", text);
 		let (suppressions, findings) = read_host(text, ranges);
 		assert!(findings.is_empty(), "{findings:?}");
@@ -781,5 +933,277 @@ mod tests {
 		let finding = Finding::kit(K9003, "m", PathBuf::from("/p/a.surql"), start..text.len());
 		let line = LineIndex::new(text).position(finding.span.start).0;
 		assert!(suppressions.suppresses(&finding, line));
+	}
+
+	/// The suppressions and findings for the one-line directive `-- surreal: <body>`.
+	fn read_body(body: &str, toml: &str) -> (String, Suppressions, Vec<Finding>) {
+		let text = format!("-- surreal: {body}\nx");
+		let (suppressions, findings) = read(&text, toml);
+		(text, suppressions, findings)
+	}
+
+	/// Whether the directive `body` silences `code` on the line it covers.
+	fn body_silences(body: &str, code: Code) -> bool {
+		let (text, suppressions, _) = read_body(body, "");
+		silenced(&suppressions, &text, code, text.len() - 1)
+	}
+
+	const E1002: Code = Code::from_number(1002);
+
+	#[test]
+	fn whitespace_is_optional_around_the_parentheses_commas_and_equals() {
+		for body in [
+			"allow(E1002,K9201)reason=\"x\"",
+			"allow(E1002, K9201) reason=\"x\"",
+			"allow ( E1002 , K9201 ) reason = \"x\" ",
+			"allow\t(\tE1002\t,\tK9201\t)\treason\t=\t\"x\"\t",
+			"allow(  E1002  ,  K9201  )   reason  =  \"x\"",
+		] {
+			let (text, suppressions, findings) =
+				read_body(body, "require_suppression_reason = true\n");
+			assert!(findings.is_empty(), "{body:?}: {findings:?}");
+			for code in [E1002, Code::kit(9201)] {
+				assert!(silenced(&suppressions, &text, code, text.len() - 1), "{body:?}: {code}");
+			}
+		}
+	}
+
+	#[test]
+	fn both_prefixes_and_all_three_markers_take_a_list() {
+		for marker in ["--", "//", "#", "-- ", "// ", "# "] {
+			for prefix in [SUPPRESSION_PREFIX, ANALYZER_SUPPRESSION_PREFIX] {
+				let text = format!("{marker}{prefix} allow(E1002, K9201)\nx");
+				let (suppressions, findings) = read(&text, "");
+				assert!(findings.is_empty(), "{text:?}: {findings:?}");
+				for code in [E1002, Code::kit(9201)] {
+					assert!(silenced(&suppressions, &text, code, text.len() - 1), "{text:?}");
+				}
+			}
+		}
+	}
+
+	#[test]
+	fn a_list_suppresses_each_of_its_codes_and_no_other() {
+		let body = "allow(E1002, K9201) reason=\"x\"";
+		let (text, suppressions, findings) = read_body(body, "");
+		assert!(findings.is_empty());
+		let at = text.len() - 1;
+		assert!(silenced(&suppressions, &text, E1002, at));
+		assert!(silenced(&suppressions, &text, Code::kit(9201), at));
+		assert!(!silenced(&suppressions, &text, Code::from_number(1003), at));
+		assert!(!silenced(&suppressions, &text, K9003, at));
+	}
+
+	#[test]
+	fn a_bad_target_is_one_l7013_and_the_other_targets_still_apply() {
+		let (text, suppressions, findings) = read_body("allow(E1002, 9201)", "");
+		assert_eq!(findings.len(), 1, "{findings:?}");
+		assert_eq!(findings[0].code, L7013);
+		assert_eq!(findings[0].span, 0..text.find('\n').unwrap(), "the whole comment");
+		assert!(findings[0].message.contains("`9201`"), "{}", findings[0].message);
+		assert!(findings[0].message.contains("K9201"), "names the form: {}", findings[0].message);
+		let at = text.len() - 1;
+		assert!(silenced(&suppressions, &text, E1002, at));
+		assert!(!silenced(&suppressions, &text, Code::kit(9201), at), "9201 names nothing");
+
+		// Two bad targets are two findings.
+		let (_, _, findings) = read_body("allow(1002, E1003, 9*)", "");
+		assert_eq!(findings.len(), 2, "{findings:?}");
+	}
+
+	#[test]
+	fn a_kit_target_is_one_defined_kit_code() {
+		for body in ["allow(K9201)", "allow(k9201)", "allow( K9003 )"] {
+			let (_, _, findings) = read_body(body, "");
+			assert!(findings.is_empty(), "{body}: {findings:?}");
+		}
+		assert!(body_silences("allow(k9201)", Code::kit(9201)), "the letter is case-insensitive");
+		for (body, says) in [
+			("allow(9201)", "K9201"),
+			("allow(K9xxx)", "no wildcards"),
+			("allow(K9*)", "no wildcards"),
+			("allow(9xxx)", "no wildcards"),
+			("allow(9XXX)", "no wildcards"),
+			("allow(9*)", "no wildcards"),
+			("allow(K1234)", "is not a SurrealKit code"),
+			("allow(K9999)", "is not a SurrealKit code"),
+			("allow(K92010)", "SurrealKit"),
+			("allow(K)", "SurrealKit"),
+		] {
+			let (text, suppressions, findings) = read_body(body, "");
+			assert_eq!(findings.len(), 1, "{body}: {findings:?}");
+			assert_eq!(findings[0].code, L7013);
+			assert!(findings[0].message.contains(says), "{body}: {}", findings[0].message);
+			assert!(!silenced(&suppressions, &text, Code::kit(9201), text.len() - 1), "{body}");
+		}
+	}
+
+	#[test]
+	fn an_engine_target_is_one_rendered_code() {
+		for body in
+			["allow(E1002)", "allow(C10001)", "allow(S0001)", "allow(L7001)", "allow(P14001)"]
+		{
+			let (_, _, findings) = read_body(body, "");
+			assert!(findings.is_empty(), "{body}: {findings:?}");
+		}
+		assert!(body_silences("allow(E1002)", E1002));
+		assert!(body_silences("allow(C10001)", Code::from_number(10001)));
+		assert!(!body_silences("allow(L1002)", E1002), "the letter is part of the code");
+		assert!(!body_silences("allow(e1002)", E1002), "an engine letter is a capital");
+		for body in [
+			"allow(1002)",
+			"allow(E1xxx)",
+			"allow(E1*)",
+			"allow(1xxx)",
+			"allow(*)",
+			"allow(unused-let)",
+			"allow(e1002)",
+			"allow(E100)",
+			"allow(E100200)",
+			"allow(X1002)",
+			"allow(E1002 E1003)",
+			"allow(E99999)",
+		] {
+			let (text, suppressions, findings) = read_body(body, "");
+			assert_eq!(findings.len(), 1, "{body}: {findings:?}");
+			assert_eq!(findings[0].code, L7013);
+			assert!(
+				findings[0].message.contains("rendered engine code"),
+				"{body}: {}",
+				findings[0].message
+			);
+			assert!(!silenced(&suppressions, &text, E1002, text.len() - 1), "{body}");
+		}
+	}
+
+	#[test]
+	fn a_fault_of_the_directive_is_one_l7013_whatever_the_targets() {
+		for body in [
+			"allow()",
+			"allow( )",
+			"allow(E1002",
+			"allow(E1002) reasn=\"x\"",
+			"allow(E1002) reason=\"open",
+			"allow(E1002) reason=\"a\" extra",
+			"allow(E1002) reason",
+			"allow(E1002,)",
+			"allow(,E1002)",
+			"allow(E1002,,K9201)",
+			// The bad target is not reported on its own: the directive is one finding.
+			"allow(E1002, 9201) reason=\"open",
+			"allow(E1002, 9201",
+		] {
+			let (text, suppressions, findings) = read_body(body, "");
+			assert_eq!(findings.len(), 1, "{body}: {findings:?}");
+			assert_eq!(findings[0].code, L7013);
+			assert!(findings[0].message.starts_with("malformed suppression directive"), "{body}");
+			assert_eq!(findings[0].span, 0..text.find('\n').unwrap());
+			for code in [E1002, Code::kit(9201)] {
+				assert!(!silenced(&suppressions, &text, code, text.len() - 1), "{body}: {code}");
+			}
+		}
+	}
+
+	#[test]
+	fn a_missing_reason_is_one_l7013_per_directive_not_per_target() {
+		let toml = "require_suppression_reason = true\n";
+		let (text, suppressions, findings) = read_body("allow(E1002, K9201)", toml);
+		assert_eq!(findings.len(), 1, "{findings:?}");
+		assert!(findings[0].message.contains("no reason"));
+		for code in [E1002, Code::kit(9201)] {
+			assert!(silenced(&suppressions, &text, code, text.len() - 1), "{code}");
+		}
+		// A bad target and a missing reason are two faults.
+		let (_, _, findings) = read_body("allow(E1002, 9201)", toml);
+		assert_eq!(findings.len(), 2, "{findings:?}");
+		// A fault of the directive is one finding, with the reason moot.
+		let (_, _, findings) = read_body("allow(E1002", toml);
+		assert_eq!(findings.len(), 1, "{findings:?}");
+	}
+
+	#[test]
+	fn a_target_has_the_owner_its_text_decides() {
+		use Owner::{Engine, Kit};
+		for (text, owner) in [
+			("K9201", Kit),
+			("k9201", Kit),
+			("K9xxx", Kit),
+			("K9*", Kit),
+			("K1234", Kit),
+			("K", Kit),
+			("kit", Kit),
+			("9201", Kit),
+			("9xxx", Kit),
+			("9XXX", Kit),
+			("9*", Kit),
+			("E1002", Engine),
+			("C10001", Engine),
+			("1002", Engine),
+			("E1xxx", Engine),
+			("1xxx", Engine),
+			("*", Engine),
+			("unused-let", Engine),
+			("E9201", Engine),
+			("92010", Engine),
+			("9x", Engine),
+			("9xx", Engine),
+			("", Engine),
+		] {
+			assert_eq!(Target::parse(text).owner, owner, "{text:?}");
+		}
+		let code = |text| Target::parse(text).code;
+		assert_eq!(code("K9201"), Ok(Code::kit(9201)));
+		assert_eq!(code("k9201"), Ok(Code::kit(9201)), "rendered with the capital");
+		assert_eq!(code("E1002"), Ok(E1002));
+		assert_eq!(code("C10001"), Ok(Code::from_number(10001)));
+		assert_eq!(code("E9201"), Ok(Code::new('E', 9201)), "not K9201");
+		assert!(code("9201").is_err() && code("K9*").is_err() && code("1002").is_err());
+	}
+
+	#[test]
+	fn an_engine_letter_on_a_9_number_is_not_the_kit_code() {
+		let (text, suppressions, findings) = read_body("allow(E9201)", "");
+		assert!(findings.is_empty(), "{findings:?}");
+		assert!(!silenced(&suppressions, &text, Code::kit(9201), text.len() - 1));
+		assert!(silenced(&suppressions, &text, Code::new('E', 9201), text.len() - 1));
+	}
+
+	#[test]
+	fn has_engine_target_is_true_when_the_engine_reads_any_target() {
+		for (body, expected) in [
+			("allow(K9201)", false),
+			("allow(K9201, 9xxx)", false),
+			("allow(K9201, K9003) reason=\"x\"", false),
+			("allow(9201)", false),
+			("allow(E1002)", true),
+			("allow(E1002, C10001)", true),
+			("allow(K9201, E1002)", true),
+			("allow(K9201, 1002)", true),
+			("allow(*)", true),
+			// A directive with a fault keeps the targets that could be read.
+			("allow(K9201, E1002", true),
+			("allow(K9201) reasn=\"x\"", false),
+			("allow(E1002) reasn=\"x\"", true),
+			("allow()", false),
+		] {
+			let directive = directive(&format!("-- surreal: {body}"));
+			assert_eq!(directive.has_engine_target(), expected, "{body}");
+		}
+	}
+
+	fn directive(comment: &str) -> Directive {
+		parse_directive(comment, 0).unwrap_or_else(|| panic!("{comment:?} is a directive"))
+	}
+
+	#[test]
+	fn the_directives_of_a_file_are_exposed_with_the_line_they_cover() {
+		let text = "-- surreal: allow(K9003, E1002)\nA;\nB; // surreal: allow(9*)\n";
+		let (suppressions, _) = read(text, "");
+		let lines: Vec<usize> = suppressions.directives().iter().map(|d| d.line).collect();
+		assert_eq!(lines, [2, 3]);
+		let first = &suppressions.directives()[0];
+		assert_eq!(first.targets.len(), 2);
+		assert!(first.fault.is_none());
+		assert!(suppressions.directives()[1].targets[0].code.is_err());
 	}
 }

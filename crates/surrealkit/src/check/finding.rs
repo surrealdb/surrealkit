@@ -74,6 +74,15 @@ impl Code {
 		}
 	}
 
+	/// The code `prefix` and `number` spell, as written: a suppression names a rendered code,
+	/// and `L1002` is not `E1002`. It does not check that the prefix suits the number.
+	pub const fn new(prefix: char, number: u16) -> Self {
+		Self {
+			prefix,
+			number,
+		}
+	}
+
 	/// A SurrealKit code, `K` and `number`.
 	pub const fn kit(number: u16) -> Self {
 		Self {

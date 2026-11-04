@@ -694,7 +694,7 @@ applies:
 | `K9106` | drift: on the target and never managed by SurrealKit (a shared database, or another writer) | warn |
 | `K9107` | drift: the target runs another engine minor than the embedded one, so only normalised facts were compared | hint |
 | `K9201` | host code: a value interpolated into a query string (an untagged `${…}`, or `{…}` in a Svelte `q`) | deny |
-| `L7013` | a malformed or reasonless suppression comment (below) | warn |
+| `L7013` | a malformed suppression comment, a bad target in one, or one without a reason (below) | warn |
 
 The `K` family is `9xxx`, and `9xxx` is the only wildcard over it, so per-code keys tune the
 drift and the host-code lints separately: `K9106 = "allow"` silences unmanaged extras and leaves
@@ -757,21 +757,44 @@ the exact code, then its family, then the code's own default level (where
 There is no `strict` or `surrealdb_version` key: the checker runs against the engine
 SurrealKit embeds. An unknown key, or a key or level that is not understood, is an error.
 
-**Suppressions.** A `--`, `//` or `#` line comment silences one code on one line (in host code
-only `//`, see "Host code"):
+**Suppressions.** A `--`, `//` or `#` line comment silences one or more codes on one line (in
+host code only `//`, see "Host code"):
 
 ```sql
 -- surreal: allow(E1002) reason="legacy column, removed in the next migration"
 SELECT nickname FROM user;
-SELECT nickname FROM user; -- surreal: allow(E1002)
+SELECT nickname FROM user; -- surreal: allow(E1002, K9201)
 ```
 
-On a line of its own it covers findings that start on the next line; after code, those on
-its own line. The target is one code (`E1002`, or `1002`); `*`, a family or a name is
-rejected. `surrealql-analyzer:` is accepted in place of `surreal:`. Comments are found by
-lexing, so a `--` inside a string is not one, and block comments are not read. A malformed
-directive is the warning `L7013` and suppresses nothing; with `require_suppression_reason`,
-one without a reason is `L7013` too but still suppresses.
+The grammar is the engine's (SurrealDB 4.1), so one comment means the same to SurrealKit and
+the engine's checker:
+
+```
+<marker> <prefix> allow ( <target> [, <target>]... ) [reason = "<text>"]
+```
+
+- `<marker>` is `--`, `//` or `#`, and `<prefix>` is `surreal:` or `surrealql-analyzer:`.
+  Whitespace is optional around the marker, the prefix, `(`, `)`, `,` and `=`, including
+  between `allow` and `(`.
+- A target is one rendered code: a letter and its digits, as in `E1002`, `C10001` or `K9201`.
+  A bare number (`1002`), `*`, a family wildcard (`1xxx`, `9*`) and a lint name are rejected.
+- Inside the reason, `\"` is a quote. Nothing may follow the closing quote.
+- A comment that has no `allow` followed by `(`, such as `surreal: note` or `surreal: allowx(E1002)`,
+  is an ordinary comment.
+
+SurrealKit reads the targets that start with `K` (`K9201`, its own codes) and every target in the
+`9xxx` family, bare or wildcard, which only it can have. The engine reads the rest, and skips
+the `K` and `9xxx` ones silently. SurrealKit holds a `K` target to one code it defines, and an
+engine target to the form of a code, `E1002` or `C10001`: whether the engine has that code is its call.
+
+On a line of its own a directive covers findings that start on the next line; after code, those
+on its own line. `surrealql-analyzer:` is accepted in place of `surreal:`. Comments are found by
+lexing, so a `--` inside a string is not one, and block comments are not read.
+
+`L7013` is a warning. A bad target is one `L7013` for that target, and the other targets in the
+comment still apply. A fault of the whole comment (a missing `)`, an empty list, an unclosed
+reason, text after the reason) is one `L7013`, and the comment suppresses nothing. With
+`require_suppression_reason`, a comment without a reason is one `L7013` too, but still suppresses.
 
 ### Drift
 

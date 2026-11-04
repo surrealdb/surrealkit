@@ -916,9 +916,9 @@ counts the other `.surql` files, and exits 1 when a finding is an error. `--form
 `--format sarif` write one document on stdout; `surrealkit watch` (or `check --watch`) checks
 again on every change. A new `[analyze]` section in `surrealkit.toml` sets the policy
 (`ignore`, `warnings_as_errors`, `require_suppression_reason`, `[analyze.lints]`), and
-`-- surreal: allow(CODE) reason="..."` comments suppress one code on one line. Query type
-checking arrives with the engine's checker in SurrealDB 4.1; see the README's "Checking
-SurrealQL".
+`-- surreal: allow(E1002, K9201) reason="..."` comments suppress the rendered codes they list
+on one line (no bare numbers or wildcards). Query type checking arrives with the engine's
+checker in SurrealDB 4.1; see the README's "Checking SurrealQL".
 
 `analyze` is a new default cargo feature, which adds `notify` to the dependency tree. A build
 with `default-features = false` is unchanged. Without `analyze` the CLI has no `check` or
