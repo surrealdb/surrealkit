@@ -14,13 +14,13 @@ import type { RecordId, SurrealQueryable } from "surrealdb";
 
 /** Every query, keyed by its exact text. */
 export type Queries = {
-  "SELECT name, email FROM user WHERE name = $name LIMIT $limit": { result: [Array<{ email: string; name: string }>]; params: { name: string; limit?: number } };
+  "SELECT name, email FROM user WHERE name = $name LIMIT $limit": { result: [Array<{ email: string; name: string }>]; params: { name: unknown; limit?: unknown } };
   "SELECT * FROM ONLY user:alice": { result: [{ bio?: string; id: RecordId<"user">; name: string } | undefined]; params: {} };
   "BEGIN; LET $n = 1; SELECT count() FROM post GROUP ALL; SELECT * FROM $__host0; COMMIT;": { result: [undefined, undefined, Array<{ count: number }>, unknown, undefined]; params: {} };
   "SELECT * FROM event": { result: [unknown]; params: {} };
   "SELECT kind FROM event": { result: [Array<{ kind: string }>]; params: {} };
   "RETURN { a: 1 }": { result: [{ a: number; [key: string]: unknown } | undefined]; params: {} };
-  "SELECT * FROM post WHERE published = $published AND author = $author": { result: [Array<{ author: RecordId<"user">; title: string; when: Date }>]; params: { published: boolean; author: RecordId<"user"> | undefined; since?: unknown } };
+  "SELECT * FROM post WHERE published = $published AND author = $author": { result: [Array<{ author: RecordId<"user">; title: string; when: Date }>]; params: { published: unknown; author: unknown; since?: unknown } };
   "USE NS app DB main; INFO FOR USER admin;": { result: [{ database?: string; namespace?: string }, string]; params: {} };
 };
 

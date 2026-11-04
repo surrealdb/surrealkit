@@ -456,7 +456,9 @@ impl Emitter<'_> {
 			if param.name.starts_with(HOST_PARAM_PREFIX) {
 				continue;
 			}
-			let text = match &param.kind {
+			// A parameter's kind is inferred from how the query uses it, so it is always a hint.
+			let trusted = param.kind.as_ref().filter(|_| self.opts.hints == HintStyle::Trust);
+			let text = match trusted {
 				Some(kind) => {
 					let text = self.kind(kind, &[]);
 					if param.optional {
@@ -903,6 +905,25 @@ mod tests {
 			"key": "k", "text": "SELECT \"a\"\nFROM t\\", "statements": [],
 		}]));
 		assert!(out.contains(r#""SELECT \"a\"\nFROM t\\": {"#), "{out}");
+	}
+
+	#[test]
+	fn parameter_kinds_are_hints() {
+		let query = json!([{ "key": "q", "text": "q", "statements": [], "params": [
+			{ "name": "min", "kind": int(), "optional": false, "required": true },
+			{ "name": "nick", "kind": { "kind": "string" }, "optional": true, "required": false },
+		] }]);
+		let trusted = render(&entries(query.clone()), &[], &RenderOptions::default());
+		assert!(
+			trusted.contains("params: { min: number; nick?: string | undefined }"),
+			"{trusted}"
+		);
+		let opts = RenderOptions {
+			hints: HintStyle::Unknown,
+			..RenderOptions::default()
+		};
+		let distrusted = render(&entries(query), &[], &opts);
+		assert!(distrusted.contains("params: { min: unknown; nick?: unknown }"), "{distrusted}");
 	}
 
 	#[test]
