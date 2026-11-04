@@ -8,8 +8,8 @@ filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
 Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and
-1.0.0-beta.7 two more (13 and 14), 1.0.0-beta.8 four more (15 to 18), and
-1.0.0-rc.1 four more (19 to 22). 1.0.0-rc.1 needs SurrealDB 4.0 (20); stay on
+1.0.0-beta.7 two more (13 and 14), 1.0.0-beta.8 five more (15 to 19), and
+1.0.0-rc.1 three more (20 to 22). 1.0.0-rc.1 needs SurrealDB 4.0 (20); stay on
 1.0.0-beta.8 while your servers run 3.x.
 Upgrading from 0.7.0 or any 1.0 beta carries existing state forward; CI checks
 that against every published release, written on SurrealDB 3.3 and carried on
@@ -437,10 +437,16 @@ even when every step had run, and could leave the lock behind. Now:
   lock's real partition (`lock@<module>` for a named module). A lock row written
   by an older release is honoured until it expires, as before.
 
-### 19. SurrealDB 4.0, and no RocksDB engine (1.0.0-rc.1)
+### 19. SurrealDB 4.0, and no RocksDB engine (1.0.0-beta.8)
 
 SurrealKit builds against the SurrealDB 4.0 SDK, so embedded engines (`mem://`,
-`surrealkv://`) are 4.0. CI tests server 4.0.0 (see 20).
+`surrealkv://`) are 4.0. It still works with servers from 3.2.0 on, so a 3.x
+server needs no upgrade. CI tests servers 3.2.0, 3.2.4, 3.3.0 and 4.0.0.
+
+If you use SurrealKit as a library, your own `surrealdb` dependency moves to 4.0
+with it. The `Surreal` handle you pass in and the `surrealdb_types` values that
+come back are the 4.0 SDK's types, so a project still on `surrealdb` 3.x does not
+compile until it upgrades.
 
 SurrealDB 4.0 has no RocksDB engine, so the `kv-rocksdb` cargo feature is gone
 and `embedded` enables `kv-surrealkv` and `kv-mem`. A build that named
@@ -493,8 +499,7 @@ To upgrade, follow SurrealDB's 3.x to 4.x guide: export first, move to the lates
 3.3, then start 4.0 on the same files with
 `SURREAL_EXPERIMENTAL_UPGRADE_FROM_3X=true`. SurrealKit's state in `__entity`
 and `__rollout` comes through as it is, and a rollout in flight on 3.x finishes
-on 4.0. The `surrealdb` crate SurrealKit re-exports is now 4.x, so a library
-user moves to the 4.0 SDK too.
+on 4.0.
 
 ### 21. `MIGRATE EXISTING ROWS` in schema files (1.0.0-rc.1)
 
@@ -748,9 +753,9 @@ Rollout::new(spec, files).folder("database").start(&db).await?;
 
 ### SurrealDB 4 (1.0.0-rc.1)
 
-- `surrealkit::surrealdb` is the 4.0 SDK. `Sync::run`, `Rollout::{start,
-  complete, rollback}`, `Rollouts::{pending, up}` and `Seed::run` return an error
-  against a server older than 4.0 (`surrealkit::core::ensure_supported_server`).
+- `Sync::run`, `Rollout::{start, complete, rollback}`, `Rollouts::{pending, up}`
+  and `Seed::run` return an error against a server older than 4.0
+  (`surrealkit::core::ensure_supported_server`).
 - `RolloutAction` has two more variants, `RevertMigration` and
   `AwaitMigrations`, built with `RolloutStep::revert_migration` and
   `RolloutStep::await_migrations`. A `match` over `RolloutAction` needs arms for
@@ -844,6 +849,7 @@ From 1.0.0-beta.8:
 | `Rollout::start` on a rollout that is ready to complete | returns `Ok` and writes nothing, where it ran the start phase again |
 | `Rollout::start` on a rollout that is completing, or failed while completing | fails, pointing at `complete` |
 | `Rollout::complete` on a rollout that failed before its start phase finished | fails, where it ran the complete phase |
+| `Surreal<Any>` and `surrealdb_types` from `surrealdb` 3.3 | from `surrealdb` 4.0; your own dependency moves to 4.x (19) |
 
 New: `tester::{run_test_report, ReportFormat, RunReport, SuiteReport, CaseReport,
 AssertionReport}`, `typegen::write_json`, `selection::Selection` (the module and

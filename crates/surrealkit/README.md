@@ -134,7 +134,7 @@ SurrealKit works against an in-process SurrealDB such as `mem://` or `surrealkv:
 ```toml
 [dependencies]
 surrealkit = "1.0.0-rc.1"
-surrealdb = { version = "3", features = ["kv-surrealkv"] }
+surrealdb = { version = "4", features = ["kv-surrealkv"] }
 ```
 
 `connect` detects embedded endpoints and skips authentication automatically (a fresh embedded datastore has no users), so the same `DbCfg`/`connect` flow works:
