@@ -54,8 +54,9 @@ let config = ServerConfig::new(std::env::current_dir()?, DbOverrides::default(),
 serve_stdio(SurrealKitMcp::new(config)).await?;
 ```
 
-SurrealKit builds against SurrealDB 4.0, so the embedded engines are 4.0. CI
-tests it against servers 3.2.4, 3.3.0 and 4.0.0. It needs Rust 1.95.
+SurrealKit builds against SurrealDB 4.0, so the embedded engines are 4.0. It
+works with servers from 3.2.0 on, and CI tests 3.2.0, 3.2.4, 3.3.0 and 4.0.0. It
+needs Rust 1.95.
 
 > You do not need these features to target an embedded engine from a library:
 > cargo unifies features across the dependency graph, so enabling e.g.
@@ -133,7 +134,7 @@ SurrealKit works against an in-process SurrealDB such as `mem://` or `surrealkv:
 ```toml
 [dependencies]
 surrealkit = "1.0.0-beta.8"
-surrealdb = { version = "3", features = ["kv-surrealkv"] }
+surrealdb = { version = "4", features = ["kv-surrealkv"] }
 ```
 
 `connect` detects embedded endpoints and skips authentication automatically (a fresh embedded datastore has no users), so the same `DbCfg`/`connect` flow works:

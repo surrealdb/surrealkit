@@ -8,8 +8,7 @@ filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
 Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and
-1.0.0-beta.7 two more (13 and 14), and 1.0.0-beta.8 four more (15 to 18).
-Unreleased changes are 19 and up.
+1.0.0-beta.7 two more (13 and 14), and 1.0.0-beta.8 five more (15 to 19).
 Upgrading from 0.7.0 or any 1.0 beta carries existing state forward; CI checks
 that against every published release.
 
@@ -435,10 +434,16 @@ even when every step had run, and could leave the lock behind. Now:
   lock's real partition (`lock@<module>` for a named module). A lock row written
   by an older release is honoured until it expires, as before.
 
-### 19. SurrealDB 4.0, and no RocksDB engine (unreleased)
+### 19. SurrealDB 4.0, and no RocksDB engine (1.0.0-beta.8)
 
 SurrealKit builds against the SurrealDB 4.0 SDK, so embedded engines (`mem://`,
-`surrealkv://`) are 4.0. CI tests servers 3.2.4, 3.3.0 and 4.0.0.
+`surrealkv://`) are 4.0. It still works with servers from 3.2.0 on, so a 3.x
+server needs no upgrade. CI tests servers 3.2.0, 3.2.4, 3.3.0 and 4.0.0.
+
+If you use SurrealKit as a library, your own `surrealdb` dependency moves to 4.0
+with it. The `Surreal` handle you pass in and the `surrealdb_types` values that
+come back are the 4.0 SDK's types, so a project still on `surrealdb` 3.x does not
+compile until it upgrades.
 
 SurrealDB 4.0 has no RocksDB engine, so the `kv-rocksdb` cargo feature is gone
 and `embedded` enables `kv-surrealkv` and `kv-mem`. A build that named
@@ -719,6 +724,7 @@ From 1.0.0-beta.8:
 | `Rollout::start` on a rollout that is ready to complete | returns `Ok` and writes nothing, where it ran the start phase again |
 | `Rollout::start` on a rollout that is completing, or failed while completing | fails, pointing at `complete` |
 | `Rollout::complete` on a rollout that failed before its start phase finished | fails, where it ran the complete phase |
+| `Surreal<Any>` and `surrealdb_types` from `surrealdb` 3.3 | from `surrealdb` 4.0; your own dependency moves to 4.x (19) |
 
 New: `tester::{run_test_report, ReportFormat, RunReport, SuiteReport, CaseReport,
 AssertionReport}`, `typegen::write_json`, `selection::Selection` (the module and

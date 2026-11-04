@@ -409,7 +409,10 @@ jobs:
             fail-fast: false
             matrix:
                 release: ["v0.7.0", "v1.0.0-beta.1", "v1.0.0-beta.2", "v1.0.0-beta.5"]
-                surrealdb: ["v3.2.4", "v3.3.0", "v4.0.0"]
+                # Servers the old releases support: each was built against a 3.x SDK
+                # and cannot sync against a 4.0 server, so there is no state for this
+                # build to carry forward there.
+                surrealdb: ["v3.2.4", "v3.3.0"]
         env:
             SURREALDB_HOST: ws://127.0.0.1:8000
             SURREAL_HTTP: http://127.0.0.1:8000
