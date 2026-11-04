@@ -693,6 +693,16 @@ Findings, policy and suppressions already follow the engine's contract, so the c
 drop-in behind the same configuration. SurrealQL embedded in host-language files
 (`db.query("...")` in TypeScript, say) is not read; only `.surql` files are.
 
+**Code families.** A code is a letter and a number, and the number's thousands are its
+family. The engine's catalog uses `S` for `0xxx` (syntax), `E` for `1xxx` to `6xxx` (errors),
+`L` for `7xxx` (lints), and, from the 4.1 checker on, `C` for `10xxx` (certainty), `A` for
+`11xxx` (access), `M` for `12xxx` (migration), `D` for `13xxx` (reserved for SQL dialects) and
+`P` for `14xxx` (performance). `8xxx` is retired. `9xxx` is SurrealKit's own family, `K`. A code
+below 10000 is its letter and four digits (`E1002`); from 10000 up, its letter and the number
+(`C10001`). The findings of the new families come with the 4.1 checker; the 4.0 build emits none
+of them, but the policy keys below already accept them. Two spellings of one number are one
+code: `E1002`, `L1002` and `1002` are the same key.
+
 **Policy: `[analyze]` in `surrealkit.toml`.** The section parses in every build, with or
 without the `analyze` feature.
 
@@ -710,9 +720,15 @@ require_suppression_reason = true
 
 [analyze.lints]
 "7xxx" = "warn"   # a family: 7xxx, 7XXX or 7*
+"10xxx" = "warn"  # a five-digit family: 10xxx, 10XXX or 10*
 E1002 = "allow"   # one code: E1002, or the bare number 1002
+C10001 = "warn"   # one five-digit code
 K9003 = "deny"
 ```
+
+A family wildcard is one or two digits and `xxx`, `XXX` or `*`, and names the number's
+thousands: `10xxx = "warn"` covers the whole `C` family, while `C10001 = "warn"` is that one
+code.
 
 A level is `allow` (drop the finding), `warn` or `deny`. The first entry that matches wins:
 the exact code, then its family, then the code's own default level (where

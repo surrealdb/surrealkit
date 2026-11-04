@@ -21,6 +21,7 @@ use serde::Deserialize;
 ///
 /// [analyze.lints]
 /// "7xxx" = "warn"
+/// "10xxx" = "warn"
 /// E1002 = "allow"
 /// K9003 = "deny"
 /// ```
@@ -45,8 +46,8 @@ pub struct AnalyzeConfig {
 	/// the warning `L7013`.
 	#[serde(default)]
 	pub require_suppression_reason: bool,
-	/// Per-code levels: `allow`, `warn` or `deny`. The key is a code (`E1002`, or the bare
-	/// number `1002`) or a family wildcard (`7xxx`, `7XXX`, `7*`).
+	/// Per-code levels: `allow`, `warn` or `deny`. The key is a code (`E1002` or `C10001`, or the
+	/// bare number `1002`) or a family wildcard (`7xxx`, `7XXX`, `7*`, `10xxx`).
 	#[serde(default)]
 	pub lints: BTreeMap<String, String>,
 }
