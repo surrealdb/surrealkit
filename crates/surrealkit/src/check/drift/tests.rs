@@ -250,6 +250,7 @@ fn setup() -> Setup {
 				source_path: String::new(),
 				statement_hash: String::new(),
 				file_hash: String::new(),
+				migration: None,
 			},
 		);
 	}
@@ -262,6 +263,7 @@ fn setup() -> Setup {
 			source_path: String::new(),
 			statement_hash: String::new(),
 			file_hash: String::new(),
+			migration: None,
 		},
 	);
 	Setup {
