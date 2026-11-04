@@ -375,6 +375,7 @@ fn redacted(report: &serde_json::Value) -> String {
 
 /// `check --target` against a live server, and a project that has drifted from it.
 #[test]
+#[expect(clippy::print_stderr, reason = "a skipped live test says why")]
 fn drift_against_a_live_server() {
 	let Some((url, user, pass)) = server() else {
 		eprintln!("SKIP: set SURREALKIT_TEST_URL to run the live drift test");

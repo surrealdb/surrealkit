@@ -1,4 +1,4 @@
-//! Lints of the SurrealQL host code sends: the queries [`host_queries`](crate::host_queries)
+//! Lints of the SurrealQL host code sends: the queries [`host_queries`]
 //! finds in TypeScript, JavaScript, Svelte, Vue and Astro sources.
 //!
 //! One rule, `K9201`: a template literal with `${…}` passed to a query method splices the value
