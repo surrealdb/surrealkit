@@ -2,31 +2,34 @@
 
 use std::ops::Range;
 
-use tree_sitter::{Node, Parser};
+use tree_sitter::{Node, Parser, Tree};
 
 use super::literal::{Quoting, decode};
 use super::{HOST_PARAM_PREFIX, HostQuery, Segment, Substitution, line_and_column};
 
-/// Finds every query call in `source[content]`, a whole file or one script region of it.
-///
-/// Offsets and line numbers in the results refer to the whole `source`. `tsx` selects the TSX
+/// Parses `source[content]`, a whole file or one script region of it. `tsx` selects the TSX
 /// grammar, needed for files with JSX.
-pub(super) fn extract(
-	source: &str,
-	content: Range<usize>,
-	tsx: bool,
-	methods: &[&str],
-) -> Vec<HostQuery> {
+fn parse(source: &str, content: &Range<usize>, tsx: bool) -> Option<Tree> {
 	let language = if tsx {
 		tree_sitter_typescript::LANGUAGE_TSX
 	} else {
 		tree_sitter_typescript::LANGUAGE_TYPESCRIPT
 	};
 	let mut parser = Parser::new();
-	if parser.set_language(&language.into()).is_err() {
-		return Vec::new();
-	}
-	let Some(tree) = parser.parse(&source[content.clone()], None) else {
+	parser.set_language(&language.into()).ok()?;
+	parser.parse(&source[content.clone()], None)
+}
+
+/// Finds every query call in `source[content]`, a whole file or one script region of it.
+///
+/// Offsets and line numbers in the results refer to the whole `source`.
+pub(super) fn extract(
+	source: &str,
+	content: Range<usize>,
+	tsx: bool,
+	methods: &[&str],
+) -> Vec<HostQuery> {
+	let Some(tree) = parse(source, &content, tsx) else {
 		return Vec::new();
 	};
 
@@ -45,6 +48,30 @@ pub(super) fn extract(
 		while !cursor.goto_next_sibling() {
 			if !cursor.goto_parent() {
 				return queries;
+			}
+		}
+	}
+}
+
+/// The byte ranges of every comment in `source[content]`, in the whole file's offsets.
+pub(super) fn comments(source: &str, content: Range<usize>, tsx: bool) -> Vec<Range<usize>> {
+	let Some(tree) = parse(source, &content, tsx) else {
+		return Vec::new();
+	};
+
+	let mut found = Vec::new();
+	let mut cursor = tree.walk();
+	loop {
+		let node = cursor.node();
+		if node.kind() == "comment" {
+			found.push(shifted(node, content.start));
+		}
+		if cursor.goto_first_child() {
+			continue;
+		}
+		while !cursor.goto_next_sibling() {
+			if !cursor.goto_parent() {
+				return found;
 			}
 		}
 	}
