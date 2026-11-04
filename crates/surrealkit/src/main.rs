@@ -313,7 +313,9 @@ enum Commands {
 	/// under the project root, applies the schema to a throwaway in-memory engine and
 	/// reports what the engine rejects, then applies the `[analyze]` policy and any
 	/// `-- surreal: allow(CODE)` comments. Nothing connects, and no connection setting is
-	/// read. Exits 1 when a finding is an error after policy.
+	/// read, unless `--target <NAME>` is given: then the schema files are also compared with
+	/// that database (read-only), and what differs is reported as drift. Exits 1 when a
+	/// finding is an error after policy.
 	#[cfg(feature = "analyze")]
 	Check {
 		/// Output format. `-j/--json` is `--format json`.
@@ -549,16 +551,59 @@ fn warn_unused_connection_flags(command: &str, args: &Cli) {
 	}
 }
 
-/// What `check` and `watch` read, from the command line.
+/// What `check` and `watch` read, from the command line. `targets` is what to compare the files
+/// with: empty unless `--target` names one.
 #[cfg(feature = "analyze")]
-fn check_opts(args: &Cli, folder: &str) -> Result<check_cli::Opts> {
+fn check_opts(
+	args: &Cli,
+	folder: &str,
+	targets: Vec<surrealkit::project::Target>,
+) -> Result<check_cli::Opts> {
 	Ok(check_cli::Opts {
 		folder: folder.to_string(),
 		schemas: args.schema.clone(),
 		all: args.all,
 		no_deps: args.no_deps,
 		vars: args.var.iter().map(|s| parse_var_flag(s)).collect::<Result<_>>()?,
+		targets,
 	})
+}
+
+/// The targets `check --target` names, resolved the way the other single-target commands
+/// resolve one: against the ambient connection (`--host` and the rest, `SURREALDB_*`, `.env`),
+/// with each target's `pass_env` read. Unlike a plain `check`, this reads connection settings,
+/// because it connects. Empty when no `--target` is given, and nothing is read.
+#[cfg(feature = "analyze")]
+fn drift_targets(args: &Cli) -> Result<Vec<surrealkit::project::Target>> {
+	if args.target.is_empty() {
+		return Ok(Vec::new());
+	}
+	let env = load_env();
+	let overrides = DbOverrides {
+		host: args.host.clone(),
+		ns: args.ns.clone(),
+		db: args.db.clone(),
+		user: args.user.clone(),
+		pass: args.pass.clone(),
+		auth_level: args.auth_level.clone(),
+		folder: args.folder.clone(),
+		connect_timeout_secs: args.connect_timeout_secs,
+		query_timeout_secs: args.query_timeout_secs,
+	};
+	let cfg = DbCfg::from_env(env.as_ref(), &overrides)?;
+	let project = ProjectConfig::load(None)?;
+	let selection =
+		Selection::resolve(&project, &cfg, &args.schema, &args.target, args.all, args.no_deps)?;
+	Ok(selection.targets().to_vec())
+}
+
+/// `--watch` and `watch` re-run on file changes and poll no database.
+#[cfg(feature = "analyze")]
+fn reject_target_watch(args: &Cli) -> Result<()> {
+	if !args.target.is_empty() {
+		bail!("`--watch` does not poll a live database; drop --target");
+	}
+	Ok(())
 }
 
 /// `--watch` and `watch` print for a person, so they take no `--json`.
@@ -681,19 +726,27 @@ async fn run_offline(args: &Cli) -> Result<Option<i32>> {
 			format,
 			watch,
 		} => {
-			warn_unused_connection_flags("check", args);
 			if *watch {
+				reject_target_watch(args)?;
+				warn_unused_connection_flags("check", args);
 				reject_json_watch(args, "--watch")?;
-				return Ok(Some(check_cli::watch(&check_opts(args, &folder)?).await?));
+				return Ok(Some(check_cli::watch(&check_opts(args, &folder, Vec::new())?).await?));
+			}
+			// `--target` is what makes a check connect; without it the connection flags do
+			// nothing, as they never did.
+			if args.target.is_empty() {
+				warn_unused_connection_flags("check", args);
 			}
 			let format = check_cli::resolve_format(args.json, *format)?;
-			Ok(Some(check_cli::check(&check_opts(args, &folder)?, format).await?))
+			let targets = drift_targets(args)?;
+			Ok(Some(check_cli::check(&check_opts(args, &folder, targets)?, format).await?))
 		}
 		#[cfg(feature = "analyze")]
 		Commands::Watch => {
+			reject_target_watch(args)?;
 			warn_unused_connection_flags("watch", args);
 			reject_json_watch(args, "watch")?;
-			Ok(Some(check_cli::watch(&check_opts(args, &folder)?).await?))
+			Ok(Some(check_cli::watch(&check_opts(args, &folder, Vec::new())?).await?))
 		}
 		_ => Ok(None),
 	}
