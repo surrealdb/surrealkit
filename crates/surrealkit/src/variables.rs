@@ -243,10 +243,35 @@ pub struct QueriesConfig {
 	/// The client methods whose first argument is a query (default `["query"]`).
 	#[serde(default = "default_query_methods")]
 	pub methods: Vec<String>,
+	/// The bare functions whose first argument is a query (default `["createQuery",
+	/// "createLive", "useQuery", "useLive"]`). A name here also matches a member call
+	/// (`svelte.createQuery(…)`); `methods` match only member calls, so a bare `query(…)` is
+	/// not a query.
+	#[serde(default = "default_query_functions")]
+	pub functions: Vec<String>,
+	/// The markup components whose `attribute` carries a query (default `["Query",
+	/// "LiveQuery"]`), in Svelte, Vue and Astro templates and in JSX.
+	#[serde(default = "default_query_components")]
+	pub components: Vec<String>,
+	/// The attribute of a `components` element that carries the query (default `"q"`).
+	#[serde(default = "default_query_attribute")]
+	pub attribute: String,
 }
 
 fn default_query_methods() -> Vec<String> {
 	vec!["query".to_string()]
+}
+
+fn default_query_functions() -> Vec<String> {
+	["createQuery", "createLive", "useQuery", "useLive"].map(str::to_string).to_vec()
+}
+
+fn default_query_components() -> Vec<String> {
+	["Query", "LiveQuery"].map(str::to_string).to_vec()
+}
+
+fn default_query_attribute() -> String {
+	"q".to_string()
 }
 
 impl Default for QueriesConfig {
@@ -254,6 +279,9 @@ impl Default for QueriesConfig {
 		Self {
 			sources: Vec::new(),
 			methods: default_query_methods(),
+			functions: default_query_functions(),
+			components: default_query_components(),
+			attribute: default_query_attribute(),
 		}
 	}
 }
@@ -276,13 +304,23 @@ impl EmitterCommand {
 }
 
 impl TypegenConfig {
-	/// `[typegen.queries]`, validated: the methods are not empty names.
+	/// `[typegen.queries]`, validated: no method, function or component is an empty name, and
+	/// the attribute is not empty.
 	pub fn queries_config(&self) -> Result<Option<QueriesConfig>> {
 		let Some(queries) = &self.queries else {
 			return Ok(None);
 		};
 		if queries.methods.iter().any(|method| method.trim().is_empty()) {
 			bail!("[typegen.queries] methods: a method name is empty");
+		}
+		if queries.functions.iter().any(|function| function.trim().is_empty()) {
+			bail!("[typegen.queries] functions: a function name is empty");
+		}
+		if queries.components.iter().any(|component| component.trim().is_empty()) {
+			bail!("[typegen.queries] components: a component name is empty");
+		}
+		if queries.attribute.trim().is_empty() {
+			bail!("[typegen.queries] attribute: the attribute name is empty");
 		}
 		Ok(Some(queries.clone()))
 	}
@@ -891,6 +929,25 @@ mod tests {
 		assert!(cfg.sources.is_empty());
 		let err = parse("[queries]\nmethods = [\" \"]\n").queries_config().unwrap_err();
 		assert!(err.to_string().contains("a method name is empty"), "{err}");
+		assert_eq!(cfg.functions, ["createQuery", "createLive", "useQuery", "useLive"]);
+		assert_eq!(cfg.components, ["Query", "LiveQuery"]);
+		assert_eq!(cfg.attribute, "q");
+		for (raw, message) in [
+			("functions = [\"\"]", "a function name is empty"),
+			("components = [\" \"]", "a component name is empty"),
+			("attribute = \"\"", "the attribute name is empty"),
+		] {
+			let err = parse(&format!("[queries]\n{raw}\n")).queries_config().unwrap_err();
+			assert!(err.to_string().contains(message), "{err}");
+		}
+		let custom = parse("[queries]\nfunctions = [\"load\"]\nattribute = \"sql\"\n")
+			.queries_config()
+			.unwrap()
+			.unwrap();
+		assert_eq!(
+			(custom.functions, custom.attribute.as_str()),
+			(vec!["load".to_string()], "sql")
+		);
 		assert!(toml::from_str::<TypegenConfig>("[queries]\nfiles = []\n").is_err());
 	}
 
