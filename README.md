@@ -953,12 +953,20 @@ surrealkit --ns my_ns --db my_db mcp
 
 ### What it exposes
 
-21 tools, one per capability: `project_info`, `setup`, `sync`, `seed`, `apply`,
-`typegen`, `test`, `init`, `compat_status`, `compat_raise`, and the rollout family
-(`rollout_baseline`, `rollout_plan`, `rollout_lint`, `rollout_start`,
+23 tools, one per capability: `project_info`, `setup`, `sync`, `seed`, `apply`,
+`typegen`, `test`, `init`, `compat_status`, `compat_raise`, `check`, `check_query`, and the
+rollout family (`rollout_baseline`, `rollout_plan`, `rollout_lint`, `rollout_start`,
 `rollout_complete`, `rollout_rollback`, `rollout_repair`, `rollout_status`,
 `rollout_up`, `rollout_freeze`, `rollout_discard`). `rollout_up` is the deploy path for a
 database that is several rollouts behind, as `surrealkit rollout up` is.
+
+`check` is `surrealkit check --json` for the whole project: it reads files, and only with a
+`target` does it connect, to read that database for drift. `check_query` checks one query
+against the project's schema files, under the `[analyze]` policy and the suppressions in the
+query's own comments; it never executes the query or connects, and a `target` only selects the
+modules that target accepts. The query's own findings come with SurrealDB 4.1: until then its
+result says `analyzed: false` and only a malformed suppression comment is found. Both need the
+`analyze` feature, which is on by default.
 
 Resources under `surrealkit://` cover the project config, schema and seed files,
 rollout manifests and test suites, so an agent can read the project without

@@ -11,6 +11,8 @@
 //! confirmation prompt would be wrong for half the actions -- and that prompt is
 //! the entire reason to ship annotations.
 
+#[cfg(feature = "analyze")]
+pub mod check;
 pub mod rollout;
 
 use std::collections::BTreeMap;
@@ -397,7 +399,11 @@ pub(super) fn contain_rollout_selector(ctx: &CallContext, selector: &str) -> Res
 /// `#[tool_router]` generates a private associated function, visible only inside
 /// this module, so the server constructor goes through here.
 pub(super) fn router() -> rmcp::handler::server::router::tool::ToolRouter<SurrealKitMcp> {
-	SurrealKitMcp::tool_router() + rollout::router()
+	let router = SurrealKitMcp::tool_router() + rollout::router();
+	// The check tools need the `analyze` feature, which `mcp` does not imply.
+	#[cfg(feature = "analyze")]
+	let router = router + check::router();
+	router
 }
 
 #[tool_router(router = tool_router)]
