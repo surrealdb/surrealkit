@@ -359,6 +359,7 @@ mod tests {
 			source_path: path.to_string(),
 			statement_hash: hash.to_string(),
 			file_hash: hash.to_string(),
+			migration: None,
 		}
 	}
 

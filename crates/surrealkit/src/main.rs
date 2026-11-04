@@ -230,6 +230,17 @@ enum Commands {
 	},
 	/// Show the rollouts recorded in the database, and what is still pending.
 	Status,
+	/// Show or raise the database's compatibility level (SurrealDB 4.0).
+	///
+	/// At level 4 a SCHEMAFULL table with records refuses a field change they
+	/// might not fit unless the DEFINE FIELD has MIGRATE EXISTING ROWS, and
+	/// REMOVE FIELD clears the field's values. A database a 3.x datastore created
+	/// stays at level 3 until it is raised.
+	#[command(arg_required_else_help = true)]
+	Compat {
+		#[command(subcommand)]
+		command: CompatCommands,
+	},
 	/// Run one SurrealQL file against the database, with template variables.
 	Apply {
 		/// The `.surql` file to run.
@@ -373,6 +384,26 @@ enum Commands {
 /// global `-t/--target`. That collision silently ate the rollout id in
 /// 1.0.0-beta.1 (`unknown target "<rollout-id>"`) and hid `--target` from these
 /// subcommands entirely. `no_subcommand_shadows_a_global_arg_id` pins it.
+#[derive(Subcommand, Debug)]
+enum CompatCommands {
+	/// Show the level, and what SurrealDB is still doing to each table.
+	Status,
+	/// Raise the database to compatibility level 4.
+	Raise {
+		/// Wait for SurrealDB to check every SCHEMAFULL table, and report the
+		/// fields whose records do not fit, with the schema file to change.
+		#[arg(long)]
+		wait: bool,
+		/// How long `--wait` waits, in seconds.
+		#[arg(long, value_name = "SECS", default_value_t = 3600)]
+		timeout_secs: u64,
+		/// Confirm the change. It alters what REMOVE FIELD does, and SurrealDB
+		/// documents no way back.
+		#[arg(long)]
+		yes: bool,
+	},
+}
+
 #[derive(Subcommand, Debug)]
 enum RolloutCommands {
 	/// Record an existing database's schema as the starting point for rollouts.
@@ -1217,6 +1248,30 @@ async fn run(args: Cli) -> Result<i32> {
 		Commands::Status => {
 			let db = connect(&cfg).await?;
 			rollout::run_status(&db, &folder, None).await?;
+		}
+		Commands::Compat {
+			command,
+		} => {
+			let db = connect(selection.single_target()?.cfg()).await?;
+			match command {
+				CompatCommands::Status => surrealkit::compat::run_compat_status(&db).await?,
+				CompatCommands::Raise {
+					wait,
+					timeout_secs,
+					yes,
+				} => {
+					surrealkit::compat::run_compat_raise(
+						&db,
+						&folder,
+						surrealkit::compat::CompatRaiseOpts {
+							wait,
+							timeout: std::time::Duration::from_secs(timeout_secs),
+							yes,
+						},
+					)
+					.await?
+				}
+			}
 		}
 		Commands::Apply {
 			path,

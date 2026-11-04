@@ -8,9 +8,12 @@ filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
 Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and
-1.0.0-beta.7 two more (13 and 14), and 1.0.0-beta.8 five more (15 to 19).
+1.0.0-beta.7 two more (13 and 14), 1.0.0-beta.8 five more (15 to 19), and
+1.0.0-rc.1 three more (20 to 22). 1.0.0-rc.1 needs SurrealDB 4.0 (20); stay on
+1.0.0-beta.8 while your servers run 3.x.
 Upgrading from 0.7.0 or any 1.0 beta carries existing state forward; CI checks
-that against every published release.
+that against every published release, written on SurrealDB 3.3 and carried on
+after the datastore is upgraded to 4.0.
 
 ### 1. Move `database/seed.surql`
 
@@ -478,6 +481,122 @@ Rust's 2 MiB test-thread stack in SurrealKit's own suite (unoptimised builds), s
 `.cargo/config.toml` sets `RUST_MIN_STACK` to 8 MiB. Do the same if your tests
 run the embedded engine and overflow.
 
+### 20. SurrealDB 4.0 or later only (1.0.0-rc.1)
+
+SurrealKit refuses a server older than 4.0, on every command and in the
+library's `Sync`, `Rollout`, `Rollouts` and `Seed`:
+
+```
+error: SurrealKit 1.0.0-rc.1 needs SurrealDB 4.0 or later, and this server is 3.3.5.
+```
+
+The 4.0 SDK still connects to 3.x, but this release relies on how 4.0 treats
+records that already exist (21 and 22) and writes SurrealQL only 4.0 reads.
+Keep 1.0.0-beta.8 until your servers run 4.0. A server that denies the
+`version` method is let through with a warning.
+
+To upgrade, follow SurrealDB's 3.x to 4.x guide: export first, move to the latest
+3.3, then start 4.0 on the same files with
+`SURREAL_EXPERIMENTAL_UPGRADE_FROM_3X=true`. SurrealKit's state in `__entity`
+and `__rollout` comes through as it is, and a rollout in flight on 3.x finishes
+on 4.0.
+
+### 21. `MIGRATE EXISTING ROWS` in schema files (1.0.0-rc.1)
+
+Nothing to change unless you use it. SurrealDB 4.0 lets a `DEFINE FIELD` say
+what the records a table already holds become:
+
+```surql
+DEFINE FIELD stock ON product TYPE int
+    MIGRATE EXISTING ROWS AS stock_to_int USING <int> $value FALLBACK 0;
+```
+
+Write the clause in the schema file, next to the definition, and leave it
+there. SurrealKit runs each named migration once:
+
+- Sync and rollouts read which names a table has run (`INFO FOR TABLE`), and
+  send a statement whose name has run without its clause. SurrealDB itself
+  writes nothing for a `DEFINE FIELD` carrying a name it has run, so a later
+  change to that field's `PERMISSIONS` or `COMMENT` would otherwise be lost.
+- SurrealKit records the clause it ran under each name in a new `__entity`
+  partition, `migration`. A name reused for another transform is refused.
+- A field an index reads cannot be migrated. SurrealKit removes those indexes,
+  applies the file, and defines them again. A `UNIQUE` index does not hold while
+  it is gone, and SurrealKit warns. Define an index after the field it reads.
+- A migration's `USING` reads only `$value`, the field's own value. A rename,
+  which copies one field into another, still needs an `UPDATE` in a rollout
+  `run_sql` step.
+- `ALTER TABLE t MIGRATE EXISTING ROWS AS n REMOVE UNDECLARED FIELDS` is the one
+  `ALTER` a schema file may hold. Every other `ALTER` is still refused.
+- `DEFINE TYPE` (4.0's named types) and `DEFINE EXTENSION` are tracked like any
+  other definition: as the kinds `type` and `module`.
+
+The catalog leaves the clause out of a statement's hash, so taking it out of a
+file later is not a change. Catalog snapshots gain an optional `migration` name
+per entity; older snapshots read as before.
+
+`rollout plan` treats a migration as a change it can plan without
+`--allow-modified`:
+
+- The start phase applies the file, as for any change.
+- Restoring the old definition cannot undo a migration, because the records no
+  longer fit it. So the rollback phase gets a `revert_migration` step for the
+  author to fill in with the reverse transform:
+
+  ```toml
+  [[steps]]
+  id = "revert_product_stock"
+  phase = "rollback"
+  kind = "revert_migration"
+  table = "product"
+  field = "stock"
+  name = "stock_to_int_revert"
+  using = ""        # what an int becomes again, for example <string> $value
+  fallback = ""     # the value stored when `using` fails, for example ''
+  ```
+
+  `rollout lint` and `rollout start` refuse the manifest while `using` is empty,
+  or when it holds something SurrealDB refuses in a transform: a statement such
+  as `IF` or `SELECT`, a parameter other than `$value`, or an `fn::` call. If
+  the server still refuses the revert when it runs, fix the step and run
+  `rollout rollback` again: a rollback accepts a manifest that changed only in
+  steps that have not run. Deleting the step makes the rollout irreversible:
+  `rollout status` reports `irreversible`, and `rollout rollback` refuses once
+  the migrating step has run.
+- SurrealDB runs each name once per table, even after a revert. When a rolled
+  back rollout is started again, or a file restates a migration that a later one
+  has replaced, SurrealKit runs it again under a new name (`stock_to_int_2`).
+- The complete phase starts with an `await_migrations` step, which waits until
+  SurrealDB has rewritten and checked the migrated tables (an hour at most,
+  `timeout_secs` to change it) and fails if any record does not fit.
+
+A migration converts each record from the moment it commits. Code still reading
+the old shape sees the new values at once. For a change without downtime, add a
+new field, backfill it, and remove the old one in a later rollout.
+
+### 22. Compatibility level 4, and `surrealkit compat` (1.0.0-rc.1)
+
+A database a 4.0 datastore creates is at compatibility level 4. A database a
+3.x datastore created stays at level 3 after the upgrade. At level 4:
+
+- A `SCHEMAFULL` table that holds records refuses a field change they might not
+  fit, unless the `DEFINE FIELD` has `MIGRATE EXISTING ROWS`. Sync and rollouts
+  report the refusal with the clause to add.
+- `REMOVE FIELD` on a `SCHEMAFULL` table clears the values the field held. Sync's
+  prune and a rollout's `remove_legacy_entities` step say so: a dry run labels
+  each such field `deletes stored values (compatibility 4)`, and a real run warns.
+
+`surrealkit status` and `rollout status` now print the server version and the
+level. Two new commands, also MCP tools (`compat_status`, `compat_raise`):
+
+- `surrealkit compat status`: the level, and for each table the migrations it
+  has run, the fields every record fits, and what SurrealDB is still doing.
+- `surrealkit compat raise --yes [--wait]`: runs `ALTER DATABASE COMPATIBILITY 4`.
+  With `--wait`, it waits for SurrealDB to check every `SCHEMAFULL` table and,
+  for each field whose records do not fit, names the schema file to change and
+  the `MIGRATE EXISTING ROWS` clause to add. Raise the level only once every
+  node runs 4.0.
+
 ## Opting into multiple schema modules
 
 Adopting modules is additive. Your existing schema stays in the default module
@@ -639,6 +758,20 @@ Rollout::new(spec, files).start(&db).await?;
 // 1.0: opt back into the filesystem workflow
 Rollout::new(spec, files).folder("database").start(&db).await?;
 ```
+
+### SurrealDB 4 (1.0.0-rc.1)
+
+- `Sync::run`, `Rollout::{start, complete, rollback}`, `Rollouts::{pending, up}`
+  and `Seed::run` return an error against a server older than 4.0
+  (`surrealkit::core::ensure_supported_server`).
+- `RolloutAction` has two more variants, `RevertMigration` and
+  `AwaitMigrations`, built with `RolloutStep::revert_migration` and
+  `RolloutStep::await_migrations`. A `match` over `RolloutAction` needs arms for
+  them.
+- `EntityKind::Type` is new. `CatalogEntity` has a `migration` field and
+  `CatalogDiff` a `migrated` field, so a struct literal of either needs them.
+- `surrealkit::compat` has `run_compat_status` and `run_compat_raise`, which back
+  the CLI's `compat` command.
 
 ### Applying a named module
 

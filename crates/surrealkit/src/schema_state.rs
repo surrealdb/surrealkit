@@ -67,7 +67,11 @@ pub enum EntityKind {
 	Model,
 	Sequence,
 	Config,
+	/// A Surrealism module, which SurrealDB 4.0 calls an extension. `DEFINE
+	/// EXTENSION` is read as this kind too.
 	Module,
+	/// A named type (`DEFINE TYPE money AS int`), new in SurrealDB 4.0.
+	Type,
 	/// An unrecognized kind preserved verbatim from persisted state.
 	Other(String),
 }
@@ -91,6 +95,7 @@ impl EntityKind {
 			Self::Sequence => "sequence",
 			Self::Config => "config",
 			Self::Module => "module",
+			Self::Type => "type",
 			Self::Other(s) => s.as_str(),
 		}
 	}
@@ -112,7 +117,8 @@ impl EntityKind {
 			"model" => Self::Model,
 			"sequence" => Self::Sequence,
 			"config" => Self::Config,
-			"module" => Self::Module,
+			"module" | "extension" => Self::Module,
+			"type" => Self::Type,
 			_ => return None,
 		})
 	}
@@ -189,8 +195,14 @@ pub struct CatalogEntity {
 	pub scope: Option<String>,
 	pub name: String,
 	pub source_path: String,
+	/// The statement's hash, without any `MIGRATE EXISTING ROWS` clause: the
+	/// clause says what stored records become, not what the definition is, so
+	/// taking it out of a file later changes nothing.
 	pub statement_hash: String,
 	pub file_hash: String,
+	/// The name of the `MIGRATE EXISTING ROWS` clause the statement carries.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub migration: Option<String>,
 }
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
@@ -205,6 +217,9 @@ pub struct CatalogDiff {
 	pub added: Vec<CatalogEntity>,
 	pub removed: Vec<CatalogEntity>,
 	pub modified: Vec<CatalogChange>,
+	/// Entities in both catalogs that carry a migration the old one did not,
+	/// whether or not their definition changed too.
+	pub migrated: Vec<CatalogEntity>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -556,6 +571,7 @@ pub fn build_catalog_snapshot(
 	files: &[SchemaFile],
 	allow_all_statements: bool,
 ) -> Result<CatalogSnapshot> {
+	crate::migrate::check_files(files)?;
 	let mut entities = BTreeSet::new();
 	let mut operations = Vec::new();
 	for file in files {
@@ -600,6 +616,10 @@ pub fn parse_schema_statements(
 		if stmt.is_word(src, 0, "LET") {
 			continue;
 		}
+		// A named migration of a table's records changes no definition.
+		if crate::migrate::is_table_migration(stmt, src) {
+			continue;
+		}
 		if !stmt.is_word(src, 0, "DEFINE") {
 			if allow_all_statements {
 				operations.push(Operation {
@@ -632,7 +652,17 @@ sync runs inside an already-selected namespace/database. Provision these out-of-
 		};
 		entity.source_path.clone_from(&file.path);
 		entity.file_hash.clone_from(&file.hash);
-		entity.statement_hash = sha256_hex(normalize_statement(normalized).as_bytes());
+		let migration = crate::migrate::find(stmt, src).map_err(|reason| {
+			anyhow!("schema file '{}', line {}: {reason}", file.path, stmt.line)
+		})?;
+		entity.statement_hash = match &migration {
+			Some(migration) => {
+				let without = crate::migrate::stripped_without(stmt, src, Some(&migration.cut));
+				sha256_hex(normalize_statement(&without).as_bytes())
+			}
+			None => sha256_hex(normalize_statement(normalized).as_bytes()),
+		};
+		entity.migration = migration.map(|migration| migration.name);
 		entities.push(entity);
 	}
 	Ok((entities, operations))
@@ -743,6 +773,11 @@ pub fn diff_catalog(old: &CatalogSnapshot, new: &CatalogSnapshot) -> CatalogDiff
 	let mut diff = CatalogDiff::default();
 
 	for (key, new_entity) in &new_map {
+		if let (Some(old_entity), Some(name)) = (old_map.get(key), &new_entity.migration)
+			&& old_entity.migration.as_ref() != Some(name)
+		{
+			diff.migrated.push(new_entity.clone());
+		}
 		match old_map.get(key) {
 			None => diff.added.push(new_entity.clone()),
 			Some(old_entity) if old_entity.statement_hash != new_entity.statement_hash => {
@@ -764,6 +799,7 @@ pub fn diff_catalog(old: &CatalogSnapshot, new: &CatalogSnapshot) -> CatalogDiff
 	diff.added.sort();
 	diff.removed.sort();
 	diff.modified.sort_by(|a, b| a.old.cmp(&b.old));
+	diff.migrated.sort();
 	diff
 }
 
@@ -823,7 +859,12 @@ Use a manual migration or upgrade server support.",
 			EntityKind::Model => format!("REMOVE MODEL IF EXISTS {};", entity.name),
 			EntityKind::Sequence => format!("REMOVE SEQUENCE IF EXISTS {};", entity.name),
 			EntityKind::Config => format!("REMOVE CONFIG IF EXISTS {};", entity.name),
+			// 4.0 takes either keyword; use the one the name was defined under.
+			EntityKind::Module if entity.name.starts_with("ext::") => {
+				format!("REMOVE EXTENSION IF EXISTS {};", entity.name)
+			}
 			EntityKind::Module => format!("REMOVE MODULE IF EXISTS {};", entity.name),
+			EntityKind::Type => format!("REMOVE TYPE IF EXISTS {};", entity.name),
 			// Unknown kinds from foreign/newer state: skip rather than fail the prune batch.
 			EntityKind::Other(_) => continue,
 		};
@@ -854,8 +895,10 @@ fn removal_sort_key(entity: &EntityKey) -> (usize, Option<String>, String, Strin
 		EntityKind::Module => 11,
 		EntityKind::Sequence => 12,
 		EntityKind::Config => 13,
-		EntityKind::Table => 14,
-		EntityKind::Other(_) => 15,
+		// Fields name types, so types go after fields.
+		EntityKind::Type => 14,
+		EntityKind::Table => 15,
+		EntityKind::Other(_) => 16,
 	};
 	(weight, entity.scope.clone(), entity.kind.to_string(), entity.name.clone())
 }
@@ -1235,7 +1278,8 @@ fn parse_define_entity(stmt: &crate::surql_scan::Stmt, src: &str) -> Option<Cata
 		| EntityKind::Model
 		| EntityKind::Sequence
 		| EntityKind::Config
-		| EntityKind::Module => (None, ident_at(stmt, src, idx)?),
+		| EntityKind::Module
+		| EntityKind::Type => (None, ident_at(stmt, src, idx)?),
 		EntityKind::Access | EntityKind::User => {
 			let name = ident_at(stmt, src, idx)?;
 			let scope = find_word(stmt, src, idx + 1, "ON")
@@ -1252,6 +1296,7 @@ fn parse_define_entity(stmt: &crate::surql_scan::Stmt, src: &str) -> Option<Cata
 		source_path: String::new(),
 		statement_hash: String::new(),
 		file_hash: String::new(),
+		migration: None,
 	})
 }
 
@@ -1259,12 +1304,25 @@ fn parse_define_entity(stmt: &crate::surql_scan::Stmt, src: &str) -> Option<Cata
 /// directly against it, so `a.b[*]`, `fn::greet` and `ml::model<1.0.0>` come back
 /// whole. It stops at whitespace and at `( , ; { } )`, which is where the old
 /// whitespace split and its trimming used to cut a name.
-fn ident_at(stmt: &crate::surql_scan::Stmt, src: &str, idx: usize) -> Option<String> {
+pub(crate) fn ident_at(stmt: &crate::surql_scan::Stmt, src: &str, idx: usize) -> Option<String> {
+	let first = stmt.tokens.get(idx)?;
+	let end = glued_end(stmt, src, idx);
+	if end == idx {
+		return None;
+	}
+	Some(src[first.span.start..stmt.tokens[end - 1].span.end].to_string())
+}
+
+/// The index of the first token after the identifier [`ident_at`] reads at
+/// `idx`, or `idx` itself when there is none there.
+pub(crate) fn glued_end(stmt: &crate::surql_scan::Stmt, src: &str, idx: usize) -> usize {
 	let is_stop =
 		|i: usize| matches!(stmt.tok_text(src, i), Some("(" | ")" | "," | ";" | "{" | "}"));
-	let first = stmt.tokens.get(idx)?;
+	let Some(first) = stmt.tokens.get(idx) else {
+		return idx;
+	};
 	if is_stop(idx) {
-		return None;
+		return idx;
 	}
 	let mut end = first.span.end;
 	let mut next = idx + 1;
@@ -1275,7 +1333,7 @@ fn ident_at(stmt: &crate::surql_scan::Stmt, src: &str, idx: usize) -> Option<Str
 		end = tok.span.end;
 		next += 1;
 	}
-	Some(src[first.span.start..end].to_string())
+	next
 }
 
 fn find_word(stmt: &crate::surql_scan::Stmt, src: &str, start: usize, word: &str) -> Option<usize> {
@@ -1501,6 +1559,7 @@ pub(crate) mod legacy {
 			source_path: String::new(),
 			statement_hash: String::new(),
 			file_hash: String::new(),
+			migration: None,
 		})
 	}
 
@@ -1647,6 +1706,7 @@ mod tests {
 			source_path: "database/schema/root.surql".to_string(),
 			statement_hash: sha256_hex("DEFINE TABLE OVERWRITE person SCHEMAFULL".as_bytes()),
 			file_hash: "x".to_string(),
+			migration: None,
 		}));
 		assert!(catalog.entities.iter().any(|entity| {
 			entity.kind == EntityKind::Field
@@ -2309,6 +2369,7 @@ mod tests {
 				source_path: "database/schema/a.surql".to_string(),
 				statement_hash: "a".to_string(),
 				file_hash: "file-a".to_string(),
+				migration: None,
 			}],
 			operations: Vec::new(),
 		};
@@ -2321,6 +2382,7 @@ mod tests {
 				source_path: "database/schema/a.surql".to_string(),
 				statement_hash: "b".to_string(),
 				file_hash: "file-b".to_string(),
+				migration: None,
 			}],
 			operations: Vec::new(),
 		};
@@ -2653,6 +2715,7 @@ mod tests {
 				source_path: "database/schema/a.surql".to_string(),
 				statement_hash: ine_hash,
 				file_hash: "f1".to_string(),
+				migration: None,
 			}],
 			operations: Vec::new(),
 		};
@@ -2665,6 +2728,7 @@ mod tests {
 				source_path: "database/schema/a.surql".to_string(),
 				statement_hash: ow_hash,
 				file_hash: "f2".to_string(),
+				migration: None,
 			}],
 			operations: Vec::new(),
 		};
@@ -3374,6 +3438,7 @@ DEFINE ACCESS acc ON DATABASE TYPE RECORD
 			source_path: "schema/q.surql".to_string(),
 			statement_hash: "h".to_string(),
 			file_hash: "f".to_string(),
+			migration: None,
 		}
 	}
 

@@ -32,6 +32,7 @@ mod chain;
 mod discard;
 mod freeze;
 mod frozen;
+pub(crate) mod migrations;
 mod up;
 
 #[doc(hidden)]
@@ -212,6 +213,35 @@ pub enum RolloutAction {
 	RestoreDefinitions {
 		entities: Vec<EntityKey>,
 	},
+	/// Turn the values a start-phase `MIGRATE EXISTING ROWS` rewrote back into
+	/// what the field held before, for the rollback phase.
+	///
+	/// `start` captures the field's live definition before it runs anything.
+	/// The step re-applies that definition with a second migration, `name`, whose
+	/// `using` says what a migrated value becomes again. A table runs a name
+	/// once, so `name` differs from the migration it reverts. `rollout plan`
+	/// writes this step with an empty `using`; `rollout lint` and `rollout start`
+	/// refuse it until it is filled in or deleted.
+	RevertMigration {
+		table: String,
+		field: String,
+		name: String,
+		using: String,
+		/// The value stored when `using` fails. Empty or absent means none.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		fallback: Option<String>,
+	},
+	/// Wait until SurrealDB has finished rewriting and checking the records of
+	/// `tables` after a migration, and fail if any record does not fit its
+	/// definition. Correct reads never depend on it: a record is migrated when
+	/// it is read. It is for what should come after the rewrite, such as
+	/// removing the fields a contract phase drops.
+	AwaitMigrations {
+		tables: Vec<String>,
+		/// How long to wait, in seconds. One hour when absent.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		timeout_secs: Option<u64>,
+	},
 }
 
 /// A file an [`RolloutAction::ApplyFiles`] step applies.
@@ -331,6 +361,12 @@ impl RolloutAction {
 			Self::RestoreDefinitions {
 				..
 			} => "restore_definitions",
+			Self::RevertMigration {
+				..
+			} => "revert_migration",
+			Self::AwaitMigrations {
+				..
+			} => "await_migrations",
 		}
 	}
 }
@@ -601,6 +637,44 @@ impl RolloutStep {
 			},
 		}
 	}
+
+	/// Revert the migration of `table.field` during rollback: re-apply the
+	/// definition `start` captured, migrating each value with `using`.
+	pub fn revert_migration(
+		id: impl Into<String>,
+		table: impl Into<String>,
+		field: impl Into<String>,
+		name: impl Into<String>,
+		using: impl Into<String>,
+	) -> Self {
+		Self {
+			id: id.into(),
+			phase: RolloutPhase::Rollback,
+			action: RolloutAction::RevertMigration {
+				table: table.into(),
+				field: field.into(),
+				name: name.into(),
+				using: using.into(),
+				fallback: None,
+			},
+		}
+	}
+
+	/// Wait during `phase` until SurrealDB has finished rewriting `tables`.
+	pub fn await_migrations<I, T>(id: impl Into<String>, phase: RolloutPhase, tables: I) -> Self
+	where
+		I: IntoIterator<Item = T>,
+		T: Into<String>,
+	{
+		Self {
+			id: id.into(),
+			phase,
+			action: RolloutAction::AwaitMigrations {
+				tables: tables.into_iter().map(Into::into).collect(),
+				timeout_secs: None,
+			},
+		}
+	}
 }
 
 impl RolloutSpec {
@@ -741,6 +815,7 @@ impl<'a> Rollout<'a> {
 	/// if this rollout is already in a terminal state, or if a step fails (the
 	/// rollout is left in the `failed` state).
 	pub async fn start(&self, db: &Surreal<Any>) -> Result<()> {
+		crate::core::ensure_supported_server(db).await?;
 		run_start_with_spec(db, self.folder.as_deref(), &self.spec, self.target_files, &self.vars)
 			.await
 	}
@@ -748,12 +823,14 @@ impl<'a> Rollout<'a> {
 	/// Run the `complete` (contract) phase, applying destructive changes and marking
 	/// the rollout completed.
 	pub async fn complete(&self, db: &Surreal<Any>) -> Result<()> {
+		crate::core::ensure_supported_server(db).await?;
 		run_complete_with_spec(db, self.folder.as_deref(), &self.spec, &self.vars).await
 	}
 
 	/// Run the `rollback` phase, undoing the `start` phase and marking the rollout
 	/// rolled back.
 	pub async fn rollback(&self, db: &Surreal<Any>) -> Result<()> {
+		crate::core::ensure_supported_server(db).await?;
 		run_rollback_with_spec(db, self.folder.as_deref(), &self.spec, &self.vars).await
 	}
 
@@ -851,6 +928,7 @@ impl Rollouts {
 
 	/// What this database has run and what it has left, without running anything.
 	pub async fn pending(&self, db: &Surreal<Any>) -> Result<RolloutChainReport> {
+		crate::core::ensure_supported_server(db).await?;
 		run_setup(db, &self.folder).await?;
 		let chain = chain::RolloutChain::load(&rollouts_dir(&self.folder))?;
 		let plan = chain::plan_for(db, &self.folder, &chain, None).await?;
@@ -871,6 +949,7 @@ impl Rollouts {
 
 	/// Run every pending rollout, in order.
 	pub async fn up(&self, db: &Surreal<Any>) -> Result<UpReport> {
+		crate::core::ensure_supported_server(db).await?;
 		run_up(
 			db,
 			&self.folder,
@@ -1145,6 +1224,7 @@ fn lint_one(folder: &str, selector: &str) -> Result<()> {
 	validate_rollout_spec(&rollout.spec)?;
 	if rollout.spec.has_frozen_files() {
 		preflight_frozen(&rollout)?;
+		migrations::check_steps(&rollout)?;
 	} else {
 		let files = collect_schema_files(folder)?;
 		let legacy_prefixes = canonicalise_manifest_paths(&mut rollout.spec, &files);
@@ -1177,6 +1257,7 @@ fn lint_all(folder: &str) -> Result<()> {
 		lint_base_snapshot(rollout);
 		if rollout.spec.has_frozen_files() {
 			preflight_frozen(rollout)?;
+			migrations::check_steps(rollout)?;
 		} else if rollout.spec.file_refs().next().is_some() {
 			legacy.push(rollout.spec.id.as_str());
 		}
@@ -1329,6 +1410,10 @@ async fn load_rollout_status_report(
 #[doc(hidden)]
 pub async fn run_status(db: &Surreal<Any>, folder: &str, selector: Option<String>) -> Result<()> {
 	run_setup(db, folder).await?;
+	crate::compat::log_server(db).await;
+	if let Some(id) = &selector {
+		log_migration_progress(db, folder, id).await;
+	}
 	let from = if selector.is_some() {
 		"type::record('__rollout', $id)"
 	} else {
@@ -1356,6 +1441,32 @@ pub async fn run_status(db: &Surreal<Any>, folder: &str, selector: Option<String
 		log::warn!("could not work out which rollouts are pending: {err:#}");
 	}
 	Ok(())
+}
+
+/// Report what SurrealDB is still doing to the tables a rollout migrates.
+async fn log_migration_progress(db: &Surreal<Any>, folder: &str, selector: &str) {
+	let Ok(rollout) = resolve_rollout_path(folder, Some(selector)).and_then(load_rollout_spec)
+	else {
+		return;
+	};
+	let Ok(started) = migrations::start_migrations(&rollout) else {
+		return;
+	};
+	let mut tables: Vec<String> = started.into_iter().map(|item| item.migration.table).collect();
+	tables.sort();
+	tables.dedup();
+	for table in tables {
+		let Ok(info) = info_json(db, "INFO FOR TABLE $table;", Some(&table)).await else {
+			continue;
+		};
+		let now = migrations::progress(&table, &info);
+		for line in now.running {
+			log::info!("migration still running: {line}");
+		}
+		for line in now.failed {
+			log::warn!("migration finished with records that do not fit: {line}");
+		}
+	}
 }
 
 /// Report where this database is in the manifest chain, and what is left.
@@ -1450,6 +1561,7 @@ pub async fn run_start(
 		// have to match it. What has to hold instead is order: it must be the next
 		// rollout this database is due.
 		preflight_frozen(&rollout)?;
+		migrations::check_steps(&rollout)?;
 		chain::require_next(db, folder, &rollout).await?;
 		TargetCatalog::frozen(&rollout)?
 	} else {
@@ -1533,6 +1645,7 @@ pub(crate) async fn run_start_with_spec(
 
 	let target = if spec.has_frozen_files() {
 		preflight_frozen(&rollout)?;
+		migrations::check_steps(&rollout)?;
 		if !target_files.is_empty() {
 			log::warn!(
 				"rollout '{}' is frozen, so its catalog comes from its frozen files; the target \
@@ -1640,7 +1753,7 @@ async fn start_inner(
 				RolloutAction::RestoreDefinitions {
 					entities,
 				} => Some(entities.clone()),
-				_ => None,
+				_ => migrations::revert_capture(step).map(|entity| vec![entity]),
 			})
 			.flatten()
 			.filter(|entity| restorable_kind(&entity.kind))
@@ -1901,7 +2014,8 @@ async fn rollback_inner(
 		let row = load_rollout_record(db, &rollout.spec.id)
 			.await?
 			.ok_or_else(|| anyhow!("rollout '{}' has not been started", rollout.spec.id))?;
-		verify_rollout_record_matches(&row, rollout)?;
+		verify_rollout_record_for_rollback(&row, rollout)?;
+		migrations::check_steps(rollout)?;
 		match string_field(&row, "status").as_deref() {
 			Some("completed") => bail!("rollout '{}' is already completed", rollout.spec.id),
 			Some("rolled_back") => {
@@ -1910,6 +2024,9 @@ async fn rollback_inner(
 			}
 			_ => {}
 		}
+		migrations::refuse_unrevertable_rollback(rollout, |step_id| {
+			step_logged_completed(&row, step_id)
+		})?;
 		set_rollout_status(db, &rollout.spec.id, RolloutStatus::RunningRollback, None, None)
 			.await?;
 		if let Err(err) = execute_phase(db, rollout, RolloutPhase::Rollback, ctx).await {
@@ -2191,6 +2308,7 @@ pub(crate) async fn load_managed_entities(
 				source_path,
 				statement_hash,
 				file_hash,
+				migration: None,
 			},
 			active_rollout_id,
 			state,
@@ -2614,17 +2732,64 @@ fn build_rollout_spec(
 			);
 		}
 	}
+	// A field migrated in place is not undone by its old definition: the
+	// records no longer fit it. Its rollback is a reverse migration, which only
+	// the author can write.
+	let migrated: BTreeSet<EntityKey> =
+		catalog_diff.migrated.iter().map(CatalogEntity::key).collect();
 	let modified_entities: Vec<EntityKey> = catalog_diff
 		.modified
 		.iter()
 		.map(|change| change.new.key())
-		.filter(|key| restorable_kind(&key.kind))
+		.filter(|key| restorable_kind(&key.kind) && !migrated.contains(key))
 		.collect();
 	if !modified_entities.is_empty() {
 		steps.push(RolloutStep::restore_definitions(
 			"rollback_modified_schema",
 			RolloutPhase::Rollback,
 			modified_entities,
+		));
+	}
+	for entity in catalog_diff.migrated.iter().filter(|e| e.kind == EntityKind::Field) {
+		let (Some(table), Some(name)) = (&entity.scope, &entity.migration) else {
+			continue;
+		};
+		log::warn!(
+			"{} is migrated in place by `{name}`: records read as converted from the moment \
+			 `rollout start` applies it, so code still reading the old shape sees the new values. \
+			 For a change without downtime, add a new field, backfill it, and remove the old one \
+			 in a later rollout. The rollback step written for it needs its `using` filled in, or \
+			 deleting to make the rollout irreversible",
+			describe_entity(entity)
+		);
+		steps.push(migrations::revert_step(table, &entity.name, name));
+	}
+
+	// The tables a changed file migrates. Waiting for their rewrite before the
+	// contract phase removes anything keeps the two apart.
+	let mut migrating = BTreeSet::new();
+	for file in changed_files(files, file_diff) {
+		for (_, migration) in crate::migrate::find_all(&file.sql)? {
+			let new = match migration.field() {
+				Some(field) => catalog_diff.migrated.iter().chain(&catalog_diff.added).any(|e| {
+					e.kind == EntityKind::Field
+						&& crate::migrate::unquote(&e.name) == crate::migrate::unquote(field)
+						&& e.scope.as_deref().map(crate::migrate::unquote).as_deref()
+							== Some(migration.table.as_str())
+						&& e.migration.as_deref() == Some(migration.name.as_str())
+				}),
+				None => true,
+			};
+			if new {
+				migrating.insert(migration.table);
+			}
+		}
+	}
+	if !migrating.is_empty() {
+		steps.push(RolloutStep::await_migrations(
+			"await_migrations",
+			RolloutPhase::Complete,
+			migrating,
 		));
 	}
 
@@ -2685,6 +2850,8 @@ fn validate_autoplan(
 	// leaves an existing one alone, so there is nothing for a rollback to undo
 	// and no reason to ask for the opt-in. One that says OVERWRITE does reset the
 	// counter, so it stays gated.
+	// A change that says what its records become, with MIGRATE EXISTING ROWS,
+	// gets a reverse migration step for its rollback instead.
 	let gated: Vec<&CatalogChange> = diff
 		.modified
 		.iter()
@@ -2692,6 +2859,7 @@ fn validate_autoplan(
 			change.new.kind != EntityKind::Sequence
 				|| overwrite_sequences.contains(&change.new.name)
 		})
+		.filter(|change| !diff.migrated.iter().any(|m| m.key() == change.new.key()))
 		.collect();
 	if !gated.is_empty() && !allow_modified {
 		let names = gated
@@ -2706,7 +2874,10 @@ fn validate_autoplan(
 			 The reason for the opt-in is rollback: undoing a modification means restoring \
 			 the previous definition, which reverses the schema but not any data effect it \
 			 had. That is a clean undo for ASSERT, PERMISSIONS and COMMENT changes, and only \
-			 a partial one for TYPE, VALUE or DEFAULT changes.\n\n\
+			 a partial one for TYPE, VALUE or DEFAULT changes. On SurrealDB 4.0 at \
+			 compatibility level 4, a TYPE change on a table with records is refused unless the \
+			 DEFINE FIELD says what they become, with MIGRATE EXISTING ROWS; one that does is \
+			 planned with a reverse migration for its rollback.\n\n\
 			 Re-run with --allow-modified once you are satisfied that is the right undo, or \
 			 author a manual manifest.",
 			gated.len(),
@@ -2771,7 +2942,10 @@ fn validate_autoplan(
 			 cannot tell apart from a rename:\n  - {detail}\n\n\
 			 If that is a rename, planning it automatically would drop the original and its \
 			 data rather than move it, so author a manual manifest with an explicit backfill \
-			 between the add and the remove. If the changes are genuinely unrelated, splitting \
+			 between the add and the remove. MIGRATE EXISTING ROWS cannot do that backfill: \
+			 its USING reads only the field's own `$value`, so copy the values with an UPDATE \
+			 in a run_sql step. At compatibility level 4, removing the old field also deletes \
+			 its values, so keep the remove in the complete phase. If the changes are genuinely unrelated, splitting \
 			 them across two rollouts is the safest way to say so."
 		);
 	}
@@ -3017,6 +3191,30 @@ fn validate_rollout_spec(spec: &RolloutSpec) -> Result<()> {
 					bail!("restore_definitions step '{}' requires entities", step.id);
 				}
 			}
+			RolloutAction::RevertMigration {
+				table,
+				field,
+				name,
+				..
+			} => {
+				if step.phase != RolloutPhase::Rollback {
+					bail!("revert_migration step '{}' belongs in the rollback phase", step.id);
+				}
+				if table.trim().is_empty() || field.trim().is_empty() || name.trim().is_empty() {
+					bail!(
+						"revert_migration step '{}' requires a table, a field and a name",
+						step.id
+					);
+				}
+			}
+			RolloutAction::AwaitMigrations {
+				tables,
+				..
+			} => {
+				if tables.is_empty() {
+					bail!("await_migrations step '{}' requires tables", step.id);
+				}
+			}
 		}
 	}
 	Ok(())
@@ -3201,6 +3399,7 @@ fn info_sections(kind: &EntityKind) -> Option<&'static [&'static str]> {
 		EntityKind::Field => &["fields"],
 		EntityKind::Index => &["indexes"],
 		EntityKind::Event => &["events"],
+		EntityKind::Type => &["types"],
 		// `INFO FOR DB` lists models and sequences too, but what it lists for them
 		// cannot be re-applied (see `unrestorable`). An unknown kind has no section.
 		EntityKind::Model | EntityKind::Sequence | EntityKind::Other(_) => return None,
@@ -3271,7 +3470,7 @@ fn reapplicable(kind: &EntityKind, definition: &str) -> String {
 }
 
 /// An identifier without the backticks or `⟨⟩` it was written with.
-fn unquote_ident(ident: &str) -> String {
+pub(crate) fn unquote_ident(ident: &str) -> String {
 	let quoted = ident
 		.strip_prefix('`')
 		.and_then(|inner| inner.strip_suffix('`'))
@@ -3303,11 +3502,23 @@ fn unescape(quoted: &str) -> String {
 }
 
 /// `ident` in backticks, the way SurrealDB prints a name that needs quoting.
-fn quote_ident(ident: &str) -> String {
+/// `ident` as written when it is a plain name, in backticks otherwise.
+pub(crate) fn quote_ident_if_needed(ident: &str) -> String {
+	if !ident.is_empty()
+		&& !ident.starts_with(|c: char| c.is_ascii_digit())
+		&& ident.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+	{
+		ident.to_string()
+	} else {
+		quote_ident(ident)
+	}
+}
+
+pub(crate) fn quote_ident(ident: &str) -> String {
 	format!("`{}`", ident.replace('\\', "\\\\").replace('`', "\\`"))
 }
 
-async fn info_json(db: &Surreal<Any>, sql: &str, table: Option<&str>) -> Result<Value> {
+pub(crate) async fn info_json(db: &Surreal<Any>, sql: &str, table: Option<&str>) -> Result<Value> {
 	let mut query = db.query(sql);
 	if let Some(table) = table {
 		query = query.bind(("table", table.to_string()));
@@ -3321,7 +3532,7 @@ async fn info_json(db: &Surreal<Any>, sql: &str, table: Option<&str>) -> Result<
 }
 
 /// Read back the definitions `start` captured for this rollout.
-async fn load_restore_definitions(
+pub(crate) async fn load_restore_definitions(
 	db: &Surreal<Any>,
 	rollout_id: &str,
 ) -> Result<BTreeMap<String, String>> {
@@ -3363,12 +3574,45 @@ async fn execute_step(
 		}
 	};
 
+	// Schema goes through `migrate::apply`, which runs each migration once.
+	let apply = async |sql: String, source: &str| -> Result<()> {
+		let module = rollout.spec.module()?;
+		let guard = crate::migrate::IndexGuard::Rollout {
+			rollout_id,
+		};
+		let applied = crate::migrate::apply(db, &module, &sql, source, &guard);
+		match ctx.query_timeout {
+			None => applied.await.map(drop),
+			Some(budget) => match tokio::time::timeout(budget, applied).await {
+				Ok(result) => result.map(drop),
+				Err(_) => bail!(
+					"step '{}' exceeded the {}s query budget. Raise it with \
+					 --query-timeout-secs / SURREALDB_QUERY_TIMEOUT_SECS, or pass 0 to \
+					 wait indefinitely.",
+					step.id,
+					budget.as_secs()
+				),
+			},
+		}
+	};
+	if matches!(
+		step.action,
+		RolloutAction::ApplySchema { .. }
+			| RolloutAction::ApplyFiles { .. }
+			| RolloutAction::RevertMigration { .. }
+	) {
+		// An earlier attempt may have removed an index for a migration and
+		// stopped before defining it again.
+		crate::migrate::restore_dropped_indexes(db, rollout_id).await?;
+	}
+
 	match &step.action {
 		RolloutAction::ApplySchema {
 			sql,
 		} => {
 			let substituted = vars.apply(sql)?;
-			run(prepare_logged(db, &substituted, &format!("step '{}'", step.id)).await?).await
+			let source = format!("step '{}'", step.id);
+			apply(prepare_logged(db, &substituted, &source).await?, &source).await
 		}
 		RolloutAction::ApplyFiles {
 			files,
@@ -3389,7 +3633,7 @@ async fn execute_step(
 				let substituted = vars
 					.apply(&raw)
 					.with_context(|| format!("applying template variables in {source}"))?;
-				run(prepare_logged(db, &substituted, &source).await?).await?;
+				apply(prepare_logged(db, &substituted, &source).await?, &source).await?;
 			}
 			Ok(())
 		}
@@ -3422,7 +3666,62 @@ async fn execute_step(
 			if sql.trim().is_empty() {
 				return Ok(());
 			}
-			run(sql).await
+			let dropping = crate::migrate::fields_whose_values_go(db, entities).await?;
+			run(sql).await?;
+			for field in dropping {
+				log::warn!(
+					"step '{}': removed field `{}.{}`, and with it the values its records held: \
+					 the database is at compatibility level 4",
+					step.id,
+					field.scope.as_deref().unwrap_or_default(),
+					field.name
+				);
+			}
+			Ok(())
+		}
+		RolloutAction::RevertMigration {
+			table,
+			field,
+			name,
+			using,
+			fallback,
+		} => {
+			if using.trim().is_empty() {
+				bail!(
+					"step '{}' has an empty `using`, so there is no reverse migration to run",
+					step.id
+				);
+			}
+			let captured = load_restore_definitions(db, rollout_id).await?;
+			let key = entity_key_string(&EntityKind::Field, Some(table), field);
+			let Some(definition) = captured.get(&key) else {
+				bail!(
+					"step '{}' has no captured definition of `{table}.{field}` to revert to. \
+					 `start` captures it before running anything; it was not in the database then",
+					step.id
+				);
+			};
+			let statement = migrations::revert_statement(
+				definition,
+				name,
+				&vars.apply(using)?,
+				fallback
+					.as_deref()
+					.filter(|f| !f.trim().is_empty())
+					.map(|f| vars.apply(f))
+					.transpose()?
+					.as_deref(),
+			)?;
+			let source = format!("step '{}'", step.id);
+			apply(prepare_logged(db, &statement, &source).await?, &source).await
+		}
+		RolloutAction::AwaitMigrations {
+			tables,
+			timeout_secs,
+		} => {
+			let timeout =
+				timeout_secs.map(Duration::from_secs).unwrap_or(migrations::AWAIT_DEFAULT_TIMEOUT);
+			migrations::await_tables(db, &step.id, tables, timeout).await
 		}
 		RolloutAction::RestoreDefinitions {
 			entities,
@@ -3622,7 +3921,7 @@ async fn create_rollout_record(
 		.bind(("source_entities", source_entities.clone()))
 		.bind(("target_entities", target_entities.clone()))
 		.bind(("started_at", started_at.clone()))
-		.bind(("reversibility", reversibility(&rollout.spec).to_string()))
+		.bind(("reversibility", reversibility(rollout).to_string()))
 		.bind(("restore_definitions", restore_definitions.clone()))
 		.await?
 		.check()?;
@@ -3637,8 +3936,13 @@ async fn create_rollout_record(
 /// means at least one step modified an entity that already existed, so rollback
 /// restores the previous *definition* but cannot undo a data effect it had --
 /// clean for ASSERT/PERMISSIONS/COMMENT, partial for TYPE/VALUE/DEFAULT.
-fn reversibility(spec: &RolloutSpec) -> &'static str {
-	let restores = spec
+fn reversibility(rollout: &LoadedRolloutSpec) -> &'static str {
+	// A migration nothing reverts left values the old definition does not fit.
+	if migrations::unreverted(rollout).is_ok_and(|unreverted| !unreverted.is_empty()) {
+		return "irreversible";
+	}
+	let restores = rollout
+		.spec
 		.steps
 		.iter()
 		.any(|step| matches!(step.action, RolloutAction::RestoreDefinitions { .. }));
@@ -3685,11 +3989,64 @@ fn verify_rollout_record_matches(row: &Value, rollout: &LoadedRolloutSpec) -> Re
 	Ok(())
 }
 
+/// [`verify_rollout_record_matches`] for a rollback, which also accepts a
+/// manifest whose rollback steps were edited after `start`.
+///
+/// A rollback step can be wrong in a way only running it shows, such as a
+/// reverse migration SurrealDB refuses. Holding the whole manifest to its
+/// checksum then left the rollout with no way back: the fix changed the
+/// checksum. What has to hold is that every step that already ran is the step
+/// in the manifest, so this compares those by the checksum the step log
+/// recorded for each.
+fn verify_rollout_record_for_rollback(row: &Value, rollout: &LoadedRolloutSpec) -> Result<()> {
+	let Err(mismatch) = verify_rollout_record_matches(row, rollout) else {
+		return Ok(());
+	};
+	let source = string_field_req(row, "source_schema_hash")?;
+	let target = string_field_req(row, "target_schema_hash")?;
+	if source != rollout.spec.source_schema_hash || target != rollout.spec.target_schema_hash {
+		return Err(mismatch);
+	}
+	let logged = row.get("steps").and_then(|v| v.as_array()).map(Vec::as_slice).unwrap_or_default();
+	for entry in logged {
+		let phase = entry.get("phase").and_then(|v| v.as_str());
+		if phase == Some(RolloutPhase::Rollback.as_str()) {
+			continue;
+		}
+		let id = entry.get("step_id").and_then(|v| v.as_str());
+		let recorded = entry.get("checksum").and_then(|v| v.as_str());
+		let in_manifest = rollout.spec.steps.iter().find(|step| Some(step.id.as_str()) == id);
+		let same = match in_manifest {
+			Some(step) => recorded == Some(step_checksum(step)?.as_str()),
+			None => false,
+		};
+		if !same {
+			return Err(mismatch);
+		}
+	}
+	log::warn!(
+		"rollout '{}' changed since it started, but only in steps that have not run; rolling \
+		 back with the manifest as it is now",
+		rollout.spec.id
+	);
+	Ok(())
+}
+
 /// Whether a rollout record's step log has any step of `phase`, so a `failed`
 /// rollout is known to have failed while completing rather than while starting.
 pub(crate) fn phase_recorded(row: &Value, phase: RolloutPhase) -> bool {
 	row.get("steps").and_then(|v| v.as_array()).is_some_and(|steps| {
 		steps.iter().any(|step| step.get("phase").and_then(|v| v.as_str()) == Some(phase.as_str()))
+	})
+}
+
+/// Whether the step log in `row` records `step_id` as completed.
+fn step_logged_completed(row: &Value, step_id: &str) -> bool {
+	row.get("steps").and_then(|v| v.as_array()).is_some_and(|logged| {
+		logged.iter().any(|entry| {
+			entry.get("step_id").and_then(|v| v.as_str()) == Some(step_id)
+				&& entry.get("status").and_then(|v| v.as_str()) == Some("completed")
+		})
 	})
 }
 
@@ -4231,6 +4588,7 @@ mod tests {
 					source_path: "database/schema/person.surql".to_string(),
 					statement_hash: "a".to_string(),
 					file_hash: "fa".to_string(),
+					migration: None,
 				},
 				new: CatalogEntity {
 					kind: EntityKind::Field,
@@ -4239,8 +4597,10 @@ mod tests {
 					source_path: "database/schema/person.surql".to_string(),
 					statement_hash: "b".to_string(),
 					file_hash: "fb".to_string(),
+					migration: None,
 				},
 			}],
+			migrated: Vec::new(),
 		};
 
 		let err = validate_autoplan(&diff, false, &BTreeSet::new())
@@ -4279,11 +4639,13 @@ mod tests {
 			source_path: "schema/person.surql".to_string(),
 			statement_hash: format!("h-{name}"),
 			file_hash: "f".to_string(),
+			migration: None,
 		};
 		let diff = CatalogDiff {
 			added: vec![entity("people")],
 			removed: vec![entity("person")],
 			modified: Vec::new(),
+			migrated: Vec::new(),
 		};
 
 		let err = validate_autoplan(&diff, false, &BTreeSet::new())
@@ -4309,11 +4671,13 @@ mod tests {
 			source_path: "schema/person.surql".to_string(),
 			statement_hash: format!("h-{name}"),
 			file_hash: "f".to_string(),
+			migration: None,
 		};
 		let diff = CatalogDiff {
 			added: vec![field("full_name")],
 			removed: vec![field("name")],
 			modified: Vec::new(),
+			migrated: Vec::new(),
 		};
 		assert!(
 			validate_autoplan(&diff, false, &BTreeSet::new()).is_err(),
@@ -4345,6 +4709,7 @@ mod tests {
 					source_path: "database/schema/customer.surql".to_string(),
 					statement_hash: "stmt".to_string(),
 					file_hash: "file-a".to_string(),
+					migration: None,
 				}],
 				removed: vec![CatalogEntity {
 					kind: EntityKind::Field,
@@ -4353,8 +4718,10 @@ mod tests {
 					source_path: "database/schema/person.surql".to_string(),
 					statement_hash: "old".to_string(),
 					file_hash: "file-old".to_string(),
+					migration: None,
 				}],
 				modified: Vec::new(),
+				migrated: Vec::new(),
 			},
 			&SchemaSnapshot {
 				version: 1,
@@ -4750,6 +5117,7 @@ mod tests {
 			source_path: format!("database/schema/{name}.surql"),
 			statement_hash: format!("stmt-{name}"),
 			file_hash: format!("file-{name}"),
+			migration: None,
 		}
 	}
 
@@ -5520,6 +5888,7 @@ mod tests {
 			source_path: "schema/x.surql".to_string(),
 			statement_hash: hash.to_string(),
 			file_hash: hash.to_string(),
+			migration: None,
 		};
 		CatalogChange {
 			old: entity("a"),
@@ -5841,28 +6210,16 @@ mod tests {
 	#[tokio::test]
 	async fn rollback_restores_a_modified_module() {
 		let db = experimental_db().await;
-		// 3.3 reads a module's source after FROM, and refuses one without UNSIGNED. 4.0 calls
-		// it an extension and, when it cannot read the archive, requires its DIGEST.
-		let version = db.version().await.expect("version");
-		let define = |comment: &str| match (version.major, version.minor) {
-			(3, 0..=2) => {
-				format!("DEFINE MODULE mod::demo AS f\"modules:/demo.surli\" COMMENT '{comment}';")
-			}
-			(3, _) => format!(
-				"DEFINE MODULE mod::demo FROM f\"modules:/demo.surli\" UNSIGNED COMMENT \
-				 '{comment}';"
-			),
-			_ => format!(
+		// 4.0 calls a module an extension and, when it cannot read the archive,
+		// requires its DIGEST.
+		let define = |comment: &str| {
+			format!(
 				"DEFINE MODULE mod::demo FROM f\"modules:/demo.surli\" UNSIGNED DIGEST \
 				 'sha256:{}' COMMENT '{comment}';",
 				"0".repeat(64)
-			),
+			)
 		};
-		let listed = if version.major >= 4 {
-			in_db("extensions", "ext::demo")
-		} else {
-			in_db("modules", "mod::demo")
-		};
+		let listed = in_db("extensions", "ext::demo");
 		assert_rolls_back(
 			&db,
 			&format!("DEFINE BUCKET modules BACKEND \"memory\";\n{}", define("v1")),

@@ -672,11 +672,11 @@ surrealkit --ns my_ns --db my_db mcp
 
 ### What it exposes
 
-19 tools, one per capability: `project_info`, `setup`, `sync`, `seed`, `apply`,
-`typegen`, `test`, `init`, and the rollout family (`rollout_baseline`,
-`rollout_plan`, `rollout_lint`, `rollout_start`, `rollout_complete`,
-`rollout_rollback`, `rollout_repair`, `rollout_status`, `rollout_up`,
-`rollout_freeze`, `rollout_discard`). `rollout_up` is the deploy path for a
+21 tools, one per capability: `project_info`, `setup`, `sync`, `seed`, `apply`,
+`typegen`, `test`, `init`, `compat_status`, `compat_raise`, and the rollout family
+(`rollout_baseline`, `rollout_plan`, `rollout_lint`, `rollout_start`,
+`rollout_complete`, `rollout_rollback`, `rollout_repair`, `rollout_status`,
+`rollout_up`, `rollout_freeze`, `rollout_discard`). `rollout_up` is the deploy path for a
 database that is several rollouts behind, as `surrealkit rollout up` is.
 
 Resources under `surrealkit://` cover the project config, schema and seed files,
@@ -689,8 +689,8 @@ Prompts cover the workflows that need judgement rather than an API call:
 ### Safety
 
 Tools that can destroy data (`sync` when it would prune, `apply`, `seed --force`,
-`rollout_up`, `rollout_complete`, `rollout_rollback`, `rollout_baseline` and
-`rollout_discard`) refuse to run until they are called again with `confirm: true`.
+`compat_raise`, `rollout_up`, `rollout_complete`, `rollout_rollback`,
+`rollout_baseline` and `rollout_discard`) refuse to run until they are called again with `confirm: true`.
 The refusal names the destination and what would be removed, so the agent has
 something concrete to show you.
 
@@ -968,8 +968,8 @@ so a changed definition is applied. Everything else in the statement, comments
 and regex literals included, reaches the server exactly as written.
 
 `DEFINE SEQUENCE` is the exception, because a sequence's definition carries its
-counter: `OVERWRITE` puts it back to `START` (immediately on SurrealDB 3.3, after
-a restart on 3.2), and the ids it hands out next collide with existing records.
+counter: `OVERWRITE` puts it back to `START`, and the ids it hands out next
+collide with existing records.
 A plain `DEFINE SEQUENCE` is applied as `IF NOT EXISTS`, and an explicit
 `IF NOT EXISTS` is kept. A changed definition therefore does not reach a database
 where the sequence exists, and sync says so. An explicit `OVERWRITE` is applied as
@@ -986,6 +986,64 @@ A file SurrealKit cannot read (an unterminated string, an unmatched bracket, a
 line and column, before anything is applied or pruned.
 
 `surrealkit sync` is the local/dev reconciliation path. `surrealkit rollout ...` is the shared/prod migration path.
+
+### Migrating existing records
+
+SurrealKit needs SurrealDB 4.0 or later. On 4.0, a field definition can say what
+the records a table already holds become:
+
+```surql
+DEFINE FIELD stock ON product TYPE int
+    MIGRATE EXISTING ROWS AS stock_to_int USING <int> $value FALLBACK 0;
+```
+
+A database a 4.0 datastore creates is at compatibility level 4. There, a
+`SCHEMAFULL` table that holds records refuses a field change they might not fit
+unless the definition has this clause, and sync or `rollout start` reports the
+refusal with the clause to add. Changing a field to a type that accepts every
+value it held, such as `int` to `int | string`, needs no clause.
+
+Keep the clause in the schema file. Each name runs once per table:
+
+- Sync and rollouts check which names each table has run, and apply a statement
+  whose name has run without its clause, so later changes to the field still
+  land.
+- A name reused for a different transform is refused. Give each transform a name
+  of its own.
+- `USING` reads only `$value`, the field's own value, so a rename still needs an
+  `UPDATE` in a rollout `run_sql` step.
+- A field an index reads cannot be migrated while the index exists. SurrealKit
+  removes such indexes, applies the file and defines them again. Define an index
+  after the field it reads.
+- `ALTER TABLE t MIGRATE EXISTING ROWS AS n REMOVE UNDECLARED FIELDS` may sit in a
+  schema file, to clear the fields a table no longer declares.
+
+In a rollout, a migrated field is planned without `--allow-modified`. Its
+rollback is a reverse migration that you write: `rollout plan` adds a
+`revert_migration` step with an empty `using` (and `fallback`), and `rollout
+lint` and `rollout start` refuse the manifest until it is filled in with an
+expression SurrealDB accepts. If the server refuses it when the rollback runs,
+fix the step and run `rollout rollback` again. Delete the step instead to make
+the rollout irreversible. A rollout started again after a rollback runs its
+migration again under a new name, since SurrealDB runs each name once. The complete phase starts with an
+`await_migrations` step, which waits for SurrealDB to finish rewriting and
+checking the migrated tables.
+
+A migration converts each record from the moment it commits, so code still
+reading the old shape sees the new values at once. For a change without
+downtime, add a new field, backfill it, and remove the old one in a later
+rollout.
+
+At level 4, `REMOVE FIELD` on a `SCHEMAFULL` table also clears the values the
+field held. Sync's prune and a rollout's contract phase say so for each field
+they remove.
+
+A database a 3.x datastore created stays at level 3 after the upgrade to 4.0.
+`surrealkit compat status` shows the level and what SurrealDB is doing to each
+table. `surrealkit compat raise --yes --wait` raises the database to level 4,
+waits for SurrealDB to check every `SCHEMAFULL` table, and names the schema file
+and clause to fix for each field whose records do not fit. Raise the level only
+once every node runs 4.0.
 
 ### Recovering a stuck rollout
 

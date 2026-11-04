@@ -96,6 +96,7 @@ impl<'a> Seed<'a> {
 	}
 
 	pub async fn run(self, db: &Surreal<Any>) -> Result<()> {
+		crate::core::ensure_supported_server(db).await?;
 		let Seed {
 			source,
 			vars,
