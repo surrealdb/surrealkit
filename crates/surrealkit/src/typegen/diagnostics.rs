@@ -85,6 +85,9 @@ pub mod codes {
 	/// The engine typed a query with a kind this reader does not know; it became `unknown`.
 	/// Warning.
 	pub const QUERY_KIND_UNRECOGNIZED: &str = "query-kind-unrecognized";
+	/// The engine reported a live notification `action` or `exit` this reader does not know; the
+	/// notification, or the statement's live facts, are left out. Warning.
+	pub const LIVE_UNKNOWN: &str = "live-unknown";
 }
 
 /// How serious a [`Diagnostic`] is.

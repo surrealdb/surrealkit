@@ -227,7 +227,7 @@ pub fn assemble(
 
 	let mut entries: Vec<QueryEntry> = Vec::with_capacity(types.queries.len());
 	for query in &types.queries {
-		let (mut entry, unrepresented) = convert_query(query);
+		let (mut entry, unrepresented, unknown_live) = convert_query(query);
 		if entries.iter().any(|seen| seen.key == entry.key) {
 			diagnostics.push(
 				Diagnostic::new(
@@ -239,6 +239,17 @@ pub fn assemble(
 				.on_query(&entry.key),
 			);
 			continue;
+		}
+		for unknown in unknown_live {
+			diagnostics.push(
+				Diagnostic::new(
+					Severity::Warning,
+					codes::LIVE_UNKNOWN,
+					unknown.value(),
+					unknown.reason(),
+				)
+				.on_query(&entry.key),
+			);
 		}
 		for spelling in unrepresented {
 			diagnostics.push(
@@ -312,6 +323,7 @@ mod tests {
 
 	use super::*;
 	use crate::typegen::Span;
+	use crate::typegen::document::LiveAction;
 	use crate::typegen::document::QueryOrigin as Origin;
 
 	fn source(origin: Origin, path: &str, start: usize, method: Option<&str>) -> QuerySource {
@@ -351,6 +363,71 @@ mod tests {
 
 	fn int_statement() -> serde_json::Value {
 		json!({ "kind_value": "Int", "certainty": "fact", "support": { "exact": true } })
+	}
+
+	/// A live statement whose `exit` is `exit` and whose notifications are `actions`.
+	fn live_statement(exit: Option<&str>, actions: &[&str]) -> serde_json::Value {
+		let notifications: Vec<serde_json::Value> = actions
+			.iter()
+			.map(|action| {
+				json!({ "action": action, "record": "record<user>",
+					"record_value": { "Record": ["user"] }, "result": "string",
+					"result_value": "String", "certainty": "fact" })
+			})
+			.collect();
+		let mut live = json!({ "diff": false, "query": "LIVE SELECT * FROM user",
+			"notifications": notifications });
+		if let Some(exit) = exit {
+			live["exit"] = json!(exit);
+		}
+		json!({ "kind_value": "String", "certainty": "fact", "support": { "exact": true },
+			"live": live,
+			"live_refusal": { "code": "E4009", "message": "m", "clauses": ["LIMIT"], "windowable": true } })
+	}
+
+	#[test]
+	fn an_unknown_live_value_drops_only_what_it_touches_and_warns() {
+		let collected = Collected {
+			named: vec![],
+			inline: vec![
+				inline_query("SELECT a FROM user", vec![]),
+				inline_query("SELECT b FROM user", vec![]),
+			],
+			diagnostics: vec![],
+		};
+		let types = engine_document(json!([
+			// An action this reader does not know: that notification is left out.
+			{ "text": "SELECT a FROM user",
+				"statements": [live_statement(None, &["CREATE", "MOVE", "KILLED"])] },
+			// An exit this reader does not know: the statement keeps no live facts at all.
+			{ "text": "SELECT b FROM user",
+				"statements": [live_statement(Some("bounce"), &["CREATE"])] },
+		]));
+		let (entries, diagnostics) = assemble(&collected, Some(&types));
+
+		let a = &entries[0].statements[0];
+		let actions: Vec<_> =
+			a.live.as_ref().expect("live").notifications.iter().map(|n| n.action).collect();
+		assert_eq!(actions, [LiveAction::Create, LiveAction::Killed]);
+		assert!(a.live_refusal.is_some());
+		assert!(a.kind.is_some());
+
+		let b = &entries[1].statements[0];
+		assert!(b.live.is_none() && b.live_refusal.is_none());
+		assert!(b.kind.is_some(), "the statement's own type stays");
+
+		let unknown: Vec<_> = diagnostics
+			.iter()
+			.filter(|d| d.code == codes::LIVE_UNKNOWN)
+			.map(|d| (d.severity, d.source.as_str(), d.query.as_deref()))
+			.collect();
+		assert_eq!(
+			unknown,
+			[
+				(Severity::Warning, "MOVE", Some("SELECT a FROM user")),
+				(Severity::Warning, "bounce", Some("SELECT b FROM user")),
+			]
+		);
 	}
 
 	#[test]

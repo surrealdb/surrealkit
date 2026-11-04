@@ -35,6 +35,41 @@ pub struct Converted {
 	/// The `source` of every `unknown` kind, deduplicated, in the order met, for the caller to
 	/// report.
 	pub unrepresented: Vec<String>,
+	/// Each live value this reader does not know, with the key of its query; see
+	/// [`Unknown`].
+	pub unknown_live: Vec<(String, Unknown)>,
+}
+
+/// A live value this reader does not know, and what was left out because of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Unknown {
+	/// A notification `action`: that notification is left out.
+	Action(String),
+	/// An `exit`: the statement's `live` and `liveRefusal` are left out, so it has no live facts.
+	Exit(String),
+}
+
+impl Unknown {
+	/// The value as the engine spelled it.
+	pub fn value(&self) -> &str {
+		match self {
+			Unknown::Action(value) | Unknown::Exit(value) => value,
+		}
+	}
+
+	/// What was left out, for a person.
+	pub fn reason(&self) -> String {
+		match self {
+			Unknown::Action(value) => format!(
+				"the engine reported the live notification action {value:?}, which this SurrealKit \
+				 does not know; that notification is left out"
+			),
+			Unknown::Exit(value) => format!(
+				"the engine reported the live exit {value:?}, which this SurrealKit does not know; \
+				 the query has no live facts, so a live subscription parses the text instead"
+			),
+		}
+	}
 }
 
 /// Converts the queries and types of an engine document.
@@ -48,9 +83,11 @@ pub fn from_types_document(doc: &TypesDocument) -> Converted {
 		}
 	};
 	let mut entries = Vec::with_capacity(doc.queries.len());
+	let mut unknown_live = Vec::new();
 	for query in &doc.queries {
-		let (entry, spellings) = convert_query(query);
+		let (entry, spellings, unknown) = convert_query(query);
 		note(spellings);
+		unknown_live.extend(unknown.into_iter().map(|value| (entry.key.clone(), value)));
 		entries.push(entry);
 	}
 	let mut types: Vec<TypeDef> = doc
@@ -71,12 +108,13 @@ pub fn from_types_document(doc: &TypesDocument) -> Converted {
 		queries: entries,
 		types,
 		unrepresented,
+		unknown_live,
 	}
 }
 
 /// Converts one query of an engine document, with the `source` of each `unknown` kind in it,
-/// in the order met.
-pub fn convert_query(query: &QueryTypes) -> (QueryEntry, Vec<String>) {
+/// in the order met, and each live value this reader does not know.
+pub fn convert_query(query: &QueryTypes) -> (QueryEntry, Vec<String>, Vec<Unknown>) {
 	let mut unrepresented: Vec<String> = Vec::new();
 	let mut note = |spellings: Vec<String>| {
 		for spelling in spellings {
@@ -86,8 +124,9 @@ pub fn convert_query(query: &QueryTypes) -> (QueryEntry, Vec<String>) {
 		}
 	};
 	let mut statements = Vec::with_capacity(query.statements.len());
+	let mut unknown = Vec::new();
 	for statement in &query.statements {
-		let (entry, spellings) = statement_entry(statement);
+		let (entry, spellings) = statement_entry(statement, &mut unknown);
 		note(spellings);
 		statements.push(entry);
 	}
@@ -106,7 +145,7 @@ pub fn convert_query(query: &QueryTypes) -> (QueryEntry, Vec<String>) {
 		params,
 		error: query.error.as_ref().map(|error| query_error(error, &query.text)),
 	};
-	(entry, unrepresented)
+	(entry, unrepresented, unknown)
 }
 
 /// The engine's refusal as v2 states it. The engine's span is kept when it is a byte range
@@ -130,15 +169,35 @@ fn query_error(error: &QueryErrorType, text: &str) -> QueryError {
 	}
 }
 
-fn statement_entry(statement: &StatementType) -> (QueryStatement, Vec<String>) {
+fn statement_entry(
+	statement: &StatementType,
+	unknown: &mut Vec<Unknown>,
+) -> (QueryStatement, Vec<String>) {
 	let (kind, optional, mut unrepresented) = top_kind(statement.kind_value.as_ref());
 	let exact =
 		statement.support.get("exact").and_then(serde_json::Value::as_bool).unwrap_or(false);
-	let live = statement.live.as_ref().map(|live| {
-		let (live, spellings) = live_entry(live);
-		unrepresented.extend(spellings);
-		live
-	});
+	let exit = match statement.live.as_ref().and_then(|live| live.exit.as_deref()) {
+		None => Ok(None),
+		Some("delete") => Ok(Some(LiveExit::Delete)),
+		Some("silent") => Ok(Some(LiveExit::Silent)),
+		Some(other) => Err(other.to_string()),
+	};
+	// An exit this reader does not know leaves the statement without live facts, rather than
+	// with facts whose meaning it cannot state.
+	let (live, live_refusal) = match exit {
+		Err(other) => {
+			unknown.push(Unknown::Exit(other));
+			(None, None)
+		}
+		Ok(exit) => {
+			let live = statement.live.as_ref().map(|live| {
+				let (live, spellings) = live_entry(live, exit, unknown);
+				unrepresented.extend(spellings);
+				live
+			});
+			(live, statement.live_refusal.as_ref().map(refusal))
+		}
+	};
 	let entry = QueryStatement {
 		kind,
 		optional,
@@ -146,7 +205,7 @@ fn statement_entry(statement: &StatementType) -> (QueryStatement, Vec<String>) {
 		exact,
 		open: paths(&statement.open),
 		live,
-		live_refusal: statement.live_refusal.as_ref().map(refusal),
+		live_refusal,
 	};
 	(entry, unrepresented)
 }
@@ -158,15 +217,31 @@ fn paths(open: &[Vec<FieldStep>]) -> Vec<Vec<String>> {
 /// A statement's live subscription, with the `source` of each `unknown` kind in it. Both kinds
 /// of a notification are value positions: a NONE in one becomes an `option`. The notifications
 /// are in the order CREATE, UPDATE, DELETE, KILLED.
-fn live_entry(live: &LiveType) -> (QueryLive, Vec<String>) {
+fn live_entry(
+	live: &LiveType,
+	exit: Option<LiveExit>,
+	unknown: &mut Vec<Unknown>,
+) -> (QueryLive, Vec<String>) {
 	let mut unrepresented = Vec::new();
-	let mut notifications: Vec<LiveNotification> =
-		live.notifications.iter().map(|n| notification(n, &mut unrepresented)).collect();
+	let mut notifications: Vec<LiveNotification> = Vec::new();
+	for entry in &live.notifications {
+		let action = match entry.action.as_str() {
+			"CREATE" => LiveAction::Create,
+			"UPDATE" => LiveAction::Update,
+			"DELETE" => LiveAction::Delete,
+			"KILLED" => LiveAction::Killed,
+			other => {
+				unknown.push(Unknown::Action(other.to_string()));
+				continue;
+			}
+		};
+		notifications.push(notification(entry, action, &mut unrepresented));
+	}
 	notifications.sort_by_key(|notification| notification.action);
 	let entry = QueryLive {
 		diff: live.diff,
 		query: live.query.clone(),
-		exit: live.exit,
+		exit,
 		watch: live.watch.clone(),
 		notifications,
 	};
@@ -175,6 +250,7 @@ fn live_entry(live: &LiveType) -> (QueryLive, Vec<String>) {
 
 fn notification(
 	notification: &LiveNotificationType,
+	action: LiveAction,
 	unrepresented: &mut Vec<String>,
 ) -> LiveNotification {
 	let record = v2::nested(&notification.record_value);
@@ -182,7 +258,7 @@ fn notification(
 	unrepresented.extend(record.unrepresented);
 	unrepresented.extend(result.unrepresented);
 	LiveNotification {
-		action: notification.action,
+		action,
 		record: record.kind,
 		result: result.kind,
 		certainty: notification.certainty,

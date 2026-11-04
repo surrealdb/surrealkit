@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use super::kind::{KindValue, LiteralValue};
-pub use crate::typegen::document::{Certainty, LiveAction, LiveExit};
+pub use crate::typegen::document::Certainty;
 
 /// The `format` member of every document this reader accepts.
 pub const FORMAT: &str = "surrealdb.types";
@@ -264,8 +264,10 @@ pub struct LiveType {
 	pub diff: bool,
 	/// The `LIVE SELECT` text to subscribe with.
 	pub query: String,
+	/// `"delete"` or `"silent"`; read as text, so a value this reader does not know drops only this
+	/// statement's live facts.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
-	pub exit: Option<LiveExit>,
+	pub exit: Option<String>,
 	/// `LIVE SELECT id FROM <targets>`, without the `WHERE`. Only with `exit: "silent"`.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub watch: Option<String>,
@@ -277,7 +279,9 @@ pub struct LiveType {
 /// What a live subscription delivers for one action.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LiveNotificationType {
-	pub action: LiveAction,
+	/// `CREATE`, `UPDATE`, `DELETE` or `KILLED`; read as text, so an action this reader does not
+	/// know drops only this notification.
+	pub action: String,
 	pub record: String,
 	pub record_value: KindValue,
 	pub result: String,
@@ -445,10 +449,10 @@ mod tests {
 		let doc = TypesDocument::from_json(&raw.to_string()).expect("reads");
 		let statement = &doc.queries[0].statements[0];
 		let live = statement.live.as_ref().expect("live");
-		assert_eq!(live.exit, Some(LiveExit::Silent));
+		assert_eq!(live.exit.as_deref(), Some("silent"));
 		assert_eq!(live.watch.as_deref(), Some("LIVE SELECT id FROM t"));
 		let note = &live.notifications[0];
-		assert_eq!((note.action, note.certainty), (LiveAction::Update, Certainty::Hint));
+		assert_eq!((note.action.as_str(), note.certainty), ("UPDATE", Certainty::Hint));
 		assert_eq!(note.record_value, KindValue::Record(vec!["t".into()]));
 		assert_eq!(note.open, vec![vec![FieldStep::Field("a".into()), FieldStep::Element]]);
 		let refusal = statement.live_refusal.as_ref().expect("refusal");
@@ -461,17 +465,21 @@ mod tests {
 	}
 
 	#[test]
-	fn an_action_the_reader_does_not_know_is_an_error() {
+	fn a_live_action_or_exit_the_reader_does_not_know_still_reads() {
 		let raw = json!({
 			"format": FORMAT, "version": 1,
 			"queries": [{ "text": "q", "statements": [{
 				"certainty": "fact",
-				"live": { "diff": false, "query": "LIVE SELECT * FROM t", "notifications": [{
+				"live": { "diff": false, "query": "LIVE SELECT * FROM t", "exit": "bounce", "notifications": [{
 					"action": "MOVE", "record": "none", "record_value": "None",
 					"result": "none", "result_value": "None", "certainty": "fact"
 				}] }
 			}] }],
 		});
-		assert!(TypesDocument::from_json(&raw.to_string()).is_err());
+		// The conversion leaves out what it does not know and says so; the document reads.
+		let doc = TypesDocument::from_json(&raw.to_string()).expect("reads");
+		let live = doc.queries[0].statements[0].live.as_ref().expect("live");
+		assert_eq!(live.exit.as_deref(), Some("bounce"));
+		assert_eq!(live.notifications[0].action, "MOVE");
 	}
 }

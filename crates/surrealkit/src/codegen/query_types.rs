@@ -452,7 +452,8 @@ pub fn report(request: &Request, document: &TypesDocument, opts: &RenderOptions)
 		error: None,
 	});
 
-	let mut notes = Vec::new();
+	let mut notes: Vec<String> =
+		converted.unknown_live.iter().map(|(_, unknown)| unknown.reason()).collect();
 	if !converted.unrepresented.is_empty() {
 		notes.push(format!(
 			"the engine reported kinds this version of SurrealKit cannot represent, typed as \

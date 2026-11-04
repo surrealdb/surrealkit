@@ -583,6 +583,7 @@ reason, in its configuration. Codes are stable identifiers; reasons are not.
 | `query-invalid` | error | The engine cannot type a query: it does not parse, or the engine refuses it. |
 | `queries-unsupported-engine` | warning | Queries are configured, but the engine cannot type them (SurrealDB before 4.1); the document has no `queries`. |
 | `query-kind-unrecognized` | warning | The engine typed a query with a kind this SurrealKit does not know; it is `unknown`. |
+| `live-unknown` | warning | The engine reported a live notification `action` or a live `exit` this SurrealKit does not know. An unknown action leaves out that notification; an unknown exit leaves out the statement's `live` and `liveRefusal`. |
 | `definition-unsupported` | warning | INFO returned an entry in a category this contract does not model (e.g. models). |
 | `field-id-clauses-ignored` | warning | `DEFINE FIELD id` carries clauses other than `TYPE`. |
 | `field-computed-kind-undeclared` | warning | `COMPUTED` without `TYPE`. |
