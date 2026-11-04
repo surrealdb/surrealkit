@@ -433,17 +433,17 @@ fn drift_ignore_entries_are_validated() {
 fn a_cross_minor_target_gets_one_k9107_hint() {
 	let setup = setup();
 	let mut with_minors = facts(&setup, "prod");
-	with_minors.minors = Some(("4.0.1", "3.3.0"));
+	with_minors.minors = Some(("4.0.1", "4.1.0"));
 	let found = findings(&[drift(DriftKind::TableMissing, "person", None)], &with_minors);
 	assert_eq!(found.iter().filter(|f| f.code == K9107).count(), 1);
 	let hint = &found[0];
 	assert_eq!(hint.code, K9107);
 	assert_eq!((hint.severity, hint.default_level()), (Severity::Hint, Level::Warn));
-	assert!(hint.message.contains("`prod`") && hint.message.contains("3.3.0"), "{}", hint.message);
+	assert!(hint.message.contains("`prod`") && hint.message.contains("4.1.0"), "{}", hint.message);
 	assert_eq!(hint.span, 10..23, "the target's header");
 	assert_eq!(found.len(), 2, "the drift is reported anyway");
 	assert_eq!(minor_of("4.0.7"), "4.0");
-	assert_eq!(minor_of("3.3"), "3.3");
+	assert_eq!(minor_of("4.1"), "4.1");
 }
 
 #[test]
@@ -451,7 +451,7 @@ fn a_rollout_in_progress_is_noted_on_every_finding_of_the_target() {
 	let setup = setup();
 	let mut mid = facts(&setup, "prod");
 	mid.rollout = Some("r1");
-	mid.minors = Some(("4.0.0", "3.3.0"));
+	mid.minors = Some(("4.0.0", "4.1.0"));
 	let found = findings(
 		&[
 			drift(DriftKind::TableMissing, "person", None),
