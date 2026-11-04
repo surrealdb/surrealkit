@@ -102,9 +102,9 @@ When the bindings have `liveQueries`, the engine's entry for a query decides its
 | --- | --- | --- |
 | No refusal, no `WHERE` | Keyed | The entry's `query`, as written. |
 | No refusal, `exit: "delete"` | Keyed | The entry's `query`, as written. |
-| No refusal, `exit: "silent"` | Window | `LIVE SELECT * FROM <target>`, because a record leaving the filter is not notified. |
+| No refusal, `exit: "silent"` | Window | The entry's `watch`, a `LIVE SELECT` without the `WHERE`, because a record leaving the filter is not notified. Without `watch`, `LIVE SELECT * FROM <target>`. |
 | `refusal.windowable: true`, `exit` absent or `"delete"` | Window | The entry's `query`, as written. |
-| `refusal.windowable: true`, `exit: "silent"` | Window | `LIVE SELECT * FROM <target>`. |
+| `refusal.windowable: true`, `exit: "silent"` | Window | The entry's `watch`, or `LIVE SELECT * FROM <target>`. |
 | `refusal.windowable: false` | Not live | None. The types reject it, and at run time it is an `unsupported` error. |
 
 `exit` is what the engine sends when an update moves a record out of the `WHERE`. The engine checks it on its own build. `trustWhere` applies only to queries without an entry.

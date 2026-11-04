@@ -138,6 +138,11 @@ export interface LiveEntry {
 	 * `DELETE` notification, or nothing. Absent without a `WHERE`.
 	 */
 	readonly exit?: 'delete' | 'silent';
+	/**
+	 * With `exit: "silent"`: a `LIVE SELECT` of the same targets without the
+	 * `WHERE`, which notifies records entering and leaving the filter.
+	 */
+	readonly watch?: string;
 	/** Present when `LIVE SELECT` refuses the query as written. */
 	readonly refusal?: {
 		/** The refused clauses, in source order (`"ORDER BY"`, `"LIMIT"`, …). */
@@ -180,10 +185,11 @@ export function planLive(text: string, options: PlanOptions = {}): LivePlan {
 		return { mode: 'keyed', liveText: described, snapshot, windowed: [] };
 	}
 	// A record leaving the filter notifies nothing, so watch the whole target:
-	// the text's own unfiltered watcher, when the text could be planned.
-	const watcher = silent ? planText(text, false) : undefined;
+	// the engine's `watch`, or else the text's own unfiltered watcher.
+	const derived = silent && !entry.watch ? planText(text, false) : undefined;
 	const unfiltered =
-		watcher?.mode === 'window' ? watcher.liveText : described;
+		(silent ? entry.watch : undefined) ??
+		(derived?.mode === 'window' ? derived.liveText : described);
 	return { mode: 'window', liveText: unfiltered, snapshot, windowed };
 }
 

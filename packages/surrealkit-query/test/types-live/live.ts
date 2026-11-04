@@ -1,22 +1,33 @@
 // With the engine's `LiveQueries` registered, a query whose refusal is not
 // windowable is a type error; a windowable one is accepted.
 
-import type { LiveText, QueryText } from '../../src/index.js';
+import type { Surreal } from 'surrealdb';
+
+import { cacheFor, type LiveText, type QueryText } from '../../src/index.js';
 import type { Queries } from '../types/queries.js';
 
-/** The shape typegen writes for the engine's live entries. */
-type LiveQueries = {
-	'SELECT kind FROM event': { query: 'LIVE SELECT kind FROM event' };
+/** The engine's live entries, as typegen emits them. */
+const liveQueries = {
+	'SELECT kind FROM event': { query: 'LIVE SELECT kind FROM event' },
 	'SELECT * FROM event': {
-		query: 'LIVE SELECT * FROM event';
-		refusal: { clauses: ['FROM a, b']; windowable: false };
-	};
+		refusal: { clauses: ['FROM a, b'], windowable: false },
+	},
 	'SELECT name, email FROM user WHERE name = $name LIMIT $limit': {
-		query: 'LIVE SELECT name, email FROM user WHERE name = $name';
-		exit: 'silent';
-		refusal: { clauses: ['LIMIT']; windowable: true };
+		query: 'LIVE SELECT name, email FROM user WHERE name = $name',
+		exit: 'silent',
+		watch: 'LIVE SELECT id FROM user',
+		refusal: { clauses: ['LIMIT'], windowable: true },
+	},
+} as const;
+
+type LiveQueries = {
+	[K in keyof typeof liveQueries]: (typeof liveQueries)[K] & {
+		notification: unknown;
 	};
 };
+
+// The value is a manifest the cache accepts.
+cacheFor(null as unknown as Surreal, { live: liveQueries });
 
 declare module '../../src/types.js' {
 	interface Register {

@@ -184,6 +184,20 @@ describe('planLive with an engine entry', () => {
 		});
 	});
 
+	it("watches with the engine's watch text when exits are silent", () => {
+		const plan = planLive(PAGE, {
+			entry: {
+				query: 'LIVE SELECT * FROM user WHERE active',
+				exit: 'silent',
+				watch: 'LIVE SELECT id FROM user',
+				refusal: { clauses: ['ORDER BY', 'LIMIT'], windowable: true },
+			},
+		});
+		expect(plan.mode !== 'unsupported' && plan.liveText).toBe(
+			'LIVE SELECT id FROM user',
+		);
+	});
+
 	it('refuses what the engine says re-running cannot serve', () => {
 		expect(
 			planLive('SELECT * FROM a, b', {
