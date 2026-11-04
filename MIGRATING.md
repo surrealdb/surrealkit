@@ -923,3 +923,17 @@ SurrealQL".
 `analyze` is a new default cargo feature, which adds `notify` to the dependency tree. A build
 with `default-features = false` is unchanged. Without `analyze` the CLI has no `check` or
 `watch`, and `[analyze]` still parses.
+
+### 24. `check --target` and `[analyze] drift_ignore` (unreleased)
+
+Nothing to change. New: `surrealkit check --target <name>` compares the schema files with the
+database a `[target.<name>]` names, read-only, and reports a table or field that is missing
+(`K9101`, `K9103`) or differs (`K9102`, `K9104`), and what only the target has (`K9105` when
+SurrealKit managed it, `K9106` when it did not). Without `--target`, `check` still connects to
+nothing and reads no connection setting. `--watch` with `--target` is a usage error. The new
+`[analyze] drift_ignore = ["table", "table.field"]` lists tables and fields that are
+intentionally unmanaged. A `[typegen.queries] sources` section also makes `check` read host
+code, and report a `${…}` interpolated into a query string as `K9201`. The `--format json`
+summary gains `host_read`, `host_files`, `host_queries`, `targets_checked` and `drift`.
+`[analyze.lints]` keys also accept the five-digit codes and families of the 4.1 checker
+(`C10001`, `10xxx`). See the README's "Checking SurrealQL".
