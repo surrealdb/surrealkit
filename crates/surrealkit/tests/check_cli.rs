@@ -468,6 +468,66 @@ fn drift_against_a_live_server() {
 	assert_eq!(json(&run(&["-j", "check", "--target", "live"])), report);
 }
 
+const HOST_CONFIG: &str = "[typegen.queries]\nsources = [\"src\"]\n";
+const APP_TS: &str = "\
+import { surql } from 'surrealdb';
+
+export async function find(db, id) {
+	await db.query(`SELECT * FROM t WHERE a = ${id}`);
+	await db.query(surql`SELECT * FROM t WHERE a = ${id}`);
+	await db.query('SELECT * FROM t WHERE a = $id', { id });
+	// surreal: allow(K9201) reason=\"id is a validated integer\"
+	return db.query(`SELECT * FROM t WHERE a = ${id}`);
+}
+";
+
+#[test]
+fn host_code_with_an_interpolated_query_is_k9201() {
+	let dir = project(HOST_CONFIG, &[("001_base.surql", BASE)]);
+	write(&dir.path().join("src/app.ts"), APP_TS);
+	let human = surrealkit(dir.path(), &["check"]);
+	assert_eq!(human.status.code(), Some(1), "{}", stderr(&human));
+	assert_eq!(stdout(&human), "");
+	insta::assert_snapshot!("check_host_human", stderr(&human));
+
+	let as_json = surrealkit(dir.path(), &["-j", "check"]);
+	let report = json(&as_json);
+	let summary = &report["summary"];
+	assert_eq!(
+		(
+			summary["host_read"].as_bool(),
+			summary["host_files"].as_u64(),
+			summary["host_queries"].as_u64()
+		),
+		(Some(true), Some(1), Some(3))
+	);
+	assert_eq!(summary["suppressed"], 1);
+	assert_eq!(report["diagnostics"][0]["code"], "K9201");
+	assert_eq!(report["diagnostics"][0]["path"], "src/app.ts");
+
+	// A level in `[analyze.lints]` applies to it like any other code.
+	write(
+		&dir.path().join("surrealkit.toml"),
+		&format!("{HOST_CONFIG}[analyze.lints]\nK9201 = \"warn\"\n"),
+	);
+	let warned = surrealkit(dir.path(), &["check"]);
+	assert_eq!(warned.status.code(), Some(0), "{}", stderr(&warned));
+}
+
+#[test]
+fn without_queries_sources_no_host_code_is_read() {
+	let dir = project("", &[("001_base.surql", BASE)]);
+	write(&dir.path().join("src/app.ts"), APP_TS);
+	let output = surrealkit(dir.path(), &["-j", "check"]);
+	assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+	assert_eq!(json(&output)["summary"]["host_read"], false);
+	let missing =
+		project("[typegen.queries]\nsources = [\"nowhere\"]\n", &[("001_base.surql", BASE)]);
+	let output = surrealkit(missing.path(), &["check"]);
+	assert_eq!(output.status.code(), Some(1));
+	assert!(stderr(&output).contains("does not exist"), "{}", stderr(&output));
+}
+
 #[test]
 fn a_project_with_no_sources_warns_and_passes() {
 	let dir = TempDir::new().expect("tempdir");

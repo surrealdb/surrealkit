@@ -22,6 +22,8 @@ pub mod drift;
 pub mod engine;
 #[cfg(feature = "analyze")]
 pub mod finding;
+#[cfg(all(feature = "analyze", feature = "host-queries"))]
+pub mod host;
 #[cfg(feature = "analyze")]
 pub mod policy;
 #[cfg(feature = "analyze")]
