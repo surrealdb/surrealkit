@@ -22,6 +22,7 @@ use serde_json::{Map, Value};
 use surrealdb::Surreal;
 use surrealdb::engine::any::Any;
 
+use super::TargetFindings;
 use super::config::AnalyzeConfig;
 use super::discover::{Source, Sources};
 use super::finding::{
@@ -31,7 +32,7 @@ use super::policy::Level;
 use crate::compile::{CompileModule, CompileOpts, compile};
 use crate::core::sha256_hex;
 use crate::module::Module;
-use crate::project::ProjectConfig;
+use crate::project::{ProjectConfig, Target};
 use crate::schema_state::{CatalogEntity, EntityKind, SchemaFile, defined_entities};
 use crate::typegen::canonical::semantic_digest;
 use crate::typegen::document::{EngineMode, Field, SchemaDocument, Table};
@@ -764,6 +765,78 @@ async fn metadata_tables(db: &Surreal<Any>) -> Result<(bool, bool)> {
 
 fn is_extra(drift: &Drift) -> bool {
 	matches!(drift.kind, DriftKind::TableExtra | DriftKind::FieldExtra)
+}
+
+/// The project's `surrealkit.toml`, where a finding about a target as a whole points.
+#[derive(Debug, Clone)]
+pub struct ConfigFile {
+	/// Absolute.
+	pub path: PathBuf,
+	pub text: String,
+}
+
+/// Compare the files in `sources` with each of `targets`, which are connected to one by one.
+///
+/// A target is compared with the schema files of the modules it accepts (`Target::allows`). A
+/// target that accepts none of them is an error, and so is one that cannot be reached or read:
+/// a connection failure is not a finding. When the files do not compile the comparison is
+/// skipped with a warning, since the check already reports what the engine rejected.
+///
+/// Targets are compared in the order given, each once.
+pub async fn check_targets(
+	sources: &Sources,
+	targets: &[Target],
+	config: &ConfigFile,
+	env: &Env<'_>,
+) -> Result<Vec<TargetFindings>> {
+	let mut compiled: BTreeMap<BTreeSet<String>, Option<FilesSide>> = BTreeMap::new();
+	let mut out: Vec<TargetFindings> = Vec::new();
+	for target in targets {
+		let name = target.name();
+		if out.iter().any(|done| done.target == name) {
+			continue;
+		}
+		let modules: BTreeSet<String> = sources
+			.schema
+			.iter()
+			.filter_map(|source| source.module.as_deref())
+			.filter(|module| target.allows(module))
+			.map(str::to_string)
+			.collect();
+		if modules.is_empty() {
+			bail!(
+				"target `{name}` accepts none of the selected schema modules, so there is nothing \
+				 to compare; pick a target whose `schemas` list includes them"
+			);
+		}
+		if !compiled.contains_key(&modules) {
+			let side = match files_side(sources, &modules, env).await {
+				Ok(side) => Some(side),
+				Err(err) => {
+					log::warn!("target `{name}` was not compared: {err:#}");
+					None
+				}
+			};
+			compiled.insert(modules.clone(), side);
+		}
+		let Some(Some(files)) = compiled.get(&modules) else {
+			continue;
+		};
+		let db = crate::config::connect(target.cfg())
+			.await
+			.with_context(|| format!("connecting to target `{name}`"))?;
+		let header = Location {
+			path: config.path.clone(),
+			span: target_header(&config.text, name),
+			statement: None,
+		};
+		let found = compare(&db, name, &header, files, env).await?;
+		out.push(TargetFindings {
+			target: name.to_string(),
+			findings: found.findings,
+		});
+	}
+	Ok(out)
 }
 
 /// Where `[target.<name>]` is in `text`, a `surrealkit.toml`: the header's line, without its

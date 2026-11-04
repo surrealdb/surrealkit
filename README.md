@@ -669,7 +669,8 @@ effect-surrealkit's own round-trip properties run that way.
 ## Checking SurrealQL
 
 `surrealkit check` is a lint for the SurrealQL in a project, for CI and for the editor
-loop. It reads, and connects to nothing:
+loop. On its own it reads files and connects to nothing (`--target` adds a read-only
+comparison with a database, under "Drift" below):
 
 - the schema files of the selected modules (`--schema`, `--all` and `--no-deps` work as
   they do for `compile`), in `depends_on` order;
@@ -680,13 +681,14 @@ loop. It reads, and connects to nothing:
 
 The project root is the working directory, and the database folder is `--folder` or
 `./database`, exactly as for `compile`. Like `compile`, it reads no connection settings
-(`SURREALDB_*`, `.env`, `[target.*]`), so a lint runs in a job with no credentials. Template
-variables come from `surrealkit.toml [variables]` and `--var`.
+(`SURREALDB_*`, `.env`, `[target.*]`) unless `--target` is given, so a lint runs in a job with
+no credentials. Template variables come from `surrealkit.toml [variables]` and `--var`.
 
 ```bash
 surrealkit check                    # findings on stderr, like rustc; exit 1 on an error
 surrealkit check --format json      # one JSON document on stdout (same as -j/--json)
 surrealkit check --format sarif     # one SARIF 2.1.0 document on stdout, for code scanning
+surrealkit check --target prod      # also compare the files with the database `[target.prod]` names
 surrealkit watch                    # check again on every change, until Ctrl-C
 surrealkit check --watch            # the same
 ```
@@ -717,14 +719,30 @@ applies:
 | `K9001` | a file SurrealKit cannot split into statements (an unterminated string, an unmatched bracket) | deny |
 | `K9002` | a template variable a statement uses is not set | deny |
 | `K9003` | a schema statement the engine rejected, or one `sync` refuses (a `REMOVE`, a non-`DEFINE`) | deny |
+| `K9101` | drift: a table the files define is missing on the target | deny |
+| `K9102` | drift: a table's definition differs (schemafull or schemaless, a relation's `in` and `out`, a view, `DROP`, …) | deny |
+| `K9103` | drift: a field the files define is missing on the target | deny |
+| `K9104` | drift: a field differs (its kind, optional, default or value, readonly, computed, flexible, reference, …) | deny |
+| `K9105` | drift: on the target and recorded as managed by SurrealKit, but no longer in the files (removed, not yet synced) | warn |
+| `K9106` | drift: on the target and never managed by SurrealKit (a shared database, or another writer) | warn |
+| `K9107` | drift: the target runs another engine minor than the embedded one, so only normalised facts were compared | hint |
+| `K9201` | host code: an untagged template literal with `${…}` passed to a query method | deny |
 | `L7013` | a malformed or reasonless suppression comment (below) | warn |
+
+The `K` family is `9xxx`, and `9xxx` is the only wildcard over it, so per-code keys tune the
+drift and the host-code lints separately: `K9106 = "allow"` silences unmanaged extras and leaves
+`K9104` alone. No other family uses a `9xxx` number, so `9xxx = "warn"` names SurrealKit's codes
+and nothing else. `K9107` is a hint by nature: under `warn` (its default) it stays a hint, and
+`warnings_as_errors` does not raise it. `K9202` (a query built by string concatenation) and
+`K9301` (a host argument's type against the parameter kind the engine infers) are reserved and
+not emitted by this build; the second is sketched in `docs/check/host-param-kinds.md`.
 
 Query type checking, the `E` and the other `L` codes, arrives with the engine's own checker
 (the SDK's `Surreal::check`, SurrealDB 4.1). The 4.0 build applies and reports schema only:
 query files are counted, and the summary says that they were found but not analyzed.
 Findings, policy and suppressions already follow the engine's contract, so the checker is a
-drop-in behind the same configuration. SurrealQL embedded in host-language files
-(`db.query("...")` in TypeScript, say) is not read; only `.surql` files are.
+drop-in behind the same configuration. The SurrealQL in `.surql` files is what a check reads;
+SurrealQL in host-language files is read for one lint only (see "Host code" below).
 
 **Code families.** A code is a letter and a number, and the number's thousands are its
 family. The engine's catalog uses `S` for `0xxx` (syntax), `E` for `1xxx` to `6xxx` (errors),
@@ -750,6 +768,9 @@ ignore = ["dist", "src/generated"]
 warnings_as_errors = false
 # Require reason="..." on every suppression comment.
 require_suppression_reason = true
+# Tables and fields that are intentionally not managed by SurrealKit: `check --target` does not
+# report them as K9105 or K9106 on any target. `table` or `table.field`; a table covers its fields.
+drift_ignore = ["audit_log", "person.legacy_id"]
 
 [analyze.lints]
 "7xxx" = "warn"   # a family: 7xxx, 7XXX or 7*
@@ -769,7 +790,8 @@ the exact code, then its family, then the code's own default level (where
 There is no `strict` or `surrealdb_version` key: the checker runs against the engine
 SurrealKit embeds. An unknown key, or a key or level that is not understood, is an error.
 
-**Suppressions.** A `--`, `//` or `#` line comment silences one code on one line:
+**Suppressions.** A `--`, `//` or `#` line comment silences one code on one line (in host code
+only `//`, see "Host code"):
 
 ```sql
 -- surreal: allow(E1002) reason="legacy column, removed in the next migration"
@@ -783,6 +805,124 @@ rejected. `surrealql-analyzer:` is accepted in place of `surreal:`. Comments are
 lexing, so a `--` inside a string is not one, and block comments are not read. A malformed
 directive is the warning `L7013` and suppresses nothing; with `require_suppression_reason`,
 one without a reason is `L7013` too but still suppresses.
+
+### Drift
+
+`surrealkit check --target <name>` also compares the schema files with a database, and reports
+where the two differ. It is how a CI job learns that `sync` was not run, that someone changed
+production by hand, or that a field's kind drifted. The flag is repeatable, with one comparison
+per named target, in the same report as the rest of `check`, so a job has one exit code.
+
+```bash
+surrealkit check --target prod
+surrealkit check -t prod -t staging --format sarif > surrealql.sarif
+```
+
+**Triggering.** Drift runs only for a target named with `-t/--target`. A plain `check`, `check
+--all`, a declared `primary` target and a sole declared target never connect, so a lint job needs
+no credentials. With `--target`, the target resolves as for `typegen` and the other single-target
+commands (`[target.<name>]`, the ambient `--host`, `--ns` and the rest, `SURREALDB_*`, `.env`,
+`pass_env`), and an unreachable or unreadable target is a command error (`error: …`, exit 1, the
+usual envelope under `--json`), not a finding. `--watch` with `--target` is a usage error: a
+watch does not poll a live database.
+
+**Read-only.** The comparison signs in, reads `INFO` and the schema of the database, and
+`SELECT`s SurrealKit's own catalog and rollout tables. It never runs the setup DDL and writes
+nothing, so it is safe against production with a read-only account.
+
+**What is compared.** The schema files of the modules the target accepts (`schemas = […]` in
+`[target.<name>]`, and `--schema`) are compiled with the embedded engine, as `compile` does, and
+the target is read through the same introspection `typegen` uses; the two schema documents are
+then compared by table name and field path, on the normalised facts a v2 document carries:
+
+- `K9101` and `K9103`: a table or field the files define that the target lacks.
+- `K9102` and `K9104`: a table or field both define differently. Each differing property is two
+  notes, `the files say kind: …` and `target `prod` has kind: …`, with a kind shown as its v2
+  JSON node.
+- `K9105` and `K9106`: a table or field only the target has. It is `K9105` when SurrealKit's
+  catalog on the target records it as managed (it was removed from the files and not yet
+  synced), and `K9106` when it never was, or when the database was never synced by SurrealKit.
+  Something a module outside this run manages is not reported.
+- `K9107`: the target runs another engine minor than the embedded one (4.0), so only normalised
+  facts were compared. Compare against a target on the embedded minor for an exact result.
+
+SurrealKit's own metadata (`__entity`, `__rollout`, `__seed`, and whatever `setup.surql`
+defines) is left out on both sides. Provenance, the `INFO` text of a definition and diagnostics
+are not compared. Indexes, events, functions, params, accesses, analyzers and the other
+collections are a known limit: a difference there is not reported.
+
+**Locations.** A missing or differing table or field points at its `DEFINE` statement in the
+schema file, so a carets block, a suppression comment and a SARIF location all work; an extra
+and `K9107` point at the `[target.<name>]` header line of `surrealkit.toml`. Every message names
+the target, and when the target has a rollout that was started and not completed, each finding of
+it carries a note that the target is expected to differ until the rollout completes.
+
+```text
+error[K9103]: field `person.age` is not defined on target `prod`
+ --> database/schema/001_person.surql:3:1
+  |
+3 | DEFINE FIELD age ON person TYPE int;
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+warning[K9106]: table `audit` is on target `prod` and was never managed by SurrealKit
+ --> surrealkit.toml:4:1
+  |
+4 | [target.prod]
+  | ^^^^^^^^^^^^^
+  = help: if it is intentionally unmanaged, list it under `[analyze] drift_ignore`
+
+checked 1 schema file and 0 query files: 1 error, 1 warning
+compared the files with 1 target: prod (2 findings)
+```
+
+Drift findings go through the same policy and suppressions as any other (`-- surreal:
+allow(K9104) reason="…"` above or on the `DEFINE` line). The extras, which point at the config
+file, are tuned by level (`K9106 = "allow"`) or by `drift_ignore`. In JSON the summary gains
+`targets_checked` and `drift`, the finding count of each target.
+
+### Host code
+
+With `[typegen.queries] sources` set, `check` also reads the host code that sends queries (needs
+the `host-queries` cargo feature, which the CLI enables). It is the same section `generate` reads:
+
+```toml
+[typegen.queries]
+sources = ["src"]         # files or directories, relative to the project root
+methods = ["query"]       # the client methods whose first argument is a query (the default)
+```
+
+The one lint is `K9201`: a template literal with `${…}` passed to a query method splices the value
+into the SurrealQL text. Each `${…}` is a finding, at the substitution. Pass the value as a
+parameter instead (`db.query("… WHERE id = $id", { id })`), or build the query with the SDK's
+`surql` tag, which is a call, not a literal, and is never flagged. A string with no `${…}`, and a
+query built any other way, is not read.
+
+```ts
+db.query(`SELECT * FROM person WHERE id = ${id}`);        // K9201
+db.query(surql`SELECT * FROM person WHERE id = ${id}`);   // fine
+// surreal: allow(K9201) reason="id is a validated integer"
+db.query(`SELECT * FROM person WHERE id = ${id}`);        // suppressed
+```
+
+Suppressions in host files are `//` line comments, found by the TypeScript grammar (so a `//`
+inside a string is not one, and `/* */` blocks are not read); in a Svelte, Vue or Astro file
+they are the comments of a script block. The summary counts the host files that hold a query and
+the queries (`host_files`, `host_queries`; `host_read` says whether host code was read at all).
+With no `sources`, or a build without `host-queries`, the lint does nothing. `watch` does not
+re-run when host code changes.
+
+### Stale generated types
+
+`check` finds what is wrong with the SurrealQL; whether the generated types still match the
+schema is a separate gate, which already exists. `surrealkit compile --check` fails when the
+committed schema document and TypeScript output are stale, and the `surql!` macro's offline
+cache (`SURREAL_OFFLINE=1`) fails to compile on a query that is not cached. Run them in CI next
+to `check`:
+
+```yaml
+- run: surrealkit check --target prod            # the SurrealQL, and drift from production
+- run: surrealkit compile --check                # the committed schema document and types
+- run: SURREAL_OFFLINE=1 cargo check             # the surql! macro's cache covers every query
+```
 
 **In CI.** The plain gate:
 

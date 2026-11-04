@@ -1,8 +1,9 @@
 //! `surrealkit check` and `surrealkit watch`: a [`surrealkit::check`] run, shown to a person or
 //! a machine, and the loop that repeats it when a file changes.
 //!
-//! Neither reads a connection setting. The project root is the working directory, the way
-//! `surrealkit compile` has it.
+//! Neither reads a connection setting, but for `check --target`, which compares the files with
+//! the named targets and so resolves and connects to them. The project root is the working
+//! directory, the way `surrealkit compile` has it.
 
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
@@ -12,13 +13,15 @@ use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
 use notify::{EventKind, RecursiveMode, Watcher};
 use surrealkit::check::discover::{Ignore, discover};
+use surrealkit::check::drift::{ConfigFile, DriftIgnore, Env, check_targets};
 use surrealkit::check::engine::SchemaApply;
+use surrealkit::check::host;
 use surrealkit::check::policy::Policy;
-use surrealkit::check::{Report, render, run};
+use surrealkit::check::{ExtraFile, Extras, Report, render, run_with};
 use surrealkit::module::Module;
-use surrealkit::project::ProjectConfig;
+use surrealkit::project::{ProjectConfig, Target};
 use surrealkit::selection::select_modules;
-use surrealkit::variables::{TemplateVars, build_project_vars, load_typegen_config};
+use surrealkit::variables::{QueriesConfig, TemplateVars, build_project_vars, load_typegen_config};
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::output;
@@ -64,6 +67,9 @@ pub struct Opts {
 	pub no_deps: bool,
 	/// `--var KEY=VALUE`.
 	pub vars: Vec<(String, String)>,
+	/// The targets `--target` names, resolved: each is compared with the files. Empty for a
+	/// check that connects to nothing.
+	pub targets: Vec<Target>,
 }
 
 /// What a run reads from `surrealkit.toml`, loaded again when the file changes.
@@ -72,7 +78,12 @@ struct Loaded {
 	modules: Vec<Module>,
 	policy: Policy,
 	ignore: Ignore,
+	drift_ignore: DriftIgnore,
 	experimental: Vec<String>,
+	/// `[typegen] engine`.
+	engine: Option<String>,
+	/// `[typegen.queries]`: where host code is, when it is set.
+	queries: Option<QueriesConfig>,
 	vars: TemplateVars,
 }
 
@@ -81,9 +92,11 @@ fn load(opts: &Opts) -> Result<Loaded> {
 	let modules = select_modules(&project, &opts.schemas, opts.all, opts.no_deps)?;
 	let policy = Policy::from_config(&project.analyze)?;
 	let ignore = Ignore::from_config(&project.analyze)?;
+	let drift_ignore = DriftIgnore::from_config(&project.analyze)?;
 	// The same capabilities `compile` runs the engine with. Template variables come from the
 	// config file and `--var` only, never from `SURREALKIT_VAR_*`.
-	let experimental = load_typegen_config(None)?.experimental;
+	let typegen = load_typegen_config(None)?;
+	let queries = typegen.queries_config()?;
 	let vars = TemplateVars {
 		vars: build_project_vars(&opts.vars, None)?,
 	};
@@ -92,14 +105,17 @@ fn load(opts: &Opts) -> Result<Loaded> {
 		modules,
 		policy,
 		ignore,
-		experimental,
+		drift_ignore,
+		experimental: typegen.experimental,
+		engine: typegen.engine,
+		queries,
 		vars,
 	})
 }
 
 /// One check of the project at `root`, with a fresh engine: discover the sources, run them
-/// through the schema backend, and return the report. The one function `watch` calls for
-/// every change.
+/// through the schema backend, read the host code `[typegen.queries]` names, compare the files
+/// with each target in `opts`, and return the report. The one function `watch` calls for every change, which has no target.
 async fn run_once(loaded: &Loaded, opts: &Opts, root: &Path) -> Result<Report> {
 	let sources =
 		discover(&loaded.project, &opts.folder, root, &loaded.modules, &loaded.project.analyze)?;
@@ -116,8 +132,49 @@ async fn run_once(loaded: &Loaded, opts: &Opts, root: &Path) -> Result<Report> {
 			dirs.join(", ")
 		);
 	}
+	let mut extras = Extras::default();
+	if let Some(queries) = loaded.queries.as_ref().filter(|queries| !queries.sources.is_empty()) {
+		let linted = host::lint(root, queries)?;
+		extras.files.extend(linted.files);
+		extras.findings.extend(linted.findings);
+		extras.host = Some(linted.counts);
+	}
+	if !opts.targets.is_empty() {
+		let config = config_file(root)?;
+		let env = Env {
+			project: &loaded.project,
+			root,
+			folder: &opts.folder,
+			vars: &loaded.vars,
+			experimental: &loaded.experimental,
+			engine: loaded.engine.as_deref(),
+			ignore: &loaded.drift_ignore,
+		};
+		extras.targets = check_targets(&sources, &opts.targets, &config, &env).await?;
+		extras.files.push(ExtraFile {
+			path: config.path,
+			text: config.text,
+			comments: None,
+		});
+	}
 	let mut engine = SchemaApply::new(&loaded.experimental).await?;
-	run(&mut engine, &sources, &loaded.policy, &loaded.vars).await
+	run_with(&mut engine, &sources, &loaded.policy, &loaded.vars, extras).await
+}
+
+/// `surrealkit.toml`, where the targets are declared: found from `root` upwards, as the rest of
+/// SurrealKit finds it.
+fn config_file(root: &Path) -> Result<ConfigFile> {
+	let Some(path) = ProjectConfig::discover(root) else {
+		bail!(
+			"`--target` needs a surrealkit.toml: targets are declared there as `[target.<name>]`"
+		);
+	};
+	let text =
+		std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
+	Ok(ConfigFile {
+		path,
+		text,
+	})
 }
 
 /// Colour on stderr: when it is a terminal and `NO_COLOR` is unset or empty.
@@ -126,7 +183,8 @@ fn color() -> bool {
 }
 
 /// `surrealkit check`: run once, show the report, and return the exit code: 1 when a finding is
-/// an error after policy. A configuration or backend failure is an `Err`.
+/// an error after policy. A configuration or backend failure, and a target that cannot be
+/// reached, is an `Err`.
 ///
 /// Human output goes to stderr whole, like rustc's, so redirecting stdout cannot hide an
 /// error. JSON and SARIF are one document on stdout and nothing else.

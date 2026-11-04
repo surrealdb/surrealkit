@@ -252,6 +252,283 @@ fn check_needs_none_of_the_environment_a_database_command_would() {
 	assert!(!stderr(&output).contains("PROD_DB_PASSWORD"), "{}", stderr(&output));
 }
 
+/// A declared target nothing listens on: a command that connects to it fails at once.
+const UNREACHABLE: &str =
+	"[target.prod]\nhost = \"ws://127.0.0.1:1\"\nns = \"app\"\ndb = \"prod\"\n";
+
+#[test]
+fn a_plain_check_connects_to_no_target_even_a_primary_one() {
+	let config = format!("{UNREACHABLE}primary = true\n");
+	let dir = project(&config, &[("001_base.surql", BASE)]);
+	for args in [&["check"][..], &["check", "--all"]] {
+		let started = Instant::now();
+		let output = surrealkit(dir.path(), args);
+		assert_eq!(output.status.code(), Some(0), "{args:?}: {}", stderr(&output));
+		assert!(started.elapsed() < Duration::from_secs(20), "{args:?} waited on a connection");
+		assert!(!stderr(&output).contains("prod"), "{args:?}: {}", stderr(&output));
+	}
+	let output = surrealkit(dir.path(), &["-j", "check"]);
+	let summary = &json(&output)["summary"];
+	assert_eq!(
+		(summary["targets_checked"].as_u64(), summary["host_read"].as_bool()),
+		(Some(0), Some(false))
+	);
+	assert!(summary["drift"].as_object().expect("an object").is_empty());
+}
+
+#[test]
+fn connection_flags_still_warn_on_a_check_without_a_target() {
+	let dir = project("", &[("001_base.surql", BASE)]);
+	let output = surrealkit(dir.path(), &["check", "--host", "ws://127.0.0.1:1"]);
+	assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+	assert!(stderr(&output).contains("never connects to a database"), "{}", stderr(&output));
+}
+
+#[test]
+fn watching_a_target_is_a_usage_error() {
+	let dir = project(UNREACHABLE, &[("001_base.surql", BASE)]);
+	for args in [&["check", "--watch", "--target", "prod"][..], &["watch", "-t", "prod"]] {
+		let output = surrealkit(dir.path(), args);
+		assert_eq!(output.status.code(), Some(1), "{args:?}");
+		assert_eq!(stdout(&output), "");
+		assert!(
+			stderr(&output).contains("`--watch` does not poll a live database; drop --target"),
+			"{args:?}: {}",
+			stderr(&output)
+		);
+	}
+}
+
+#[test]
+fn an_unreachable_target_is_a_command_error_not_a_finding() {
+	let dir = project(UNREACHABLE, &[("001_base.surql", BASE)]);
+	let output =
+		surrealkit(dir.path(), &["check", "--target", "prod", "--connect-timeout-secs", "5"]);
+	assert_eq!(output.status.code(), Some(1));
+	assert!(
+		stderr(&output).starts_with("error: connecting to target `prod`"),
+		"{}",
+		stderr(&output)
+	);
+	assert!(!stderr(&output).contains("checked "), "no report: {}", stderr(&output));
+
+	let output =
+		surrealkit(dir.path(), &["--json", "check", "-t", "prod", "--connect-timeout-secs", "5"]);
+	assert_eq!(output.status.code(), Some(1));
+	assert_eq!(stdout(&output), "", "a failure is the envelope on stderr, never a report");
+	assert!(stderr(&output).contains("connecting to target `prod`"), "{}", stderr(&output));
+}
+
+#[test]
+fn a_target_must_be_declared_and_its_password_variable_set() {
+	let dir = project(UNREACHABLE, &[("001_base.surql", BASE)]);
+	let output = surrealkit(dir.path(), &["check", "--target", "nope"]);
+	assert_eq!(output.status.code(), Some(1));
+	assert!(stderr(&output).contains("unknown target \"nope\""), "{}", stderr(&output));
+
+	let config = "[target.prod]\nhost = \"ws://127.0.0.1:1\"\npass_env = \"PROD_DB_PASSWORD\"\n";
+	let dir = project(config, &[("001_base.surql", BASE)]);
+	let output = surrealkit(dir.path(), &["check", "--target", "prod"]);
+	assert_eq!(output.status.code(), Some(1));
+	assert!(stderr(&output).contains("PROD_DB_PASSWORD"), "{}", stderr(&output));
+}
+
+#[test]
+fn a_bad_drift_ignore_entry_is_an_error() {
+	let dir = project("[analyze]\ndrift_ignore = [\"a..b\"]\n", &[("001_base.surql", BASE)]);
+	let output = surrealkit(dir.path(), &["check"]);
+	assert_eq!(output.status.code(), Some(1));
+	assert!(stderr(&output).contains("drift_ignore"), "{}", stderr(&output));
+}
+
+fn server() -> Option<(String, String, String)> {
+	let url = std::env::var("SURREALKIT_TEST_URL").ok().filter(|url| !url.is_empty())?;
+	let user = std::env::var("SURREALKIT_TEST_USER").unwrap_or_else(|_| "root".into());
+	let pass = std::env::var("SURREALKIT_TEST_PASS").unwrap_or_else(|_| "secret".into());
+	Some((url, user, pass))
+}
+
+const PERSON: &str = "DEFINE TABLE person SCHEMAFULL;\nDEFINE FIELD name ON person TYPE string;\n\
+                      DEFINE FIELD age ON person TYPE int;\nDEFINE TABLE legacy SCHEMAFULL;\n\
+                      DEFINE FIELD note ON legacy TYPE string;\n";
+const PERSON_NOW: &str = "DEFINE TABLE person SCHEMAFULL;\n\
+                          DEFINE FIELD name ON person TYPE string;\n\
+                          DEFINE FIELD age ON person TYPE int;\n";
+
+/// The report as it is compared with the golden one: what depends on the server's engine
+/// version (`K9107`, and the hint it counts) left out.
+fn redacted(report: &serde_json::Value) -> String {
+	let mut report = report.clone();
+	let kept: Vec<serde_json::Value> = report["diagnostics"]
+		.as_array()
+		.expect("diagnostics")
+		.iter()
+		.filter(|d| d["code"] != "K9107")
+		.cloned()
+		.collect();
+	report["diagnostics"] = kept.into();
+	report["summary"]["hints"] = 0.into();
+	report["summary"]["drift"]["live"] =
+		(report["diagnostics"].as_array().map_or(0, Vec::len)).into();
+	serde_json::to_string_pretty(&report).expect("json")
+}
+
+/// `check --target` against a live server, and a project that has drifted from it.
+#[test]
+#[expect(clippy::print_stderr, reason = "a skipped live test says why")]
+fn drift_against_a_live_server() {
+	let Some((url, user, pass)) = server() else {
+		eprintln!("SKIP: set SURREALKIT_TEST_URL to run the live drift test");
+		return;
+	};
+	let nonce = std::time::SystemTime::now()
+		.duration_since(std::time::UNIX_EPOCH)
+		.map_or(0, |since| since.as_nanos());
+	let ns = format!("kit_drift_{nonce}");
+	let config = format!(
+		"[target.live]\nhost = {url:?}\nns = {ns:?}\ndb = \"drift\"\nuser = {user:?}\n\
+		 pass_env = \"KIT_DRIFT_PASS\"\n"
+	);
+	let dir = project(&config, &[("001_person.surql", PERSON)]);
+	let run = |args: &[&str]| {
+		command(dir.path(), args)
+			.env("KIT_DRIFT_PASS", &pass)
+			.env("SURREALDB_CONNECT_TIMEOUT_SECS", "30")
+			.output()
+			.expect("run surrealkit")
+	};
+
+	let synced = run(&["sync", "--target", "live"]);
+	assert_eq!(synced.status.code(), Some(0), "{}", stderr(&synced));
+
+	// Synced from these files: nothing differs but, across engine minors, the hint.
+	let clean = run(&["-j", "check", "--target", "live"]);
+	assert_eq!(clean.status.code(), Some(0), "{}{}", stderr(&clean), stdout(&clean));
+	let report = json(&clean);
+	assert_eq!(report["summary"]["targets_checked"], 1);
+	assert_eq!(
+		(report["summary"]["errors"].as_u64(), report["summary"]["warnings"].as_u64()),
+		(Some(0), Some(0))
+	);
+
+	// The files drop `legacy`, which stays on the server; the server loses a field, gains an
+	// unmanaged table and has a field's kind changed.
+	write(&dir.path().join("database/schema/001_person.surql"), PERSON_NOW);
+	let runtime = tokio::runtime::Runtime::new().expect("runtime");
+	runtime.block_on(async {
+		let db = surrealkit::surrealdb::engine::any::connect(url.as_str()).await.expect("connect");
+		db.signin(surrealkit::surrealdb::opt::auth::Root {
+			username: user.clone(),
+			password: pass.clone(),
+		})
+		.await
+		.expect("signin");
+		db.use_ns(&ns).use_db("drift").await.expect("use");
+		db.query(
+			"REMOVE FIELD age ON person; DEFINE TABLE audit SCHEMAFULL; \
+			 DEFINE FIELD OVERWRITE name ON person TYPE int;",
+		)
+		.await
+		.and_then(|response| response.check())
+		.expect("alter");
+	});
+
+	let drifted = run(&["-j", "check", "--target", "live"]);
+	assert_eq!(drifted.status.code(), Some(1), "{}", stderr(&drifted));
+	let report = json(&drifted);
+	let codes: Vec<&str> = report["diagnostics"]
+		.as_array()
+		.expect("diagnostics")
+		.iter()
+		.map(|d| d["code"].as_str().expect("code"))
+		.filter(|code| *code != "K9107")
+		.collect();
+	// In file order: `name` (line 2) before `age` (line 3), then the config file.
+	assert_eq!(codes, ["K9104", "K9103", "K9105", "K9106"], "{report:#}");
+	let at_server_engine = !report["diagnostics"]
+		.as_array()
+		.expect("diagnostics")
+		.iter()
+		.any(|d| d["code"] == "K9107");
+	if at_server_engine {
+		insta::assert_snapshot!("check_drift_json", redacted(&report));
+	} else {
+		eprintln!(
+			"the server runs another engine minor: the golden report is compared at 4.0 only"
+		);
+	}
+
+	let human = run(&["check", "--target", "live"]);
+	let text = stderr(&human);
+	assert!(
+		text.contains("error[K9103]: field `person.age` is not defined on target `live`"),
+		"{text}"
+	);
+	assert!(text.contains("compared the files with 1 target: live ("), "{text}");
+	// The drift pass is read-only: another run finds the same thing.
+	assert_eq!(json(&run(&["-j", "check", "--target", "live"])), report);
+}
+
+const HOST_CONFIG: &str = "[typegen.queries]\nsources = [\"src\"]\n";
+const APP_TS: &str = "\
+import { surql } from 'surrealdb';
+
+export async function find(db, id) {
+	await db.query(`SELECT * FROM t WHERE a = ${id}`);
+	await db.query(surql`SELECT * FROM t WHERE a = ${id}`);
+	await db.query('SELECT * FROM t WHERE a = $id', { id });
+	// surreal: allow(K9201) reason=\"id is a validated integer\"
+	return db.query(`SELECT * FROM t WHERE a = ${id}`);
+}
+";
+
+#[test]
+fn host_code_with_an_interpolated_query_is_k9201() {
+	let dir = project(HOST_CONFIG, &[("001_base.surql", BASE)]);
+	write(&dir.path().join("src/app.ts"), APP_TS);
+	let human = surrealkit(dir.path(), &["check"]);
+	assert_eq!(human.status.code(), Some(1), "{}", stderr(&human));
+	assert_eq!(stdout(&human), "");
+	insta::assert_snapshot!("check_host_human", stderr(&human));
+
+	let as_json = surrealkit(dir.path(), &["-j", "check"]);
+	let report = json(&as_json);
+	let summary = &report["summary"];
+	assert_eq!(
+		(
+			summary["host_read"].as_bool(),
+			summary["host_files"].as_u64(),
+			summary["host_queries"].as_u64()
+		),
+		(Some(true), Some(1), Some(3))
+	);
+	assert_eq!(summary["suppressed"], 1);
+	assert_eq!(report["diagnostics"][0]["code"], "K9201");
+	assert_eq!(report["diagnostics"][0]["path"], "src/app.ts");
+
+	// A level in `[analyze.lints]` applies to it like any other code.
+	write(
+		&dir.path().join("surrealkit.toml"),
+		&format!("{HOST_CONFIG}[analyze.lints]\nK9201 = \"warn\"\n"),
+	);
+	let warned = surrealkit(dir.path(), &["check"]);
+	assert_eq!(warned.status.code(), Some(0), "{}", stderr(&warned));
+}
+
+#[test]
+fn without_queries_sources_no_host_code_is_read() {
+	let dir = project("", &[("001_base.surql", BASE)]);
+	write(&dir.path().join("src/app.ts"), APP_TS);
+	let output = surrealkit(dir.path(), &["-j", "check"]);
+	assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+	assert_eq!(json(&output)["summary"]["host_read"], false);
+	let missing =
+		project("[typegen.queries]\nsources = [\"nowhere\"]\n", &[("001_base.surql", BASE)]);
+	let output = surrealkit(missing.path(), &["check"]);
+	assert_eq!(output.status.code(), Some(1));
+	assert!(stderr(&output).contains("does not exist"), "{}", stderr(&output));
+}
+
 #[test]
 fn a_project_with_no_sources_warns_and_passes() {
 	let dir = TempDir::new().expect("tempdir");
