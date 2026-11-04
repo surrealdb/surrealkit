@@ -21,6 +21,7 @@ export type Queries = {
   "SELECT kind FROM event": { result: [Array<{ kind: string }>]; params: {} };
   "RETURN { a: 1 }": { result: [{ a: number; [key: string]: unknown } | undefined]; params: {} };
   "SELECT * FROM post WHERE published = $published AND author = $author": { result: [Array<{ author: RecordId<"user">; title: string; when: DateTime }>]; params: { published: boolean; author: RecordId<"user"> | undefined; since?: unknown } };
+  "USE NS app DB main; INFO FOR USER admin;": { result: [{ database?: string; namespace?: string }, string]; params: {} };
 };
 
 /** Each named query's text, so `Queries[QueryNames["name"]]` finds its entry. */

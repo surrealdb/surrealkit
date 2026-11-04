@@ -22,6 +22,7 @@ pub const VERSION: u32 = 1;
 pub struct TypesDocument {
 	pub format: String,
 	pub version: u32,
+	/// The version of the engine's core crate.
 	#[serde(default)]
 	pub engine: Option<String>,
 	#[serde(default)]
@@ -265,6 +266,16 @@ mod tests {
 		let doc = TypesDocument::from_json(&minimal(FORMAT, VERSION)).expect("reads");
 		assert_eq!(doc.format, FORMAT);
 		assert!(doc.tables.is_empty() && doc.queries.is_empty() && doc.types.is_empty());
+	}
+
+	#[test]
+	fn a_session_without_namespace_or_database_reads_as_none() {
+		let raw = json!({
+			"format": FORMAT, "version": 1, "engine": "4.1.0", "namespace": null, "database": null,
+		});
+		let doc = TypesDocument::from_json(&raw.to_string()).expect("reads");
+		assert_eq!(doc.engine.as_deref(), Some("4.1.0"));
+		assert!(doc.namespace.is_none() && doc.database.is_none());
 	}
 
 	#[test]

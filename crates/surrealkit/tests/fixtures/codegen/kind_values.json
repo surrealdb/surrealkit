@@ -166,7 +166,7 @@
     }
   },
   {
-    "kind": "none | string",
+    "kind": "option<string>",
     "kind_value": {
       "Either": [
         "None",
@@ -265,7 +265,7 @@
     }
   },
   {
-    "kind": "1.25decdec",
+    "kind": "1.25dec",
     "kind_value": {
       "Literal": {
         "Decimal": "1.25"
@@ -303,7 +303,7 @@
     }
   },
   {
-    "kind": "{name: string, nick: none | string, weird key: int}",
+    "kind": "{ name: string, nick: option<string>, \"weird key\": int }",
     "kind_value": {
       "Literal": {
         "Object": {

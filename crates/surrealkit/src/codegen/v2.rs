@@ -359,10 +359,9 @@ mod tests {
 		);
 	}
 
-	/// Every engine kind in the fixture converts, and wherever the v2 kind parser can read
-	/// the engine's spelling of the same kind, both readings give the same v2 kind. The
-	/// spellings it cannot read are pinned: two engine renderings the fixture captured
-	/// (`1.25decdec`, an object literal with an unescaped key).
+	/// Every engine kind in the fixture converts, the v2 kind parser reads the engine's
+	/// spelling of every one (`surrealdb_types::typing::render_kind`), and both readings give
+	/// the same v2 kind.
 	#[test]
 	fn converting_agrees_with_parsing_the_engine_spelling() {
 		let fixture: Vec<Value> =
@@ -387,10 +386,7 @@ mod tests {
 				None => unreadable.push(text),
 			}
 		}
-		assert_eq!(
-			unreadable,
-			["1.25decdec", "{name: string, nick: none | string, weird key: int}"]
-		);
+		assert!(unreadable.is_empty(), "the v2 parser cannot read {unreadable:?}");
 		assert!(compared > 30, "compared only {compared} kinds");
 	}
 }

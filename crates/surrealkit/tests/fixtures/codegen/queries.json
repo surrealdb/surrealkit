@@ -362,5 +362,45 @@
         "required": false
       }
     ]
+  },
+  {
+    "key": "USE NS app DB main; INFO FOR USER admin;",
+    "text": "USE NS app DB main; INFO FOR USER admin;",
+    "statements": [
+      {
+        "kind": {
+          "kind": "objectLiteral",
+          "fields": [
+            {
+              "name": "database",
+              "kind": {
+                "kind": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "namespace",
+              "kind": {
+                "kind": "string"
+              },
+              "optional": true
+            }
+          ]
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "string"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      }
+    ]
   }
 ]
