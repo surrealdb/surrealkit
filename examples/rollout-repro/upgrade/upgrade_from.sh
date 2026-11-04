@@ -200,10 +200,17 @@ sql "$NS" "INFO FOR DB;" | jq -e '.tables | has("invoice") | not' >/dev/null || 
 ok "a rollout the old release started rolls back after the upgrade"
 }
 
+# 1.0.0-beta.1's rollout commands that take an id never worked, so its rollout
+# steps above run on this build. Across a server upgrade this build cannot reach
+# the old server, and beta.1 has no rollout state of its own to carry forward.
+rollouts_from_old() { [ "$OLD_VERSION" != "1.0.0-beta.1" ]; }
+
 if [ -n "${UPGRADE_SERVER:-}" ]; then
     sync_old
-    rollout_old
-    rollback_old
+    if rollouts_from_old; then
+        rollout_old
+        rollback_old
+    fi
     if new "upgrade_sync_$TAG" status >/tmp/upgrade_refused.log 2>&1; then
         fail "this build ran against the old server: $(cat /tmp/upgrade_refused.log)"
     fi
@@ -212,8 +219,12 @@ if [ -n "${UPGRADE_SERVER:-}" ]; then
     ok "this build refuses the 3.x server and says why"
     bash -c "$UPGRADE_SERVER" || fail "upgrading the server failed"
     sync_new
-    rollout_new
-    rollback_new
+    if rollouts_from_old; then
+        rollout_new
+        rollback_new
+    else
+        ok "skipped the rollout sections: $OLD_VERSION could not run them on its own"
+    fi
     new "upgrade_sync_$TAG" compat status >/tmp/upgrade_compat.log 2>&1 \
         || fail "compat status failed: $(cat /tmp/upgrade_compat.log)"
     grep -q "compatibility level 3" /tmp/upgrade_compat.log \
