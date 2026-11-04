@@ -1,4 +1,4 @@
-//! `host_queries::scan` over the fixture hosts under `tests/fixtures/codegen/hosts`.
+//! `host_queries::scan` over the fixture hosts under `tests/fixtures/host_queries`.
 
 #![cfg(feature = "host-queries")]
 
@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 use surrealkit::host_queries::{DEFAULT_METHODS, FoundQuery, scan};
 
 fn hosts() -> PathBuf {
-	Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codegen/hosts")
+	Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/host_queries")
 }
 
 fn texts(found: &[FoundQuery]) -> Vec<(String, &str)> {
