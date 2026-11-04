@@ -35,7 +35,8 @@ expression: stdout(&as_json)
       },
       "statement": 1,
       "notes": [],
-      "tags": []
+      "tags": [],
+      "source": "kit"
     },
     {
       "code": "K9001",
@@ -52,7 +53,8 @@ expression: stdout(&as_json)
       },
       "statement": null,
       "notes": [],
-      "tags": []
+      "tags": [],
+      "source": "kit"
     }
   ]
 }

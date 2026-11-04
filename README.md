@@ -676,6 +676,13 @@ when the command itself fails (a bad `[analyze]` key, an unreadable file). Under
 empty; a report, even a failing one, is never an envelope. `watch` is for a person and takes
 no `--json`.
 
+**JSON and SARIF.** Each JSON diagnostic and each SARIF result says which checker reported it:
+`"source": "kit"` on a diagnostic, and `"properties": {"source": "kit"}` on a result. The value
+is `kit` for SurrealKit's own checker and `engine` for the SurrealDB engine's checker. In this
+build every finding is `kit`. The human output does not show it. `summary.suppressed` counts the
+findings SurrealKit itself suppressed; findings the engine's checker suppresses are not counted
+until the engine reports them.
+
 **What it finds in this build.** SurrealKit applies each schema file, in order, to a
 throwaway in-memory engine, the way `compile` does (no network, no scripting), one
 statement at a time so each failing statement is its own finding and the next still

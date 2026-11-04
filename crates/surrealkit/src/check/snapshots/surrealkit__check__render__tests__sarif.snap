@@ -71,7 +71,10 @@ expression: text
                 }
               }
             }
-          ]
+          ],
+          "properties": {
+            "source": "kit"
+          }
         },
         {
           "ruleId": "K9003",
@@ -117,7 +120,10 @@ expression: text
                 "text": "the table is defined here"
               }
             }
-          ]
+          ],
+          "properties": {
+            "source": "kit"
+          }
         },
         {
           "ruleId": "L7013",
@@ -142,7 +148,10 @@ expression: text
                 }
               }
             }
-          ]
+          ],
+          "properties": {
+            "source": "kit"
+          }
         },
         {
           "ruleId": "K9001",
@@ -167,7 +176,10 @@ expression: text
                 }
               }
             }
-          ]
+          ],
+          "properties": {
+            "source": "kit"
+          }
         },
         {
           "ruleId": "E1002",
@@ -192,7 +204,10 @@ expression: text
                 }
               }
             }
-          ]
+          ],
+          "properties": {
+            "source": "kit"
+          }
         }
       ]
     }

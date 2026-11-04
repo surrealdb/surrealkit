@@ -11,7 +11,7 @@ use std::path::{Component, Path};
 use serde::Serialize;
 
 use super::Report;
-use super::finding::{Code, Finding, LineIndex, Note, NoteKind, Severity, Tag, describe};
+use super::finding::{Code, Finding, LineIndex, Note, NoteKind, Severity, Source, Tag, describe};
 
 const RED: &str = "\x1b[1;31m";
 const YELLOW: &str = "\x1b[1;33m";
@@ -251,6 +251,8 @@ pub struct JsonFinding {
 	pub statement: Option<u32>,
 	pub notes: Vec<JsonNote>,
 	pub tags: Vec<Tag>,
+	/// Which checker reported it: `kit` or `engine`.
+	pub source: Source,
 }
 
 #[derive(Debug, Serialize)]
@@ -293,6 +295,7 @@ pub fn json_finding(report: &Report, finding: &Finding, base: &Path) -> JsonFind
 		statement: finding.statement,
 		notes: finding.notes.iter().map(|note| json_note(&index, note)).collect(),
 		tags: finding.tags.clone(),
+		source: finding.source,
 	}
 }
 
@@ -393,6 +396,12 @@ struct SarifRelated {
 	message: SarifText,
 }
 
+/// The result's property bag. SurrealKit sets only `source`.
+#[derive(Debug, Serialize)]
+struct SarifProperties {
+	source: Source,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SarifResult {
@@ -403,6 +412,7 @@ struct SarifResult {
 	locations: Vec<SarifLocation>,
 	#[serde(skip_serializing_if = "Vec::is_empty")]
 	related_locations: Vec<SarifRelated>,
+	properties: SarifProperties,
 }
 
 #[derive(Debug, Serialize)]
@@ -504,6 +514,9 @@ pub fn sarif(report: &Report, base: &Path) -> SarifLog {
 					physical_location: physical(&finding.span),
 				}],
 				related_locations: related,
+				properties: SarifProperties {
+					source: finding.source,
+				},
 			}
 		})
 		.collect();

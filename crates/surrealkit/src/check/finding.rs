@@ -220,6 +220,28 @@ pub enum Tag {
 	Deprecated,
 }
 
+/// Which checker reported a finding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Source {
+	/// SurrealKit's own checker: its drift, host-code and directive findings, and the schema
+	/// statements it applies and the engine rejects.
+	Kit,
+	/// The SurrealDB engine's own checker, which reports its own codes and applies its own
+	/// suppressions.
+	Engine,
+}
+
+impl Source {
+	/// `kit` or `engine`, as the JSON and SARIF reports spell it.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			Self::Kit => "kit",
+			Self::Engine => "engine",
+		}
+	}
+}
+
 /// One thing a check found.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Finding {
@@ -235,6 +257,9 @@ pub struct Finding {
 	pub statement: Option<u32>,
 	pub notes: Vec<Note>,
 	pub tags: Vec<Tag>,
+	/// The checker that reported it. The constructors say [`Source::Kit`]; a backend that
+	/// converts the engine's findings says otherwise with [`with_source`](Self::with_source).
+	pub source: Source,
 	intrinsic: Severity,
 	default_level: Level,
 }
@@ -258,6 +283,7 @@ impl Finding {
 			statement: None,
 			notes: Vec::new(),
 			tags: Vec::new(),
+			source: Source::Kit,
 			intrinsic,
 			default_level,
 		}
@@ -279,6 +305,13 @@ impl Finding {
 	#[must_use]
 	pub fn with_note(mut self, note: Note) -> Self {
 		self.notes.push(note);
+		self
+	}
+
+	/// With `source` as the checker that reported it.
+	#[must_use]
+	pub fn with_source(mut self, source: Source) -> Self {
+		self.source = source;
 		self
 	}
 
@@ -428,6 +461,26 @@ mod tests {
 			assert!(describe(code).is_some(), "{code}");
 		}
 		assert!(describe(L7013).is_none());
+	}
+
+	#[test]
+	fn a_finding_is_the_kits_until_a_backend_says_otherwise() {
+		let finding = Finding::kit(K9003, "m", PathBuf::from("/p/a.surql"), 0..1);
+		assert_eq!(finding.source, Source::Kit);
+		let finding = Finding::new(
+			L7013,
+			Severity::Warning,
+			Level::Warn,
+			"m",
+			PathBuf::from("/p/a.surql"),
+			0..1,
+		);
+		assert_eq!(finding.source, Source::Kit);
+		let engine = finding.with_source(Source::Engine);
+		assert_eq!(engine.source, Source::Engine);
+		assert_eq!(serde_json::to_value(Source::Kit).unwrap(), "kit");
+		assert_eq!(serde_json::to_value(Source::Engine).unwrap(), "engine");
+		assert_eq!((Source::Kit.as_str(), Source::Engine.as_str()), ("kit", "engine"));
 	}
 
 	#[test]

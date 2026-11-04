@@ -37,7 +37,8 @@ expression: "pretty(&json(&report(), Path::new(\"/proj\")))"
       "notes": [],
       "tags": [
         "unnecessary"
-      ]
+      ],
+      "source": "kit"
     },
     {
       "code": "K9003",
@@ -80,7 +81,8 @@ expression: "pretty(&json(&report(), Path::new(\"/proj\")))"
           "replacement": "TYPE string"
         }
       ],
-      "tags": []
+      "tags": [],
+      "source": "kit"
     },
     {
       "code": "L7013",
@@ -97,7 +99,8 @@ expression: "pretty(&json(&report(), Path::new(\"/proj\")))"
       },
       "statement": null,
       "notes": [],
-      "tags": []
+      "tags": [],
+      "source": "kit"
     },
     {
       "code": "K9001",
@@ -114,7 +117,8 @@ expression: "pretty(&json(&report(), Path::new(\"/proj\")))"
       },
       "statement": null,
       "notes": [],
-      "tags": []
+      "tags": [],
+      "source": "kit"
     },
     {
       "code": "E1002",
@@ -131,7 +135,8 @@ expression: "pretty(&json(&report(), Path::new(\"/proj\")))"
       },
       "statement": 1,
       "notes": [],
-      "tags": []
+      "tags": [],
+      "source": "kit"
     }
   ]
 }

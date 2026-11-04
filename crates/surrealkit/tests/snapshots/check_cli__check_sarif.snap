@@ -53,7 +53,10 @@ expression: "stdout(&sarif).replace(VERSION, \"<version>\")"
                 }
               }
             }
-          ]
+          ],
+          "properties": {
+            "source": "kit"
+          }
         },
         {
           "ruleId": "K9001",
@@ -78,7 +81,10 @@ expression: "stdout(&sarif).replace(VERSION, \"<version>\")"
                 }
               }
             }
-          ]
+          ],
+          "properties": {
+            "source": "kit"
+          }
         }
       ]
     }
