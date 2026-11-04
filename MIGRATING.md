@@ -8,9 +8,12 @@ filesystem source set described below. Upgrading and running `surrealkit sync`
 on an existing project re-applies nothing and prunes nothing.
 
 Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and
-1.0.0-beta.7 two more (13 and 14). Unreleased changes are 15 to 21.
+1.0.0-beta.7 two more (13 and 14), 1.0.0-beta.8 five more (15 to 19), and
+1.0.0-rc.1 three more (20 to 22). 1.0.0-rc.1 needs SurrealDB 4.0 (20); stay on
+1.0.0-beta.8 while your servers run 3.x. Unreleased changes are 23 and up.
 Upgrading from 0.7.0 or any 1.0 beta carries existing state forward; CI checks
-that against every published release.
+that against every published release, written on SurrealDB 3.3 and carried on
+after the datastore is upgraded to 4.0.
 
 ### 1. Move `database/seed.surql`
 
@@ -322,7 +325,7 @@ discard --keep-snapshots` delete the project's `src/`. Every id `rollout plan`
 writes is already a plain name, so this only affects a manifest whose id was
 edited by hand.
 
-### 15. Typegen reads the selected target and writes atomically (unreleased)
+### 15. Typegen reads the selected target and writes atomically (1.0.0-beta.8)
 
 `surrealkit typegen` used to connect through the ambient connection even when
 `surrealkit.toml` declared targets, so `--target` and `primary = true` were
@@ -342,7 +345,7 @@ formatter only accepts files matching a pattern, make sure that name matches
 too. New opt-ins: `[typegen] strict`, `[typegen] generated_at = false`, and
 `surrealkit typegen --check`.
 
-### 16. Typegen parses every SurrealDB 3.x kind (unreleased)
+### 16. Typegen parses every SurrealDB 3.x kind (1.0.0-beta.8)
 
 These are changes to v1 output that need no opt-in: they are parser fixes.
 `schema.json` and the generated TypeScript change only where the old parser was
@@ -370,7 +373,7 @@ handle, and `FieldType::Literal` has a `literal_type` field. Anything typegen
 still cannot represent is reported as a `Diagnostic`
 (`typegen::generate_with_diagnostics`), and `strict` fails on errors.
 
-### 17. Effect-native typegen (unreleased)
+### 17. Effect-native typegen (1.0.0-beta.8)
 
 Nothing to change. Relative to the parser fixes in entry 16 (and the behaviour
 changes in entry 15), every part is opt-in: with no new configuration,
@@ -406,10 +409,44 @@ section (everything else below is opt-in):
 - `surrealkit test --exec <cmd>` runs a command against each prepared suite database
   (and `--schema-from` now wins over a suite's `schema_from`; see the tester section).
 
-### 18. SurrealDB 4.0, and no RocksDB engine (unreleased)
+### 18. Rollout bookkeeping retries transaction conflicts (1.0.0-beta.8)
+
+Nothing to change. On a distributed SurrealDB, the small writes a rollout makes
+around its steps (taking and releasing the lock, recording each step, moving the
+status) can lose a transaction conflict. One lost conflict used to fail the run
+even when every step had run, and could leave the lock behind. Now:
+
+- Those writes are retried with backoff, up to six attempts, and each retry is
+  logged as a warning.
+- A rollout's record is read and written by its record id rather than by
+  scanning `__rollout`.
+- `rollout start` on a rollout that is `ready_to_complete` does nothing. It used
+  to write the status twice more, and a conflict between the two writes left the
+  rollout back in `running_start`. On a rollout that is `running_complete`, or
+  that failed while completing, `start` now refuses and points at
+  `rollout complete`.
+- `rollout repair` on a `running_start` rollout whose start steps all ran moves it
+  to `ready_to_complete` instead of `failed`.
+- `rollout complete` on a `failed` rollout refuses when its start phase did not
+  finish. Run `rollout start` again first; it carries on from the first step that
+  did not finish.
+- A lock's owner is now `<SURREALKIT_OWNER or surrealkit>/<pid>/<8 hex
+  characters>`. Containers reuse pids, so two CI runs could share the old
+  `surrealkit/<pid>` owner and release each other's lock. A release that fails is
+  reported with the statement that clears the lock, and that statement names the
+  lock's real partition (`lock@<module>` for a named module). A lock row written
+  by an older release is honoured until it expires, as before.
+
+### 19. SurrealDB 4.0, and no RocksDB engine (1.0.0-beta.8)
 
 SurrealKit builds against the SurrealDB 4.0 SDK, so embedded engines (`mem://`,
-`surrealkv://`) are 4.0. CI tests servers 3.2.4, 3.3.0 and 4.0.0.
+`surrealkv://`) are 4.0. It still works with servers from 3.2.0 on, so a 3.x
+server needs no upgrade. CI tests servers 3.2.0, 3.2.4, 3.3.0 and 4.0.0.
+
+If you use SurrealKit as a library, your own `surrealdb` dependency moves to 4.0
+with it. The `Surreal` handle you pass in and the `surrealdb_types` values that
+come back are the 4.0 SDK's types, so a project still on `surrealdb` 3.x does not
+compile until it upgrades.
 
 SurrealDB 4.0 has no RocksDB engine, so the `kv-rocksdb` cargo feature is gone
 and `embedded` enables `kv-surrealkv` and `kv-mem`. A build that named
@@ -443,6 +480,122 @@ Running the 4.0 engine under a current-thread `#[tokio::test]` runtime overflowe
 Rust's 2 MiB test-thread stack in SurrealKit's own suite (unoptimised builds), so
 `.cargo/config.toml` sets `RUST_MIN_STACK` to 8 MiB. Do the same if your tests
 run the embedded engine and overflow.
+
+### 20. SurrealDB 4.0 or later only (1.0.0-rc.1)
+
+SurrealKit refuses a server older than 4.0, on every command and in the
+library's `Sync`, `Rollout`, `Rollouts` and `Seed`:
+
+```
+error: SurrealKit 1.0.0-rc.1 needs SurrealDB 4.0 or later, and this server is 3.3.5.
+```
+
+The 4.0 SDK still connects to 3.x, but this release relies on how 4.0 treats
+records that already exist (21 and 22) and writes SurrealQL only 4.0 reads.
+Keep 1.0.0-beta.8 until your servers run 4.0. A server that denies the
+`version` method is let through with a warning.
+
+To upgrade, follow SurrealDB's 3.x to 4.x guide: export first, move to the latest
+3.3, then start 4.0 on the same files with
+`SURREAL_EXPERIMENTAL_UPGRADE_FROM_3X=true`. SurrealKit's state in `__entity`
+and `__rollout` comes through as it is, and a rollout in flight on 3.x finishes
+on 4.0.
+
+### 21. `MIGRATE EXISTING ROWS` in schema files (1.0.0-rc.1)
+
+Nothing to change unless you use it. SurrealDB 4.0 lets a `DEFINE FIELD` say
+what the records a table already holds become:
+
+```surql
+DEFINE FIELD stock ON product TYPE int
+    MIGRATE EXISTING ROWS AS stock_to_int USING <int> $value FALLBACK 0;
+```
+
+Write the clause in the schema file, next to the definition, and leave it
+there. SurrealKit runs each named migration once:
+
+- Sync and rollouts read which names a table has run (`INFO FOR TABLE`), and
+  send a statement whose name has run without its clause. SurrealDB itself
+  writes nothing for a `DEFINE FIELD` carrying a name it has run, so a later
+  change to that field's `PERMISSIONS` or `COMMENT` would otherwise be lost.
+- SurrealKit records the clause it ran under each name in a new `__entity`
+  partition, `migration`. A name reused for another transform is refused.
+- A field an index reads cannot be migrated. SurrealKit removes those indexes,
+  applies the file, and defines them again. A `UNIQUE` index does not hold while
+  it is gone, and SurrealKit warns. Define an index after the field it reads.
+- A migration's `USING` reads only `$value`, the field's own value. A rename,
+  which copies one field into another, still needs an `UPDATE` in a rollout
+  `run_sql` step.
+- `ALTER TABLE t MIGRATE EXISTING ROWS AS n REMOVE UNDECLARED FIELDS` is the one
+  `ALTER` a schema file may hold. Every other `ALTER` is still refused.
+- `DEFINE TYPE` (4.0's named types) and `DEFINE EXTENSION` are tracked like any
+  other definition: as the kinds `type` and `module`.
+
+The catalog leaves the clause out of a statement's hash, so taking it out of a
+file later is not a change. Catalog snapshots gain an optional `migration` name
+per entity; older snapshots read as before.
+
+`rollout plan` treats a migration as a change it can plan without
+`--allow-modified`:
+
+- The start phase applies the file, as for any change.
+- Restoring the old definition cannot undo a migration, because the records no
+  longer fit it. So the rollback phase gets a `revert_migration` step for the
+  author to fill in with the reverse transform:
+
+  ```toml
+  [[steps]]
+  id = "revert_product_stock"
+  phase = "rollback"
+  kind = "revert_migration"
+  table = "product"
+  field = "stock"
+  name = "stock_to_int_revert"
+  using = ""        # what an int becomes again, for example <string> $value
+  fallback = ""     # the value stored when `using` fails, for example ''
+  ```
+
+  `rollout lint` and `rollout start` refuse the manifest while `using` is empty,
+  or when it holds something SurrealDB refuses in a transform: a statement such
+  as `IF` or `SELECT`, a parameter other than `$value`, or an `fn::` call. If
+  the server still refuses the revert when it runs, fix the step and run
+  `rollout rollback` again: a rollback accepts a manifest that changed only in
+  steps that have not run. Deleting the step makes the rollout irreversible:
+  `rollout status` reports `irreversible`, and `rollout rollback` refuses once
+  the migrating step has run.
+- SurrealDB runs each name once per table, even after a revert. When a rolled
+  back rollout is started again, or a file restates a migration that a later one
+  has replaced, SurrealKit runs it again under a new name (`stock_to_int_2`).
+- The complete phase starts with an `await_migrations` step, which waits until
+  SurrealDB has rewritten and checked the migrated tables (an hour at most,
+  `timeout_secs` to change it) and fails if any record does not fit.
+
+A migration converts each record from the moment it commits. Code still reading
+the old shape sees the new values at once. For a change without downtime, add a
+new field, backfill it, and remove the old one in a later rollout.
+
+### 22. Compatibility level 4, and `surrealkit compat` (1.0.0-rc.1)
+
+A database a 4.0 datastore creates is at compatibility level 4. A database a
+3.x datastore created stays at level 3 after the upgrade. At level 4:
+
+- A `SCHEMAFULL` table that holds records refuses a field change they might not
+  fit, unless the `DEFINE FIELD` has `MIGRATE EXISTING ROWS`. Sync and rollouts
+  report the refusal with the clause to add.
+- `REMOVE FIELD` on a `SCHEMAFULL` table clears the values the field held. Sync's
+  prune and a rollout's `remove_legacy_entities` step say so: a dry run labels
+  each such field `deletes stored values (compatibility 4)`, and a real run warns.
+
+`surrealkit status` and `rollout status` now print the server version and the
+level. Two new commands, also MCP tools (`compat_status`, `compat_raise`):
+
+- `surrealkit compat status`: the level, and for each table the migrations it
+  has run, the fields every record fits, and what SurrealDB is still doing.
+- `surrealkit compat raise --yes [--wait]`: runs `ALTER DATABASE COMPATIBILITY 4`.
+  With `--wait`, it waits for SurrealDB to check every `SCHEMAFULL` table and,
+  for each field whose records do not fit, names the schema file to change and
+  the `MIGRATE EXISTING ROWS` clause to add. Raise the level only once every
+  node runs 4.0.
 
 ## Opting into multiple schema modules
 
@@ -570,7 +723,7 @@ Two behaviour changes:
   allowed to create. Test those creates with a `sql_expect` case that sets its
   own unique values.
 
-### `--schema-from` wins over the suite, and `--exec` (unreleased)
+### `--schema-from` wins over the suite, and `--exec` (1.0.0-beta.8)
 
 - `surrealkit test --schema-from <source>` now overrides a suite's own
   `schema_from`, as the documentation always said. Before, a suite that set
@@ -605,6 +758,20 @@ Rollout::new(spec, files).start(&db).await?;
 // 1.0: opt back into the filesystem workflow
 Rollout::new(spec, files).folder("database").start(&db).await?;
 ```
+
+### SurrealDB 4 (1.0.0-rc.1)
+
+- `Sync::run`, `Rollout::{start, complete, rollback}`, `Rollouts::{pending, up}`
+  and `Seed::run` return an error against a server older than 4.0
+  (`surrealkit::core::ensure_supported_server`).
+- `RolloutAction` has two more variants, `RevertMigration` and
+  `AwaitMigrations`, built with `RolloutStep::revert_migration` and
+  `RolloutStep::await_migrations`. A `match` over `RolloutAction` needs arms for
+  them.
+- `EntityKind::Type` is new. `CatalogEntity` has a `migration` field and
+  `CatalogDiff` a `migrated` field, so a struct literal of either needs them.
+- `surrealkit::compat` has `run_compat_status` and `run_compat_raise`, which back
+  the CLI's `compat` command.
 
 ### Applying a named module
 
@@ -683,6 +850,15 @@ From 1.0.0-beta.7:
 | `variables::TypegenConfig { .. }` | gains `json`; `json_path()` resolves the file |
 | `tester::run_test(..)` | unchanged; `run_test_to(.., format, out)` writes the report to any writer |
 
+From 1.0.0-beta.8:
+
+| 1.0.0-beta.7 | 1.0.0-beta.8 |
+|---|---|
+| `Rollout::start` on a rollout that is ready to complete | returns `Ok` and writes nothing, where it ran the start phase again |
+| `Rollout::start` on a rollout that is completing, or failed while completing | fails, pointing at `complete` |
+| `Rollout::complete` on a rollout that failed before its start phase finished | fails, where it ran the complete phase |
+| `Surreal<Any>` and `surrealdb_types` from `surrealdb` 3.3 | from `surrealdb` 4.0; your own dependency moves to 4.x (19) |
+
 New: `tester::{run_test_report, ReportFormat, RunReport, SuiteReport, CaseReport,
 AssertionReport}`, `typegen::write_json`, `selection::Selection` (the module and
 target matrix the CLI resolves), `progress::{CaptureLogger, StderrLogger,
@@ -732,7 +908,7 @@ event (always `null` in middleware mode, so nothing was ever cleaned up) to the
 `closeBundle` hook, and the plugin no longer imports anything from `vite` at
 runtime — only its types.
 
-### 19. `surrealkit check` and `watch`, and the `analyze` feature (unreleased)
+### 23. `surrealkit check` and `watch`, and the `analyze` feature (unreleased)
 
 Nothing to change. New: `surrealkit check` lints a project's SurrealQL with no database: it
 applies the schema to a throwaway in-memory engine, reports each statement the engine rejects,
@@ -748,7 +924,7 @@ SurrealQL".
 with `default-features = false` is unchanged. Without `analyze` the CLI has no `check` or
 `watch`, and `[analyze]` still parses.
 
-### 20. `check --target` and `[analyze] drift_ignore` (unreleased)
+### 24. `check --target` and `[analyze] drift_ignore` (unreleased)
 
 Nothing to change. New: `surrealkit check --target <name>` compares the schema files with the
 database a `[target.<name>]` names, read-only, and reports a table or field that is missing
@@ -762,7 +938,7 @@ summary gains `host_read`, `host_files`, `host_queries`, `targets_checked` and `
 `[analyze.lints]` keys also accept the five-digit codes and families of the 4.1 checker
 (`C10001`, `10xxx`). See the README's "Checking SurrealQL".
 
-### 21. Typed queries (unreleased)
+### 25. Typed queries (unreleased)
 
 Nothing to change. New, and opt-in: `[typegen.queries]` types the queries a project sends,
 named queries in `.surql` query files (`-- name: ListPeople`) and `db.query("…")` calls found
@@ -777,6 +953,13 @@ A document without `[typegen.queries]` is unchanged, byte for byte, and `queries
 `[typegen.emit.<name>] queries = true`; every other emitter, `effect-surrealkit` included,
 receives the document it received before. `surrealkit generate` is another name for
 `surrealkit compile`.
+
+`surrealkit compile --watch` keeps compiling as the schema, the query files or the host code
+change, and types only the queries whose text changed; `compile --watch-paths` prints the files
+it reads and writes as JSON, for tools that watch the project themselves.
+
+`surrealkit types` and the `query_types` MCP tool type one query on demand, without running it, and
+return its TypeScript type; they need SurrealDB 4.1 as well.
 
 For library users: `TypegenOpts` and `CompileOpts` gain a `queries` field (`None` keeps the
 current behaviour), `SchemaDocument` gains `queries`, and `Diagnostic` gains `query`.

@@ -150,13 +150,20 @@ fn the_catalog_covers_every_cli_capability() {
 	// Parity with the CLI is the whole point: a capability reachable from the
 	// terminal but not from an agent is a gap, not a design choice.
 	let names: BTreeSet<String> = tools().into_iter().map(|t| t.name.to_string()).collect();
-	for expected in [
+	// The check tools need the `analyze` feature, which `mcp` does not imply.
+	let checks: &[&str] = if cfg!(feature = "analyze") {
+		&["check", "check_query"]
+	} else {
+		&[]
+	};
+	for expected in checks.iter().copied().chain([
 		"init",
 		"setup",
 		"sync",
 		"seed",
 		"apply",
 		"typegen",
+		"query_types",
 		"test",
 		"project_info",
 		"rollout_baseline",
@@ -170,7 +177,9 @@ fn the_catalog_covers_every_cli_capability() {
 		"rollout_up",
 		"rollout_freeze",
 		"rollout_discard",
-	] {
+		"compat_status",
+		"compat_raise",
+	]) {
 		assert!(names.contains(expected), "missing tool {expected}; have {names:?}");
 	}
 }

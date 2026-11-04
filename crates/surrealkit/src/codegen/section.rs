@@ -114,10 +114,20 @@ fn inline(root: &str, config: &QueriesConfig) -> Result<Vec<CollectedQuery>> {
 	if config.sources.is_empty() {
 		return Ok(Vec::new());
 	}
-	let methods: Vec<&str> = config.methods.iter().map(String::as_str).collect();
+	fn names(list: &[String]) -> Vec<&str> {
+		list.iter().map(String::as_str).collect()
+	}
+	let (methods, functions, components) =
+		(names(&config.methods), names(&config.functions), names(&config.components));
+	let queries = crate::host_queries::Queries {
+		methods: &methods,
+		functions: &functions,
+		components: &components,
+		attribute: &config.attribute,
+	};
 	let mut inline: Vec<CollectedQuery> = Vec::new();
 	let mut by_text: HashMap<String, usize> = HashMap::new();
-	for found in crate::host_queries::scan(&config.sources, &methods)? {
+	for found in crate::host_queries::scan_with(&config.sources, &queries)? {
 		let source = QuerySource {
 			origin: QueryOrigin::Host,
 			path: relative(root, &found.file)?,
@@ -246,9 +256,7 @@ pub fn assemble(
 	(entries, diagnostics)
 }
 
-/// Types `collected` against `db` and sets `document.queries`, adding the diagnostics to
-/// `document.diagnostics`, which stay in canonical order. The digest is outside the section, so
-/// it does not change.
+/// Types `collected` against `db` and sets `document.queries`, as [`apply`] does.
 pub async fn attach(
 	db: &Surreal<Any>,
 	collected: &Collected,
@@ -260,12 +268,20 @@ pub async fn attach(
 	} else {
 		engine::types_document(db, &inputs).await?
 	};
-	let (entries, diagnostics) = assemble(collected, types.as_ref());
+	apply(document, collected, types.as_ref());
+	Ok(())
+}
+
+/// [`assemble`]s `collected` with `types` and sets `document.queries`, adding the diagnostics
+/// to `document.diagnostics`, which stay in canonical order. The digest is outside the section,
+/// so it does not change. `types` is what [`engine::types_document`] returned for
+/// [`Collected::inputs`], or the same assembled from earlier answers.
+pub fn apply(document: &mut SchemaDocument, collected: &Collected, types: Option<&TypesDocument>) {
+	let (entries, diagnostics) = assemble(collected, types);
 	document.queries = entries;
 	document.diagnostics.extend(diagnostics);
 	document.diagnostics =
 		crate::typegen::sort_diagnostics(std::mem::take(&mut document.diagnostics));
-	Ok(())
 }
 
 #[cfg(test)]

@@ -1,0 +1,60 @@
+---
+source: crates/surrealkit/tests/codegen_render.rs
+expression: report
+---
+{
+  "name": "Posts",
+  "text": "SELECT * FROM post WHERE author = $author AND published = $published AND at > $since LIMIT $limit",
+  "statements": [
+    {
+      "index": 0,
+      "typescript": "Array<{ [key: string]: unknown }>",
+      "kind": "array<object>",
+      "certainty": "fact",
+      "exact": false,
+      "support": {
+        "exact": false
+      },
+      "open": [],
+      "span": {
+        "column": 1,
+        "end": 10,
+        "end_column": 11,
+        "end_line": 1,
+        "line": 1,
+        "start": 0
+      }
+    }
+  ],
+  "params": [
+    {
+      "name": "author",
+      "typescript": "RecordId<\"user\">",
+      "kind": "record<user>",
+      "required": true,
+      "source": "engine"
+    },
+    {
+      "name": "published",
+      "typescript": "boolean",
+      "kind": "bool",
+      "required": true,
+      "source": "engine"
+    },
+    {
+      "name": "since",
+      "typescript": "DateTime",
+      "kind": "datetime",
+      "required": true,
+      "source": "engine"
+    },
+    {
+      "name": "limit",
+      "typescript": "number | undefined",
+      "kind": "option<int>",
+      "required": false,
+      "source": "engine"
+    }
+  ],
+  "snippet": "import type { DateTime, RecordId } from \"surrealdb\";\n\nexport type Posts = [Array<{ [key: string]: unknown }>];\nexport type PostsParams = { author: RecordId<\"user\">; published: boolean; since: DateTime; limit?: number | undefined };\n"
+}

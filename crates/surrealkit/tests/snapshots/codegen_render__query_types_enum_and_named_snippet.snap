@@ -1,0 +1,8 @@
+---
+source: crates/surrealkit/tests/codegen_render.rs
+expression: report.snippet
+---
+import type { Decimal } from "surrealdb";
+
+export type Items = [Array<{ price: Decimal; status: "draft" | "live"; tags: Array<Decimal> }>];
+export type ItemsParams = {};

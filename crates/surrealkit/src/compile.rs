@@ -371,8 +371,31 @@ fn engine_mismatch(expected: Option<&str>, version: &str) -> Result<Option<Diagn
 	)))
 }
 
-/// Compile `modules` (already in dependency order) into schema document v2.
+/// A compiled schema and the engine that holds it.
+pub(crate) struct Built {
+	/// The engine the modules were applied to. It stays usable, so queries can be typed against
+	/// the schema without compiling it again.
+	pub(crate) db: Surreal<Any>,
+	/// The compile result, with no `queries` section.
+	pub(crate) compiled: Compiled,
+}
+
+/// Compile `modules` (already in dependency order) into schema document v2, and type
+/// `opts.queries` into its `queries` section.
 pub async fn compile(modules: &[CompileModule], opts: &CompileOpts) -> Result<Compiled> {
+	let Built {
+		db,
+		mut compiled,
+	} = build(modules, opts).await?;
+	if let Some(collected) = &opts.queries {
+		crate::codegen::section::attach(&db, collected, &mut compiled.document).await?;
+	}
+	Ok(compiled)
+}
+
+/// Apply `modules` (already in dependency order) to a fresh engine and read the schema back.
+/// `opts.queries` is not used: the document has no `queries` section.
+pub(crate) async fn build(modules: &[CompileModule], opts: &CompileOpts) -> Result<Built> {
 	let (features, experimental) = experimental_features(&opts.experimental)?;
 	let db = engine(&features, "compile").await?;
 
@@ -421,7 +444,7 @@ pub async fn compile(modules: &[CompileModule], opts: &CompileOpts) -> Result<Co
 		})
 		.collect();
 	source_files.sort();
-	let mut document = assemble(
+	let document = assemble(
 		&snapshot,
 		Origin {
 			source: Source::Compile {
@@ -436,13 +459,13 @@ pub async fn compile(modules: &[CompileModule], opts: &CompileOpts) -> Result<Co
 			diagnostics,
 		},
 	)?;
-	if let Some(collected) = &opts.queries {
-		crate::codegen::section::attach(&db, collected, &mut document).await?;
-	}
-	Ok(Compiled {
-		document,
-		v1,
-		v1_diagnostics,
+	Ok(Built {
+		db,
+		compiled: Compiled {
+			document,
+			v1,
+			v1_diagnostics,
+		},
 	})
 }
 
@@ -463,6 +486,18 @@ pub async fn run_compile(
 		.map(|module| collect_module(project, folder, module))
 		.collect::<Result<Vec<_>>>()?;
 	let compiled = compile(&collected, opts).await?;
+	emit(&compiled, folder, outputs, None)?;
+	Ok(compiled)
+}
+
+/// Report `compiled`'s diagnostics under `outputs`' strictness, then write (or check) the
+/// outputs. Returns the outputs written, as [`crate::typegen::produce_with`] does.
+pub(crate) fn emit(
+	compiled: &Compiled,
+	folder: &str,
+	outputs: &crate::typegen::TypegenOpts,
+	level: Option<log::Level>,
+) -> Result<Vec<std::path::PathBuf>> {
 	crate::typegen::report_diagnostics(
 		&compiled.document.diagnostics,
 		outputs.strict,
@@ -477,8 +512,7 @@ pub async fn run_compile(
 			&outputs.acknowledge,
 		)?;
 	}
-	crate::typegen::produce(&compiled.v1, Some(&compiled.document), folder, outputs)?;
-	Ok(compiled)
+	crate::typegen::produce_with(&compiled.v1, Some(&compiled.document), folder, outputs, level)
 }
 
 /// Collect the schema files of `module` in `folder` the way `sync` does.

@@ -1,0 +1,42 @@
+---
+source: crates/surrealkit/tests/codegen_render.rs
+expression: report
+---
+{
+  "name": "Query",
+  "text": "SELECT * FROM person WHERE age > $min",
+  "statements": [
+    {
+      "index": 0,
+      "typescript": "Array<{ [key: string]: unknown }>",
+      "kind": "array<object>",
+      "certainty": "fact",
+      "exact": false,
+      "support": {
+        "exact": false
+      },
+      "open": [],
+      "span": {
+        "column": 1,
+        "end": 10,
+        "end_column": 11,
+        "end_line": 1,
+        "line": 1,
+        "start": 0
+      }
+    }
+  ],
+  "params": [
+    {
+      "name": "min",
+      "typescript": "number",
+      "kind": "int",
+      "required": true,
+      "source": "engine"
+    }
+  ],
+  "snippet": "export type Query = [Array<{ [key: string]: unknown }>];\nexport type QueryParams = { min: number };\n",
+  "notes": [
+    "`$min` is declared as `string`, but the engine infers `int`; the engine's kind is used"
+  ]
+}

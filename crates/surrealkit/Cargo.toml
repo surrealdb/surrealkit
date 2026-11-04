@@ -88,7 +88,9 @@ mcp = ['templates', 'dep:rmcp']
 # in-memory engine and does NOT imply `cli`, so a library consumer can run a check without
 # clap. `[analyze]` in surrealkit.toml parses whether or not this feature is on, so one
 # config file serves every build.
-analyze = ['kv-mem', 'dep:notify']
+analyze = ['kv-mem', 'watch']
+# File-change watching (`notify`), which `check --watch`, `watch` and `compile --watch` use.
+watch = ['dep:notify']
 kv-mem = ['surrealdb/kv-mem']
 kv-surrealkv = ['surrealdb/kv-surrealkv']
 # Convenience: a full embedded CLI with every supported local engine.
@@ -101,6 +103,8 @@ required-features = ['cli']
 
 [dev-dependencies]
 tempfile = '3'
+# Paused time, so the conflict-retry tests do not sleep through real backoffs.
+tokio = { version = '1.47', features = ['test-util'] }
 test-case = '3'
 insta = { version = '1', features = ['json'] }
 # An in-process MCP client, so the protocol tests drive the real server over an
@@ -129,6 +133,11 @@ required-features = ['mcp', 'cli']
 name = 'check_cli'
 path = 'tests/check_cli.rs'
 required-features = ['analyze', 'cli']
+
+[[test]]
+name = 'compile_watch_cli'
+path = 'tests/compile_watch_cli.rs'
+required-features = ['watch', 'cli', 'kv-mem']
 
 [lints]
 workspace = true

@@ -32,6 +32,7 @@ mod chain;
 mod discard;
 mod freeze;
 mod frozen;
+pub(crate) mod migrations;
 mod up;
 
 #[doc(hidden)]
@@ -212,6 +213,35 @@ pub enum RolloutAction {
 	RestoreDefinitions {
 		entities: Vec<EntityKey>,
 	},
+	/// Turn the values a start-phase `MIGRATE EXISTING ROWS` rewrote back into
+	/// what the field held before, for the rollback phase.
+	///
+	/// `start` captures the field's live definition before it runs anything.
+	/// The step re-applies that definition with a second migration, `name`, whose
+	/// `using` says what a migrated value becomes again. A table runs a name
+	/// once, so `name` differs from the migration it reverts. `rollout plan`
+	/// writes this step with an empty `using`; `rollout lint` and `rollout start`
+	/// refuse it until it is filled in or deleted.
+	RevertMigration {
+		table: String,
+		field: String,
+		name: String,
+		using: String,
+		/// The value stored when `using` fails. Empty or absent means none.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		fallback: Option<String>,
+	},
+	/// Wait until SurrealDB has finished rewriting and checking the records of
+	/// `tables` after a migration, and fail if any record does not fit its
+	/// definition. Correct reads never depend on it: a record is migrated when
+	/// it is read. It is for what should come after the rewrite, such as
+	/// removing the fields a contract phase drops.
+	AwaitMigrations {
+		tables: Vec<String>,
+		/// How long to wait, in seconds. One hour when absent.
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		timeout_secs: Option<u64>,
+	},
 }
 
 /// A file an [`RolloutAction::ApplyFiles`] step applies.
@@ -331,6 +361,12 @@ impl RolloutAction {
 			Self::RestoreDefinitions {
 				..
 			} => "restore_definitions",
+			Self::RevertMigration {
+				..
+			} => "revert_migration",
+			Self::AwaitMigrations {
+				..
+			} => "await_migrations",
 		}
 	}
 }
@@ -601,6 +637,44 @@ impl RolloutStep {
 			},
 		}
 	}
+
+	/// Revert the migration of `table.field` during rollback: re-apply the
+	/// definition `start` captured, migrating each value with `using`.
+	pub fn revert_migration(
+		id: impl Into<String>,
+		table: impl Into<String>,
+		field: impl Into<String>,
+		name: impl Into<String>,
+		using: impl Into<String>,
+	) -> Self {
+		Self {
+			id: id.into(),
+			phase: RolloutPhase::Rollback,
+			action: RolloutAction::RevertMigration {
+				table: table.into(),
+				field: field.into(),
+				name: name.into(),
+				using: using.into(),
+				fallback: None,
+			},
+		}
+	}
+
+	/// Wait during `phase` until SurrealDB has finished rewriting `tables`.
+	pub fn await_migrations<I, T>(id: impl Into<String>, phase: RolloutPhase, tables: I) -> Self
+	where
+		I: IntoIterator<Item = T>,
+		T: Into<String>,
+	{
+		Self {
+			id: id.into(),
+			phase,
+			action: RolloutAction::AwaitMigrations {
+				tables: tables.into_iter().map(Into::into).collect(),
+				timeout_secs: None,
+			},
+		}
+	}
 }
 
 impl RolloutSpec {
@@ -741,6 +815,7 @@ impl<'a> Rollout<'a> {
 	/// if this rollout is already in a terminal state, or if a step fails (the
 	/// rollout is left in the `failed` state).
 	pub async fn start(&self, db: &Surreal<Any>) -> Result<()> {
+		crate::core::ensure_supported_server(db).await?;
 		run_start_with_spec(db, self.folder.as_deref(), &self.spec, self.target_files, &self.vars)
 			.await
 	}
@@ -748,12 +823,14 @@ impl<'a> Rollout<'a> {
 	/// Run the `complete` (contract) phase, applying destructive changes and marking
 	/// the rollout completed.
 	pub async fn complete(&self, db: &Surreal<Any>) -> Result<()> {
+		crate::core::ensure_supported_server(db).await?;
 		run_complete_with_spec(db, self.folder.as_deref(), &self.spec, &self.vars).await
 	}
 
 	/// Run the `rollback` phase, undoing the `start` phase and marking the rollout
 	/// rolled back.
 	pub async fn rollback(&self, db: &Surreal<Any>) -> Result<()> {
+		crate::core::ensure_supported_server(db).await?;
 		run_rollback_with_spec(db, self.folder.as_deref(), &self.spec, &self.vars).await
 	}
 
@@ -851,6 +928,7 @@ impl Rollouts {
 
 	/// What this database has run and what it has left, without running anything.
 	pub async fn pending(&self, db: &Surreal<Any>) -> Result<RolloutChainReport> {
+		crate::core::ensure_supported_server(db).await?;
 		run_setup(db, &self.folder).await?;
 		let chain = chain::RolloutChain::load(&rollouts_dir(&self.folder))?;
 		let plan = chain::plan_for(db, &self.folder, &chain, None).await?;
@@ -871,6 +949,7 @@ impl Rollouts {
 
 	/// Run every pending rollout, in order.
 	pub async fn up(&self, db: &Surreal<Any>) -> Result<UpReport> {
+		crate::core::ensure_supported_server(db).await?;
 		run_up(
 			db,
 			&self.folder,
@@ -1145,6 +1224,7 @@ fn lint_one(folder: &str, selector: &str) -> Result<()> {
 	validate_rollout_spec(&rollout.spec)?;
 	if rollout.spec.has_frozen_files() {
 		preflight_frozen(&rollout)?;
+		migrations::check_steps(&rollout)?;
 	} else {
 		let files = collect_schema_files(folder)?;
 		let legacy_prefixes = canonicalise_manifest_paths(&mut rollout.spec, &files);
@@ -1177,6 +1257,7 @@ fn lint_all(folder: &str) -> Result<()> {
 		lint_base_snapshot(rollout);
 		if rollout.spec.has_frozen_files() {
 			preflight_frozen(rollout)?;
+			migrations::check_steps(rollout)?;
 		} else if rollout.spec.file_refs().next().is_some() {
 			legacy.push(rollout.spec.id.as_str());
 		}
@@ -1329,13 +1410,19 @@ async fn load_rollout_status_report(
 #[doc(hidden)]
 pub async fn run_status(db: &Surreal<Any>, folder: &str, selector: Option<String>) -> Result<()> {
 	run_setup(db, folder).await?;
-	let mut query = "SELECT id, name, status, started_at, completed_at, last_error, \
-	                 reversibility, steps FROM __rollout"
-		.to_string();
-	if selector.is_some() {
-		query.push_str(" WHERE record::id(id) = $id");
+	crate::compat::log_server(db).await;
+	if let Some(id) = &selector {
+		log_migration_progress(db, folder, id).await;
 	}
-	query.push_str(" ORDER BY started_at DESC;");
+	let from = if selector.is_some() {
+		"type::record('__rollout', $id)"
+	} else {
+		"__rollout"
+	};
+	let query = format!(
+		"SELECT id, name, status, started_at, completed_at, last_error, reversibility, steps \
+		 FROM {from} ORDER BY started_at DESC;"
+	);
 
 	let whole_chain = selector.is_none();
 	let mut req = db.query(query);
@@ -1354,6 +1441,32 @@ pub async fn run_status(db: &Surreal<Any>, folder: &str, selector: Option<String
 		log::warn!("could not work out which rollouts are pending: {err:#}");
 	}
 	Ok(())
+}
+
+/// Report what SurrealDB is still doing to the tables a rollout migrates.
+async fn log_migration_progress(db: &Surreal<Any>, folder: &str, selector: &str) {
+	let Ok(rollout) = resolve_rollout_path(folder, Some(selector)).and_then(load_rollout_spec)
+	else {
+		return;
+	};
+	let Ok(started) = migrations::start_migrations(&rollout) else {
+		return;
+	};
+	let mut tables: Vec<String> = started.into_iter().map(|item| item.migration.table).collect();
+	tables.sort();
+	tables.dedup();
+	for table in tables {
+		let Ok(info) = info_json(db, "INFO FOR TABLE $table;", Some(&table)).await else {
+			continue;
+		};
+		let now = migrations::progress(&table, &info);
+		for line in now.running {
+			log::info!("migration still running: {line}");
+		}
+		for line in now.failed {
+			log::warn!("migration finished with records that do not fit: {line}");
+		}
+	}
 }
 
 /// Report where this database is in the manifest chain, and what is left.
@@ -1448,6 +1561,7 @@ pub async fn run_start(
 		// have to match it. What has to hold instead is order: it must be the next
 		// rollout this database is due.
 		preflight_frozen(&rollout)?;
+		migrations::check_steps(&rollout)?;
 		chain::require_next(db, folder, &rollout).await?;
 		TargetCatalog::frozen(&rollout)?
 	} else {
@@ -1531,6 +1645,7 @@ pub(crate) async fn run_start_with_spec(
 
 	let target = if spec.has_frozen_files() {
 		preflight_frozen(&rollout)?;
+		migrations::check_steps(&rollout)?;
 		if !target_files.is_empty() {
 			log::warn!(
 				"rollout '{}' is frozen, so its catalog comes from its frozen files; the target \
@@ -1574,14 +1689,45 @@ async fn start_inner(
 	let result = async {
 		ensure_no_conflicting_active_rollout(db, &rollout.spec.id).await?;
 		let mut record = load_rollout_record(db, &rollout.spec.id).await?;
+		let id = &rollout.spec.id;
 		match record.as_ref().and_then(|row| string_field(row, "status")).as_deref() {
-			Some("completed") => bail!("rollout '{}' is already completed", rollout.spec.id),
+			Some("completed") => bail!("rollout '{id}' is already completed"),
 			// Rollback put the database back where it was before this rollout, so
 			// starting it again is a first run: a fresh record, and a fresh capture
 			// of what a rollback would restore.
 			Some("rolled_back") => {
-				log::info!("Rollout {} was rolled back; starting it again.", rollout.spec.id);
+				log::info!("Rollout {id} was rolled back; starting it again.");
 				record = None;
+			}
+			// Start has finished. Running it again would only write `running_start`
+			// and then `ready_to_complete`, and a failure between the two would
+			// strand a finished start back in `running_start`.
+			Some("ready_to_complete") => {
+				if let Some(row) = &record {
+					verify_rollout_record_matches(row, rollout)?;
+				}
+				log::log!(
+					ctx.progress(),
+					"Rollout {id} has already started and is ready to complete."
+				);
+				return Ok(());
+			}
+			// Completing has begun, and may have removed what start relied on, so
+			// the start phase must not run again.
+			Some("running_complete") => bail!(
+				"rollout '{id}' is completing (status=running_complete). Run `surrealkit rollout \
+				 complete {id}` to resume it, or `surrealkit rollout repair {id}` if its complete \
+				 steps all ran."
+			),
+			Some("failed")
+				if record
+					.as_ref()
+					.is_some_and(|row| phase_recorded(row, RolloutPhase::Complete)) =>
+			{
+				bail!(
+					"rollout '{id}' failed while completing. Run `surrealkit rollout complete {id}` to \
+				 resume it."
+				)
 			}
 			_ => {}
 		}
@@ -1607,7 +1753,7 @@ async fn start_inner(
 				RolloutAction::RestoreDefinitions {
 					entities,
 				} => Some(entities.clone()),
-				_ => None,
+				_ => migrations::revert_capture(step).map(|entity| vec![entity]),
 			})
 			.flatten()
 			.filter(|entity| restorable_kind(&entity.kind))
@@ -1700,12 +1846,7 @@ async fn start_inner(
 	}
 	.await;
 	drop(keep_alive);
-	let release = release_lock(db, &lock).await;
-	match (result, release) {
-		(Err(err), _) => Err(err),
-		(Ok(_), Err(err)) => Err(err),
-		(Ok(value), Ok(())) => Ok(value),
-	}
+	finish_locked(db, &lock, result).await
 }
 
 #[doc(hidden)]
@@ -1761,7 +1902,20 @@ async fn complete_inner(
 			.ok_or_else(|| anyhow!("rollout '{}' has not been started", rollout.spec.id))?;
 		verify_rollout_record_matches(&row, rollout)?;
 		match string_field(&row, "status").as_deref() {
-			Some("ready_to_complete") | Some("running_complete") | Some("failed") => {}
+			Some("ready_to_complete") | Some("running_complete") => {}
+			// A failure while completing resumes here. A failure while starting
+			// does too once every start step ran, which is a start that failed
+			// only on its final status write.
+			Some("failed")
+				if phase_recorded(&row, RolloutPhase::Complete)
+					|| start_phase_finished(&row, &rollout.spec) => {}
+			Some("failed") => bail!(
+				"rollout '{}' failed before its start phase finished, so it cannot complete. Re-run \
+				 `surrealkit rollout start {}`, which carries on from the first step that did not \
+				 finish, or roll it back.",
+				rollout.spec.id,
+				rollout.spec.id
+			),
 			Some(other) => {
 				bail!("rollout '{}' is not ready to complete (status={})", rollout.spec.id, other)
 			}
@@ -1806,12 +1960,7 @@ async fn complete_inner(
 	}
 	.await;
 	drop(keep_alive);
-	let release = release_lock(db, &lock).await;
-	match (result, release) {
-		(Err(err), _) => Err(err),
-		(Ok(_), Err(err)) => Err(err),
-		(Ok(value), Ok(())) => Ok(value),
-	}
+	finish_locked(db, &lock, result).await
 }
 
 #[doc(hidden)]
@@ -1865,7 +2014,8 @@ async fn rollback_inner(
 		let row = load_rollout_record(db, &rollout.spec.id)
 			.await?
 			.ok_or_else(|| anyhow!("rollout '{}' has not been started", rollout.spec.id))?;
-		verify_rollout_record_matches(&row, rollout)?;
+		verify_rollout_record_for_rollback(&row, rollout)?;
+		migrations::check_steps(rollout)?;
 		match string_field(&row, "status").as_deref() {
 			Some("completed") => bail!("rollout '{}' is already completed", rollout.spec.id),
 			Some("rolled_back") => {
@@ -1874,6 +2024,9 @@ async fn rollback_inner(
 			}
 			_ => {}
 		}
+		migrations::refuse_unrevertable_rollback(rollout, |step_id| {
+			step_logged_completed(&row, step_id)
+		})?;
 		set_rollout_status(db, &rollout.spec.id, RolloutStatus::RunningRollback, None, None)
 			.await?;
 		if let Err(err) = execute_phase(db, rollout, RolloutPhase::Rollback, ctx).await {
@@ -1913,12 +2066,7 @@ async fn rollback_inner(
 	}
 	.await;
 	drop(keep_alive);
-	let release = release_lock(db, &lock).await;
-	match (result, release) {
-		(Err(err), _) => Err(err),
-		(Ok(_), Err(err)) => Err(err),
-		(Ok(value), Ok(())) => Ok(value),
-	}
+	finish_locked(db, &lock, result).await
 }
 
 /// Heal a rollout left in an intermediate state without re-running SQL steps.
@@ -2003,6 +2151,23 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 					rollout.spec.id
 				);
 			}
+			// Every start step ran, and only the final status write is missing:
+			// make it, rather than call a finished start a failure.
+			"running_start" if start_phase_finished(&row, &rollout.spec) => {
+				set_rollout_status(
+					db,
+					&rollout.spec.id,
+					RolloutStatus::ReadyToComplete,
+					None,
+					None,
+				)
+				.await?;
+				log::info!(
+					"Repaired rollout {}: running_start → ready_to_complete (every start step had \
+					 run).",
+					rollout.spec.id
+				);
+			}
 			"running_start" => {
 				set_rollout_status(
 					db,
@@ -2031,12 +2196,7 @@ async fn repair_inner(db: &Surreal<Any>, rollout: &LoadedRolloutSpec) -> Result<
 		Ok(())
 	}
 	.await;
-	let release = release_lock(db, &lock).await;
-	match (result, release) {
-		(Err(err), _) => Err(err),
-		(Ok(_), Err(err)) => Err(err),
-		(Ok(value), Ok(())) => Ok(value),
-	}
+	finish_locked(db, &lock, result).await
 }
 
 /// Force a stuck or failed rollout to the terminal `rolled_back` state by id,
@@ -2080,12 +2240,7 @@ pub async fn run_abandon_rollout(
 		Ok(())
 	}
 	.await;
-	let release = release_lock(db, &lock).await;
-	match (result, release) {
-		(Err(err), _) => Err(err),
-		(Ok(_), Err(err)) => Err(err),
-		(Ok(value), Ok(())) => Ok(value),
-	}
+	finish_locked(db, &lock, result).await
 }
 
 pub(crate) async fn load_active_rollout_id(db: &Surreal<Any>) -> Result<Option<String>> {
@@ -2153,6 +2308,7 @@ pub(crate) async fn load_managed_entities(
 				source_path,
 				statement_hash,
 				file_hash,
+				migration: None,
 			},
 			active_rollout_id,
 			state,
@@ -2236,7 +2392,7 @@ pub(crate) async fn write_partition(
 					"__entity partition '{ns}': transaction conflict on pass \
 					 {pass}/{ENTITY_WRITE_PASSES}, retrying: {err:#}"
 				);
-				tokio::time::sleep(Duration::from_millis(250 * u64::from(pass))).await;
+				tokio::time::sleep(conflict_backoff(pass)).await;
 			}
 			Err(err) => {
 				return Err(err).with_context(|| format!("writing __entity partition '{ns}'"));
@@ -2371,6 +2527,54 @@ fn is_retryable_conflict(err: &anyhow::Error) -> bool {
 		let message = cause.to_string().to_ascii_lowercase();
 		message.contains("transaction conflict") || message.contains("can be retried")
 	})
+}
+
+/// How many times a small bookkeeping read or write runs before a conflict is
+/// returned as an error.
+const CONFLICT_ATTEMPTS: u32 = 6;
+
+/// The wait after the first conflict. Each later one doubles, so the five waits
+/// between six attempts add up to about six seconds, plus jitter.
+const CONFLICT_BACKOFF: Duration = Duration::from_millis(200);
+
+/// How long to wait after the `attempt`th conflict.
+///
+/// Up to half as long again at random, so two runs that conflicted with each
+/// other do not retry in step and conflict again.
+fn conflict_backoff(attempt: u32) -> Duration {
+	let base = CONFLICT_BACKOFF * 2u32.saturating_pow(attempt.saturating_sub(1));
+	let spread = f64::from(surrealdb_types::uuid::Uuid::new_v4().as_bytes()[0]) / 510.0;
+	base.mul_f64(1.0 + spread)
+}
+
+/// Run `op`, and run it again while it fails with a retryable transaction
+/// conflict, up to [`CONFLICT_ATTEMPTS`] times in all.
+///
+/// For the rollout's small bookkeeping: the lock, the status and the step log.
+/// On a distributed store these single-row writes conflict often enough that a
+/// rollout whose steps all ran could still fail on them, and a failed release
+/// left the lock behind for the next run to trip over. Every operation passed in
+/// must be safe to repeat, including after an attempt that committed but reported
+/// a conflict.
+pub(crate) async fn retry_conflicts<T, F, Fut>(what: &str, mut op: F) -> Result<T>
+where
+	F: FnMut() -> Fut,
+	Fut: Future<Output = Result<T>>,
+{
+	let mut attempt = 1;
+	loop {
+		match op().await {
+			Err(err) if attempt < CONFLICT_ATTEMPTS && is_retryable_conflict(&err) => {
+				log::warn!(
+					"{what}: transaction conflict on attempt {attempt}/{CONFLICT_ATTEMPTS}, \
+					 retrying: {err:#}"
+				);
+				tokio::time::sleep(conflict_backoff(attempt)).await;
+				attempt += 1;
+			}
+			result => return result,
+		}
+	}
 }
 
 /// The `__entity` rows for `entities`, keyed `kind:scope:name`.
@@ -2528,17 +2732,64 @@ fn build_rollout_spec(
 			);
 		}
 	}
+	// A field migrated in place is not undone by its old definition: the
+	// records no longer fit it. Its rollback is a reverse migration, which only
+	// the author can write.
+	let migrated: BTreeSet<EntityKey> =
+		catalog_diff.migrated.iter().map(CatalogEntity::key).collect();
 	let modified_entities: Vec<EntityKey> = catalog_diff
 		.modified
 		.iter()
 		.map(|change| change.new.key())
-		.filter(|key| restorable_kind(&key.kind))
+		.filter(|key| restorable_kind(&key.kind) && !migrated.contains(key))
 		.collect();
 	if !modified_entities.is_empty() {
 		steps.push(RolloutStep::restore_definitions(
 			"rollback_modified_schema",
 			RolloutPhase::Rollback,
 			modified_entities,
+		));
+	}
+	for entity in catalog_diff.migrated.iter().filter(|e| e.kind == EntityKind::Field) {
+		let (Some(table), Some(name)) = (&entity.scope, &entity.migration) else {
+			continue;
+		};
+		log::warn!(
+			"{} is migrated in place by `{name}`: records read as converted from the moment \
+			 `rollout start` applies it, so code still reading the old shape sees the new values. \
+			 For a change without downtime, add a new field, backfill it, and remove the old one \
+			 in a later rollout. The rollback step written for it needs its `using` filled in, or \
+			 deleting to make the rollout irreversible",
+			describe_entity(entity)
+		);
+		steps.push(migrations::revert_step(table, &entity.name, name));
+	}
+
+	// The tables a changed file migrates. Waiting for their rewrite before the
+	// contract phase removes anything keeps the two apart.
+	let mut migrating = BTreeSet::new();
+	for file in changed_files(files, file_diff) {
+		for (_, migration) in crate::migrate::find_all(&file.sql)? {
+			let new = match migration.field() {
+				Some(field) => catalog_diff.migrated.iter().chain(&catalog_diff.added).any(|e| {
+					e.kind == EntityKind::Field
+						&& crate::migrate::unquote(&e.name) == crate::migrate::unquote(field)
+						&& e.scope.as_deref().map(crate::migrate::unquote).as_deref()
+							== Some(migration.table.as_str())
+						&& e.migration.as_deref() == Some(migration.name.as_str())
+				}),
+				None => true,
+			};
+			if new {
+				migrating.insert(migration.table);
+			}
+		}
+	}
+	if !migrating.is_empty() {
+		steps.push(RolloutStep::await_migrations(
+			"await_migrations",
+			RolloutPhase::Complete,
+			migrating,
 		));
 	}
 
@@ -2599,6 +2850,8 @@ fn validate_autoplan(
 	// leaves an existing one alone, so there is nothing for a rollback to undo
 	// and no reason to ask for the opt-in. One that says OVERWRITE does reset the
 	// counter, so it stays gated.
+	// A change that says what its records become, with MIGRATE EXISTING ROWS,
+	// gets a reverse migration step for its rollback instead.
 	let gated: Vec<&CatalogChange> = diff
 		.modified
 		.iter()
@@ -2606,6 +2859,7 @@ fn validate_autoplan(
 			change.new.kind != EntityKind::Sequence
 				|| overwrite_sequences.contains(&change.new.name)
 		})
+		.filter(|change| !diff.migrated.iter().any(|m| m.key() == change.new.key()))
 		.collect();
 	if !gated.is_empty() && !allow_modified {
 		let names = gated
@@ -2620,7 +2874,10 @@ fn validate_autoplan(
 			 The reason for the opt-in is rollback: undoing a modification means restoring \
 			 the previous definition, which reverses the schema but not any data effect it \
 			 had. That is a clean undo for ASSERT, PERMISSIONS and COMMENT changes, and only \
-			 a partial one for TYPE, VALUE or DEFAULT changes.\n\n\
+			 a partial one for TYPE, VALUE or DEFAULT changes. On SurrealDB 4.0 at \
+			 compatibility level 4, a TYPE change on a table with records is refused unless the \
+			 DEFINE FIELD says what they become, with MIGRATE EXISTING ROWS; one that does is \
+			 planned with a reverse migration for its rollback.\n\n\
 			 Re-run with --allow-modified once you are satisfied that is the right undo, or \
 			 author a manual manifest.",
 			gated.len(),
@@ -2685,7 +2942,10 @@ fn validate_autoplan(
 			 cannot tell apart from a rename:\n  - {detail}\n\n\
 			 If that is a rename, planning it automatically would drop the original and its \
 			 data rather than move it, so author a manual manifest with an explicit backfill \
-			 between the add and the remove. If the changes are genuinely unrelated, splitting \
+			 between the add and the remove. MIGRATE EXISTING ROWS cannot do that backfill: \
+			 its USING reads only the field's own `$value`, so copy the values with an UPDATE \
+			 in a run_sql step. At compatibility level 4, removing the old field also deletes \
+			 its values, so keep the remove in the complete phase. If the changes are genuinely unrelated, splitting \
 			 them across two rollouts is the safest way to say so."
 		);
 	}
@@ -2931,6 +3191,30 @@ fn validate_rollout_spec(spec: &RolloutSpec) -> Result<()> {
 					bail!("restore_definitions step '{}' requires entities", step.id);
 				}
 			}
+			RolloutAction::RevertMigration {
+				table,
+				field,
+				name,
+				..
+			} => {
+				if step.phase != RolloutPhase::Rollback {
+					bail!("revert_migration step '{}' belongs in the rollback phase", step.id);
+				}
+				if table.trim().is_empty() || field.trim().is_empty() || name.trim().is_empty() {
+					bail!(
+						"revert_migration step '{}' requires a table, a field and a name",
+						step.id
+					);
+				}
+			}
+			RolloutAction::AwaitMigrations {
+				tables,
+				..
+			} => {
+				if tables.is_empty() {
+					bail!("await_migrations step '{}' requires tables", step.id);
+				}
+			}
 		}
 	}
 	Ok(())
@@ -3115,6 +3399,7 @@ fn info_sections(kind: &EntityKind) -> Option<&'static [&'static str]> {
 		EntityKind::Field => &["fields"],
 		EntityKind::Index => &["indexes"],
 		EntityKind::Event => &["events"],
+		EntityKind::Type => &["types"],
 		// `INFO FOR DB` lists models and sequences too, but what it lists for them
 		// cannot be re-applied (see `unrestorable`). An unknown kind has no section.
 		EntityKind::Model | EntityKind::Sequence | EntityKind::Other(_) => return None,
@@ -3185,7 +3470,7 @@ fn reapplicable(kind: &EntityKind, definition: &str) -> String {
 }
 
 /// An identifier without the backticks or `⟨⟩` it was written with.
-fn unquote_ident(ident: &str) -> String {
+pub(crate) fn unquote_ident(ident: &str) -> String {
 	let quoted = ident
 		.strip_prefix('`')
 		.and_then(|inner| inner.strip_suffix('`'))
@@ -3217,11 +3502,23 @@ fn unescape(quoted: &str) -> String {
 }
 
 /// `ident` in backticks, the way SurrealDB prints a name that needs quoting.
-fn quote_ident(ident: &str) -> String {
+/// `ident` as written when it is a plain name, in backticks otherwise.
+pub(crate) fn quote_ident_if_needed(ident: &str) -> String {
+	if !ident.is_empty()
+		&& !ident.starts_with(|c: char| c.is_ascii_digit())
+		&& ident.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+	{
+		ident.to_string()
+	} else {
+		quote_ident(ident)
+	}
+}
+
+pub(crate) fn quote_ident(ident: &str) -> String {
 	format!("`{}`", ident.replace('\\', "\\\\").replace('`', "\\`"))
 }
 
-async fn info_json(db: &Surreal<Any>, sql: &str, table: Option<&str>) -> Result<Value> {
+pub(crate) async fn info_json(db: &Surreal<Any>, sql: &str, table: Option<&str>) -> Result<Value> {
 	let mut query = db.query(sql);
 	if let Some(table) = table {
 		query = query.bind(("table", table.to_string()));
@@ -3235,12 +3532,12 @@ async fn info_json(db: &Surreal<Any>, sql: &str, table: Option<&str>) -> Result<
 }
 
 /// Read back the definitions `start` captured for this rollout.
-async fn load_restore_definitions(
+pub(crate) async fn load_restore_definitions(
 	db: &Surreal<Any>,
 	rollout_id: &str,
 ) -> Result<BTreeMap<String, String>> {
 	let mut resp = db
-		.query("SELECT restore_definitions FROM __rollout WHERE record::id(id) = $id LIMIT 1;")
+		.query("SELECT restore_definitions FROM type::record('__rollout', $id);")
 		.bind(("id", rollout_id.to_string()))
 		.await?;
 	let raw: Option<surrealdb_types::Value> = resp.take(0)?;
@@ -3277,12 +3574,45 @@ async fn execute_step(
 		}
 	};
 
+	// Schema goes through `migrate::apply`, which runs each migration once.
+	let apply = async |sql: String, source: &str| -> Result<()> {
+		let module = rollout.spec.module()?;
+		let guard = crate::migrate::IndexGuard::Rollout {
+			rollout_id,
+		};
+		let applied = crate::migrate::apply(db, &module, &sql, source, &guard);
+		match ctx.query_timeout {
+			None => applied.await.map(drop),
+			Some(budget) => match tokio::time::timeout(budget, applied).await {
+				Ok(result) => result.map(drop),
+				Err(_) => bail!(
+					"step '{}' exceeded the {}s query budget. Raise it with \
+					 --query-timeout-secs / SURREALDB_QUERY_TIMEOUT_SECS, or pass 0 to \
+					 wait indefinitely.",
+					step.id,
+					budget.as_secs()
+				),
+			},
+		}
+	};
+	if matches!(
+		step.action,
+		RolloutAction::ApplySchema { .. }
+			| RolloutAction::ApplyFiles { .. }
+			| RolloutAction::RevertMigration { .. }
+	) {
+		// An earlier attempt may have removed an index for a migration and
+		// stopped before defining it again.
+		crate::migrate::restore_dropped_indexes(db, rollout_id).await?;
+	}
+
 	match &step.action {
 		RolloutAction::ApplySchema {
 			sql,
 		} => {
 			let substituted = vars.apply(sql)?;
-			run(prepare_logged(db, &substituted, &format!("step '{}'", step.id)).await?).await
+			let source = format!("step '{}'", step.id);
+			apply(prepare_logged(db, &substituted, &source).await?, &source).await
 		}
 		RolloutAction::ApplyFiles {
 			files,
@@ -3303,7 +3633,7 @@ async fn execute_step(
 				let substituted = vars
 					.apply(&raw)
 					.with_context(|| format!("applying template variables in {source}"))?;
-				run(prepare_logged(db, &substituted, &source).await?).await?;
+				apply(prepare_logged(db, &substituted, &source).await?, &source).await?;
 			}
 			Ok(())
 		}
@@ -3336,7 +3666,62 @@ async fn execute_step(
 			if sql.trim().is_empty() {
 				return Ok(());
 			}
-			run(sql).await
+			let dropping = crate::migrate::fields_whose_values_go(db, entities).await?;
+			run(sql).await?;
+			for field in dropping {
+				log::warn!(
+					"step '{}': removed field `{}.{}`, and with it the values its records held: \
+					 the database is at compatibility level 4",
+					step.id,
+					field.scope.as_deref().unwrap_or_default(),
+					field.name
+				);
+			}
+			Ok(())
+		}
+		RolloutAction::RevertMigration {
+			table,
+			field,
+			name,
+			using,
+			fallback,
+		} => {
+			if using.trim().is_empty() {
+				bail!(
+					"step '{}' has an empty `using`, so there is no reverse migration to run",
+					step.id
+				);
+			}
+			let captured = load_restore_definitions(db, rollout_id).await?;
+			let key = entity_key_string(&EntityKind::Field, Some(table), field);
+			let Some(definition) = captured.get(&key) else {
+				bail!(
+					"step '{}' has no captured definition of `{table}.{field}` to revert to. \
+					 `start` captures it before running anything; it was not in the database then",
+					step.id
+				);
+			};
+			let statement = migrations::revert_statement(
+				definition,
+				name,
+				&vars.apply(using)?,
+				fallback
+					.as_deref()
+					.filter(|f| !f.trim().is_empty())
+					.map(|f| vars.apply(f))
+					.transpose()?
+					.as_deref(),
+			)?;
+			let source = format!("step '{}'", step.id);
+			apply(prepare_logged(db, &statement, &source).await?, &source).await
+		}
+		RolloutAction::AwaitMigrations {
+			tables,
+			timeout_secs,
+		} => {
+			let timeout =
+				timeout_secs.map(Duration::from_secs).unwrap_or(migrations::AWAIT_DEFAULT_TIMEOUT);
+			migrations::await_tables(db, &step.id, tables, timeout).await
 		}
 		RolloutAction::RestoreDefinitions {
 			entities,
@@ -3501,8 +3886,14 @@ async fn create_rollout_record(
 	restore_definitions: &BTreeMap<String, String>,
 ) -> Result<()> {
 	let started_at = OffsetDateTime::now_utc().format(&Rfc3339)?;
-	db.query(
-		"DELETE __rollout WHERE record::id(id) = $id; \
+	let source_entities = serde_json::to_value(source_entities)?;
+	let target_entities = serde_json::to_value(target_entities)?;
+	let restore_definitions = serde_json::to_value(restore_definitions)?;
+	// Two standalone statements, so repeating both after a conflict is safe: the
+	// DELETE clears whatever the last attempt left, committed or not.
+	retry_conflicts(&format!("recording rollout '{}'", rollout.spec.id), || async {
+		db.query(
+			"DELETE type::record('__rollout', $id); \
 		 CREATE __rollout CONTENT { \
 		 	id: $id, \
 		 	name: $name, \
@@ -3519,22 +3910,24 @@ async fn create_rollout_record(
 		 	restore_definitions: $restore_definitions, \
 		 	last_error: NONE \
 		 };",
-	)
-	.bind(("id", rollout.spec.id.clone()))
-	.bind(("name", rollout.spec.name.clone()))
-	.bind(("manifest_path", rollout.path.to_string_lossy().to_string()))
-	.bind(("manifest_checksum", rollout.checksum.clone()))
-	.bind(("source_schema_hash", rollout.spec.source_schema_hash.clone()))
-	.bind(("target_schema_hash", rollout.spec.target_schema_hash.clone()))
-	.bind(("status", status.as_str().to_string()))
-	.bind(("source_entities", serde_json::to_value(source_entities)?))
-	.bind(("target_entities", serde_json::to_value(target_entities)?))
-	.bind(("started_at", started_at))
-	.bind(("reversibility", reversibility(&rollout.spec).to_string()))
-	.bind(("restore_definitions", serde_json::to_value(restore_definitions)?))
-	.await?
-	.check()?;
-	Ok(())
+		)
+		.bind(("id", rollout.spec.id.clone()))
+		.bind(("name", rollout.spec.name.clone()))
+		.bind(("manifest_path", rollout.path.to_string_lossy().to_string()))
+		.bind(("manifest_checksum", rollout.checksum.clone()))
+		.bind(("source_schema_hash", rollout.spec.source_schema_hash.clone()))
+		.bind(("target_schema_hash", rollout.spec.target_schema_hash.clone()))
+		.bind(("status", status.as_str().to_string()))
+		.bind(("source_entities", source_entities.clone()))
+		.bind(("target_entities", target_entities.clone()))
+		.bind(("started_at", started_at.clone()))
+		.bind(("reversibility", reversibility(rollout).to_string()))
+		.bind(("restore_definitions", restore_definitions.clone()))
+		.await?
+		.check()?;
+		Ok(())
+	})
+	.await
 }
 
 /// How completely a rollback can undo this rollout.
@@ -3543,8 +3936,13 @@ async fn create_rollout_record(
 /// means at least one step modified an entity that already existed, so rollback
 /// restores the previous *definition* but cannot undo a data effect it had --
 /// clean for ASSERT/PERMISSIONS/COMMENT, partial for TYPE/VALUE/DEFAULT.
-fn reversibility(spec: &RolloutSpec) -> &'static str {
-	let restores = spec
+fn reversibility(rollout: &LoadedRolloutSpec) -> &'static str {
+	// A migration nothing reverts left values the old definition does not fit.
+	if migrations::unreverted(rollout).is_ok_and(|unreverted| !unreverted.is_empty()) {
+		return "irreversible";
+	}
+	let restores = rollout
+		.spec
 		.steps
 		.iter()
 		.any(|step| matches!(step.action, RolloutAction::RestoreDefinitions { .. }));
@@ -3555,13 +3953,22 @@ fn reversibility(spec: &RolloutSpec) -> &'static str {
 	}
 }
 
+/// Read one rollout's record.
+///
+/// By its record id, not with a `WHERE` over the table: that scanned every
+/// rollout, each carrying the whole catalog twice, and on a store that checks
+/// reads at commit it made every bookkeeping write conflict with any write to any
+/// rollout.
 async fn load_rollout_record(db: &Surreal<Any>, rollout_id: &str) -> Result<Option<Value>> {
-	let mut resp = db
-		.query("SELECT * FROM __rollout WHERE record::id(id) = $id LIMIT 1;")
-		.bind(("id", rollout_id.to_string()))
-		.await?;
-	let raw: Option<surrealdb_types::Value> = resp.take(0)?;
-	Ok(raw.map(|v| Value::from_value(v).unwrap_or(Value::Null)))
+	retry_conflicts(&format!("reading rollout '{rollout_id}'"), || async {
+		let mut resp = db
+			.query("SELECT * FROM type::record('__rollout', $id);")
+			.bind(("id", rollout_id.to_string()))
+			.await?;
+		let raw: Option<surrealdb_types::Value> = resp.take(0)?;
+		Ok(raw.map(|v| Value::from_value(v).unwrap_or(Value::Null)))
+	})
+	.await
 }
 
 fn verify_rollout_record_matches(row: &Value, rollout: &LoadedRolloutSpec) -> Result<()> {
@@ -3580,6 +3987,81 @@ fn verify_rollout_record_matches(row: &Value, rollout: &LoadedRolloutSpec) -> Re
 		bail!("schema hash mismatch for rollout '{}'", rollout.spec.id);
 	}
 	Ok(())
+}
+
+/// [`verify_rollout_record_matches`] for a rollback, which also accepts a
+/// manifest whose rollback steps were edited after `start`.
+///
+/// A rollback step can be wrong in a way only running it shows, such as a
+/// reverse migration SurrealDB refuses. Holding the whole manifest to its
+/// checksum then left the rollout with no way back: the fix changed the
+/// checksum. What has to hold is that every step that already ran is the step
+/// in the manifest, so this compares those by the checksum the step log
+/// recorded for each.
+fn verify_rollout_record_for_rollback(row: &Value, rollout: &LoadedRolloutSpec) -> Result<()> {
+	let Err(mismatch) = verify_rollout_record_matches(row, rollout) else {
+		return Ok(());
+	};
+	let source = string_field_req(row, "source_schema_hash")?;
+	let target = string_field_req(row, "target_schema_hash")?;
+	if source != rollout.spec.source_schema_hash || target != rollout.spec.target_schema_hash {
+		return Err(mismatch);
+	}
+	let logged = row.get("steps").and_then(|v| v.as_array()).map(Vec::as_slice).unwrap_or_default();
+	for entry in logged {
+		let phase = entry.get("phase").and_then(|v| v.as_str());
+		if phase == Some(RolloutPhase::Rollback.as_str()) {
+			continue;
+		}
+		let id = entry.get("step_id").and_then(|v| v.as_str());
+		let recorded = entry.get("checksum").and_then(|v| v.as_str());
+		let in_manifest = rollout.spec.steps.iter().find(|step| Some(step.id.as_str()) == id);
+		let same = match in_manifest {
+			Some(step) => recorded == Some(step_checksum(step)?.as_str()),
+			None => false,
+		};
+		if !same {
+			return Err(mismatch);
+		}
+	}
+	log::warn!(
+		"rollout '{}' changed since it started, but only in steps that have not run; rolling \
+		 back with the manifest as it is now",
+		rollout.spec.id
+	);
+	Ok(())
+}
+
+/// Whether a rollout record's step log has any step of `phase`, so a `failed`
+/// rollout is known to have failed while completing rather than while starting.
+pub(crate) fn phase_recorded(row: &Value, phase: RolloutPhase) -> bool {
+	row.get("steps").and_then(|v| v.as_array()).is_some_and(|steps| {
+		steps.iter().any(|step| step.get("phase").and_then(|v| v.as_str()) == Some(phase.as_str()))
+	})
+}
+
+/// Whether the step log in `row` records `step_id` as completed.
+fn step_logged_completed(row: &Value, step_id: &str) -> bool {
+	row.get("steps").and_then(|v| v.as_array()).is_some_and(|logged| {
+		logged.iter().any(|entry| {
+			entry.get("step_id").and_then(|v| v.as_str()) == Some(step_id)
+				&& entry.get("status").and_then(|v| v.as_str()) == Some("completed")
+		})
+	})
+}
+
+/// Whether a rollout record logs every start step of `spec` as completed.
+///
+/// The step log is what a resumed start skips by, so this is exactly "running
+/// start again would run nothing".
+fn start_phase_finished(row: &Value, spec: &RolloutSpec) -> bool {
+	let logged = row.get("steps").and_then(|v| v.as_array()).map(Vec::as_slice).unwrap_or_default();
+	spec.steps.iter().filter(|step| step.phase == RolloutPhase::Start).all(|step| {
+		logged.iter().any(|entry| {
+			entry.get("step_id").and_then(|v| v.as_str()) == Some(step.id.as_str())
+				&& entry.get("status").and_then(|v| v.as_str()) == Some("completed")
+		})
+	})
 }
 
 fn deserialize_entities_field(row: &Value, key: &str) -> Result<Vec<CatalogEntity>> {
@@ -3667,21 +4149,23 @@ async fn set_rollout_status(
 	last_error: Option<&str>,
 	completed_at: Option<String>,
 ) -> Result<()> {
-	db.query(
-		"UPDATE __rollout SET \
-		 	status = $status, \
-		 	last_error = $last_error, \
-		 	completed_at = IF $completed_at THEN <datetime> $completed_at ELSE NONE END, \
-		 	updated_at = time::now() \
-		 WHERE record::id(id) = $id;",
-	)
-	.bind(("id", rollout_id.to_string()))
-	.bind(("status", status.as_str().to_string()))
-	.bind(("last_error", last_error.map(str::to_string)))
-	.bind(("completed_at", completed_at))
-	.await?
-	.check()?;
-	Ok(())
+	retry_conflicts(&format!("setting rollout '{rollout_id}' to {}", status.as_str()), || async {
+		db.query(
+			"UPDATE type::record('__rollout', $id) SET \
+			 	status = $status, \
+			 	last_error = $last_error, \
+			 	completed_at = IF $completed_at THEN <datetime> $completed_at ELSE NONE END, \
+			 	updated_at = time::now();",
+		)
+		.bind(("id", rollout_id.to_string()))
+		.bind(("status", status.as_str().to_string()))
+		.bind(("last_error", last_error.map(str::to_string)))
+		.bind(("completed_at", completed_at.clone()))
+		.await?
+		.check()?;
+		Ok(())
+	})
+	.await
 }
 
 /// Read just the step log, rather than the whole rollout record.
@@ -3691,15 +4175,28 @@ async fn set_rollout_status(
 /// per step, so on a large schema over a high-latency link that payload dominates
 /// the rollout and makes a working run look like the hang reported in issue #55.
 async fn load_rollout_steps(db: &Surreal<Any>, rollout_id: &str) -> Result<Option<Vec<Value>>> {
-	let mut resp = db
-		.query("SELECT steps FROM __rollout WHERE record::id(id) = $id LIMIT 1;")
+	retry_conflicts(&format!("reading the steps of rollout '{rollout_id}'"), || async {
+		let mut resp = db
+			.query("SELECT steps FROM type::record('__rollout', $id);")
+			.bind(("id", rollout_id.to_string()))
+			.await?;
+		let raw: Option<surrealdb_types::Value> = resp.take(0)?;
+		let Some(row) = raw.map(|v| Value::from_value(v).unwrap_or(Value::Null)) else {
+			return Ok(None);
+		};
+		Ok(Some(row.get("steps").and_then(|v| v.as_array()).cloned().unwrap_or_default()))
+	})
+	.await
+}
+
+/// Write a rollout's step log back.
+async fn store_rollout_steps(db: &Surreal<Any>, rollout_id: &str, steps: Vec<Value>) -> Result<()> {
+	db.query("UPDATE type::record('__rollout', $id) SET steps = $steps, updated_at = time::now();")
 		.bind(("id", rollout_id.to_string()))
-		.await?;
-	let raw: Option<surrealdb_types::Value> = resp.take(0)?;
-	let Some(row) = raw.map(|v| Value::from_value(v).unwrap_or(Value::Null)) else {
-		return Ok(None);
-	};
-	Ok(Some(row.get("steps").and_then(|v| v.as_array()).cloned().unwrap_or_default()))
+		.bind(("steps", steps))
+		.await?
+		.check()?;
+	Ok(())
 }
 
 async fn step_already_completed(
@@ -3725,21 +4222,17 @@ async fn record_step_start(db: &Surreal<Any>, rollout_id: &str, step: &RolloutSt
 		"status": "running",
 		"error": null
 	});
-	// Load, remove any existing entry for this step, append, write back
-	let mut steps = load_rollout_steps(db, rollout_id)
-		.await?
-		.ok_or_else(|| anyhow!("rollout '{}' not found", rollout_id))?;
-	steps.retain(|s| s.get("step_id").and_then(|v| v.as_str()) != Some(&step.id));
-	steps.push(new_step);
-	db.query(
-		"UPDATE __rollout SET steps = $steps, updated_at = time::now() \
-		 WHERE record::id(id) = $id;",
-	)
-	.bind(("id", rollout_id.to_string()))
-	.bind(("steps", steps))
-	.await?
-	.check()?;
-	Ok(())
+	// Load, remove any existing entry for this step, append, write back. The
+	// whole read-modify-write is retried, so each attempt starts from a fresh read.
+	retry_conflicts(&format!("recording the start of step '{}'", step.id), || async {
+		let mut steps = load_rollout_steps(db, rollout_id)
+			.await?
+			.ok_or_else(|| anyhow!("rollout '{}' not found", rollout_id))?;
+		steps.retain(|s| s.get("step_id").and_then(|v| v.as_str()) != Some(&step.id));
+		steps.push(new_step.clone());
+		store_rollout_steps(db, rollout_id, steps).await
+	})
+	.await
 }
 
 async fn record_step_complete(
@@ -3766,30 +4259,26 @@ async fn update_step_status(
 	status: &str,
 	error: Option<&str>,
 ) -> Result<()> {
-	// Load, patch in Rust, write back — avoids complex inline array mutation
-	let mut steps = load_rollout_steps(db, rollout_id)
-		.await?
-		.ok_or_else(|| anyhow!("rollout '{}' not found", rollout_id))?;
-	for s in &mut steps {
-		if s.get("step_id").and_then(|v| v.as_str()) == Some(step_id)
-			&& let Some(obj) = s.as_object_mut()
-		{
-			obj.insert("status".into(), Value::String(status.to_string()));
-			obj.insert(
-				"error".into(),
-				error.map(|e| Value::String(e.to_string())).unwrap_or(Value::Null),
-			);
+	// Load, patch in Rust, write back — avoids complex inline array mutation. As
+	// in `record_step_start`, a retry reads afresh.
+	retry_conflicts(&format!("recording step '{step_id}' as {status}"), || async {
+		let mut steps = load_rollout_steps(db, rollout_id)
+			.await?
+			.ok_or_else(|| anyhow!("rollout '{}' not found", rollout_id))?;
+		for s in &mut steps {
+			if s.get("step_id").and_then(|v| v.as_str()) == Some(step_id)
+				&& let Some(obj) = s.as_object_mut()
+			{
+				obj.insert("status".into(), Value::String(status.to_string()));
+				obj.insert(
+					"error".into(),
+					error.map(|e| Value::String(e.to_string())).unwrap_or(Value::Null),
+				);
+			}
 		}
-	}
-	db.query(
-		"UPDATE __rollout SET steps = $steps, updated_at = time::now() \
-		 WHERE record::id(id) = $id;",
-	)
-	.bind(("id", rollout_id.to_string()))
-	.bind(("steps", steps))
-	.await?
-	.check()?;
-	Ok(())
+		store_rollout_steps(db, rollout_id, steps).await
+	})
+	.await
 }
 
 fn step_checksum(step: &RolloutStep) -> Result<String> {
@@ -3814,97 +4303,140 @@ pub(crate) struct LockToken {
 	owner: String,
 }
 
-/// Identifies the holder in contention messages. The pid distinguishes concurrent
-/// runs that share a `SURREALKIT_OWNER` (e.g. two CI jobs).
+impl LockToken {
+	/// The statement that clears this lock by hand, for messages that need one.
+	fn clear_statement(&self) -> String {
+		format!("DELETE __entity WHERE ns = '{}' AND key = '{}';", self.ns, self.key)
+	}
+
+	/// What to say when this lock could not be released.
+	fn left_behind(&self) -> String {
+		format!(
+			"could not release the '{}' lock, so it stays held for up to {LOCK_TTL_SECS}s. To \
+			 clear it now, run: {}",
+			self.key,
+			self.clear_statement()
+		)
+	}
+}
+
+/// Identifies the holder in contention messages, and is what a release checks.
+///
+/// The pid tells apart concurrent runs that share a `SURREALKIT_OWNER` (e.g. two
+/// CI jobs), but containers reuse pids, so every CI run can be `surrealkit/100`.
+/// The random suffix makes each acquisition its own owner: one run can neither
+/// release another's lock nor mistake it for its own.
 fn lock_owner_id() -> String {
 	let base = std::env::var("SURREALKIT_OWNER").unwrap_or_else(|_| "surrealkit".to_string());
-	format!("{base}/{}", std::process::id())
+	let nonce = surrealdb_types::uuid::Uuid::new_v4().simple().to_string();
+	format!("{base}/{}/{}", std::process::id(), &nonce[..8])
 }
 
 /// Take the named lock, or fail if another process holds it.
 ///
 /// This is a real mutual exclusion: the `by_ns_key` unique index rejects a second
 /// holder. Expired locks -- and locks written before v1, which carry no
-/// `expires_at` -- are taken over in the same statement, so a crashed run does not
-/// need a manual cleanup.
+/// `expires_at` -- are cleared first, so a crashed run does not need a manual
+/// cleanup.
+///
+/// Clearing and taking are two statements, not one transaction. The unique index
+/// is what excludes a second holder, so the transaction added nothing to that,
+/// and it cost the retry: SurrealDB retries a standalone statement that loses a
+/// conflict, but not an explicit `BEGIN ... COMMIT`, and the conflict reached the
+/// client only as "the query was not executed due to a failed transaction".
 pub(crate) async fn acquire_lock(
 	db: &Surreal<Any>,
 	module: &Module,
 	lock_key: &str,
 ) -> Result<LockToken> {
-	let owner = lock_owner_id();
-	let ns = module.partition(Partition::Lock);
+	let token = LockToken {
+		ns: module.partition(Partition::Lock),
+		key: lock_key.to_string(),
+		owner: lock_owner_id(),
+	};
+	let what = format!("acquiring the '{lock_key}' lock");
+	match retry_conflicts(&what, || take_lock(db, &token)).await {
+		Ok(()) => Ok(token),
+		Err(err) => resolve_failed_acquire(db, token, err).await,
+	}
+}
 
-	// The conditional DELETE clears only an expired (or pre-v1) holder; the CREATE
-	// then violates `by_ns_key` if a live holder remains, aborting the transaction
-	// and leaving that holder untouched.
-	let sql = format!(
-		"BEGIN; \
-		 DELETE __entity WHERE ns = $ns AND key = $key \
+/// Work out what a failed attempt at `token`'s lock means.
+async fn resolve_failed_acquire(
+	db: &Surreal<Any>,
+	token: LockToken,
+	err: anyhow::Error,
+) -> Result<LockToken> {
+	let lock_key = &token.key;
+	// The error is generic, so read the holder back to say who.
+	match lock_holder(db, &token.ns, lock_key).await {
+		// An attempt that reported a conflict had committed after all, and the
+		// retry found the lock it took.
+		Ok(Some(holder)) if holder.owner == token.owner => Ok(token),
+		Ok(Some(holder)) => bail!(
+			"another surrealkit run holds the '{lock_key}' lock ({holder}).\n\
+			 Wait for it to finish, or if it crashed, clear the lock with:\n\
+			 \x20   {}\n\
+			 It is taken over automatically {LOCK_TTL_SECS}s after it was acquired.",
+			token.clear_statement()
+		),
+		// No holder: the failure was something else (or we lost a benign race).
+		_ => Err(err).with_context(|| format!("acquiring the '{lock_key}' lock")),
+	}
+}
+
+/// One attempt at taking `token`'s lock.
+async fn take_lock(db: &Surreal<Any>, token: &LockToken) -> Result<()> {
+	// The DELETE clears only an expired (or pre-v1) holder; the CREATE then
+	// violates `by_ns_key` if a live holder remains, leaving that holder untouched.
+	db.query(format!(
+		"DELETE __entity WHERE ns = $ns AND key = $key \
 		 	AND (val.expires_at = NONE OR val.expires_at < time::now()); \
 		 CREATE __entity CONTENT {{ \
 		 	ns: $ns, \
 		 	key: $key, \
 		 	val: {{ owner: $owner, acquired_at: time::now(), expires_at: time::now() + {LOCK_TTL_SECS}s }}, \
 		 	updated_at: time::now() \
-		 }}; \
-		 COMMIT;"
-	);
+		 }};"
+	))
+	.bind(("ns", token.ns.clone()))
+	.bind(("key", token.key.clone()))
+	.bind(("owner", token.owner.clone()))
+	.await?
+	.check()?;
+	Ok(())
+}
 
-	let attempt = match db
-		.query(sql)
-		.bind(("ns", ns.clone()))
-		.bind(("key", lock_key.to_string()))
-		.bind(("owner", owner.clone()))
-		.await
-	{
-		Ok(resp) => resp.check(),
-		Err(err) => Err(err),
-	};
+/// Who holds a lock, as its row records it.
+#[derive(Debug)]
+struct LockHolder {
+	owner: String,
+	acquired_at: Option<String>,
+}
 
-	match attempt {
-		Ok(_) => Ok(LockToken {
-			ns,
-			key: lock_key.to_string(),
-			owner,
-		}),
-		Err(err) => {
-			// The transaction error is generic, so read the holder back to say who.
-			match describe_lock_holder(db, module, lock_key).await {
-				Ok(Some(holder)) => bail!(
-					"another surrealkit run holds the '{lock_key}' lock ({holder}).\n\
-					 Wait for it to finish, or if it crashed, clear the lock with:\n\
-					 \x20   DELETE __entity WHERE ns = 'lock' AND key = '{lock_key}';\n\
-					 It is taken over automatically {LOCK_TTL_SECS}s after it was acquired."
-				),
-				// No holder: the failure was something else (or we lost a benign race).
-				_ => Err(err).with_context(|| format!("acquiring the '{lock_key}' lock")),
-			}
+impl std::fmt::Display for LockHolder {
+	fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+		match &self.acquired_at {
+			Some(at) => write!(f, "held by {} since {at}", self.owner),
+			None => write!(f, "held by {}", self.owner),
 		}
 	}
 }
 
-/// Render the current holder of `lock_key` as `owner, held for Ns`, if any.
-async fn describe_lock_holder(
-	db: &Surreal<Any>,
-	module: &Module,
-	lock_key: &str,
-) -> Result<Option<String>> {
+/// The current holder of `lock_key` in lock partition `ns`, if any.
+async fn lock_holder(db: &Surreal<Any>, ns: &str, lock_key: &str) -> Result<Option<LockHolder>> {
 	let mut resp = db
 		.query(
 			"SELECT val.owner AS owner, val.acquired_at AS acquired_at \
 			 FROM __entity WHERE ns = $ns AND key = $key LIMIT 1;",
 		)
-		.bind(("ns", module.partition(Partition::Lock)))
+		.bind(("ns", ns.to_string()))
 		.bind(("key", lock_key.to_string()))
 		.await?;
 	let row: Option<serde_json::Value> = resp.take(0)?;
-	Ok(row.map(|r| {
-		let owner = r.get("owner").and_then(|v| v.as_str()).unwrap_or("unknown owner");
-		match r.get("acquired_at").and_then(|v| v.as_str()) {
-			Some(at) => format!("held by {owner} since {at}"),
-			None => format!("held by {owner}"),
-		}
+	Ok(row.map(|r| LockHolder {
+		owner: r.get("owner").and_then(|v| v.as_str()).unwrap_or("unknown owner").to_string(),
+		acquired_at: r.get("acquired_at").and_then(|v| v.as_str()).map(str::to_string),
 	}))
 }
 
@@ -3914,19 +4446,22 @@ const LOCK_REFRESH: Duration = Duration::from_secs(LOCK_TTL_SECS / 3);
 /// Push a held lock's expiry back to a full TTL from now. Returns whether this
 /// process still held it.
 pub(crate) async fn refresh_lock(db: &Surreal<Any>, token: &LockToken) -> Result<bool> {
-	let mut resp = db
-		.query(format!(
-			"UPDATE __entity SET val.expires_at = time::now() + {LOCK_TTL_SECS}s, \
-			 updated_at = time::now() \
-			 WHERE ns = $ns AND key = $key AND val.owner = $owner RETURN AFTER;"
-		))
-		.bind(("ns", token.ns.clone()))
-		.bind(("key", token.key.clone()))
-		.bind(("owner", token.owner.clone()))
-		.await?
-		.check()?;
-	let rows: Vec<Value> = resp.take(0)?;
-	Ok(!rows.is_empty())
+	retry_conflicts(&format!("extending the '{}' lock", token.key), || async {
+		let mut resp = db
+			.query(format!(
+				"UPDATE __entity SET val.expires_at = time::now() + {LOCK_TTL_SECS}s, \
+				 updated_at = time::now() \
+				 WHERE ns = $ns AND key = $key AND val.owner = $owner RETURN AFTER;"
+			))
+			.bind(("ns", token.ns.clone()))
+			.bind(("key", token.key.clone()))
+			.bind(("owner", token.owner.clone()))
+			.await?
+			.check()?;
+		let rows: Vec<Value> = resp.take(0)?;
+		Ok(!rows.is_empty())
+	})
+	.await
 }
 
 /// Keeps a lock alive for as long as this value lives.
@@ -3971,13 +4506,39 @@ impl Drop for LockKeepAlive {
 /// the owner check is what stops a slow run from clearing the lock a newer run
 /// legitimately took over.
 pub(crate) async fn release_lock(db: &Surreal<Any>, token: &LockToken) -> Result<()> {
-	db.query("DELETE __entity WHERE ns = $ns AND key = $key AND val.owner = $owner;")
-		.bind(("ns", token.ns.clone()))
-		.bind(("key", token.key.clone()))
-		.bind(("owner", token.owner.clone()))
-		.await?
-		.check()?;
-	Ok(())
+	retry_conflicts(&format!("releasing the '{}' lock", token.key), || async {
+		db.query("DELETE __entity WHERE ns = $ns AND key = $key AND val.owner = $owner;")
+			.bind(("ns", token.ns.clone()))
+			.bind(("key", token.key.clone()))
+			.bind(("owner", token.owner.clone()))
+			.await?
+			.check()?;
+		Ok(())
+	})
+	.await
+}
+
+/// Release `lock` now that the work done under it has finished, and pass on the
+/// work's result.
+///
+/// A lock that is not released stays held until it expires and blocks every run
+/// until then, so a failed release is never dropped. When the work succeeded,
+/// the failed release is the error. When the work failed too, its error is the
+/// one to return, and the failed release is logged with how to clear the lock.
+pub(crate) async fn finish_locked<T>(
+	db: &Surreal<Any>,
+	lock: &LockToken,
+	result: Result<T>,
+) -> Result<T> {
+	match (result, release_lock(db, lock).await) {
+		(Ok(value), Ok(())) => Ok(value),
+		(Err(err), Ok(())) => Err(err),
+		(Ok(_), Err(release_err)) => Err(release_err.context(lock.left_behind())),
+		(Err(err), Err(release_err)) => {
+			log::warn!("{}: {release_err:#}", lock.left_behind());
+			Err(err)
+		}
+	}
 }
 
 fn slugify(input: &str) -> String {
@@ -4027,6 +4588,7 @@ mod tests {
 					source_path: "database/schema/person.surql".to_string(),
 					statement_hash: "a".to_string(),
 					file_hash: "fa".to_string(),
+					migration: None,
 				},
 				new: CatalogEntity {
 					kind: EntityKind::Field,
@@ -4035,8 +4597,10 @@ mod tests {
 					source_path: "database/schema/person.surql".to_string(),
 					statement_hash: "b".to_string(),
 					file_hash: "fb".to_string(),
+					migration: None,
 				},
 			}],
+			migrated: Vec::new(),
 		};
 
 		let err = validate_autoplan(&diff, false, &BTreeSet::new())
@@ -4075,11 +4639,13 @@ mod tests {
 			source_path: "schema/person.surql".to_string(),
 			statement_hash: format!("h-{name}"),
 			file_hash: "f".to_string(),
+			migration: None,
 		};
 		let diff = CatalogDiff {
 			added: vec![entity("people")],
 			removed: vec![entity("person")],
 			modified: Vec::new(),
+			migrated: Vec::new(),
 		};
 
 		let err = validate_autoplan(&diff, false, &BTreeSet::new())
@@ -4105,11 +4671,13 @@ mod tests {
 			source_path: "schema/person.surql".to_string(),
 			statement_hash: format!("h-{name}"),
 			file_hash: "f".to_string(),
+			migration: None,
 		};
 		let diff = CatalogDiff {
 			added: vec![field("full_name")],
 			removed: vec![field("name")],
 			modified: Vec::new(),
+			migrated: Vec::new(),
 		};
 		assert!(
 			validate_autoplan(&diff, false, &BTreeSet::new()).is_err(),
@@ -4141,6 +4709,7 @@ mod tests {
 					source_path: "database/schema/customer.surql".to_string(),
 					statement_hash: "stmt".to_string(),
 					file_hash: "file-a".to_string(),
+					migration: None,
 				}],
 				removed: vec![CatalogEntity {
 					kind: EntityKind::Field,
@@ -4149,8 +4718,10 @@ mod tests {
 					source_path: "database/schema/person.surql".to_string(),
 					statement_hash: "old".to_string(),
 					file_hash: "file-old".to_string(),
+					migration: None,
 				}],
 				modified: Vec::new(),
+				migrated: Vec::new(),
 			},
 			&SchemaSnapshot {
 				version: 1,
@@ -4221,11 +4792,12 @@ mod tests {
 		assert!(msg.contains("holds the 'global' lock"), "unexpected error: {msg}");
 
 		// The original holder is intact.
-		let holder = describe_lock_holder(&db, &Module::default_module(), "global")
-			.await
-			.expect("describe")
-			.expect("holder");
-		assert!(holder.contains(&lock_owner_id()), "holder changed: {holder}");
+		let holder =
+			lock_holder(&db, &Module::default_module().partition(Partition::Lock), "global")
+				.await
+				.expect("describe")
+				.expect("holder");
+		assert_eq!(holder.owner, first.owner, "holder changed: {holder}");
 
 		release_lock(&db, &first).await.expect("release");
 		let second = acquire_lock(&db, &Module::default_module(), "global")
@@ -4248,7 +4820,7 @@ mod tests {
 
 		// The genuine holder still holds it.
 		assert!(
-			describe_lock_holder(&db, &Module::default_module(), "global")
+			lock_holder(&db, &Module::default_module().partition(Partition::Lock), "global")
 				.await
 				.expect("describe")
 				.is_some(),
@@ -4279,11 +4851,12 @@ mod tests {
 		let token = acquire_lock(&db, &Module::default_module(), "global")
 			.await
 			.expect("must take over a pre-v1 lock");
-		let holder = describe_lock_holder(&db, &Module::default_module(), "global")
-			.await
-			.expect("describe")
-			.expect("holder");
-		assert!(holder.contains(&lock_owner_id()), "expected takeover, got: {holder}");
+		let holder =
+			lock_holder(&db, &Module::default_module().partition(Partition::Lock), "global")
+				.await
+				.expect("describe")
+				.expect("holder");
+		assert_eq!(holder.owner, token.owner, "expected takeover, got: {holder}");
 		release_lock(&db, &token).await.expect("release");
 	}
 
@@ -4544,6 +5117,7 @@ mod tests {
 			source_path: format!("database/schema/{name}.surql"),
 			statement_hash: format!("stmt-{name}"),
 			file_hash: format!("file-{name}"),
+			migration: None,
 		}
 	}
 
@@ -4944,6 +5518,255 @@ mod tests {
 		assert!(err.to_string().contains("not in a repairable state"), "got: {err}",);
 	}
 
+	// ---- transaction conflicts on the bookkeeping --------------------------------
+
+	fn kv_conflict() -> anyhow::Error {
+		anyhow!(
+			"There was a problem with the key-value store: Transaction conflict: Transaction \
+			 exceeded the maximum number of retry attempts 2. This transaction can be retried"
+		)
+	}
+
+	#[tokio::test(start_paused = true)]
+	async fn bookkeeping_retries_a_conflict_until_it_clears() {
+		let attempts = std::sync::atomic::AtomicU32::new(0);
+		let value = retry_conflicts("test", || async {
+			let attempt = attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+			if attempt < 3 {
+				Err(kv_conflict())
+			} else {
+				Ok(attempt)
+			}
+		})
+		.await
+		.expect("the third attempt succeeds");
+		assert_eq!(value, 3);
+	}
+
+	#[tokio::test(start_paused = true)]
+	async fn bookkeeping_gives_up_on_a_conflict_that_does_not_clear() {
+		let attempts = std::sync::atomic::AtomicU32::new(0);
+		let err = retry_conflicts("test", || async {
+			attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+			Err::<(), _>(kv_conflict())
+		})
+		.await
+		.expect_err("a conflict on every attempt is returned");
+		assert!(is_retryable_conflict(&err), "{err:#}");
+		assert_eq!(attempts.into_inner(), CONFLICT_ATTEMPTS);
+	}
+
+	#[tokio::test(start_paused = true)]
+	async fn bookkeeping_does_not_retry_other_errors() {
+		let attempts = std::sync::atomic::AtomicU32::new(0);
+		retry_conflicts("test", || async {
+			attempts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+			Err::<(), _>(anyhow!("Parse error: Unexpected token `;`"))
+		})
+		.await
+		.expect_err("the error is returned");
+		assert_eq!(attempts.into_inner(), 1);
+	}
+
+	#[test]
+	fn conflict_backoff_doubles_with_up_to_half_again_of_jitter() {
+		for (attempt, base_ms) in [(1, 200), (2, 400), (5, 3200)] {
+			let wait = conflict_backoff(attempt);
+			let base = Duration::from_millis(base_ms);
+			assert!(wait >= base && wait <= base.mul_f64(1.5), "attempt {attempt}: {wait:?}");
+		}
+	}
+
+	// Containers reuse pids, so `surrealkit/<pid>` alone was the same owner for
+	// every CI run, and one run could release another's lock.
+	#[tokio::test]
+	async fn each_acquisition_is_its_own_owner() {
+		let db = connect_mem_db().await;
+		let module = Module::default_module();
+		let a = acquire_lock(&db, &module, "one").await.expect("one");
+		let b = acquire_lock(&db, &module, "two").await.expect("two");
+		assert_ne!(a.owner, b.owner);
+		let pid = format!("/{}/", std::process::id());
+		assert!(a.owner.contains(&pid) && b.owner.contains(&pid), "{} {}", a.owner, b.owner);
+		release_lock(&db, &a).await.expect("release one");
+		release_lock(&db, &b).await.expect("release two");
+	}
+
+	// An attempt can commit and still report a conflict. The retry then finds the
+	// lock held, and has to recognise the holder as itself.
+	#[tokio::test]
+	async fn a_lock_an_earlier_attempt_took_counts_as_acquired() {
+		let db = connect_mem_db().await;
+		let token = LockToken {
+			ns: Module::default_module().partition(Partition::Lock),
+			key: "global".to_string(),
+			owner: lock_owner_id(),
+		};
+		take_lock(&db, &token).await.expect("the attempt that committed");
+
+		let held = resolve_failed_acquire(&db, token.clone(), anyhow!("unique index violation"))
+			.await
+			.expect("our own lock is ours");
+		assert_eq!(held.owner, token.owner);
+
+		let other = LockToken {
+			owner: lock_owner_id(),
+			..token.clone()
+		};
+		let err = resolve_failed_acquire(&db, other, anyhow!("unique index violation"))
+			.await
+			.expect_err("someone else's lock is not");
+		let message = format!("{err:#}");
+		assert!(message.contains("holds the 'global' lock"), "{message}");
+		assert!(message.contains("ns = 'lock' AND key = 'global'"), "{message}");
+		release_lock(&db, &token).await.expect("release");
+	}
+
+	#[tokio::test]
+	async fn a_failed_release_after_a_failed_run_keeps_the_runs_error() {
+		let db = connect_mem_db().await;
+		let token = acquire_lock(&db, &Module::default_module(), "global").await.expect("acquire");
+		let result: Result<()> = finish_locked(&db, &token, Err(anyhow!("the step failed"))).await;
+		assert_eq!(result.unwrap_err().to_string(), "the step failed");
+		assert!(
+			lock_holder(&db, &token.ns, "global").await.expect("holder").is_none(),
+			"the lock is released when the work fails"
+		);
+		let ok = finish_locked(&db, &token, Ok(7)).await.expect("nothing left to release");
+		assert_eq!(ok, 7);
+	}
+
+	// ---- start, complete and repair after a run that stopped part way ------------
+
+	fn spec_with_one_start_step(id: &str) -> LoadedRolloutSpec {
+		let mut loaded = sample_loaded_spec(id);
+		loaded.spec.steps.push(RolloutStep::run_sql("expand", RolloutPhase::Start, "RETURN 1;"));
+		loaded
+	}
+
+	async fn log_step(db: &Surreal<Any>, id: &str, phase: &str, status: &str) {
+		let entry = serde_json::json!({
+			"step_id": "expand", "phase": phase, "kind": "run_sql", "status": status
+		});
+		store_rollout_steps(db, id, vec![entry]).await.expect("store step log");
+	}
+
+	async fn seed(db: &Surreal<Any>, loaded: &LoadedRolloutSpec, status: RolloutStatus) {
+		create_rollout_record(db, loaded, &[], &[], status, &BTreeMap::new())
+			.await
+			.expect("seed rollout record");
+	}
+
+	async fn start_again(db: &Surreal<Any>, loaded: &LoadedRolloutSpec) -> Result<()> {
+		let vars = TemplateVars::default();
+		let ctx = StepContext::new(&vars, None, None);
+		let empty = CatalogSnapshot {
+			version: 2,
+			entities: Vec::new(),
+			operations: Vec::new(),
+		};
+		start_inner(db, loaded, &empty, &TargetCatalog::Full(empty.clone()), &ctx).await
+	}
+
+	async fn status_and_updated_at(db: &Surreal<Any>) -> (String, String) {
+		let row = load_single_row(db).await;
+		(string_field(&row, "status").unwrap_or_default(), row["updated_at"].to_string())
+	}
+
+	// Start used to write `running_start` and then `ready_to_complete` again on a
+	// finished start, and a conflict between the two writes stranded it.
+	#[tokio::test]
+	async fn start_leaves_a_rollout_that_is_ready_to_complete_alone() {
+		let db = connect_mem_db().await;
+		let loaded = spec_with_one_start_step("20261103000000__ready");
+		seed(&db, &loaded, RolloutStatus::ReadyToComplete).await;
+		log_step(&db, &loaded.spec.id, "start", "completed").await;
+		let before = status_and_updated_at(&db).await;
+
+		start_again(&db, &loaded).await.expect("start on a finished start is a no-op");
+		assert_eq!(status_and_updated_at(&db).await, before, "start wrote to the record");
+		assert!(
+			lock_holder(&db, "lock", "global").await.expect("holder").is_none(),
+			"the lock was not released"
+		);
+	}
+
+	#[tokio::test]
+	async fn start_refuses_a_rollout_that_is_completing() {
+		let db = connect_mem_db().await;
+		let loaded = spec_with_one_start_step("20261103000001__completing");
+		seed(&db, &loaded, RolloutStatus::RunningComplete).await;
+
+		let err = start_again(&db, &loaded).await.expect_err("completing must not restart");
+		assert!(format!("{err:#}").contains("rollout complete"), "{err:#}");
+		assert_eq!(status_and_updated_at(&db).await.0, "running_complete");
+	}
+
+	#[tokio::test]
+	async fn complete_refuses_a_rollout_whose_start_did_not_finish() {
+		let db = connect_mem_db().await;
+		let loaded = spec_with_one_start_step("20261103000002__half_started");
+		seed(&db, &loaded, RolloutStatus::Failed).await;
+		log_step(&db, &loaded.spec.id, "start", "failed").await;
+		let vars = TemplateVars::default();
+		let ctx = StepContext::new(&vars, None, None);
+
+		let err = complete_inner(&db, &loaded, &ctx).await.expect_err("start did not finish");
+		assert!(format!("{err:#}").contains("rollout start"), "{err:#}");
+		assert_eq!(status_and_updated_at(&db).await.0, "failed");
+
+		// Every start step ran, and only the final status write failed.
+		log_step(&db, &loaded.spec.id, "start", "completed").await;
+		complete_inner(&db, &loaded, &ctx).await.expect("a finished start completes");
+		assert_eq!(status_and_updated_at(&db).await.0, "completed");
+	}
+
+	#[tokio::test]
+	async fn repair_finishes_a_start_whose_steps_all_ran() {
+		let db = connect_mem_db().await;
+		let loaded = spec_with_one_start_step("20261103000003__start_ran");
+		seed(&db, &loaded, RolloutStatus::RunningStart).await;
+		log_step(&db, &loaded.spec.id, "start", "completed").await;
+
+		repair_inner(&db, &loaded).await.expect("repair");
+		assert_eq!(status_and_updated_at(&db).await.0, "ready_to_complete");
+	}
+
+	#[tokio::test]
+	async fn repair_fails_a_start_that_stopped_part_way() {
+		let db = connect_mem_db().await;
+		let loaded = spec_with_one_start_step("20261103000004__start_stopped");
+		seed(&db, &loaded, RolloutStatus::RunningStart).await;
+		log_step(&db, &loaded.spec.id, "start", "running").await;
+
+		repair_inner(&db, &loaded).await.expect("repair");
+		assert_eq!(status_and_updated_at(&db).await.0, "failed");
+	}
+
+	// The record is addressed by its id, so the bookkeeping reads and writes the
+	// one row and leaves every other rollout's row alone.
+	#[tokio::test]
+	async fn bookkeeping_touches_only_its_own_rollout() {
+		let db = connect_mem_db().await;
+		let mine = sample_loaded_spec("20261103000005__mine");
+		let other = sample_loaded_spec("20261103000006__other");
+		seed(&db, &mine, RolloutStatus::Planned).await;
+		seed(&db, &other, RolloutStatus::Planned).await;
+
+		set_rollout_status(&db, &mine.spec.id, RolloutStatus::RunningStart, None, None)
+			.await
+			.expect("status");
+		log_step(&db, &mine.spec.id, "start", "completed").await;
+
+		let row = load_rollout_record(&db, &mine.spec.id).await.expect("load").expect("mine");
+		assert_eq!(string_field(&row, "status").as_deref(), Some("running_start"));
+		let other_row =
+			load_rollout_record(&db, &other.spec.id).await.expect("load").expect("other");
+		assert_eq!(string_field(&other_row, "status").as_deref(), Some("planned"));
+		assert_eq!(load_rollout_steps(&db, &other.spec.id).await.expect("steps"), Some(Vec::new()));
+		assert!(load_rollout_record(&db, "missing").await.expect("load").is_none());
+	}
+
 	/// A manifest planned elsewhere records foreign paths. They have to be mapped
 	/// onto this project's canonical keys before anything executes.
 	#[test]
@@ -5065,6 +5888,7 @@ mod tests {
 			source_path: "schema/x.surql".to_string(),
 			statement_hash: hash.to_string(),
 			file_hash: hash.to_string(),
+			migration: None,
 		};
 		CatalogChange {
 			old: entity("a"),
@@ -5386,28 +6210,16 @@ mod tests {
 	#[tokio::test]
 	async fn rollback_restores_a_modified_module() {
 		let db = experimental_db().await;
-		// 3.3 reads a module's source after FROM, and refuses one without UNSIGNED. 4.0 calls
-		// it an extension and, when it cannot read the archive, requires its DIGEST.
-		let version = db.version().await.expect("version");
-		let define = |comment: &str| match (version.major, version.minor) {
-			(3, 0..=2) => {
-				format!("DEFINE MODULE mod::demo AS f\"modules:/demo.surli\" COMMENT '{comment}';")
-			}
-			(3, _) => format!(
-				"DEFINE MODULE mod::demo FROM f\"modules:/demo.surli\" UNSIGNED COMMENT \
-				 '{comment}';"
-			),
-			_ => format!(
+		// 4.0 calls a module an extension and, when it cannot read the archive,
+		// requires its DIGEST.
+		let define = |comment: &str| {
+			format!(
 				"DEFINE MODULE mod::demo FROM f\"modules:/demo.surli\" UNSIGNED DIGEST \
 				 'sha256:{}' COMMENT '{comment}';",
 				"0".repeat(64)
-			),
+			)
 		};
-		let listed = if version.major >= 4 {
-			in_db("extensions", "ext::demo")
-		} else {
-			in_db("modules", "mod::demo")
-		};
+		let listed = in_db("extensions", "ext::demo");
 		assert_rolls_back(
 			&db,
 			&format!("DEFINE BUCKET modules BACKEND \"memory\";\n{}", define("v1")),

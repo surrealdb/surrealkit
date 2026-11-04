@@ -1,0 +1,6 @@
+---
+source: crates/surrealkit/tests/codegen_render.rs
+expression: report.snippet
+---
+export type Query = [Array<{ [key: string]: unknown }>];
+export type QueryParams = { min: number };

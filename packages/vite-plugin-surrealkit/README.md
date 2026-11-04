@@ -72,6 +72,27 @@ database, so the database options (`targets`, `all`, `syncArgs`,
   `reloadOnGenerate: false` to reload only for held-back updates.
 - With `include: ['build']`, `vite build` generates before bundling and fails
   if generation fails (`failBuildOnError`).
+- Editing a query regenerates its types, like editing a schema file: see
+  below.
+
+### Query sources
+
+In dev, `mode: 'generate'` also watches where your queries live: the host
+files under the configured query source roots (`.ts`, `.tsx`, `.svelte`,
+`.vue`, `.astro` and the like, never `.d.ts` files, hidden directories or
+ignored directories such as `node_modules`), the named `.surql` query files,
+and the SurrealKit config files. A change to a query source runs the same
+`surrealkit compile` as a schema change. A change to a config file re-reads
+the paths, since the query configuration may have moved. The files the
+generation writes are never watched, so an output inside a source root does
+not trigger a loop.
+
+The plugin does not read `surrealkit.toml`. It asks the binary what to watch
+with `surrealkit compile --watch-paths` (same binary, working directory and
+`schemas` as the compile run), which prints the schema, config, query and
+output paths as JSON. If that command fails or prints something the plugin
+does not understand, the plugin logs one warning and watches the schema files
+only. Set `watchQueries: false` to skip the query watch and the command.
 
 ## Options
 
@@ -102,6 +123,8 @@ interface SurrealkitPluginOptions {
   schemaGlobs?: string[];
   /** Directories the generation writes (generate mode); see above. */
   generatedDirs?: string[];
+  /** Also watch query sources in dev (generate mode). Default: true. */
+  watchQueries?: boolean;
   /** Where the plugin runs. Default: `['serve']`. */
   include?: RunMode[];
   /** Sync when the dev server starts or the build begins. Default: true. */

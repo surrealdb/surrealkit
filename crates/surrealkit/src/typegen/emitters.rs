@@ -93,7 +93,7 @@ struct Manifest {
 #[derive(Debug)]
 pub(crate) struct EmitPlan {
 	emitter: String,
-	out: PathBuf,
+	pub(super) out: PathBuf,
 	/// `(path relative to out, bytes)`, sorted by path.
 	files: Vec<(String, Vec<u8>)>,
 	manifest: Vec<u8>,
@@ -380,7 +380,8 @@ pub(crate) fn preflight(plan: &EmitPlan, strict: bool) -> Result<()> {
 
 /// Write `plan`'s files, remove the ones the previous publish wrote that are no longer
 /// produced, then write the manifest.
-pub(crate) fn publish(plan: &EmitPlan, level: log::Level) -> Result<()> {
+/// Returns whether any file in the emitter's directory was written or removed.
+pub(crate) fn publish(plan: &EmitPlan, level: log::Level) -> Result<bool> {
 	let previous = previous(plan)?.unwrap_or_default();
 	let mut written = 0usize;
 	for (path, bytes) in &plan.files {
@@ -403,7 +404,8 @@ pub(crate) fn publish(plan: &EmitPlan, level: log::Level) -> Result<()> {
 			Err(err) => return Err(err).with_context(|| format!("removing {}", path.display())),
 		}
 	}
-	output::write_atomic(&plan.out.join(MANIFEST), &plan.manifest)?;
+	let manifest = output::write_atomic(&plan.out.join(MANIFEST), &plan.manifest)?;
+	let changed = written > 0 || manifest == WriteOutcome::Written;
 	if written == 0 {
 		log::log!(
 			level,
@@ -421,7 +423,7 @@ pub(crate) fn publish(plan: &EmitPlan, level: log::Level) -> Result<()> {
 			plan.files.len()
 		);
 	}
-	Ok(())
+	Ok(changed)
 }
 
 /// Remove the directories between `file` and `root` that are now empty.

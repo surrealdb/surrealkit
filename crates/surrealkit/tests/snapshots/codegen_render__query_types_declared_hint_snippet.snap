@@ -1,0 +1,8 @@
+---
+source: crates/surrealkit/tests/codegen_render.rs
+expression: report.snippet
+---
+import type { DateTime, RecordId } from "surrealdb";
+
+export type Query = [Array<{ [key: string]: unknown }>];
+export type QueryParams = { who: RecordId<"person">; since: DateTime };

@@ -14,7 +14,7 @@ use crate::core::{exec_surql, sha256_hex};
 use crate::module::{Module, Partition};
 use crate::rollout::{
 	ManagedEntityRecord, PartitionWrite, acquire_lock, delete_managed_entities, delete_sync_hashes,
-	load_active_rollout_id, load_managed_entities, release_lock, upsert_managed_entities,
+	finish_locked, load_active_rollout_id, load_managed_entities, upsert_managed_entities,
 	write_partition,
 };
 use crate::schema_state::{
@@ -280,6 +280,7 @@ impl<'a> Sync<'a> {
 	/// Apply the schema to `db`. Idempotent: re-running with unchanged content is a
 	/// no-op.
 	pub async fn run(self, db: &Surreal<Any>) -> Result<()> {
+		crate::core::ensure_supported_server(db).await?;
 		let opts = SyncOpts {
 			watch: false,
 			debounce_ms: 0,
@@ -426,6 +427,7 @@ async fn run_sync_with_files(
 		if opts.dry_run {
 			if !watch_mode {
 				log::info!("DRY RUN: would apply {}", file.path);
+				log_planned_migrations(db, &file.path, &substitute(&file.sql, &file.path)?).await;
 			}
 			synced_paths.insert(file.path.clone());
 			continue;
@@ -437,16 +439,32 @@ async fn run_sync_with_files(
 				for warning in crate::rollout::relevant_warnings(db, prepared.warnings).await {
 					log::warn!("{}: {warning}", file.path);
 				}
-				exec_surql(db, &prepared.sql).await
+				crate::migrate::apply(
+					db,
+					layout.module(),
+					&prepared.sql,
+					&file.path,
+					&crate::migrate::IndexGuard::Sync {
+						entities: &desired_catalog.entities,
+					},
+				)
+				.await
 			}
 			Err(err) => Err(err.context(format!("preparing {} for apply", file.path))),
 		};
 		match applied {
-			Ok(_) => {
+			Ok(applied) => {
 				if !watch_mode {
 					log::info!("applied {}", file.path);
 				}
 				store_sync_hash(db, layout.module(), &file.path, &file.hash).await?;
+				// The indexes a migration removed are back, so the files that
+				// define them need no re-apply.
+				for path in applied.cleared {
+					if let Some(other) = files.iter().find(|f| f.path == path) {
+						store_sync_hash(db, layout.module(), &other.path, &other.hash).await?;
+					}
+				}
 				synced_paths.insert(file.path.clone());
 			}
 			Err(err) => {
@@ -548,26 +566,37 @@ async fn run_sync_with_files(
 	let mut pruned_count = 0usize;
 	if opts.prune && stale_count > 0 {
 		let remove_sql = render_remove_sql(&stale_entities, true)?;
+		let dropping = crate::migrate::fields_whose_values_go(db, &stale_entities).await?;
 		if opts.dry_run {
 			if !watch_mode {
 				log::info!("DRY RUN: would prune {} stale managed entities", remove_sql.len());
 				for stmt in &remove_sql {
 					log::info!("  {}", stmt);
 				}
+				for field in &dropping {
+					log::info!(
+						"  {} deletes stored values (compatibility 4)",
+						describe_field(field)
+					);
+				}
 			}
 		} else if shared {
 			let lock = acquire_lock(db, layout.module(), "global").await?;
 			let result = prune_managed_entities(db, layout.module(), &stale_entities).await;
-			let release = release_lock(db, &lock).await;
-			match (result, release) {
-				(Err(err), _) => return Err(err),
-				(Ok(_), Err(err)) => return Err(err),
-				(Ok(()), Ok(())) => {}
-			}
+			finish_locked(db, &lock, result).await?;
 			pruned_count = stale_count;
 		} else {
 			prune_managed_entities(db, layout.module(), &stale_entities).await?;
 			pruned_count = stale_count;
+		}
+		if !opts.dry_run {
+			for field in &dropping {
+				log::warn!(
+					"removed {}, and with it the values its records held: the database is at \
+					 compatibility level 4",
+					describe_field(field)
+				);
+			}
 		}
 	}
 
@@ -758,6 +787,45 @@ pub(crate) async fn load_sync_hashes(
 		}
 	}
 	Ok(out)
+}
+
+/// `table.field` for a field entity.
+fn describe_field(field: &EntityKey) -> String {
+	format!("field `{}.{}`", field.scope.as_deref().unwrap_or_default(), field.name)
+}
+
+/// Log what applying `sql` would do to the migrations it carries.
+async fn log_planned_migrations(db: &Surreal<Any>, source: &str, sql: &str) {
+	if !sql.contains("MIGRATE") && !sql.contains("migrate") {
+		return;
+	}
+	match crate::migrate::plan(db, sql).await {
+		Ok(planned) => {
+			for item in planned {
+				let migration = &item.migration;
+				if item.ran_before {
+					log::info!(
+						"  migration `{}` on `{}` already ran; only the definition would be applied",
+						migration.name,
+						migration.table
+					);
+				} else {
+					log::info!(
+						"  would run migration `{}` on `{}`",
+						migration.name,
+						migration.table
+					);
+				}
+				for index in &item.indexes {
+					log::info!(
+						"  would remove index `{index}` on `{}` for it, then define it again",
+						migration.table
+					);
+				}
+			}
+		}
+		Err(err) => log::warn!("{source}: cannot tell what its migrations would do: {err:#}"),
+	}
 }
 
 async fn store_sync_hash(db: &Surreal<Any>, module: &Module, path: &str, hash: &str) -> Result<()> {
@@ -998,13 +1066,10 @@ mod tests {
 
 		project.write("DEFINE SEQUENCE OVERWRITE order_no BATCH 1 START 500;\n");
 		project.sync(&db).await.expect("re-sync");
-		// 3.3 drops the node's cached batch, so the rewind is immediate. 3.2 keeps
+		// The node's cached batch is dropped, so the rewind is immediate. 3.2 kept
 		// handing out the cached batch until a restart, which is why #93 only
 		// showed up after one there; the restart case is in the e2e scenarios.
-		let version = db.version().await.expect("server version");
-		if (version.major, version.minor) >= (3, 3) {
-			assert_eq!(next_id(&db).await, 500);
-		}
+		assert_eq!(next_id(&db).await, 500);
 	}
 
 	#[tokio::test]
@@ -1094,6 +1159,7 @@ mod tests {
 			source_path: "schema/s.surql".to_string(),
 			statement_hash: hash.to_string(),
 			file_hash: "f".to_string(),
+			migration: None,
 		};
 		let managed: Vec<ManagedEntityRecord> =
 			[entity("same", "1"), entity("changed", "1"), entity("forced", "1")]

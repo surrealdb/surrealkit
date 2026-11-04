@@ -6,6 +6,7 @@ use std::process::Command;
 
 use surrealkit::codegen::document::TypesDocument;
 use surrealkit::codegen::queries::{QueryEntry, from_types_document};
+use surrealkit::codegen::query_types::{Report, Request, report};
 use surrealkit::codegen::typescript::{DateStyle, HintStyle, RenderOptions, render};
 use surrealkit::typegen::document::TypeDef;
 
@@ -16,6 +17,8 @@ const KIND_TYPES: &str = include_str!("fixtures/codegen/queries_kinds_types.json
 const EMPTY: &str = include_str!("fixtures/codegen/queries_empty.json");
 const BLOG: &str = include_str!("fixtures/codegen/blog.json");
 const OPEN: &str = include_str!("fixtures/codegen/open.json");
+/// Cases of `query_types`: a request and the engine's document for it.
+const QUERY_TYPES: &str = include_str!("fixtures/codegen/query_types.json");
 
 fn entries(text: &str) -> Vec<QueryEntry> {
 	serde_json::from_str(text).expect("fixture entries read")
@@ -86,6 +89,66 @@ fn the_engines_types_document_converts_to_entries() {
 	insta::assert_json_snapshot!("engine_entries", all);
 }
 
+/// The `query_types` cases, each reported against its document.
+fn query_type_reports() -> Vec<(String, Report)> {
+	let cases: Vec<serde_json::Value> = serde_json::from_str(QUERY_TYPES).expect("cases read");
+	cases
+		.into_iter()
+		.map(|case| {
+			let name = case["name"].as_str().expect("case name").to_string();
+			let request: Request =
+				serde_json::from_value(case["request"].clone()).expect("request reads");
+			request.validate().expect("request is valid");
+			let document =
+				TypesDocument::from_json(&case["document"].to_string()).expect("document reads");
+			(name, report(&request, &document, &RenderOptions::default()))
+		})
+		.collect()
+}
+
+#[test]
+fn query_types_reports() {
+	for (name, report) in query_type_reports() {
+		insta::assert_json_snapshot!(format!("query_types_{name}_report"), report);
+		insta::assert_snapshot!(format!("query_types_{name}_snippet"), report.snippet);
+	}
+}
+
+#[test]
+fn query_types_hints_never_override_the_engine() {
+	let reports: std::collections::BTreeMap<_, _> = query_type_reports().into_iter().collect();
+	let params = |name: &str| {
+		reports[name]
+			.params
+			.iter()
+			.map(|p| (p.name.as_str(), p.kind.as_deref(), p.source))
+			.collect::<Vec<_>>()
+	};
+	use surrealkit::codegen::query_types::ParamSource::{Declared, Engine, Example};
+	assert_eq!(
+		params("declared_hint"),
+		[("who", Some("record<person>"), Declared), ("since", Some("datetime"), Engine)]
+	);
+	assert_eq!(params("example_hint")[0], ("who", Some("string"), Example));
+	assert_eq!(params("disagreeing_hint"), [("min", Some("int"), Engine)]);
+	assert_eq!(reports["unused_hint"].notes.len(), 1);
+	assert_eq!(reports["disagreeing_hint"].notes.len(), 1);
+	assert!(reports["projection"].notes.is_empty());
+}
+
+#[test]
+fn query_types_report_omits_what_is_absent() {
+	let reports: std::collections::BTreeMap<_, _> = query_type_reports().into_iter().collect();
+	let json = serde_json::to_value(&reports["untyped"]).expect("serialises");
+	assert!(json.get("notes").is_none() && json.get("findings").is_none(), "{json}");
+	assert!(json["statements"][0].get("kind").is_none(), "{json}");
+	assert_eq!(json["statements"][0]["typescript"], "unknown");
+	assert!(!json.to_string().contains("null"), "{json}");
+	let host = serde_json::to_value(&reports["transaction"]).expect("serialises");
+	assert_eq!(host["params"], serde_json::json!([]));
+	assert_eq!(host["statements"].as_array().expect("statements").len(), 5);
+}
+
 /// Typechecks the goldens with `strict` against the real SDK. Needs `SURREALKIT_TSC` (a `tsc`
 /// binary) and `SURREALKIT_TS_SDK` (the JS SDK package directory, which has `dist/`); skipped
 /// without them.
@@ -108,11 +171,25 @@ fn typecheck_golden_with_tsc() {
 	}
 	write(&root.join("kinds.ts"), &render_kinds());
 	write(&root.join("native.ts"), &render(&entries(QUERIES), &[], &native_unknown()));
+	let mut snippet_files = Vec::new();
+	for (name, report) in query_type_reports() {
+		let file = format!("qt_{name}.ts");
+		write(&root.join(&file), &report.snippet);
+		snippet_files.push(file);
+	}
 	write(&root.join("use.ts"), USE_TS);
+	let files = ["use.ts", "queries.ts", "kinds.ts", "native.ts", "empty.ts"]
+		.map(String::from)
+		.into_iter()
+		.chain(snippet_files)
+		.map(|file| format!("{file:?}"))
+		.collect::<Vec<_>>()
+		.join(", ");
 	write(
 		&root.join("tsconfig.json"),
-		r#"{
-  "compilerOptions": {
+		&format!(
+			r#"{{
+  "compilerOptions": {{
     "strict": true,
     "noEmit": true,
     "target": "es2022",
@@ -120,10 +197,11 @@ fn typecheck_golden_with_tsc() {
     "moduleResolution": "bundler",
     "skipLibCheck": true,
     "types": []
-  },
-  "files": ["use.ts", "queries.ts", "kinds.ts", "native.ts", "empty.ts"]
-}
-"#,
+  }},
+  "files": [{files}]
+}}
+"#
+		),
 	);
 
 	let output = Command::new(&tsc)
@@ -166,6 +244,21 @@ export async function main() {
   });
   const first: { name: string; email: string } = rows[0];
   void first;
+
+  // A known text must be given its parameters' types; it never falls through to the SDK's
+  // untyped overload.
+  // @ts-expect-error a parameter of the wrong type
+  await db.query("SELECT name, email FROM user WHERE name = $name LIMIT $limit", { name: 1 });
+  // @ts-expect-error a required parameter left out
+  await db.query("SELECT name, email FROM user WHERE name = $name LIMIT $limit");
+  // @ts-expect-error a binding for a query that reads no parameter
+  await db.query("SELECT * FROM event", { nope: 1 });
+  // Other text, and text only known at run time, keep the SDK's own types.
+  const [elsewhere] = await db.query<[number[]]>("SELECT * FROM elsewhere", { x: 1 });
+  const counts: number[] = elsewhere;
+  const dynamic: string = "SELECT 1";
+  await db.query(dynamic, { x: 1 });
+  void counts;
 
   const [row] = await db.query("SELECT * FROM ONLY user:alice");
   if (row) {

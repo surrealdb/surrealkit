@@ -1,0 +1,6 @@
+---
+source: crates/surrealkit/tests/codegen_render.rs
+expression: report.snippet
+---
+export type Tally = [undefined, undefined, Array<{ count: number }>, Array<unknown>, undefined];
+export type TallyParams = {};

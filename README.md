@@ -503,6 +503,7 @@ a throwaway embedded in-memory engine, then reads that engine back:
 ```bash
 surrealkit compile                       # writes [typegen] json (schema_version = 2), else database/types/schema.json
 surrealkit compile --check               # CI: fail when the committed outputs are stale
+surrealkit compile --watch               # regenerate on every change, until Ctrl-C
 surrealkit --schema billing compile      # billing and the modules it depends on
 surrealkit compile --allow-experimental surrealism
 ```
@@ -626,6 +627,127 @@ The engine types the queries without running them, which needs SurrealDB 4.1. On
 engine `compile` and `typegen` report the warning `queries-unsupported-engine` and write no
 `queries`.
 
+#### `compile --watch`
+
+`surrealkit compile --watch` (also `generate --watch`) compiles, then regenerates the outputs
+whenever a file a compile reads changes, until Ctrl-C. It writes exactly what `surrealkit compile`
+writes, atomically, and leaves a file whose bytes did not change alone. It does not combine with
+`--check` or `--stdout`, and needs the `watch` cargo feature (on in the default build).
+
+```bash
+surrealkit compile --watch
+```
+
+```
+compile: schema changed (database/schema/person.surql): 7 queries typed, wrote generated/schema.json, src/generated/queries.ts
+compile: queries changed (src/routes/+page.svelte): 1 of 7 re-typed, wrote src/generated/queries.ts
+compile: queries changed (src/a.ts and 2 more): 0 of 7 re-typed, nothing changed on disk
+```
+
+It watches the selected modules' schema directories (`.surql`), `surrealkit.toml`, `.env` and
+`.env.local`, the `[typegen.queries] files` directories (`.surql`), and the `[typegen.queries]
+sources` roots (host code, by the rule `check` and `compile` read it with). It does not watch what a
+run writes: the JSON, the TypeScript files and every emitter's `out` directory, so writing them
+starts nothing.
+
+- A change to a schema file, `surrealkit.toml` or `.env*` reads the configuration again, compiles
+  from a fresh engine and types every query again. A `surrealkit.toml` that no longer parses is
+  reported, the previous one is kept, and the watch goes on.
+- A change to a query file or host code collects the queries again and types only those whose text
+  is new, against the engine of the last schema that compiled. A query that was edited is a new
+  text, so it is typed again; one that was not is not. The result is what a one-shot `compile` of
+  the same files gives.
+- The first compile runs exactly as `compile` does, and when it fails the error is reported and
+  the watch starts anyway, so the file can be fixed. Every later run that fails logs one `error`
+  line with the cause and leaves the previous outputs in place. A query change before any schema
+  has compiled says the schema has to compile first.
+- The exit code is 0 after Ctrl-C, and an error only when the file watcher itself fails.
+
+`surrealkit compile --watch-paths` prints the files a compile reads and writes as one JSON object on
+stdout and exits 0, without compiling and in a build without the `watch` feature. It reads the
+configuration and honours `--schema`, `--all`, `--folder` and `--out`, so a tool that watches the
+project itself (the Vite plugin) asks the same question `--watch` answers:
+
+```json
+{
+  "version": 1,
+  "schema": ["database/schema", "database/modules/auth/schema"],
+  "config": ["surrealkit.toml", ".env", ".env.local"],
+  "queryFiles": ["database/queries"],
+  "querySources": ["src"],
+  "queryExtensions": ["ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx", "svelte", "vue", "astro"],
+  "queryIgnoredDirectories": ["node_modules", "dist", "build", "target", ".svelte-kit", ".next", ".nuxt", ".astro", ".output"],
+  "outputs": ["generated/schema.json", "src/generated/queries.ts", "src/generated/surreal"]
+}
+```
+
+Paths are relative to the current directory and `/`-separated, as configured; each array is present
+and is empty when nothing is configured. `schema` holds directories (watch the `.surql` files in
+them), `config` holds files, `queryFiles` directories of `.surql` files, `querySources` files and
+directories of host code, and `outputs` files and directories that must not start a rebuild. A
+host file counts when its extension is in `queryExtensions`, it is not a `.d.ts` declaration, and
+no directory between the source root and the file is hidden (starts with `.`) or in
+`queryIgnoredDirectories`. `version` changes only when a field changes meaning.
+
+#### Typing one query
+
+`surrealkit types` types a single query on demand, with no query file, no host-code scan and no
+generated module. The query is never executed: the engine types it against a schema, and the
+answer is its TypeScript type.
+
+```bash
+surrealkit types "SELECT name, age FROM person WHERE age > \$min" --name ListPeople
+echo "SELECT * FROM person" | surrealkit types -        # the query from stdin
+surrealkit types --param min=int "RETURN \$min + 1"    # declare a kind the engine cannot infer
+surrealkit types --json "SELECT 1"                      # the whole report
+surrealkit types -t staging "SELECT * FROM person"      # against a live target's schema
+```
+
+Without `--target` it compiles the project's schema on an embedded engine, as `compile` does
+(same module selection, `--var` and `[typegen] experimental`), and reads no connection setting;
+with `--target NAME` it asks that database. By default it prints the TypeScript snippet on stdout
+and any notes on stderr. `[typegen.queries]` `dates` and `hints` apply when configured.
+
+The `query_types` MCP tool does the same: its input is `query`, an optional `name` and `params`
+(by name, `{ "kind": "int" }` to declare a SurrealQL kind or `{ "example": 3 }` to derive one),
+and the usual `schema`, `target`, `folder` and `vars`. Its structured result is the report that
+`--json` prints:
+
+```json
+{
+  "name": "ListPeople",
+  "text": "SELECT name, age FROM person WHERE age > $min",
+  "statements": [
+    {
+      "index": 0,
+      "typescript": "Array<{ age: number; name: string }>",
+      "kind": "array<{ age: int, name: string }>",
+      "certainty": "hint",
+      "exact": false,
+      "support": { "exact": false, "reason": "param" },
+      "open": [],
+      "span": { "column": 1, "end": 45, "end_column": 46, "end_line": 1, "line": 1, "start": 0 }
+    }
+  ],
+  "params": [
+    { "name": "min", "typescript": "number", "kind": "int", "required": true, "source": "engine" }
+  ],
+  "snippet": "export type ListPeople = [Array<{ age: number; name: string }>];\nexport type ListPeopleParams = { min: number };\n"
+}
+```
+
+`statements` has one entry per statement (`BEGIN` and `COMMIT` included), in the order of the
+response; a statement the engine did not type is `unknown` and has no `kind`. `certainty` is
+`fact` when an engine invariant guarantees the kind and `hint` when it is declared but unproven
+(`hints = "unknown"` types a hint as `unknown`). A parameter's `source` says where its type
+came from: the `engine`'s inference, a `declared` kind or an `example`. A hint only fills in a
+parameter the engine left without a kind; where the engine disagrees, it wins and `notes` says
+so, as it does for a hint the query does not use. Optional members are left out, never `null`.
+`name` must be an identifier, and the snippet's types are `<Name>` and `<Name>Params`.
+
+Like the queries section, this needs SurrealDB 4.1 or later; on an older engine the command
+fails with `the engine cannot type queries (SurrealDB 4.1 or later is needed)`.
+
 ### Effect schemas
 
 [`effect-surrealkit`](packages/effect-surrealkit) is the reference emitter: it
@@ -726,7 +848,7 @@ applies:
 | `K9105` | drift: on the target and recorded as managed by SurrealKit, but no longer in the files (removed, not yet synced) | warn |
 | `K9106` | drift: on the target and never managed by SurrealKit (a shared database, or another writer) | warn |
 | `K9107` | drift: the target runs another engine minor than the embedded one, so only normalised facts were compared | hint |
-| `K9201` | host code: an untagged template literal with `${…}` passed to a query method | deny |
+| `K9201` | host code: a value interpolated into a query string (an untagged `${…}`, or `{…}` in a Svelte `q`) | deny |
 | `L7013` | a malformed or reasonless suppression comment (below) | warn |
 
 The `K` family is `9xxx`, and `9xxx` is the only wildcard over it, so per-code keys tune the
@@ -843,8 +965,10 @@ then compared by table name and field path, on the normalised facts a v2 documen
   catalog on the target records it as managed (it was removed from the files and not yet
   synced), and `K9106` when it never was, or when the database was never synced by SurrealKit.
   Something a module outside this run manages is not reported.
-- `K9107`: the target runs another engine minor than the embedded one (4.0), so only normalised
-  facts were compared. Compare against a target on the embedded minor for an exact result.
+- `K9107`: the target runs another SurrealDB 4 minor than the embedded one (4.0), for example a
+  4.1 server, so only normalised facts were compared. Compare against a target on the embedded
+  minor for an exact result. SurrealKit refuses a 3.x server, so a 3.x target never gets this
+  far.
 
 SurrealKit's own metadata (`__entity`, `__rollout`, `__seed`, and whatever `setup.surql`
 defines) is left out on both sides. Provenance, the `INFO` text of a definition and diagnostics
@@ -890,8 +1014,31 @@ sources = ["src"]         # files or directories, relative to the project root
 methods = ["query"]       # the client methods whose first argument is a query (the default)
 ```
 
-The one lint is `K9201`: a template literal with `${…}` passed to a query method splices the value
-into the SurrealQL text. Each `${…}` is a finding, at the substitution. Pass the value as a
+A query is a string or template literal in one of three places:
+
+- the first argument of a call to a method in `methods`, such as `db.query("…")` (default
+  `["query"]`; a bare `query("…")` does not count);
+- the first argument of a call to a function in `functions`, bare or namespaced, such as
+  `createQuery("…")` or `kit.useQuery("…")` (default `["createQuery", "createLive",
+  "useQuery", "useLive"]`);
+- the `attribute` of a component in `components`, such as `<Query q="…">` (default
+  `components = ["Query", "LiveQuery"]`, `attribute = "q"`).
+
+The attribute forms that are read:
+
+| Host | Forms |
+|---|---|
+| TSX, JSX | `q="…"`, `q={"…"}`, ``q={`…`}`` |
+| Svelte | `q="…"`, where each `{…}` is an interpolation, and `q={…}` |
+| Vue | `q="…"`, and `:q="…"` / `v-bind:q="…"` read as JavaScript |
+| Astro | `q="…"`, `q={…}` and ``q=`…` `` |
+
+An attribute's value counts only when it is one string or template literal. HTML character
+references in plain attribute text are decoded.
+
+The one lint is `K9201`: a value interpolated into the query text, a `${…}` in a template literal
+or a `{…}` inside a Svelte attribute's quotes, splices the value into the SurrealQL. Each one is a
+finding, at the substitution. Pass the value as a
 parameter instead (`db.query("… WHERE id = $id", { id })`), or build the query with the SDK's
 `surql` tag, which is a call, not a literal, and is never flagged. A string with no `${…}`, and a
 query built any other way, is not read.
@@ -905,7 +1052,7 @@ db.query(`SELECT * FROM person WHERE id = ${id}`);        // suppressed
 
 Suppressions in host files are `//` line comments, found by the TypeScript grammar (so a `//`
 inside a string is not one, and `/* */` blocks are not read); in a Svelte, Vue or Astro file
-they are the comments of a script block. The summary counts the host files that hold a query and
+they are the comments of a script block, or of a `{…}` expression in a Svelte or Astro template. The summary counts the host files that hold a query and
 the queries (`host_files`, `host_queries`; `host_read` says whether host code was read at all).
 With no `sources`, or a build without `host-queries`, the lint does nothing. `watch` does not
 re-run when host code changes.
@@ -986,12 +1133,20 @@ surrealkit --ns my_ns --db my_db mcp
 
 ### What it exposes
 
-19 tools, one per capability: `project_info`, `setup`, `sync`, `seed`, `apply`,
-`typegen`, `test`, `init`, and the rollout family (`rollout_baseline`,
-`rollout_plan`, `rollout_lint`, `rollout_start`, `rollout_complete`,
-`rollout_rollback`, `rollout_repair`, `rollout_status`, `rollout_up`,
-`rollout_freeze`, `rollout_discard`). `rollout_up` is the deploy path for a
+24 tools, one per capability: `project_info`, `setup`, `sync`, `seed`, `apply`,
+`typegen`, `query_types`, `test`, `init`, `compat_status`, `compat_raise`, `check`,
+`check_query`, and the rollout family (`rollout_baseline`, `rollout_plan`, `rollout_lint`, `rollout_start`,
+`rollout_complete`, `rollout_rollback`, `rollout_repair`, `rollout_status`,
+`rollout_up`, `rollout_freeze`, `rollout_discard`). `rollout_up` is the deploy path for a
 database that is several rollouts behind, as `surrealkit rollout up` is.
+
+`check` is `surrealkit check --json` for the whole project: it reads files, and only with a
+`target` does it connect, to read that database for drift. `check_query` checks one query
+against the project's schema files, under the `[analyze]` policy and the suppressions in the
+query's own comments; it never executes the query or connects, and a `target` only selects the
+modules that target accepts. The query's own findings come with SurrealDB 4.1: until then its
+result says `analyzed: false` and only a malformed suppression comment is found. Both need the
+`analyze` feature, which is on by default.
 
 Resources under `surrealkit://` cover the project config, schema and seed files,
 rollout manifests and test suites, so an agent can read the project without
@@ -1003,8 +1158,8 @@ Prompts cover the workflows that need judgement rather than an API call:
 ### Safety
 
 Tools that can destroy data (`sync` when it would prune, `apply`, `seed --force`,
-`rollout_up`, `rollout_complete`, `rollout_rollback`, `rollout_baseline` and
-`rollout_discard`) refuse to run until they are called again with `confirm: true`.
+`compat_raise`, `rollout_up`, `rollout_complete`, `rollout_rollback`,
+`rollout_baseline` and `rollout_discard`) refuse to run until they are called again with `confirm: true`.
 The refusal names the destination and what would be removed, so the agent has
 something concrete to show you.
 
@@ -1282,8 +1437,8 @@ so a changed definition is applied. Everything else in the statement, comments
 and regex literals included, reaches the server exactly as written.
 
 `DEFINE SEQUENCE` is the exception, because a sequence's definition carries its
-counter: `OVERWRITE` puts it back to `START` (immediately on SurrealDB 3.3, after
-a restart on 3.2), and the ids it hands out next collide with existing records.
+counter: `OVERWRITE` puts it back to `START`, and the ids it hands out next
+collide with existing records.
 A plain `DEFINE SEQUENCE` is applied as `IF NOT EXISTS`, and an explicit
 `IF NOT EXISTS` is kept. A changed definition therefore does not reach a database
 where the sequence exists, and sync says so. An explicit `OVERWRITE` is applied as
@@ -1300,6 +1455,64 @@ A file SurrealKit cannot read (an unterminated string, an unmatched bracket, a
 line and column, before anything is applied or pruned.
 
 `surrealkit sync` is the local/dev reconciliation path. `surrealkit rollout ...` is the shared/prod migration path.
+
+### Migrating existing records
+
+SurrealKit needs SurrealDB 4.0 or later. On 4.0, a field definition can say what
+the records a table already holds become:
+
+```surql
+DEFINE FIELD stock ON product TYPE int
+    MIGRATE EXISTING ROWS AS stock_to_int USING <int> $value FALLBACK 0;
+```
+
+A database a 4.0 datastore creates is at compatibility level 4. There, a
+`SCHEMAFULL` table that holds records refuses a field change they might not fit
+unless the definition has this clause, and sync or `rollout start` reports the
+refusal with the clause to add. Changing a field to a type that accepts every
+value it held, such as `int` to `int | string`, needs no clause.
+
+Keep the clause in the schema file. Each name runs once per table:
+
+- Sync and rollouts check which names each table has run, and apply a statement
+  whose name has run without its clause, so later changes to the field still
+  land.
+- A name reused for a different transform is refused. Give each transform a name
+  of its own.
+- `USING` reads only `$value`, the field's own value, so a rename still needs an
+  `UPDATE` in a rollout `run_sql` step.
+- A field an index reads cannot be migrated while the index exists. SurrealKit
+  removes such indexes, applies the file and defines them again. Define an index
+  after the field it reads.
+- `ALTER TABLE t MIGRATE EXISTING ROWS AS n REMOVE UNDECLARED FIELDS` may sit in a
+  schema file, to clear the fields a table no longer declares.
+
+In a rollout, a migrated field is planned without `--allow-modified`. Its
+rollback is a reverse migration that you write: `rollout plan` adds a
+`revert_migration` step with an empty `using` (and `fallback`), and `rollout
+lint` and `rollout start` refuse the manifest until it is filled in with an
+expression SurrealDB accepts. If the server refuses it when the rollback runs,
+fix the step and run `rollout rollback` again. Delete the step instead to make
+the rollout irreversible. A rollout started again after a rollback runs its
+migration again under a new name, since SurrealDB runs each name once. The complete phase starts with an
+`await_migrations` step, which waits for SurrealDB to finish rewriting and
+checking the migrated tables.
+
+A migration converts each record from the moment it commits, so code still
+reading the old shape sees the new values at once. For a change without
+downtime, add a new field, backfill it, and remove the old one in a later
+rollout.
+
+At level 4, `REMOVE FIELD` on a `SCHEMAFULL` table also clears the values the
+field held. Sync's prune and a rollout's contract phase say so for each field
+they remove.
+
+A database a 3.x datastore created stays at level 3 after the upgrade to 4.0.
+`surrealkit compat status` shows the level and what SurrealDB is doing to each
+table. `surrealkit compat raise --yes --wait` raises the database to level 4,
+waits for SurrealDB to check every `SCHEMAFULL` table, and names the schema file
+and clause to fix for each field whose records do not fit. Raise the level only
+once every node runs 4.0.
 
 ### Recovering a stuck rollout
 

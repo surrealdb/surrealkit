@@ -138,3 +138,73 @@ fn hex(digits: &str) -> Option<u32> {
 	}
 	u32::from_str_radix(digits, 16).ok()
 }
+
+/// Appends the text of `source[range]` with its HTML character references decoded to `text`, and
+/// its span map to `segments`.
+///
+/// This is the value of a JSX attribute string or of a plain markup attribute: no backslash
+/// escapes, only `&quot;`, `&amp;`, `&lt;`, `&gt;`, `&apos;` and numeric references (`&#39;`,
+/// `&#x27;`). Copied runs map byte for byte and each reference is one segment covering the whole
+/// `&…;`. An `&` that does not start one of these stays as it is.
+pub(super) fn decode_entities(
+	source: &str,
+	range: Range<usize>,
+	text: &mut String,
+	segments: &mut Vec<Segment>,
+) {
+	let mut at = range.start;
+	while at < range.end {
+		let rest = &source[at..range.end];
+		if rest.starts_with('&')
+			&& let Some((decoded, consumed)) = reference(rest)
+		{
+			segments.push(Segment {
+				text_start: text.len(),
+				text_len: decoded.len_utf8(),
+				host_start: at,
+				host_len: consumed,
+			});
+			text.push(decoded);
+			at += consumed;
+			continue;
+		}
+		// The run up to the next `&`, always at least the char at `at`.
+		let run =
+			rest.char_indices().skip(1).find(|(_, c)| *c == '&').map_or(rest.len(), |(i, _)| i);
+		segments.push(Segment {
+			text_start: text.len(),
+			text_len: run,
+			host_start: at,
+			host_len: run,
+		});
+		text.push_str(&rest[..run]);
+		at += run;
+	}
+}
+
+/// The char of the character reference at the start of `rest` (which begins with `&`) and the
+/// number of bytes it spans, `None` when it is not one of the supported references.
+fn reference(rest: &str) -> Option<(char, usize)> {
+	// The longest supported reference is `&#x10FFFF;`.
+	let end = rest.bytes().take(12).position(|byte| byte == b';')?;
+	let body = &rest[1..end];
+	let decoded = match body {
+		"quot" => '"',
+		"amp" => '&',
+		"lt" => '<',
+		"gt" => '>',
+		"apos" => '\'',
+		_ => {
+			let digits = body.strip_prefix('#')?;
+			let value = match digits.strip_prefix(['x', 'X']) {
+				Some(hex_digits) => hex(hex_digits)?,
+				None if !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit()) => {
+					digits.parse().ok()?
+				}
+				None => return None,
+			};
+			char::from_u32(value).filter(|decoded| *decoded != '\0')?
+		}
+	};
+	Some((decoded, end + 1))
+}

@@ -12,16 +12,10 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use clap::ValueEnum;
 use notify::{EventKind, RecursiveMode, Watcher};
-use surrealkit::check::discover::{Ignore, discover};
-use surrealkit::check::drift::{ConfigFile, DriftIgnore, Env, check_targets};
-use surrealkit::check::engine::SchemaApply;
-use surrealkit::check::host;
-use surrealkit::check::policy::Policy;
-use surrealkit::check::{ExtraFile, Extras, Report, render, run_with};
-use surrealkit::module::Module;
+use surrealkit::check::discover::Ignore;
+use surrealkit::check::{Prepared, Report, render};
 use surrealkit::project::{ProjectConfig, Target};
-use surrealkit::selection::select_modules;
-use surrealkit::variables::{QueriesConfig, TemplateVars, build_project_vars, load_typegen_config};
+use surrealkit::variables::{TemplateVars, build_project_vars, load_typegen_config};
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::output;
@@ -73,108 +67,22 @@ pub struct Opts {
 }
 
 /// What a run reads from `surrealkit.toml`, loaded again when the file changes.
-struct Loaded {
-	project: ProjectConfig,
-	modules: Vec<Module>,
-	policy: Policy,
-	ignore: Ignore,
-	drift_ignore: DriftIgnore,
-	experimental: Vec<String>,
-	/// `[typegen] engine`.
-	engine: Option<String>,
-	/// `[typegen.queries]`: where host code is, when it is set.
-	queries: Option<QueriesConfig>,
-	vars: TemplateVars,
-}
-
-fn load(opts: &Opts) -> Result<Loaded> {
+fn load(opts: &Opts) -> Result<Prepared> {
 	let project = ProjectConfig::load(None)?;
-	let modules = select_modules(&project, &opts.schemas, opts.all, opts.no_deps)?;
-	let policy = Policy::from_config(&project.analyze)?;
-	let ignore = Ignore::from_config(&project.analyze)?;
-	let drift_ignore = DriftIgnore::from_config(&project.analyze)?;
 	// The same capabilities `compile` runs the engine with. Template variables come from the
 	// config file and `--var` only, never from `SURREALKIT_VAR_*`.
 	let typegen = load_typegen_config(None)?;
-	let queries = typegen.queries_config()?;
 	let vars = TemplateVars {
 		vars: build_project_vars(&opts.vars, None)?,
 	};
-	Ok(Loaded {
-		project,
-		modules,
-		policy,
-		ignore,
-		drift_ignore,
-		experimental: typegen.experimental,
-		engine: typegen.engine,
-		queries,
-		vars,
-	})
+	Prepared::new(project, &typegen, &opts.schemas, opts.all, opts.no_deps, vars)
 }
 
-/// One check of the project at `root`, with a fresh engine: discover the sources, run them
-/// through the schema backend, read the host code `[typegen.queries]` names, compare the files
-/// with each target in `opts`, and return the report. The one function `watch` calls for every change, which has no target.
-async fn run_once(loaded: &Loaded, opts: &Opts, root: &Path) -> Result<Report> {
-	let sources =
-		discover(&loaded.project, &opts.folder, root, &loaded.modules, &loaded.project.analyze)?;
-	if sources.schema.is_empty() && sources.queries.is_empty() {
-		let dirs: Vec<String> = sources
-			.schema_dirs
-			.iter()
-			.map(|dir| dir.strip_prefix(&sources.root).unwrap_or(dir).display().to_string())
-			.collect();
-		log::warn!(
-			"no SurrealQL sources found under {} (schema dirs: {}); check --folder, --schema and \
-			 [analyze] ignore",
-			sources.root.display(),
-			dirs.join(", ")
-		);
-	}
-	let mut extras = Extras::default();
-	if let Some(queries) = loaded.queries.as_ref().filter(|queries| !queries.sources.is_empty()) {
-		let linted = host::lint(root, queries)?;
-		extras.files.extend(linted.files);
-		extras.findings.extend(linted.findings);
-		extras.host = Some(linted.counts);
-	}
-	if !opts.targets.is_empty() {
-		let config = config_file(root)?;
-		let env = Env {
-			project: &loaded.project,
-			root,
-			folder: &opts.folder,
-			vars: &loaded.vars,
-			experimental: &loaded.experimental,
-			engine: loaded.engine.as_deref(),
-			ignore: &loaded.drift_ignore,
-		};
-		extras.targets = check_targets(&sources, &opts.targets, &config, &env).await?;
-		extras.files.push(ExtraFile {
-			path: config.path,
-			text: config.text,
-			comments: None,
-		});
-	}
-	let mut engine = SchemaApply::new(&loaded.experimental).await?;
-	run_with(&mut engine, &sources, &loaded.policy, &loaded.vars, extras).await
-}
-
-/// `surrealkit.toml`, where the targets are declared: found from `root` upwards, as the rest of
-/// SurrealKit finds it.
-fn config_file(root: &Path) -> Result<ConfigFile> {
-	let Some(path) = ProjectConfig::discover(root) else {
-		bail!(
-			"`--target` needs a surrealkit.toml: targets are declared there as `[target.<name>]`"
-		);
-	};
-	let text =
-		std::fs::read_to_string(&path).with_context(|| format!("reading {}", path.display()))?;
-	Ok(ConfigFile {
-		path,
-		text,
-	})
+/// One check of the project at `root`, with a fresh engine: the library's check of the whole
+/// project, with the targets in `opts` compared with the files. The one function `watch` calls
+/// for every change, which has no target.
+async fn run_once(loaded: &Prepared, opts: &Opts, root: &Path) -> Result<Report> {
+	loaded.run(root, &opts.folder, &opts.targets).await
 }
 
 /// Colour on stderr: when it is a terminal and `NO_COLOR` is unset or empty.
@@ -241,7 +149,7 @@ pub async fn watch(opts: &Opts) -> Result<i32> {
 
 	let ctrl_c = tokio::signal::ctrl_c();
 	tokio::pin!(ctrl_c);
-	let mut loaded: Option<Loaded> = None;
+	let mut loaded: Option<Prepared> = None;
 	let mut reason = String::from("start");
 	let mut number = 0;
 	loop {

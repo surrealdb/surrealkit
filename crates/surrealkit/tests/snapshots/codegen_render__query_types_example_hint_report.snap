@@ -1,0 +1,46 @@
+---
+source: crates/surrealkit/tests/codegen_render.rs
+expression: report
+---
+{
+  "name": "ByExample",
+  "text": "SELECT * FROM person WHERE id = $who AND created > $since",
+  "statements": [
+    {
+      "index": 0,
+      "typescript": "Array<{ [key: string]: unknown }>",
+      "kind": "array<object>",
+      "certainty": "fact",
+      "exact": false,
+      "support": {
+        "exact": false
+      },
+      "open": [],
+      "span": {
+        "column": 1,
+        "end": 10,
+        "end_column": 11,
+        "end_line": 1,
+        "line": 1,
+        "start": 0
+      }
+    }
+  ],
+  "params": [
+    {
+      "name": "who",
+      "typescript": "string",
+      "kind": "string",
+      "required": true,
+      "source": "example"
+    },
+    {
+      "name": "since",
+      "typescript": "DateTime",
+      "kind": "datetime",
+      "required": true,
+      "source": "engine"
+    }
+  ],
+  "snippet": "import type { DateTime } from \"surrealdb\";\n\nexport type ByExample = [Array<{ [key: string]: unknown }>];\nexport type ByExampleParams = { who: string; since: DateTime };\n"
+}
