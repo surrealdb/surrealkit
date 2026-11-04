@@ -78,6 +78,13 @@ export interface QueryCacheOptions {
 	 * Default 5 minutes. `Infinity` keeps it until {@link QueryCache.clear}.
 	 */
 	gcTime?: number;
+	/**
+	 * Apply the notifications of a live query with a `WHERE` by record id,
+	 * instead of re-running its SELECT on every change to its target. Set it
+	 * only when the engine notifies a record that an update moves out of the
+	 * filter (SurrealDB 3.3 does not), or when no update ever does.
+	 */
+	trustWhere?: boolean;
 }
 
 /** What the cache holds, for tests and debugging. */
@@ -128,6 +135,7 @@ const PENDING_QUERY: QueryState<unknown> = {
 export class QueryCache {
 	readonly #db: SurrealLike;
 	readonly #gcTime: number;
+	readonly #trustWhere: boolean;
 	readonly #entries = new Map<string, Entry>();
 	readonly #offConnected: (() => void) | undefined;
 	#live = 0;
@@ -135,6 +143,7 @@ export class QueryCache {
 	constructor(db: SurrealLike, options: QueryCacheOptions = {}) {
 		this.#db = db;
 		this.#gcTime = options.gcTime ?? DEFAULT_GC_TIME;
+		this.#trustWhere = options.trustWhere ?? false;
 		this.#offConnected = db.subscribe?.('connected', () =>
 			this.#reconnected(),
 		);
@@ -270,7 +279,10 @@ export class QueryCache {
 				kind,
 				text,
 				params: clean,
-				plan: kind === 'live' ? planLive(text) : undefined,
+				plan:
+					kind === 'live'
+						? planLive(text, { trustWhere: this.#trustWhere })
+						: undefined,
 				state: pendingState(kind),
 				listeners: new Set(),
 				refs: 0,

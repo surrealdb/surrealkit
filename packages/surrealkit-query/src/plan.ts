@@ -7,13 +7,21 @@
  * and several targets are refused (the engine's E4009). So a SELECT is made
  * live in one of two ways:
  *
- * - **keyed**: the SELECT has only clauses `LIVE SELECT` accepts. It runs as
- *   `LIVE <text>`, and each notification is applied to the rows by record id.
- * - **window**: the SELECT has a clause `LIVE SELECT` refuses, or uses
- *   `VALUE`. A `LIVE SELECT * FROM <target> [WHERE …]` watches the same
- *   records, and each notification re-runs the SELECT itself, so the window
- *   (its order, offset, limit and grouping) is always the one the engine
+ * - **keyed**: the SELECT has only a projection, a target and `FETCH`. It
+ *   runs as `LIVE <text>`, and each notification is applied to the rows by
+ *   record id.
+ * - **window**: the SELECT has a clause `LIVE SELECT` refuses, uses `VALUE`,
+ *   or has a `WHERE`. A `LIVE SELECT * FROM <target>` watches the target, and
+ *   each notification re-runs the SELECT itself, so the rows (their filter,
+ *   order, offset, limit and grouping) are always the ones the engine
  *   computes.
+ *
+ * `WHERE` is windowed because the engine does not notify a record that an
+ * update moves out of a live query's `WHERE` (SurrealDB 3.3), so applying
+ * notifications would keep that record. With `trustWhere`, a SELECT whose
+ * only other clause is `WHERE` is keyed and runs as `LIVE <text>`: use it
+ * with an engine that notifies such records, or when updates never move a
+ * record out of the filter.
  *
  * A text that is not exactly one SELECT with one target, or that selects
  * `FROM ONLY`, cannot be live at all.
@@ -113,8 +121,13 @@ export function topLevelTokens(text: string): Token[] {
 	return tokens;
 }
 
+export interface PlanOptions {
+	/** Apply notifications of a `LIVE … WHERE` directly; see {@link planLive}. */
+	readonly trustWhere?: boolean;
+}
+
 /** Plans `text` as a live query. */
-export function planLive(text: string): LivePlan {
+export function planLive(text: string, options: PlanOptions = {}): LivePlan {
 	const snapshot = text.trim().replace(/;\s*$/, '').trimEnd();
 	const tokens = topLevelTokens(snapshot);
 	if (tokens[0]?.value !== 'SELECT') {
@@ -149,7 +162,10 @@ export function planLive(text: string): LivePlan {
 	const clauses = firstClause < 0 ? [] : rest.slice(firstClause);
 	for (const [index, token] of clauses.entries()) {
 		if (!CLAUSES.has(token.value)) continue;
-		if (!LIVE_CLAUSES.has(token.value)) windowed.add(token.value);
+		const live =
+			LIVE_CLAUSES.has(token.value) &&
+			(token.value !== 'WHERE' || options.trustWhere === true);
+		if (!live) windowed.add(token.value);
 		if (token.value === 'WHERE') {
 			const end = clauses
 				.slice(index + 1)
@@ -170,7 +186,7 @@ export function planLive(text: string): LivePlan {
 	}
 	return {
 		mode: 'window',
-		liveText: `LIVE SELECT * FROM ${target}${where ? ` WHERE ${where}` : ''}`,
+		liveText: `LIVE SELECT * FROM ${target}${where && options.trustWhere ? ` WHERE ${where}` : ''}`,
 		snapshot,
 		windowed: [...windowed],
 	};
