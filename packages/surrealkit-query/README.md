@@ -72,6 +72,8 @@ A keyed query whose rows have no `id` (for example `SELECT name FROM user`) also
 
 `WHERE` is in window mode because the engine does not notify a record that an update moves out of the filter (SurrealDB 3.3). If you apply notifications directly, that record stays in the rows. Set `trustWhere: true` on the cache to apply `WHERE` notifications by id when your engine sends them, or when no update moves a record out of the filter.
 
+Both modes watch only the records of the target. A change to any other record does not update the rows, even when the query reads it. This includes a record that `FETCH` joins, a record that a graph traversal (`->knows->person`) reaches, and a record that a subquery reads. A notification for the target's own record does carry the current fetched values.
+
 These queries cannot be live, and go to the error state with the code `unsupported`:
 
 - More than one statement.
