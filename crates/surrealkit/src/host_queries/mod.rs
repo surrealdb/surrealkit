@@ -36,11 +36,11 @@ pub const HOST_PARAM_PREFIX: &str = "__host";
 pub const DEFAULT_METHODS: &[&str] = &["query"];
 
 /// Extensions [`scan`] reads.
-const SOURCE_EXTENSIONS: &[&str] =
+pub const SOURCE_EXTENSIONS: &[&str] =
 	&["ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx", "svelte", "vue", "astro"];
 
 /// Directories [`scan`] never descends into, besides hidden ones.
-const SKIPPED_DIRECTORIES: &[&str] = &[
+pub const SKIPPED_DIRECTORIES: &[&str] = &[
 	"node_modules",
 	"dist",
 	"build",
@@ -276,7 +276,12 @@ pub fn scan(roots: &[PathBuf], methods: &[&str]) -> Result<Vec<FoundQuery>> {
 					continue;
 				}
 			};
-			if entry.file_type().is_file() && is_source_file(entry.path()) {
+			// A root that is itself a file is judged by its own name.
+			let relative = match entry.depth() {
+				0 => Path::new(entry.file_name()),
+				_ => entry.path().strip_prefix(root).unwrap_or(entry.path()),
+			};
+			if entry.file_type().is_file() && is_source(relative) {
 				files.insert(entry.into_path());
 			}
 		}
@@ -310,16 +315,33 @@ fn is_skipped_directory(entry: &walkdir::DirEntry) -> bool {
 	if !entry.file_type().is_dir() {
 		return false;
 	}
-	let name = entry.file_name().to_string_lossy();
-	name.starts_with('.') || SKIPPED_DIRECTORIES.contains(&name.as_ref())
+	is_skipped_name(&entry.file_name().to_string_lossy())
 }
 
-fn is_source_file(path: &Path) -> bool {
+/// Whether a directory of this name is one [`scan`] never descends into: hidden, or one of
+/// [`SKIPPED_DIRECTORIES`].
+fn is_skipped_name(name: &str) -> bool {
+	name.starts_with('.') || SKIPPED_DIRECTORIES.contains(&name)
+}
+
+/// Whether [`scan`] reads the file at `path`, which is relative to the root being scanned: a
+/// [`SOURCE_EXTENSIONS`] file that is not a `.d.ts` declaration, with no directory between the
+/// root and the file that is hidden or one of [`SKIPPED_DIRECTORIES`]. A path given relative to
+/// another directory is judged by every directory it names, so pass it relative to the root.
+pub fn is_source(path: &Path) -> bool {
 	let is_declaration = path
 		.file_name()
 		.and_then(OsStr::to_str)
 		.is_some_and(|name| name.to_ascii_lowercase().ends_with(".d.ts"));
-	!is_declaration && SOURCE_EXTENSIONS.contains(&extension_of(path).as_str())
+	let in_skipped_directory = path.parent().is_some_and(|parent| {
+		parent.components().any(|component| match component {
+			std::path::Component::Normal(name) => is_skipped_name(&name.to_string_lossy()),
+			_ => false,
+		})
+	});
+	!is_declaration
+		&& !in_skipped_directory
+		&& SOURCE_EXTENSIONS.contains(&extension_of(path).as_str())
 }
 
 /// The lowercased extension of `path`, empty when there is none.
