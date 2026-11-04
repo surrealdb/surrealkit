@@ -176,6 +176,9 @@ export class QueryCache {
 	 * observer of the payload's text and parameters render its data at once;
 	 * a live observer still opens its live query and re-reads the snapshot
 	 * when it starts, so nothing that changed in between is missed.
+	 *
+	 * Hydrate in the browser only. A server's cache is shared by every
+	 * request, so seeding it would show one request's rows to another.
 	 */
 	hydrate(payload: Preloaded): void {
 		const params = payload.params
@@ -187,7 +190,10 @@ export class QueryCache {
 			if (entry.state.status === 'success') continue;
 			const data = kind === 'live' ? result[0] : unwrap(result);
 			if (kind === 'live' && !Array.isArray(data)) continue;
-			this.#set(entry, { status: 'success', data, error: undefined });
+			// Observers hear of the seed on a microtask, so hydrating from inside
+			// a framework's derivation never writes state during it.
+			entry.state = { status: 'success', data, error: undefined };
+			queueMicrotask(() => this.#set(entry, entry.state));
 			entry.seeded = kind === 'query' && !entry.running;
 			if (entry.refs === 0) this.#scheduleGc(entry);
 		}

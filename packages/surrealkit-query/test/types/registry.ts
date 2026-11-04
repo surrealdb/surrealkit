@@ -47,8 +47,13 @@ expectType<
 expectType<
 	Equal<ParamsArg<ByName>, [params: { name: string; limit?: number }]>
 >(true);
-// biome-ignore lint/complexity/noBannedTypes: the generated module writes `params: {}`.
-expectType<Equal<ParamsArg<'SELECT kind FROM event'>, [params?: {}]>>(true);
+// A query with no parameters takes none.
+expectType<
+	Equal<ParamsArg<'SELECT kind FROM event'>, [params?: Record<string, never>]>
+>(true);
+// @ts-expect-error a stray parameter
+const stray: ParamsOf<'SELECT kind FROM event'> = { stray: 1 };
+void stray;
 const posts: ParamsOf<Posts> = {
 	published: true,
 	author: undefined,

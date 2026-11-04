@@ -64,9 +64,15 @@ export type ResultOf<Q extends string> = Q extends KnownQuery
 	? RegisteredQueries[Q]['result']
 	: unknown[];
 
-/** The parameters of `Q`; any bindings for unregistered text. */
+/**
+ * The parameters of `Q`; any bindings for unregistered text. A query with no
+ * parameters takes none: `Record<string, never>`, so a stray one is an error
+ * (the registry's `{}` would accept anything).
+ */
 export type ParamsOf<Q extends string> = Q extends KnownQuery
-	? RegisteredQueries[Q]['params']
+	? keyof RegisteredQueries[Q]['params'] extends never
+		? Record<string, never>
+		: RegisteredQueries[Q]['params']
 	: Record<string, unknown>;
 
 /** Whether `Q` can be called without parameters. */
@@ -159,7 +165,7 @@ export interface Preloaded<Q extends string = string> {
  * `Q` has a required parameter.
  */
 export type ParamsProp<Q extends string> = {
-	params?: ParamsOf<Q>;
+	params?: ParamsOf<Q> | undefined;
 } & (ParamsOptional<Q> extends true
 	? Record<never, never>
 	: { params: ParamsOf<Q> });
