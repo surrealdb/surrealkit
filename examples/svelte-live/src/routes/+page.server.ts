@@ -4,7 +4,7 @@ import { connect } from '$lib/db';
 
 import type { PageServerLoad } from './$types';
 
-export const PAGE_SIZE = 5;
+const PAGE_SIZE = 5;
 
 // The first page renders on the server. The page component subscribes to
 // exactly this query from the payload, so the text is written once.
