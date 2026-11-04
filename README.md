@@ -689,6 +689,65 @@ host file counts when its extension is in `queryExtensions`, it is not a `.d.ts`
 no directory between the source root and the file is hidden (starts with `.`) or in
 `queryIgnoredDirectories`. `version` changes only when a field changes meaning.
 
+#### Typing one query
+
+`surrealkit types` types a single query on demand, with no query file, no host-code scan and no
+generated module. The query is never executed: the engine types it against a schema, and the
+answer is its TypeScript type.
+
+```bash
+surrealkit types "SELECT name, age FROM person WHERE age > \$min" --name ListPeople
+echo "SELECT * FROM person" | surrealkit types -        # the query from stdin
+surrealkit types --param min=int "RETURN \$min + 1"    # declare a kind the engine cannot infer
+surrealkit types --json "SELECT 1"                      # the whole report
+surrealkit types -t staging "SELECT * FROM person"      # against a live target's schema
+```
+
+Without `--target` it compiles the project's schema on an embedded engine, as `compile` does
+(same module selection, `--var` and `[typegen] experimental`), and reads no connection setting;
+with `--target NAME` it asks that database. By default it prints the TypeScript snippet on stdout
+and any notes on stderr. `[typegen.queries]` `dates` and `hints` apply when configured.
+
+The `query_types` MCP tool does the same: its input is `query`, an optional `name` and `params`
+(by name, `{ "kind": "int" }` to declare a SurrealQL kind or `{ "example": 3 }` to derive one),
+and the usual `schema`, `target`, `folder` and `vars`. Its structured result is the report that
+`--json` prints:
+
+```json
+{
+  "name": "ListPeople",
+  "text": "SELECT name, age FROM person WHERE age > $min",
+  "statements": [
+    {
+      "index": 0,
+      "typescript": "Array<{ age: number; name: string }>",
+      "kind": "array<{ age: int, name: string }>",
+      "certainty": "hint",
+      "exact": false,
+      "support": { "exact": false, "reason": "param" },
+      "open": [],
+      "span": { "column": 1, "end": 45, "end_column": 46, "end_line": 1, "line": 1, "start": 0 }
+    }
+  ],
+  "params": [
+    { "name": "min", "typescript": "number", "kind": "int", "required": true, "source": "engine" }
+  ],
+  "snippet": "export type ListPeople = [Array<{ age: number; name: string }>];\nexport type ListPeopleParams = { min: number };\n"
+}
+```
+
+`statements` has one entry per statement (`BEGIN` and `COMMIT` included), in the order of the
+response; a statement the engine did not type is `unknown` and has no `kind`. `certainty` is
+`fact` when an engine invariant guarantees the kind and `hint` when it is declared but unproven
+(`hints = "unknown"` types a hint as `unknown`). A parameter's `source` says where its type
+came from: the `engine`'s inference, a `declared` kind or an `example`. A hint only fills in a
+parameter the engine left without a kind; where the engine disagrees, it wins and `notes` says
+so, as it does for a hint the query does not use. Optional members are left out, never `null`.
+`name` must be an identifier, and the snippet's types are `<Name>` and `<Name>Params`.
+
+Like the queries section, this needs SurrealDB 4.1 or later; on an older engine the command
+fails with `the engine cannot type queries (SurrealDB 4.1 or later is needed)`.
+
 ### Effect schemas
 
 [`effect-surrealkit`](packages/effect-surrealkit) is the reference emitter: it
@@ -1049,8 +1108,8 @@ surrealkit --ns my_ns --db my_db mcp
 
 ### What it exposes
 
-19 tools, one per capability: `project_info`, `setup`, `sync`, `seed`, `apply`,
-`typegen`, `test`, `init`, and the rollout family (`rollout_baseline`,
+20 tools, one per capability: `project_info`, `setup`, `sync`, `seed`, `apply`,
+`typegen`, `query_types`, `test`, `init`, and the rollout family (`rollout_baseline`,
 `rollout_plan`, `rollout_lint`, `rollout_start`, `rollout_complete`,
 `rollout_rollback`, `rollout_repair`, `rollout_status`, `rollout_up`,
 `rollout_freeze`, `rollout_discard`). `rollout_up` is the deploy path for a

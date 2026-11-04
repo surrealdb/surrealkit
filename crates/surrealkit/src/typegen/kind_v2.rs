@@ -118,7 +118,6 @@ fn sized(number: SizedNumber) -> Kind {
 
 /// Parse `text` as a kind in a top-level position, or `None` when any part of it could not be
 /// parsed.
-#[cfg(test)]
 pub(crate) fn parse_top_exact(text: &str) -> Option<(Kind, bool)> {
 	let parsed = parse_top(text);
 	parsed.problems.is_empty().then_some((parsed.kind, parsed.optional))

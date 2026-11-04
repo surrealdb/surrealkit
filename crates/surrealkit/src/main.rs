@@ -367,6 +367,26 @@ enum Commands {
 		#[arg(long, value_name = "SCHEMA_JSON")]
 		from: Option<PathBuf>,
 	},
+	/// Type one SurrealQL query without running it, and print its TypeScript.
+	///
+	/// The query is the argument, or stdin when the argument is `-` or absent. The engine
+	/// types it against the project's schema compiled on an embedded engine (reading no
+	/// connection settings), or against the database `--target` names. Prints the TypeScript
+	/// snippet; `--json` prints the full report. Nothing is executed. Needs SurrealDB 4.1 or
+	/// later.
+	Types {
+		/// The query, or `-` for stdin.
+		#[arg(value_name = "QUERY")]
+		query: Option<String>,
+		/// A name for the query: an identifier the TypeScript types are named after
+		/// (default: `Query`).
+		#[arg(long, value_name = "NAME")]
+		name: Option<String>,
+		/// Declare a parameter's kind, for one the engine cannot infer (repeatable):
+		/// --param min=int
+		#[arg(long = "param", value_name = "NAME=KIND")]
+		param: Vec<String>,
+	},
 	/// Compile the schema modules to schema document v2 without a database.
 	///
 	/// Applies the selected modules, in dependency order, to a throwaway embedded
@@ -596,6 +616,55 @@ fn reject_json_watch(args: &Cli, what: &str) -> Result<()> {
 	Ok(())
 }
 
+/// The request `types` makes from its arguments. The query is `query`, or stdin when that is
+/// `-` or absent (and stdin is not a terminal).
+fn types_request(
+	query: Option<&str>,
+	name: Option<&str>,
+	params: &[String],
+) -> Result<surrealkit::codegen::query_types::Request> {
+	use std::io::{IsTerminal, Read};
+
+	let text = match query {
+		Some(text) if text != "-" => text.to_string(),
+		_ => {
+			if query.is_none() && std::io::stdin().is_terminal() {
+				bail!("no query given: pass it as an argument, or pipe it in with `-`");
+			}
+			let mut text = String::new();
+			std::io::stdin().read_to_string(&mut text).context("reading the query from stdin")?;
+			text
+		}
+	};
+	let mut request = surrealkit::codegen::query_types::Request::new(text);
+	request.name = name.map(str::to_string);
+	for flag in params {
+		let (param, hint) = surrealkit::codegen::query_types::parse_param_flag(flag)?;
+		request.params.insert(param, hint);
+	}
+	Ok(request)
+}
+
+/// How `types` renders: `[typegen.queries]`' `dates` and `hints` when it is configured.
+fn types_render_options(
+	typegen: &surrealkit::variables::TypegenConfig,
+) -> Result<surrealkit::codegen::typescript::RenderOptions> {
+	Ok(typegen.queries_config()?.map(|config| config.render_options()).unwrap_or_default())
+}
+
+/// What `types` prints: the report as JSON, or the snippet alone on stdout with the notes on
+/// stderr.
+fn print_types(report: &surrealkit::codegen::query_types::Report, json: bool) {
+	if json {
+		println!("{}", output::pretty(report));
+		return;
+	}
+	print!("{}", report.snippet);
+	for note in &report.notes {
+		eprintln!("note: {note}");
+	}
+}
+
 /// The commands that read only files: `compile`, `typegen --from`, `check` and `watch`. They
 /// run before anything reads connection settings, so no `SURREALDB_*` variable or `.env` file
 /// can reach them. Returns the exit code of the command it ran, or `None` for every other
@@ -647,6 +716,37 @@ async fn run_offline(args: &Cli) -> Result<Option<i32>> {
 				&plan.outputs,
 			)
 			.await?;
+			Ok(Some(0))
+		}
+		// With `--target` it reads a database, and `run` takes it.
+		Commands::Types {
+			query,
+			name,
+			param,
+		} if args.target.is_empty() => {
+			warn_unused_connection_flags("types", args);
+			let request = types_request(query.as_deref(), name.as_deref(), param)?;
+			let compile_args = surrealkit::compile_cmd::CompileArgs {
+				folder: folder.clone(),
+				schemas: args.schema.clone(),
+				all: args.all,
+				no_deps: args.no_deps,
+				vars: args.var.iter().map(|s| parse_var_flag(s)).collect::<Result<_>>()?,
+				..Default::default()
+			};
+			// Nothing is written, so no output setting may refuse the command.
+			let plan = Plan::load(&compile_args, true, false)?;
+			let opts = types_render_options(&plan.typegen)?;
+			let report = surrealkit::codegen::query_types::types(
+				&request,
+				surrealkit::codegen::query_types::Source::Project {
+					plan: &plan,
+					folder: &folder,
+				},
+				&opts,
+			)
+			.await?;
+			print_types(&report, args.json);
 			Ok(Some(0))
 		}
 		Commands::Typegen {
@@ -1426,6 +1526,24 @@ async fn run(args: Cli) -> Result<i32> {
 		}
 		#[cfg(feature = "mcp")]
 		Commands::Mcp => unreachable!("dispatched before logging is installed"),
+		Commands::Types {
+			query,
+			name,
+			param,
+		} => {
+			let request = types_request(query.as_deref(), name.as_deref(), &param)?;
+			let typegen_cfg = surrealkit::variables::load_typegen_config(None)?;
+			let opts = types_render_options(&typegen_cfg)?;
+			let target = selection.typegen_target(schema_selection_used)?;
+			let db = connect(target.cfg()).await?;
+			let report = surrealkit::codegen::query_types::types(
+				&request,
+				surrealkit::codegen::query_types::Source::Live(&db),
+				&opts,
+			)
+			.await?;
+			print_types(&report, json);
+		}
 		Commands::Typegen {
 			out,
 			stdout,

@@ -782,5 +782,8 @@ receives the document it received before. `surrealkit generate` is another name 
 change, and types only the queries whose text changed; `compile --watch-paths` prints the files
 it reads and writes as JSON, for tools that watch the project themselves.
 
+`surrealkit types` and the `query_types` MCP tool type one query on demand, without running it, and
+return its TypeScript type; they need SurrealDB 4.1 as well.
+
 For library users: `TypegenOpts` and `CompileOpts` gain a `queries` field (`None` keeps the
 current behaviour), `SchemaDocument` gains `queries`, and `Diagnostic` gains `query`.

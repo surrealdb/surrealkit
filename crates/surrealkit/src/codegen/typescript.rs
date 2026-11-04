@@ -431,7 +431,7 @@ impl Emitter<'_> {
 	fn result_tuple(&mut self, statements: &[QueryStatement]) -> String {
 		let slots: Vec<String> =
 			statements.iter().map(|statement| self.statement(statement)).collect();
-		format!("[{}]", slots.join(", "))
+		tuple_text(&slots)
 	}
 
 	/// A statement's slot. One the engine did not type is `unknown`.
@@ -456,14 +456,20 @@ impl Emitter<'_> {
 	/// absent. Folding a parameter's `option<T>` into the key as well would let callers omit a key
 	/// the query requires, so an optional kind stays `T | undefined`.
 	fn query_params(&mut self, params: &[QueryParameter]) -> String {
-		let mut parts = Vec::new();
+		params_text(&self.param_types(params))
+	}
+
+	/// The parameters a caller binds, in order: those the host-language template fills are
+	/// left out.
+	fn param_types(&mut self, params: &[QueryParameter]) -> Vec<ParamRender> {
+		let mut out = Vec::new();
 		for param in params {
 			if param.name.starts_with(HOST_PARAM_PREFIX) {
 				continue;
 			}
 			// A parameter's kind is inferred from how the query uses it, so it is always a hint.
 			let trusted = param.kind.as_ref().filter(|_| self.opts.hints == HintStyle::Trust);
-			let text = match trusted {
+			let typescript = match trusted {
 				Some(kind) => {
 					let text = self.kind(kind, &[]);
 					if param.optional {
@@ -474,15 +480,84 @@ impl Emitter<'_> {
 				}
 				None => "unknown".to_string(),
 			};
+			out.push(ParamRender {
+				name: param.name.clone(),
+				typescript,
+				required: param.required,
+			});
+		}
+		out
+	}
+}
+
+/// One parameter of a query as the module types it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ParamRender {
+	pub(crate) name: String,
+	/// The value's type, `| undefined` included when its kind admits NONE.
+	pub(crate) typescript: String,
+	/// Whether the caller must bind it.
+	pub(crate) required: bool,
+}
+
+/// One query rendered with the module's rules, in pieces.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct QueryRender {
+	/// One type per statement, in source order.
+	pub(crate) slots: Vec<String>,
+	/// The parameters a caller binds, in order.
+	pub(crate) params: Vec<ParamRender>,
+	/// The SDK names the types use, in import order.
+	pub(crate) imports: Vec<&'static str>,
+}
+
+/// Renders `query` as [`render`] renders its registry row, and reports the SDK names it uses.
+/// `types` are the document's `DEFINE TYPE`s, which a `named` kind is expanded from.
+pub(crate) fn render_query(
+	query: &QueryEntry,
+	types: &[TypeDef],
+	opts: &RenderOptions,
+) -> QueryRender {
+	let mut emitter = Emitter {
+		opts,
+		types,
+		expanding: Vec::new(),
+		used: BTreeSet::new(),
+	};
+	let slots = query.statements.iter().map(|statement| emitter.statement(statement)).collect();
+	let params = emitter.param_types(&query.params);
+	let imports = SDK_NAMES.iter().copied().filter(|name| emitter.used.contains(name)).collect();
+	QueryRender {
+		slots,
+		params,
+		imports,
+	}
+}
+
+/// The result tuple: one element per statement.
+pub(crate) fn tuple_text(slots: &[String]) -> String {
+	format!("[{}]", slots.join(", "))
+}
+
+/// The named-parameter object, `{}` when there is none.
+pub(crate) fn params_text(params: &[ParamRender]) -> String {
+	let parts: Vec<String> = params
+		.iter()
+		.map(|param| {
 			let marker = if param.required {
 				""
 			} else {
 				"?"
 			};
-			parts.push(format!("{}{marker}: {text}", object_key(&param.name)));
-		}
-		object_text(&parts)
-	}
+			format!("{}{marker}: {}", object_key(&param.name), param.typescript)
+		})
+		.collect();
+	object_text(&parts)
+}
+
+/// A TypeScript double-quoted string literal for `text`, for the package a snippet imports from.
+pub(crate) fn string_literal(text: &str) -> String {
+	ts_string(text)
 }
 
 const INDEX_SIGNATURE: &str = "[key: string]: unknown";

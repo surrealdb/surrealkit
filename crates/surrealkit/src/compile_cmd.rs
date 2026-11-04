@@ -67,8 +67,26 @@ impl Plan {
 	/// json` is a version 1 document, which compile does not write.
 	pub fn load(args: &CompileArgs, stdout: bool, check: bool) -> Result<Self> {
 		let project = ProjectConfig::load(None)?;
-		let modules = select_modules(&project, &args.schemas, args.all, args.no_deps)?;
 		let typegen = load_typegen_config(None)?;
+		Self::from_config(project, typegen, None, args, stdout, check)
+	}
+
+	/// [`Plan::load`] for a `project` and its `typegen` section that are already read.
+	/// `config_path` is the `surrealkit.toml` the `[variables]` come from (`None`: the one in
+	/// the working directory).
+	///
+	/// # Errors
+	///
+	/// Fails as [`Plan::load`] does.
+	pub fn from_config(
+		project: ProjectConfig,
+		typegen: TypegenConfig,
+		config_path: Option<&Path>,
+		args: &CompileArgs,
+		stdout: bool,
+		check: bool,
+	) -> Result<Self> {
+		let modules = select_modules(&project, &args.schemas, args.all, args.no_deps)?;
 		// `sync` and `typegen` write the configured JSON in the configured version; compile
 		// writing v2 there would make the commands overwrite one another.
 		if args.out.is_none()
@@ -90,7 +108,7 @@ impl Plan {
 			experimental,
 			// Files and flags only: no SURREALKIT_VAR_* from the environment.
 			vars: TemplateVars {
-				vars: build_project_vars(&args.vars, None)?,
+				vars: build_project_vars(&args.vars, config_path)?,
 			},
 			expected_engine: typegen.engine.clone(),
 			queries: None,

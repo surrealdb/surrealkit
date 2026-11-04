@@ -1,0 +1,31 @@
+---
+source: crates/surrealkit/tests/codegen_render.rs
+expression: report
+---
+{
+  "name": "Items",
+  "text": "SELECT price, status, tags FROM item",
+  "statements": [
+    {
+      "index": 0,
+      "typescript": "Array<{ price: Decimal; status: \"draft\" | \"live\"; tags: Array<Decimal> }>",
+      "kind": "array<object>",
+      "certainty": "fact",
+      "exact": true,
+      "support": {
+        "exact": true
+      },
+      "open": [],
+      "span": {
+        "column": 1,
+        "end": 10,
+        "end_column": 11,
+        "end_line": 1,
+        "line": 1,
+        "start": 0
+      }
+    }
+  ],
+  "params": [],
+  "snippet": "import type { Decimal } from \"surrealdb\";\n\nexport type Items = [Array<{ price: Decimal; status: \"draft\" | \"live\"; tags: Array<Decimal> }>];\nexport type ItemsParams = {};\n"
+}

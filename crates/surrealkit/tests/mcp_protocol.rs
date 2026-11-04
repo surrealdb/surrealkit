@@ -281,3 +281,75 @@ async fn rollout_discard_refuses_a_manifest_whose_id_leaves_the_rollouts_dir() {
 	assert!(rollouts.join("crafted.toml").exists(), "nothing should have been deleted at all");
 	client.cancel().await.expect("shutdown");
 }
+
+#[tokio::test]
+async fn query_types_is_a_read_only_tool_that_requires_a_query() {
+	let dir = project();
+	let client = connect(&dir).await;
+	let tools = client.list_all_tools().await.expect("tools/list");
+	let tool = tools.iter().find(|t| t.name == "query_types").expect("query_types is listed");
+
+	let annotations = tool.annotations.as_ref().expect("annotations");
+	assert_eq!(annotations.read_only_hint, Some(true));
+	assert_eq!(annotations.destructive_hint, Some(false));
+	assert_eq!(annotations.idempotent_hint, Some(true));
+
+	let schema = serde_json::to_value(&tool.input_schema).expect("schema");
+	assert_eq!(schema["required"], serde_json::json!(["query"]), "{schema}");
+	for property in ["query", "name", "params", "target", "schema", "folder", "vars"] {
+		assert!(schema["properties"].get(property).is_some(), "{property} in {schema}");
+	}
+	client.cancel().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn query_types_against_an_engine_that_cannot_type_says_so() {
+	// The SDK this build links has no `types` method, so the engine seam answers none. The call
+	// is a clear error for the model, not a panic or a protocol failure.
+	let dir = project();
+	let schema = dir.path().join("database/schema/001_person.surql");
+	std::fs::create_dir_all(schema.parent().expect("parent")).expect("mkdir");
+	std::fs::write(&schema, "DEFINE TABLE person SCHEMAFULL;\n").expect("schema");
+	let client = connect(&dir).await;
+	let mut arguments = serde_json::Map::new();
+	arguments.insert("query".to_string(), serde_json::json!("SELECT 1"));
+	arguments.insert(
+		"params".to_string(),
+		serde_json::json!({ "a": { "kind": "int" }, "b": { "example": null } }),
+	);
+	let result = client.call_tool(call_params("query_types", arguments)).await.expect("tools/call");
+	assert_eq!(result.is_error, Some(true), "{result:?}");
+	let text = serde_json::to_string(&result.content).expect("serialize");
+	assert!(text.contains("4.1 or later"), "{text}");
+	client.cancel().await.expect("shutdown");
+}
+
+#[tokio::test]
+async fn query_types_refuses_a_bad_name_and_a_bad_hint_before_touching_an_engine() {
+	let dir = project();
+	let client = connect(&dir).await;
+	for (arguments, wanted) in [
+		(serde_json::json!({ "query": "SELECT 1", "name": "not valid" }), "not an identifier"),
+		(
+			serde_json::json!({ "query": "RETURN $a", "params": { "a": { "kind": "int", "example": 1 } } }),
+			"not both",
+		),
+		(
+			serde_json::json!({ "query": "RETURN $a", "params": { "a": {} } }),
+			"needs `kind` or `example`",
+		),
+	] {
+		let arguments = arguments.as_object().expect("object").clone();
+		let outcome = client.call_tool(call_params("query_types", arguments)).await;
+		let text = match outcome {
+			Ok(result) => {
+				assert_eq!(result.is_error, Some(true), "{result:?}");
+				serde_json::to_string(&result.content).expect("serialize")
+			}
+			// A malformed argument may be rejected by the protocol layer instead.
+			Err(err) => err.to_string(),
+		};
+		assert!(text.contains(wanted) || text.contains("invalid"), "{wanted}: {text}");
+	}
+	client.cancel().await.expect("shutdown");
+}

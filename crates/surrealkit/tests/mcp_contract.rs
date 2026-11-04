@@ -157,6 +157,7 @@ fn the_catalog_covers_every_cli_capability() {
 		"seed",
 		"apply",
 		"typegen",
+		"query_types",
 		"test",
 		"project_info",
 		"rollout_baseline",
