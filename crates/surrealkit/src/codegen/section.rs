@@ -170,8 +170,10 @@ fn inline(_root: &str, config: &QueriesConfig) -> Result<Vec<CollectedQuery>> {
 /// Entries are sorted by key, each one's sources by path then `span.start` and its params by
 /// name. Without a `types` document (an engine that cannot type queries) there are no entries
 /// and, when anything was collected, the warning `queries-unsupported-engine`. A kind the
-/// reader does not know is `query-kind-unrecognized` on its entry, and a key that two entries
-/// share is `query-name-duplicate`, the first one kept. The diagnostics include those of
+/// reader does not know is `query-kind-unrecognized` on its entry, a key that two entries
+/// share is `query-name-duplicate`, the first one kept, and a query the engine could not type
+/// is `query-invalid` on its entry, which carries the engine's `error`. The other entries are
+/// unaffected. The diagnostics include those of
 /// reading the query files. The document's own `types` are not used: schema document v2
 /// carries its own.
 pub fn assemble(
@@ -242,6 +244,19 @@ pub fn assemble(
 				)
 				.on_query(&entry.key),
 			);
+		}
+		if let Some(error) = &entry.error {
+			let mut diagnostic = Diagnostic::new(
+				Severity::Error,
+				codes::QUERY_INVALID,
+				entry.text.as_str(),
+				format!("the engine cannot type the query ({}): {}", error.code, error.message),
+			)
+			.on_query(&entry.key);
+			if let Some(span) = error.span {
+				diagnostic = diagnostic.with_span(span.start..span.end);
+			}
+			diagnostics.push(diagnostic);
 		}
 		let sources = match &entry.name {
 			Some(name) => named.get(name),

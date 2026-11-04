@@ -9,11 +9,16 @@
 //! from the engine's [`TypesDocument`].
 
 pub use super::document::Certainty;
-use super::document::{FieldStep, KindValue, QueryParam, QueryTypes, StatementType, TypesDocument};
+use super::document::{
+	FieldStep, KindValue, LiveNotificationType, LiveRefusalType, LiveType, QueryErrorType,
+	QueryParam, QueryTypes, StatementType, TypesDocument,
+};
 use super::v2;
+use crate::typegen::Span;
 use crate::typegen::document::{Kind, TypeDef};
 pub use crate::typegen::document::{
-	QueryEntry, QueryOrigin, QueryParameter, QuerySource, QueryStatement,
+	LiveAction, LiveExit, LiveNotification, LiveRefusal, QueryEntry, QueryError, QueryLive,
+	QueryOrigin, QueryParameter, QuerySource, QueryStatement,
 };
 
 /// The v2 spelling of a path step into a collection's elements.
@@ -99,22 +104,99 @@ pub fn convert_query(query: &QueryTypes) -> (QueryEntry, Vec<String>) {
 		sources: Vec::new(),
 		statements,
 		params,
+		error: query.error.as_ref().map(|error| query_error(error, &query.text)),
 	};
 	(entry, unrepresented)
 }
 
+/// The engine's refusal as v2 states it. The engine's span is kept when it is a byte range
+/// within `text` on character boundaries, and left out otherwise.
+fn query_error(error: &QueryErrorType, text: &str) -> QueryError {
+	let bound = |name: &str| {
+		let at = error.span.as_ref()?.get(name)?.as_u64()?;
+		usize::try_from(at).ok().filter(|at| *at <= text.len() && text.is_char_boundary(*at))
+	};
+	let span = match (bound("start"), bound("end")) {
+		(Some(start), Some(end)) if start <= end => Some(Span {
+			start,
+			end,
+		}),
+		_ => None,
+	};
+	QueryError {
+		code: error.code.clone(),
+		message: error.message.clone(),
+		span,
+	}
+}
+
 fn statement_entry(statement: &StatementType) -> (QueryStatement, Vec<String>) {
-	let (kind, optional, unrepresented) = top_kind(statement.kind_value.as_ref());
+	let (kind, optional, mut unrepresented) = top_kind(statement.kind_value.as_ref());
 	let exact =
 		statement.support.get("exact").and_then(serde_json::Value::as_bool).unwrap_or(false);
+	let live = statement.live.as_ref().map(|live| {
+		let (live, spellings) = live_entry(live);
+		unrepresented.extend(spellings);
+		live
+	});
 	let entry = QueryStatement {
 		kind,
 		optional,
 		certainty: statement.certainty,
 		exact,
-		open: statement.open.iter().map(|path| path.iter().map(segment).collect()).collect(),
+		open: paths(&statement.open),
+		live,
+		live_refusal: statement.live_refusal.as_ref().map(refusal),
 	};
 	(entry, unrepresented)
+}
+
+fn paths(open: &[Vec<FieldStep>]) -> Vec<Vec<String>> {
+	open.iter().map(|path| path.iter().map(segment).collect()).collect()
+}
+
+/// A statement's live subscription, with the `source` of each `unknown` kind in it. Both kinds
+/// of a notification are value positions: a NONE in one becomes an `option`. The notifications
+/// are in the order CREATE, UPDATE, DELETE, KILLED.
+fn live_entry(live: &LiveType) -> (QueryLive, Vec<String>) {
+	let mut unrepresented = Vec::new();
+	let mut notifications: Vec<LiveNotification> =
+		live.notifications.iter().map(|n| notification(n, &mut unrepresented)).collect();
+	notifications.sort_by_key(|notification| notification.action);
+	let entry = QueryLive {
+		diff: live.diff,
+		query: live.query.clone(),
+		exit: live.exit,
+		watch: live.watch.clone(),
+		notifications,
+	};
+	(entry, unrepresented)
+}
+
+fn notification(
+	notification: &LiveNotificationType,
+	unrepresented: &mut Vec<String>,
+) -> LiveNotification {
+	let record = v2::nested(&notification.record_value);
+	let result = v2::nested(&notification.result_value);
+	unrepresented.extend(record.unrepresented);
+	unrepresented.extend(result.unrepresented);
+	LiveNotification {
+		action: notification.action,
+		record: record.kind,
+		result: result.kind,
+		certainty: notification.certainty,
+		open: paths(&notification.open),
+	}
+}
+
+fn refusal(refusal: &LiveRefusalType) -> LiveRefusal {
+	LiveRefusal {
+		code: refusal.code.clone(),
+		message: refusal.message.clone(),
+		clauses: refusal.clauses.clone(),
+		windowable: refusal.windowable,
+	}
 }
 
 fn param_entry(param: &QueryParam) -> (QueryParameter, Vec<String>) {
@@ -227,8 +309,11 @@ mod tests {
 				certainty: Certainty::Fact,
 				exact: true,
 				open: Vec::new(),
+				live: None,
+				live_refusal: None,
 			}],
 			params: Vec::new(),
+			error: None,
 		};
 		let json = serde_json::to_value(&entry).expect("json");
 		assert_eq!(
@@ -242,5 +327,84 @@ mod tests {
 			})
 		);
 		assert_eq!(serde_json::from_value::<QueryEntry>(json).expect("reads"), entry);
+	}
+
+	#[test]
+	fn live_notifications_are_value_kinds_in_a_fixed_order() {
+		let note = |action: &str, result: Value| {
+			json!({ "action": action, "record": "r", "record_value": { "Record": ["t"] },
+				"result": "r", "result_value": result, "certainty": "fact", "open": [[{ "element": true }]] })
+		};
+		let none_or_int = json!({ "Either": ["None", "Int"] });
+		let (entries, unrepresented) =
+			entries(json!([{ "text": "SELECT * FROM t", "statements": [{
+			"kind_value": "Int", "certainty": "fact",
+			"live": { "diff": true, "query": "LIVE SELECT DIFF FROM t", "notifications": [
+				note("KILLED", json!("None")),
+				note("DELETE", none_or_int.clone()),
+				note("CREATE", json!({ "Hologram": 1 })),
+				note("UPDATE", none_or_int),
+			] }
+		}] }]));
+		assert_eq!(unrepresented, [r#"{"Hologram":1}"#]);
+		let live = entries[0].statements[0].live.as_ref().expect("live");
+		assert!(live.diff && live.exit.is_none() && live.watch.is_none());
+		let actions: Vec<LiveAction> = live.notifications.iter().map(|n| n.action).collect();
+		assert_eq!(
+			actions,
+			[LiveAction::Create, LiveAction::Update, LiveAction::Delete, LiveAction::Killed]
+		);
+		assert_eq!(
+			live.notifications[1].result,
+			Kind::Option {
+				item: Box::new(Kind::int())
+			}
+		);
+		assert_eq!(live.notifications[3].result, Kind::None);
+		assert_eq!(live.notifications[1].open, vec![vec!["*".to_string()]]);
+		assert_eq!(
+			live.notifications[1].record,
+			Kind::Record {
+				tables: vec!["t".into()]
+			}
+		);
+	}
+
+	#[test]
+	fn a_query_error_keeps_a_span_only_inside_the_text() {
+		let error = |span: Value| {
+			let (entries, _) = entries(json!([{ "text": "SELEC é", "statements": [],
+				"error": { "code": "S0001", "message": "bad", "span": span } }]));
+			entries[0].error.clone().expect("error")
+		};
+		let valid = error(json!({ "start": 0, "end": 5, "line": 1, "column": 1 }));
+		assert_eq!(
+			valid.span,
+			Some(Span {
+				start: 0,
+				end: 5
+			})
+		);
+		// Past the end, backwards, inside a character (`é` is bytes 6 and 7), or not numbers.
+		for span in [
+			json!({ "start": 0, "end": 99 }),
+			json!({ "start": 5, "end": 1 }),
+			json!({ "start": 0, "end": 7 }),
+			json!({ "start": "0", "end": 1 }),
+			json!({ "start": 0 }),
+			json!(null),
+		] {
+			assert_eq!(error(span.clone()).span, None, "{span}");
+		}
+		let (entries, _) = entries(json!([{ "text": "SELEC", "statements": [],
+			"error": { "code": "S0001", "message": "bad" } }]));
+		let error = entries[0].error.as_ref().expect("error");
+		assert!(error.span.is_none());
+		let json = serde_json::to_value(&entries[0]).expect("json");
+		assert_eq!(
+			json,
+			json!({ "key": "SELEC", "text": "SELEC", "statements": [],
+				"error": { "code": "S0001", "message": "bad" } })
+		);
 	}
 }

@@ -563,5 +563,1029 @@
         "open": []
       }
     ]
+  },
+  {
+    "key": "SELECT * FROM user",
+    "text": "SELECT * FROM user",
+    "statements": [
+      {
+        "kind": {
+          "kind": "array",
+          "item": {
+            "kind": "objectLiteral",
+            "fields": [
+              {
+                "name": "id",
+                "kind": {
+                  "kind": "record",
+                  "tables": [
+                    "user"
+                  ]
+                },
+                "optional": false
+              },
+              {
+                "name": "name",
+                "kind": {
+                  "kind": "string"
+                },
+                "optional": false
+              },
+              {
+                "name": "team",
+                "kind": {
+                  "kind": "record",
+                  "tables": [
+                    "team"
+                  ]
+                },
+                "optional": false
+              }
+            ]
+          }
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": [],
+        "live": {
+          "diff": false,
+          "query": "LIVE SELECT * FROM user",
+          "notifications": [
+            {
+              "action": "CREATE",
+              "record": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "result": {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "id",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "user"
+                      ]
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "name",
+                    "kind": {
+                      "kind": "string"
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "team",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "team"
+                      ]
+                    },
+                    "optional": false
+                  }
+                ]
+              },
+              "certainty": "fact",
+              "open": []
+            },
+            {
+              "action": "UPDATE",
+              "record": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "result": {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "id",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "user"
+                      ]
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "name",
+                    "kind": {
+                      "kind": "string"
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "team",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "team"
+                      ]
+                    },
+                    "optional": false
+                  }
+                ]
+              },
+              "certainty": "fact",
+              "open": []
+            },
+            {
+              "action": "DELETE",
+              "record": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "result": {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "id",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "user"
+                      ]
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "name",
+                    "kind": {
+                      "kind": "string"
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "team",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "team"
+                      ]
+                    },
+                    "optional": false
+                  }
+                ]
+              },
+              "certainty": "fact",
+              "open": []
+            },
+            {
+              "action": "KILLED",
+              "record": {
+                "kind": "none"
+              },
+              "result": {
+                "kind": "none"
+              },
+              "certainty": "fact",
+              "open": []
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "key": "SELECT * FROM user ORDER BY name LIMIT $lim",
+    "text": "SELECT * FROM user ORDER BY name LIMIT $lim",
+    "statements": [
+      {
+        "kind": {
+          "kind": "array",
+          "item": {
+            "kind": "objectLiteral",
+            "fields": [
+              {
+                "name": "id",
+                "kind": {
+                  "kind": "record",
+                  "tables": [
+                    "user"
+                  ]
+                },
+                "optional": false
+              },
+              {
+                "name": "name",
+                "kind": {
+                  "kind": "string"
+                },
+                "optional": false
+              },
+              {
+                "name": "team",
+                "kind": {
+                  "kind": "record",
+                  "tables": [
+                    "team"
+                  ]
+                },
+                "optional": false
+              }
+            ]
+          }
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": [],
+        "live": {
+          "diff": false,
+          "query": "LIVE SELECT * FROM user",
+          "notifications": [
+            {
+              "action": "CREATE",
+              "record": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "result": {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "id",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "user"
+                      ]
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "name",
+                    "kind": {
+                      "kind": "string"
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "team",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "team"
+                      ]
+                    },
+                    "optional": false
+                  }
+                ]
+              },
+              "certainty": "fact",
+              "open": []
+            },
+            {
+              "action": "UPDATE",
+              "record": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "result": {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "id",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "user"
+                      ]
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "name",
+                    "kind": {
+                      "kind": "string"
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "team",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "team"
+                      ]
+                    },
+                    "optional": false
+                  }
+                ]
+              },
+              "certainty": "fact",
+              "open": []
+            },
+            {
+              "action": "DELETE",
+              "record": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "result": {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "id",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "user"
+                      ]
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "name",
+                    "kind": {
+                      "kind": "string"
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "team",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "team"
+                      ]
+                    },
+                    "optional": false
+                  }
+                ]
+              },
+              "certainty": "fact",
+              "open": []
+            },
+            {
+              "action": "KILLED",
+              "record": {
+                "kind": "none"
+              },
+              "result": {
+                "kind": "none"
+              },
+              "certainty": "fact",
+              "open": []
+            }
+          ]
+        },
+        "liveRefusal": {
+          "code": "E4009",
+          "message": "LIVE SELECT cannot run a SELECT with ORDER BY, LIMIT",
+          "clauses": [
+            "ORDER BY",
+            "LIMIT"
+          ],
+          "windowable": true
+        }
+      }
+    ],
+    "params": [
+      {
+        "name": "lim",
+        "kind": {
+          "kind": "int"
+        },
+        "optional": false,
+        "required": true
+      }
+    ]
+  },
+  {
+    "key": "SELECT * FROM user WHERE team = $team",
+    "text": "SELECT * FROM user WHERE team = $team",
+    "statements": [
+      {
+        "kind": {
+          "kind": "array",
+          "item": {
+            "kind": "objectLiteral",
+            "fields": [
+              {
+                "name": "id",
+                "kind": {
+                  "kind": "record",
+                  "tables": [
+                    "user"
+                  ]
+                },
+                "optional": false
+              },
+              {
+                "name": "name",
+                "kind": {
+                  "kind": "string"
+                },
+                "optional": false
+              },
+              {
+                "name": "team",
+                "kind": {
+                  "kind": "record",
+                  "tables": [
+                    "team"
+                  ]
+                },
+                "optional": false
+              }
+            ]
+          }
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": [],
+        "live": {
+          "diff": false,
+          "query": "LIVE SELECT * FROM user WHERE team = $team",
+          "exit": "silent",
+          "watch": "LIVE SELECT id FROM user",
+          "notifications": [
+            {
+              "action": "CREATE",
+              "record": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "result": {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "id",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "user"
+                      ]
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "name",
+                    "kind": {
+                      "kind": "string"
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "team",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "team"
+                      ]
+                    },
+                    "optional": false
+                  }
+                ]
+              },
+              "certainty": "hint",
+              "open": [
+                []
+              ]
+            },
+            {
+              "action": "UPDATE",
+              "record": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "result": {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "id",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "user"
+                      ]
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "name",
+                    "kind": {
+                      "kind": "string"
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "team",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "team"
+                      ]
+                    },
+                    "optional": false
+                  }
+                ]
+              },
+              "certainty": "hint",
+              "open": [
+                []
+              ]
+            },
+            {
+              "action": "DELETE",
+              "record": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "result": {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "id",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "user"
+                      ]
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "name",
+                    "kind": {
+                      "kind": "string"
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "team",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "team"
+                      ]
+                    },
+                    "optional": false
+                  }
+                ]
+              },
+              "certainty": "hint",
+              "open": [
+                []
+              ]
+            },
+            {
+              "action": "KILLED",
+              "record": {
+                "kind": "none"
+              },
+              "result": {
+                "kind": "none"
+              },
+              "certainty": "fact",
+              "open": []
+            }
+          ]
+        }
+      }
+    ],
+    "params": [
+      {
+        "name": "team",
+        "kind": {
+          "kind": "record",
+          "tables": [
+            "team"
+          ]
+        },
+        "optional": false,
+        "required": true
+      }
+    ]
+  },
+  {
+    "key": "SELECT * FROM ONLY user:ada",
+    "text": "SELECT * FROM ONLY user:ada",
+    "statements": [
+      {
+        "kind": {
+          "kind": "objectLiteral",
+          "fields": [
+            {
+              "name": "id",
+              "kind": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "optional": false
+            },
+            {
+              "name": "name",
+              "kind": {
+                "kind": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "team",
+              "kind": {
+                "kind": "record",
+                "tables": [
+                  "team"
+                ]
+              },
+              "optional": false
+            }
+          ]
+        },
+        "optional": true,
+        "certainty": "fact",
+        "exact": true,
+        "open": [],
+        "liveRefusal": {
+          "code": "E4009",
+          "message": "LIVE SELECT cannot run a SELECT FROM ONLY",
+          "clauses": [
+            "ONLY"
+          ],
+          "windowable": false
+        }
+      }
+    ]
+  },
+  {
+    "key": "LIVE SELECT DIFF FROM user",
+    "text": "LIVE SELECT DIFF FROM user",
+    "statements": [
+      {
+        "kind": {
+          "kind": "uuid"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": [],
+        "live": {
+          "diff": true,
+          "query": "LIVE SELECT DIFF FROM user",
+          "notifications": [
+            {
+              "action": "CREATE",
+              "record": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "result": {
+                "kind": "array",
+                "item": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "op",
+                      "kind": {
+                        "kind": "enum",
+                        "labels": [
+                          "add",
+                          "change",
+                          "remove",
+                          "replace"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "path",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "value",
+                      "kind": {
+                        "kind": "any"
+                      },
+                      "optional": false
+                    }
+                  ]
+                }
+              },
+              "certainty": "fact",
+              "open": []
+            },
+            {
+              "action": "UPDATE",
+              "record": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "result": {
+                "kind": "array",
+                "item": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "op",
+                      "kind": {
+                        "kind": "enum",
+                        "labels": [
+                          "add",
+                          "change",
+                          "remove",
+                          "replace"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "path",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "value",
+                      "kind": {
+                        "kind": "any"
+                      },
+                      "optional": false
+                    }
+                  ]
+                }
+              },
+              "certainty": "fact",
+              "open": []
+            },
+            {
+              "action": "DELETE",
+              "record": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "result": {
+                "kind": "array",
+                "item": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "op",
+                      "kind": {
+                        "kind": "enum",
+                        "labels": [
+                          "add",
+                          "change",
+                          "remove",
+                          "replace"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "path",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "value",
+                      "kind": {
+                        "kind": "any"
+                      },
+                      "optional": false
+                    }
+                  ]
+                }
+              },
+              "certainty": "fact",
+              "open": []
+            },
+            {
+              "action": "KILLED",
+              "record": {
+                "kind": "none"
+              },
+              "result": {
+                "kind": "none"
+              },
+              "certainty": "fact",
+              "open": []
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "key": "LET $n = 1; LIVE SELECT * FROM user;",
+    "text": "LET $n = 1; LIVE SELECT * FROM user;",
+    "statements": [
+      {
+        "kind": {
+          "kind": "none"
+        },
+        "optional": true,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "uuid"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": [],
+        "live": {
+          "diff": false,
+          "query": "LIVE SELECT * FROM user",
+          "notifications": [
+            {
+              "action": "CREATE",
+              "record": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "result": {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "id",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "user"
+                      ]
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "name",
+                    "kind": {
+                      "kind": "string"
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "team",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "team"
+                      ]
+                    },
+                    "optional": false
+                  }
+                ]
+              },
+              "certainty": "fact",
+              "open": []
+            },
+            {
+              "action": "UPDATE",
+              "record": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "result": {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "id",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "user"
+                      ]
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "name",
+                    "kind": {
+                      "kind": "string"
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "team",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "team"
+                      ]
+                    },
+                    "optional": false
+                  }
+                ]
+              },
+              "certainty": "fact",
+              "open": []
+            },
+            {
+              "action": "DELETE",
+              "record": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "result": {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "id",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "user"
+                      ]
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "name",
+                    "kind": {
+                      "kind": "string"
+                    },
+                    "optional": false
+                  },
+                  {
+                    "name": "team",
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "team"
+                      ]
+                    },
+                    "optional": false
+                  }
+                ]
+              },
+              "certainty": "fact",
+              "open": []
+            },
+            {
+              "action": "KILLED",
+              "record": {
+                "kind": "none"
+              },
+              "result": {
+                "kind": "none"
+              },
+              "certainty": "fact",
+              "open": []
+            }
+          ]
+        }
+      }
+    ]
+  },
+  {
+    "key": "SELEC * FROM user",
+    "text": "SELEC * FROM user",
+    "statements": [],
+    "error": {
+      "code": "S0001",
+      "message": "Parse error: unexpected token `*`, expected a statement",
+      "span": {
+        "start": 0,
+        "end": 5
+      }
+    }
   }
 ]

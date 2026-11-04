@@ -607,6 +607,7 @@ methods = ["query"]            # the client methods to look for (default)
 typescript = "src/generated/queries.ts"   # optional: the per-query TypeScript module
 dates = "class"                # `datetime` as the SDK's DateTime (default), or "native" for Date
 hints = "trust"                # kinds the engine only hints at: as declared (default), or "unknown"
+register = "surrealkit-query"  # optional: the bindings package whose `Register` the module augments
 ```
 
 A query file holds named queries, each behind a marker line:
@@ -622,6 +623,37 @@ from, the kind of each statement's result and its parameters, in the language-ne
 tree any emitter can render. The TypeScript module gives `Typed<Surreal>` a `query()` that
 returns the registry's result type for known query text. External emitters receive the
 section only when they opt in with `queries = true` in their `[typegen.emit.<name>]`.
+
+The module is not only types. It also exports `liveQueries`, a runtime value: for each
+single-statement `SELECT` the engine can describe a live subscription for, the facts a client
+needs to subscribe, keyed by the same text as `Queries`.
+
+```ts
+export const liveQueries = {
+  "SELECT * FROM user ORDER BY name LIMIT $lim": {
+    query: "LIVE SELECT * FROM user",   // the text to subscribe with
+    refusal: { clauses: ["ORDER BY", "LIMIT"], windowable: true },
+  },
+  "SELECT * FROM user WHERE team = $team": {
+    query: "LIVE SELECT * FROM user WHERE team = $team",
+    exit: "silent",                     // a record leaving the WHERE is not reported
+    watch: "LIVE SELECT id FROM user",  // the same targets without the WHERE
+  },
+  "SELECT * FROM ONLY user:ada": { refusal: { clauses: ["ONLY"], windowable: false } },
+} as const;
+```
+
+`LiveQueries` types it and adds `notification`, the union of the messages a subscription
+delivers as the SDK's `LiveMessage` carries them; `LiveQueryText` is the texts a subscription can
+serve (every entry but a refusal that cannot be windowed), and `LiveNotification<K>` is one text's
+notification. `liveQueries` is always exported, `{}` when there is none. A query the engine could
+not type is left out of both registries and reported as `query-invalid`; its text keeps the SDK's
+untyped `query()`.
+
+`register` names the bindings package to augment, so its components and functions are typed by
+the generated registry: the module ends with `declare module "<register>" { interface Register {
+queries: Queries; liveQueries: LiveQueries } }`. It must name the package that declares
+`Register`, not one that re-exports it.
 
 The engine types the queries without running them, which needs SurrealDB 4.1. On an older
 engine `compile` and `typegen` report the warning `queries-unsupported-engine` and write no

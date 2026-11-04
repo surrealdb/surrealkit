@@ -963,3 +963,8 @@ return its TypeScript type; they need SurrealDB 4.1 as well.
 
 For library users: `TypegenOpts` and `CompileOpts` gain a `queries` field (`None` keeps the
 current behaviour), `SchemaDocument` gains `queries`, and `Diagnostic` gains `query`.
+
+With `[typegen.queries] register = "<package>"` the module also augments that package's
+`Register` interface with `queries` and `liveQueries`, so a bindings package such as
+`surrealkit-query` is typed by the generated registry. The module now exports a runtime value,
+`liveQueries` (each SELECT's live subscription facts), so it is no longer types-only.

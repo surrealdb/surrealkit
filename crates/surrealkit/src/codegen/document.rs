@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use super::kind::{KindValue, LiteralValue};
-pub use crate::typegen::document::Certainty;
+pub use crate::typegen::document::{Certainty, LiveAction, LiveExit};
 
 /// The `format` member of every document this reader accepts.
 pub const FORMAT: &str = "surrealdb.types";
@@ -215,6 +215,21 @@ pub struct QueryTypes {
 	pub statements: Vec<StatementType>,
 	#[serde(default)]
 	pub params: Vec<QueryParam>,
+	/// Why the engine could not type this query alone. The query then has no `statements` and
+	/// no `params`.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub error: Option<QueryErrorType>,
+}
+
+/// The engine's refusal to type one query.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct QueryErrorType {
+	pub code: String,
+	pub message: String,
+	/// Kept opaque: a byte range in the query text as `{ "start": …, "end": … }`, with the
+	/// members this reader does not use.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub span: Option<Value>,
 }
 
 /// The type of one top-level statement's slot in the response. Every statement has one.
@@ -235,6 +250,53 @@ pub struct StatementType {
 	/// Kept opaque.
 	#[serde(default)]
 	pub span: Value,
+	/// What a live subscription to the statement delivers.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub live: Option<LiveType>,
+	/// Why `LIVE SELECT` cannot run the statement as written.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub live_refusal: Option<LiveRefusalType>,
+}
+
+/// The live subscription of a statement.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveType {
+	pub diff: bool,
+	/// The `LIVE SELECT` text to subscribe with.
+	pub query: String,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub exit: Option<LiveExit>,
+	/// `LIVE SELECT id FROM <targets>`, without the `WHERE`. Only with `exit: "silent"`.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub watch: Option<String>,
+	/// One per action.
+	#[serde(default)]
+	pub notifications: Vec<LiveNotificationType>,
+}
+
+/// What a live subscription delivers for one action.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveNotificationType {
+	pub action: LiveAction,
+	pub record: String,
+	pub record_value: KindValue,
+	pub result: String,
+	pub result_value: KindValue,
+	pub certainty: Certainty,
+	/// Object positions inside `result_value` that admit undeclared keys.
+	#[serde(default)]
+	pub open: Vec<Vec<FieldStep>>,
+}
+
+/// Why `LIVE SELECT` cannot run a `SELECT` as written.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct LiveRefusalType {
+	pub code: String,
+	pub message: String,
+	#[serde(default)]
+	pub clauses: Vec<String>,
+	#[serde(default)]
+	pub windowable: bool,
 }
 
 /// A `$name` a query reads without binding it.
@@ -349,6 +411,65 @@ mod tests {
 			"tables": [{ "name": "t", "fields": [{
 				"path": ["a"], "steps": [{ "elements": true }], "kind": "int",
 				"kind_value": "Int", "certainty": "fact"
+			}] }],
+		});
+		assert!(TypesDocument::from_json(&raw.to_string()).is_err());
+	}
+
+	#[test]
+	fn live_typing_and_a_query_error_read_in_the_engines_shape() {
+		let raw = json!({
+			"format": FORMAT, "version": 1,
+			"queries": [
+				{ "text": "SELECT * FROM t WHERE a = 1", "statements": [{
+					"kind": "array<object>", "kind_value": { "Array": ["Object", null] },
+					"certainty": "fact",
+					"live": {
+						"diff": false, "query": "LIVE SELECT * FROM t WHERE a = 1", "exit": "silent",
+						"watch": "LIVE SELECT id FROM t", "future": 1,
+						"notifications": [{
+							"action": "UPDATE", "record": "record<t>", "record_value": { "Record": ["t"] },
+							"result": "object", "result_value": "Object", "certainty": "hint",
+							"open": [[{ "field": "a" }, { "element": true }]], "future": 1
+						}]
+					},
+					"live_refusal": {
+						"code": "E4009", "message": "no", "clauses": ["ORDER BY"], "windowable": true
+					}
+				}] },
+				{ "text": "SELEC", "statements": [], "params": [],
+					"error": { "code": "S0001", "message": "bad", "span": { "start": 0, "end": 5 } } },
+				{ "text": "RETURN 1", "statements": [] },
+			],
+		});
+		let doc = TypesDocument::from_json(&raw.to_string()).expect("reads");
+		let statement = &doc.queries[0].statements[0];
+		let live = statement.live.as_ref().expect("live");
+		assert_eq!(live.exit, Some(LiveExit::Silent));
+		assert_eq!(live.watch.as_deref(), Some("LIVE SELECT id FROM t"));
+		let note = &live.notifications[0];
+		assert_eq!((note.action, note.certainty), (LiveAction::Update, Certainty::Hint));
+		assert_eq!(note.record_value, KindValue::Record(vec!["t".into()]));
+		assert_eq!(note.open, vec![vec![FieldStep::Field("a".into()), FieldStep::Element]]);
+		let refusal = statement.live_refusal.as_ref().expect("refusal");
+		assert!(refusal.windowable && refusal.clauses == ["ORDER BY"]);
+		let error = doc.queries[1].error.as_ref().expect("error");
+		assert_eq!((error.code.as_str(), error.message.as_str()), ("S0001", "bad"));
+		assert!(doc.queries[2].error.is_none() && doc.queries[2].statements.is_empty());
+		let back = serde_json::to_value(&doc).expect("serialises");
+		assert!(back["queries"][2].get("error").is_none(), "an absent error is not written");
+	}
+
+	#[test]
+	fn an_action_the_reader_does_not_know_is_an_error() {
+		let raw = json!({
+			"format": FORMAT, "version": 1,
+			"queries": [{ "text": "q", "statements": [{
+				"certainty": "fact",
+				"live": { "diff": false, "query": "LIVE SELECT * FROM t", "notifications": [{
+					"action": "MOVE", "record": "none", "record_value": "None",
+					"result": "none", "result_value": "None", "certainty": "fact"
+				}] }
 			}] }],
 		});
 		assert!(TypesDocument::from_json(&raw.to_string()).is_err());

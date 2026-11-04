@@ -1,0 +1,9 @@
+---
+source: crates/surrealkit/tests/codegen_render.rs
+expression: report.snippet
+---
+import type { RecordId, Uuid } from "surrealdb";
+
+export type ListUsers = [Array<{ id: RecordId<"user">; name: string; team: RecordId<"team"> }>];
+export type ListUsersParams = { lim: number };
+export type ListUsersLive = { queryId: Uuid; action: "CREATE"; recordId: RecordId<"user">; value: { id: RecordId<"user">; name: string; team: RecordId<"team"> } } | { queryId: Uuid; action: "UPDATE"; recordId: RecordId<"user">; value: { id: RecordId<"user">; name: string; team: RecordId<"team"> } } | { queryId: Uuid; action: "DELETE"; recordId: RecordId<"user">; value: { id: RecordId<"user">; name: string; team: RecordId<"team"> } } | { queryId: Uuid; action: "KILLED"; recordId?: undefined; value?: undefined };

@@ -273,6 +273,11 @@ pub struct QueriesConfig {
 	/// How a kind the engine only hints at is typed in that module: `trust` (as declared,
 	/// default) or `unknown`.
 	pub hints: Option<crate::codegen::typescript::HintStyle>,
+	/// The bindings package that module augments, so its components and functions are typed by
+	/// the generated registry: the module declares `Register` there with `queries` and
+	/// `liveQueries`. It must name the package that declares `Register`, not one that re-exports
+	/// it. No augmentation when absent.
+	pub register: Option<String>,
 }
 
 fn default_query_methods() -> Vec<String> {
@@ -303,6 +308,7 @@ impl Default for QueriesConfig {
 			typescript: None,
 			dates: None,
 			hints: None,
+			register: None,
 		}
 	}
 }
@@ -314,6 +320,7 @@ impl QueriesConfig {
 		crate::codegen::typescript::RenderOptions {
 			dates: self.dates.unwrap_or(defaults.dates),
 			hints: self.hints.unwrap_or(defaults.hints),
+			register: self.register.clone(),
 			..defaults
 		}
 	}
@@ -420,8 +427,8 @@ impl TypegenConfig {
 	}
 
 	/// `[typegen.queries]`, validated: no method, function or component is an empty name, the
-	/// attribute is not empty, and `typescript` names a TypeScript file that is neither the
-	/// `[typegen] json` nor the `[typegen] typescript` output.
+	/// attribute and `register` are not empty, and `typescript` names a TypeScript file that is
+	/// neither the `[typegen] json` nor the `[typegen] typescript` output.
 	pub fn queries_config(&self) -> Result<Option<QueriesConfig>> {
 		let Some(queries) = &self.queries else {
 			return Ok(None);
@@ -437,6 +444,9 @@ impl TypegenConfig {
 		}
 		if queries.attribute.trim().is_empty() {
 			bail!("[typegen.queries] attribute: the attribute name is empty");
+		}
+		if queries.register.as_ref().is_some_and(|register| register.trim().is_empty()) {
+			bail!("[typegen.queries] register: the module name is empty");
 		}
 		if let Some(typescript) = self.queries_typescript()? {
 			let lexical = |p: &Path| -> PathBuf {
@@ -928,17 +938,28 @@ mod tests {
 		let render = cfg.render_options();
 		assert_eq!((render.dates, render.hints), (DateStyle::Native, HintStyle::Unknown));
 		assert_eq!(QueriesConfig::default().render_options(), Default::default());
+		assert_eq!(render.register, None);
+		let cfg = parse("[typegen.queries]\nregister = \"surrealkit-query\"\n")
+			.unwrap()
+			.queries_config()
+			.unwrap()
+			.unwrap();
+		assert_eq!(cfg.register.as_deref(), Some("surrealkit-query"));
+		assert_eq!(cfg.render_options().register.as_deref(), Some("surrealkit-query"));
 
 		// An unknown key, or a value outside the choices, is refused rather than ignored.
 		assert!(parse("[typegen.queries]\nwat = 1\n").is_err());
 		assert!(parse("[typegen.queries]\ndates = \"iso\"\n").is_err());
 		assert!(parse("[typegen.queries]\nhints = \"guess\"\n").is_err());
+		assert!(parse("[typegen.queries]\nregister = 1\n").is_err());
 
 		let err = |raw: &str| parse(raw).unwrap().queries_config().unwrap_err().to_string();
 		assert!(
 			err("[typegen.queries]\ntypescript = \"src/queries\"\n").contains(".ts, .mts or .cts")
 		);
 		assert!(err("[typegen.queries]\nmethods = [\"\"]\n").contains("method name is empty"));
+		assert!(err("[typegen.queries]\nregister = \" \"\n").contains("register"));
+		assert!(err("[typegen.queries]\nregister = \"\"\n").contains("module name is empty"));
 		assert!(
 			err("[typegen]\ntypescript = \"src/db.ts\"\n[typegen.queries]\ntypescript = \
 			     \"./src/db.ts\"\n")
