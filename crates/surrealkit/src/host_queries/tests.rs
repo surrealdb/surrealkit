@@ -280,6 +280,47 @@ fn frontmatter_ranges_exclude_the_fences() {
 	assert!(frameworks::astro_frontmatter("<p/>\n---\nx\n---").is_none());
 }
 
+/// The text of each comment `comments` finds.
+fn comment_texts<'a>(file: &str, source: &'a str) -> Vec<&'a str> {
+	comments(file, source).into_iter().map(|range| &source[range]).collect()
+}
+
+#[test]
+fn comments_are_the_grammars_comment_nodes() {
+	let source = "// one\nconst a = 1; // two\n/* three */ const s = \"// not\" + `/* nor */`;\n";
+	assert_eq!(comment_texts("a.ts", source), ["// one", "// two", "/* three */"]);
+	assert!(comments("a.ts", "const a = 1;\n").is_empty());
+	assert_eq!(comment_texts("notes", "// plain\n"), ["// plain"], "unknown extensions are TS");
+}
+
+#[test]
+fn tsx_comments_are_found_with_the_jsx_grammar() {
+	let source = "// head\nexport const W = () => <div>{/* in jsx */ db.query(\"S\")}</div>; // tail\n";
+	assert_eq!(comment_texts("w.tsx", source), ["// head", "/* in jsx */", "// tail"]);
+	assert_eq!(comment_texts("w.jsx", source), ["// head", "/* in jsx */", "// tail"]);
+}
+
+#[test]
+fn svelte_comments_are_shifted_into_the_whole_file() {
+	let source = "<!-- markup -->\n<script>\n// first\nconst a = 1; // second\n</script>\n<p>// text</p>\n<script lang=\"ts\">\n/* third */\n</script>\n";
+	let found = comments("p.svelte", source);
+	assert_eq!(
+		found.iter().map(|range| &source[range.clone()]).collect::<Vec<_>>(),
+		["// first", "// second", "/* third */"]
+	);
+	// Offsets index the whole file, so a query's line can be compared with a comment's.
+	assert_eq!(&source[..found[0].start].matches('\n').count(), &2);
+}
+
+#[test]
+fn vue_and_astro_comments_come_from_their_script_regions() {
+	let vue = "<template><p/></template>\n<script setup lang=\"ts\">\n// v\n</script>\n";
+	assert_eq!(comment_texts("c.vue", vue), ["// v"]);
+	let astro = "---\n// front\nlet a;\n---\n<ul></ul>\n<script>\n// client\n</script>\n";
+	assert_eq!(comment_texts("p.astro", astro), ["// front", "// client"]);
+	assert!(comments("p.astro", "<p>// no script</p>").is_empty());
+}
+
 #[test]
 fn unknown_extensions_parse_as_typescript() {
 	assert_eq!(texts("notes", "db.query(\"S\")"), ["S"]);
