@@ -281,3 +281,201 @@ async fn rollout_discard_refuses_a_manifest_whose_id_leaves_the_rollouts_dir() {
 	assert!(rollouts.join("crafted.toml").exists(), "nothing should have been deleted at all");
 	client.cancel().await.expect("shutdown");
 }
+
+/// The check tools, which need `analyze` as well as `mcp`.
+#[cfg(feature = "analyze")]
+mod check {
+	use std::time::{Duration, Instant};
+
+	use super::*;
+
+	/// A project written by hand: `surrealkit.toml` and `(path, text)` files under the root.
+	fn written(config: &str, files: &[(&str, &str)]) -> TempDir {
+		let dir = TempDir::new().expect("tempdir");
+		if !config.is_empty() {
+			std::fs::write(dir.path().join("surrealkit.toml"), config).expect("config");
+		}
+		for (path, text) in files {
+			let path = dir.path().join(path);
+			std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+			std::fs::write(path, text).expect("file");
+		}
+		dir
+	}
+
+	async fn call(
+		client: &RunningService<RoleClient, ()>,
+		tool: &str,
+		arguments: serde_json::Value,
+	) -> rmcp::model::CallToolResult {
+		let serde_json::Value::Object(arguments) = arguments else {
+			panic!("arguments are an object");
+		};
+		client.call_tool(call_params(tool, arguments)).await.expect("tools/call")
+	}
+
+	fn text(result: &rmcp::model::CallToolResult) -> String {
+		serde_json::to_string(&result.content).expect("serialize")
+	}
+
+	const BAD_DIRECTIVE: &str = "SELECT 1;\n-- surreal: allow(*)\nSELECT 2;\n";
+
+	/// `core` is clean and uses a template variable the config sets, so a call that read
+	/// another directory's `surrealkit.toml` (this crate's, which has none) fails it as K9002;
+	/// `billing` never applies. `dev` accepts only `core`.
+	const MODULES: &str = "[schema.core]\n[schema.billing]\n[target.dev]\nschemas = [\"core\"]\n\
+	                       [target.prod]\n[variables]\nPREFIX = \"app\"\n";
+
+	fn modules() -> TempDir {
+		written(
+			MODULES,
+			&[
+				(
+					"database/modules/core/schema/a.surql",
+					"DEFINE TABLE ${PREFIX}_t SCHEMAFULL;\nDEFINE FIELD a ON ${PREFIX}_t TYPE string;\n",
+				),
+				(
+					"database/modules/billing/schema/b.surql",
+					"DEFINE FIELD x.y ON nope TYPE string;\n",
+				),
+			],
+		)
+	}
+
+	#[tokio::test]
+	async fn check_query_passes_a_clean_query_and_says_it_was_not_analyzed() {
+		let dir = written("", &[("database/schema/a.surql", "DEFINE TABLE t SCHEMAFULL;\n")]);
+		let client = connect(&dir).await;
+		let result =
+			call(&client, "check_query", serde_json::json!({"query": "SELECT * FROM t;"})).await;
+		assert_ne!(result.is_error, Some(true), "{result:?}");
+		let found = result.structured_content.clone().expect("structured content");
+		assert_eq!(found["diagnostics"], serde_json::json!([]));
+		assert_eq!(found["passed"], true);
+		assert_eq!(found["analyzed"], false);
+		assert_eq!(found["schema_errors"], 0);
+		assert!(text(&result).contains("not analyzed: needs SurrealDB 4.1"), "{}", text(&result));
+		client.cancel().await.expect("shutdown");
+	}
+
+	#[tokio::test]
+	async fn check_query_positions_a_finding_within_the_query_text() {
+		let dir = written("", &[]);
+		let client = connect(&dir).await;
+		let result = call(
+			&client,
+			"check_query",
+			serde_json::json!({"query": BAD_DIRECTIVE, "name": "list.surql"}),
+		)
+		.await;
+		let found = result.structured_content.expect("structured content");
+		let diagnostics = found["diagnostics"].as_array().expect("diagnostics");
+		assert_eq!(diagnostics.len(), 1, "{found}");
+		let diagnostic = &diagnostics[0];
+		assert_eq!(diagnostic["code"], "L7013");
+		assert_eq!(diagnostic["path"], "list.surql");
+		let span = &diagnostic["span"];
+		let (start, end) = (span["start"].as_u64().unwrap(), span["end"].as_u64().unwrap());
+		assert!(
+			BAD_DIRECTIVE[start as usize..end as usize].contains("allow(*)"),
+			"the span is within the query: {span}"
+		);
+		assert_eq!((span["line"].as_u64(), span["column"].as_u64()), (Some(2), Some(1)));
+		assert_eq!(found["warnings"], 1);
+		assert_eq!(found["passed"], true);
+		client.cancel().await.expect("shutdown");
+	}
+
+	#[tokio::test]
+	async fn check_query_refuses_a_target_the_project_does_not_declare() {
+		let dir = modules();
+		let client = connect(&dir).await;
+		let result = call(
+			&client,
+			"check_query",
+			serde_json::json!({"query": "SELECT 1;", "target": "staging"}),
+		)
+		.await;
+		assert_eq!(result.is_error, Some(true), "{result:?}");
+		let text = text(&result);
+		assert!(
+			text.contains("staging") && text.contains("dev") && text.contains("prod"),
+			"{text}"
+		);
+		client.cancel().await.expect("shutdown");
+	}
+
+	#[tokio::test]
+	async fn check_query_applies_only_the_modules_a_target_accepts() {
+		let dir = modules();
+		let client = connect(&dir).await;
+		let errors = |target: Option<&str>| {
+			let mut arguments = serde_json::json!({"query": "SELECT 1;"});
+			if let Some(target) = target {
+				arguments["target"] = serde_json::json!(target);
+			}
+			let client = &client;
+			async move {
+				let result = call(client, "check_query", arguments).await;
+				assert_ne!(result.is_error, Some(true), "{result:?}");
+				let found = result.structured_content.expect("structured content");
+				assert_eq!(found["diagnostics"], serde_json::json!([]), "no K findings: {found}");
+				found["schema_errors"].as_u64().expect("schema_errors")
+			}
+		};
+		// `billing`'s broken file is the one error; `core` applies with the config's variable.
+		assert_eq!(errors(None).await, 1);
+		assert_eq!(errors(Some("prod")).await, 1);
+		assert_eq!(errors(Some("dev")).await, 0, "dev never sees billing");
+		client.cancel().await.expect("shutdown");
+	}
+
+	#[tokio::test]
+	async fn check_reports_a_broken_schema_file_as_a_failing_report() {
+		let dir = written(
+			"",
+			&[
+				("database/schema/a.surql", "DEFINE TABLE t SCHEMAFULL;\n"),
+				("database/schema/b.surql", "DEFINE FIELD x.y ON t TYPE string;\n"),
+			],
+		);
+		let client = connect(&dir).await;
+		let result = call(&client, "check", serde_json::json!({})).await;
+		assert_ne!(result.is_error, Some(true), "a failing report is not a tool error");
+		let report = result.structured_content.expect("structured content");
+		assert_eq!(report["summary"]["passed"], false, "{report}");
+		assert_eq!(report["summary"]["schema_files"], 2);
+		let diagnostics = report["diagnostics"].as_array().expect("diagnostics");
+		assert_eq!(diagnostics[0]["code"], "K9003", "{report}");
+		assert_eq!(diagnostics[0]["path"], "database/schema/b.surql");
+		client.cancel().await.expect("shutdown");
+	}
+
+	#[tokio::test]
+	async fn check_without_a_target_connects_to_nothing() {
+		let dir = written(
+			"[target.prod]\nhost = \"ws://127.0.0.1:1\"\nns = \"app\"\ndb = \"prod\"\nprimary = true\n",
+			&[("database/schema/a.surql", "DEFINE TABLE t SCHEMAFULL;\n")],
+		);
+		let client = connect(&dir).await;
+		let started = Instant::now();
+		let result = call(&client, "check", serde_json::json!({})).await;
+		assert_ne!(result.is_error, Some(true), "{result:?}");
+		assert_eq!(result.structured_content.expect("report")["summary"]["passed"], true);
+		assert!(started.elapsed() < Duration::from_secs(20), "waited on a connection");
+		client.cancel().await.expect("shutdown");
+	}
+
+	#[tokio::test]
+	async fn check_reads_the_variables_of_the_project_it_was_asked_about() {
+		// Cargo runs this from the crate directory, which has no surrealkit.toml: a check that
+		// read the working directory's would find `PREFIX` unset (K9002) and fail.
+		let dir = modules();
+		let client = connect(&dir).await;
+		let result = call(&client, "check", serde_json::json!({"schema": ["core"]})).await;
+		let report = result.structured_content.expect("report");
+		assert_eq!(report["summary"]["passed"], true, "{report}");
+		assert_eq!(report["diagnostics"], serde_json::json!([]));
+		client.cancel().await.expect("shutdown");
+	}
+}
