@@ -126,6 +126,23 @@ pub(crate) fn check_steps(rollout: &LoadedRolloutSpec) -> Result<()> {
 				rollout.spec.id
 			);
 		}
+		// Caught here, it costs an edit. Caught when the rollback runs, the rollout
+		// has already started.
+		let refusal = crate::migrate::transform_refusal(using, false)
+			.map(|reason| ("using", reason))
+			.or_else(|| {
+				step_fallback(step)
+					.and_then(|f| crate::migrate::transform_refusal(f, true))
+					.map(|reason| ("fallback", reason))
+			});
+		if let Some((key, reason)) = refusal {
+			bail!(
+				"revert_migration step '{}' in rollout '{}': SurrealDB would refuse its `{key}`: \
+				 {reason}",
+				step.id,
+				rollout.spec.id
+			);
+		}
 		if forward.iter().any(|f| {
 			f.migration.table == crate::migrate::unquote(table)
 				&& f.migration.name == crate::migrate::unquote(name)
@@ -237,11 +254,17 @@ pub(crate) fn revert_statement(
 }
 
 fn quote_name(name: &str) -> String {
-	let bare = crate::migrate::unquote(name);
-	if !bare.is_empty() && bare.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-		bare
-	} else {
-		crate::rollout::quote_ident(&bare)
+	crate::rollout::quote_ident_if_needed(&crate::migrate::unquote(name))
+}
+
+/// A `revert_migration` step's FALLBACK, when it has one.
+fn step_fallback(step: &RolloutStep) -> Option<&str> {
+	match &step.action {
+		RolloutAction::RevertMigration {
+			fallback,
+			..
+		} => fallback.as_deref().filter(|f| !f.trim().is_empty()),
+		_ => None,
 	}
 }
 

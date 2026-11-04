@@ -2014,7 +2014,8 @@ async fn rollback_inner(
 		let row = load_rollout_record(db, &rollout.spec.id)
 			.await?
 			.ok_or_else(|| anyhow!("rollout '{}' has not been started", rollout.spec.id))?;
-		verify_rollout_record_matches(&row, rollout)?;
+		verify_rollout_record_for_rollback(&row, rollout)?;
+		migrations::check_steps(rollout)?;
 		match string_field(&row, "status").as_deref() {
 			Some("completed") => bail!("rollout '{}' is already completed", rollout.spec.id),
 			Some("rolled_back") => {
@@ -3501,6 +3502,18 @@ fn unescape(quoted: &str) -> String {
 }
 
 /// `ident` in backticks, the way SurrealDB prints a name that needs quoting.
+/// `ident` as written when it is a plain name, in backticks otherwise.
+pub(crate) fn quote_ident_if_needed(ident: &str) -> String {
+	if !ident.is_empty()
+		&& !ident.starts_with(|c: char| c.is_ascii_digit())
+		&& ident.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+	{
+		ident.to_string()
+	} else {
+		quote_ident(ident)
+	}
+}
+
 pub(crate) fn quote_ident(ident: &str) -> String {
 	format!("`{}`", ident.replace('\\', "\\\\").replace('`', "\\`"))
 }
@@ -3976,6 +3989,49 @@ fn verify_rollout_record_matches(row: &Value, rollout: &LoadedRolloutSpec) -> Re
 	Ok(())
 }
 
+/// [`verify_rollout_record_matches`] for a rollback, which also accepts a
+/// manifest whose rollback steps were edited after `start`.
+///
+/// A rollback step can be wrong in a way only running it shows, such as a
+/// reverse migration SurrealDB refuses. Holding the whole manifest to its
+/// checksum then left the rollout with no way back: the fix changed the
+/// checksum. What has to hold is that every step that already ran is the step
+/// in the manifest, so this compares those by the checksum the step log
+/// recorded for each.
+fn verify_rollout_record_for_rollback(row: &Value, rollout: &LoadedRolloutSpec) -> Result<()> {
+	let Err(mismatch) = verify_rollout_record_matches(row, rollout) else {
+		return Ok(());
+	};
+	let source = string_field_req(row, "source_schema_hash")?;
+	let target = string_field_req(row, "target_schema_hash")?;
+	if source != rollout.spec.source_schema_hash || target != rollout.spec.target_schema_hash {
+		return Err(mismatch);
+	}
+	let logged = row.get("steps").and_then(|v| v.as_array()).map(Vec::as_slice).unwrap_or_default();
+	for entry in logged {
+		let phase = entry.get("phase").and_then(|v| v.as_str());
+		if phase == Some(RolloutPhase::Rollback.as_str()) {
+			continue;
+		}
+		let id = entry.get("step_id").and_then(|v| v.as_str());
+		let recorded = entry.get("checksum").and_then(|v| v.as_str());
+		let in_manifest = rollout.spec.steps.iter().find(|step| Some(step.id.as_str()) == id);
+		let same = match in_manifest {
+			Some(step) => recorded == Some(step_checksum(step)?.as_str()),
+			None => false,
+		};
+		if !same {
+			return Err(mismatch);
+		}
+	}
+	log::warn!(
+		"rollout '{}' changed since it started, but only in steps that have not run; rolling \
+		 back with the manifest as it is now",
+		rollout.spec.id
+	);
+	Ok(())
+}
+
 /// Whether a rollout record's step log has any step of `phase`, so a `failed`
 /// rollout is known to have failed while completing rather than while starting.
 pub(crate) fn phase_recorded(row: &Value, phase: RolloutPhase) -> bool {
@@ -3984,10 +4040,6 @@ pub(crate) fn phase_recorded(row: &Value, phase: RolloutPhase) -> bool {
 	})
 }
 
-/// Whether a rollout record logs every start step of `spec` as completed.
-///
-/// The step log is what a resumed start skips by, so this is exactly "running
-/// start again would run nothing".
 /// Whether the step log in `row` records `step_id` as completed.
 fn step_logged_completed(row: &Value, step_id: &str) -> bool {
 	row.get("steps").and_then(|v| v.as_array()).is_some_and(|logged| {
@@ -3998,6 +4050,10 @@ fn step_logged_completed(row: &Value, step_id: &str) -> bool {
 	})
 }
 
+/// Whether a rollout record logs every start step of `spec` as completed.
+///
+/// The step log is what a resumed start skips by, so this is exactly "running
+/// start again would run nothing".
 fn start_phase_finished(row: &Value, spec: &RolloutSpec) -> bool {
 	let logged = row.get("steps").and_then(|v| v.as_array()).map(Vec::as_slice).unwrap_or_default();
 	spec.steps.iter().filter(|step| step.phase == RolloutPhase::Start).all(|step| {

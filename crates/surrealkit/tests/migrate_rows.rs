@@ -389,3 +389,55 @@ async fn compat_raise_reports_fields_whose_records_do_not_fit() {
 	assert_eq!(query(&db, "SELECT VALUE stock FROM product ORDER BY id;").await, json!([7, 0]));
 	surrealkit::compat::run_compat_status(&db).await.expect("status");
 }
+
+#[tokio::test]
+async fn a_refused_revert_can_be_fixed_and_the_rollout_started_again() {
+	let _guard = FS_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+	let (tmp, _restore) = enter_tempdir();
+	let (db, id, manifest) = planned_stock_rollout(tmp.path()).await;
+	let planned = std::fs::read_to_string(&manifest).expect("read manifest");
+
+	// A statement in the transform is caught before anything runs.
+	std::fs::write(
+		&manifest,
+		planned
+			.replace("using = \"\"", "using = \"IF $value = 0 { NONE } ELSE { <string> $value }\""),
+	)
+	.expect("write manifest");
+	let err = run_lint(DEFAULT_ROOT_DIR, opts(&id)).await.expect_err("an IF block");
+	assert!(format!("{err:#}").contains("may not hold a statement"), "{err:#}");
+
+	// One the server refuses only when it runs: no FALLBACK for a cast that can fail.
+	std::fs::write(&manifest, planned.replace("using = \"\"", "using = \"<string> $value\""))
+		.expect("write manifest");
+	run_start(&db, DEFAULT_ROOT_DIR, opts(&id), &TemplateVars::default()).await.expect("start");
+	run_rollback(&db, DEFAULT_ROOT_DIR, opts(&id), &TemplateVars::default())
+		.await
+		.expect_err("the server refuses the revert");
+
+	// Fixing the step changes the manifest, and the rollback still goes ahead.
+	let fixed = planned
+		.replace("using = \"\"", "using = \"<string> $value\"")
+		.replace("fallback = \"\"", "fallback = \"''\"");
+	std::fs::write(&manifest, &fixed).expect("write manifest");
+	run_rollback(&db, DEFAULT_ROOT_DIR, opts(&id), &TemplateVars::default())
+		.await
+		.expect("rollback with the fixed revert");
+	assert_eq!(query(&db, "SELECT VALUE stock FROM product ORDER BY id;").await, json!(["7", "0"]));
+
+	// The migration ran once already, under its name. Started again, it runs
+	// again under a new one, and so does its revert.
+	run_start(&db, DEFAULT_ROOT_DIR, opts(&id), &TemplateVars::default())
+		.await
+		.expect("start again after the rollback");
+	assert_eq!(query(&db, "SELECT VALUE stock FROM product ORDER BY id;").await, json!([7, 0]));
+	run_rollback(&db, DEFAULT_ROOT_DIR, opts(&id), &TemplateVars::default())
+		.await
+		.expect("roll back a second time");
+	assert_eq!(query(&db, "SELECT VALUE stock FROM product ORDER BY id;").await, json!(["7", "0"]));
+	let names = query(&db, "(INFO FOR TABLE product).migrations.migrations.*.name;").await;
+	assert_eq!(
+		names,
+		json!(["stock_to_int", "stock_to_int_revert", "stock_to_int_2", "stock_to_int_revert_2"])
+	);
+}

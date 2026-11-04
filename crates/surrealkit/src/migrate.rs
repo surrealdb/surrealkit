@@ -67,6 +67,8 @@ pub(crate) struct Migration {
 	/// The bytes to cut to leave the statement without its clause: from the end
 	/// of the token before `MIGRATE` to the end of the clause.
 	pub cut: Range<usize>,
+	/// The bytes of the name after `AS`, as written.
+	pub name_span: Range<usize>,
 	/// SHA-256 of the clause, comments dropped and whitespace collapsed.
 	pub clause_hash: String,
 	/// 1-based line of the statement.
@@ -186,6 +188,7 @@ pub(crate) fn find(stmt: &Stmt, src: &str) -> Result<Option<Migration>, String> 
 		name,
 		step,
 		cut: cut_start..clause.end,
+		name_span: name_tok.span.clone(),
 		clause_hash: sha256_hex(collapse(&without_comments(stmt, src, clause)).as_bytes()),
 		line: stmt.line,
 	}))
@@ -360,6 +363,9 @@ pub(crate) struct DroppedIndex {
 /// its indexes by name.
 struct TableState {
 	ran: BTreeSet<String>,
+	/// The latest migration SurrealDB ran on each field, by the generation it
+	/// minted.
+	latest: BTreeMap<String, String>,
 	indexes: BTreeMap<String, String>,
 }
 
@@ -370,6 +376,7 @@ async fn table_state(db: &Surreal<Any>, table: &str) -> Result<TableState> {
 	.await?;
 	Ok(TableState {
 		ran: run_names(&info),
+		latest: latest_runs(&info),
 		indexes: info
 			.get("indexes")
 			.and_then(Value::as_object)
@@ -383,6 +390,74 @@ async fn table_state(db: &Surreal<Any>, table: &str) -> Result<TableState> {
 			})
 			.unwrap_or_default(),
 	})
+}
+
+/// For each field, the migration an `INFO FOR TABLE` answer says ran on it
+/// last, by the generation each minted.
+fn latest_runs(info: &Value) -> BTreeMap<String, String> {
+	let mut latest: BTreeMap<String, (i64, String)> = BTreeMap::new();
+	let runs = info
+		.get("migrations")
+		.and_then(|section| section.get("migrations"))
+		.and_then(Value::as_array);
+	for run in runs.into_iter().flatten() {
+		let (Some(name), Some(field)) =
+			(run.get("name").and_then(Value::as_str), run.get("field").and_then(Value::as_str))
+		else {
+			continue;
+		};
+		let generation = run.get("generation").and_then(Value::as_i64).unwrap_or(0);
+		let field = unquote(field);
+		if latest.get(&field).is_none_or(|(at, _)| generation > *at) {
+			latest.insert(field, (generation, name.to_string()));
+		}
+	}
+	latest.into_iter().map(|(field, (_, name))| (field, name)).collect()
+}
+
+/// What applying one migration does, given what the table has run.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Decision {
+	/// The table has not run it: send the statement as written.
+	Run,
+	/// It is the field's latest migration: send the definition without it.
+	InEffect,
+	/// It ran, and a later migration of the field (a revert, say) has replaced
+	/// it since. A table never runs a name twice, so it runs under this one.
+	RunAs(String),
+}
+
+fn decide(migration: &Migration, state: &TableState, entry: Option<&LedgerEntry>) -> Decision {
+	let mut names: Vec<String> = entry.map(|e| e.server_names.clone()).unwrap_or_default();
+	if !names.contains(&migration.name) {
+		names.push(migration.name.clone());
+	}
+	if !names.iter().any(|name| state.ran.contains(name)) {
+		return Decision::Run;
+	}
+	let Some(field) = migration.field() else {
+		return Decision::InEffect;
+	};
+	match state.latest.get(&unquote(field)) {
+		Some(latest) if !names.contains(latest) => {
+			let fresh = (2..)
+				.map(|n| format!("{}_{n}", migration.name))
+				.find(|name| !state.ran.contains(name))
+				.expect("an unused name");
+			Decision::RunAs(fresh)
+		}
+		_ => Decision::InEffect,
+	}
+}
+
+/// `stmt` with its migration's name replaced by `name`.
+fn renamed(stmt: &Stmt, src: &str, migration: &Migration, name: &str) -> String {
+	format!(
+		"{}{}{}",
+		&src[stmt.span.start..migration.name_span.start],
+		crate::rollout::quote_ident_if_needed(name),
+		&src[migration.name_span.end..stmt.span.end]
+	)
 }
 
 /// The names of the migrations an `INFO FOR TABLE` answer says the table has run.
@@ -452,11 +527,20 @@ fn ledger_key(table: &str, name: &str) -> String {
 	format!("{table}:{name}")
 }
 
+/// What SurrealKit recorded about a migration it ran.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LedgerEntry {
+	clause_hash: String,
+	/// The names SurrealDB ran it under: its own, and one for each time it ran
+	/// again after a later migration of its field replaced it.
+	server_names: Vec<String>,
+}
+
 async fn load_ledger(
 	db: &Surreal<Any>,
 	module: &Module,
 	keys: &[String],
-) -> Result<BTreeMap<String, String>> {
+) -> Result<BTreeMap<String, LedgerEntry>> {
 	let ns = module.partition(Partition::Migration);
 	let rows: Vec<Value> =
 		crate::rollout::retry_conflicts("reading the migration ledger", || async {
@@ -473,8 +557,20 @@ async fn load_ledger(
 		.iter()
 		.filter_map(|row| {
 			let key = row.get("key")?.as_str()?.to_string();
-			let hash = row.get("val")?.get("clause_hash")?.as_str()?.to_string();
-			Some((key, hash))
+			let val = row.get("val")?;
+			let clause_hash = val.get("clause_hash")?.as_str()?.to_string();
+			let server_names = val
+				.get("server_names")
+				.and_then(Value::as_array)
+				.map(|names| names.iter().filter_map(|n| n.as_str().map(str::to_string)).collect())
+				.unwrap_or_default();
+			Some((
+				key,
+				LedgerEntry {
+					clause_hash,
+					server_names,
+				},
+			))
 		})
 		.collect())
 }
@@ -483,6 +579,7 @@ async fn record_in_ledger(
 	db: &Surreal<Any>,
 	module: &Module,
 	migration: &Migration,
+	server_names: &[String],
 	source: &str,
 ) -> Result<()> {
 	let ns = module.partition(Partition::Migration);
@@ -490,6 +587,7 @@ async fn record_in_ledger(
 	let val = serde_json::json!({
 		"field": migration.field(),
 		"clause_hash": migration.clause_hash,
+		"server_names": server_names,
 		"source_path": source,
 	});
 	crate::rollout::retry_conflicts("recording a migration", || async {
@@ -527,7 +625,7 @@ pub(crate) async fn plan(db: &Surreal<Any>, sql: &str) -> Result<Vec<Planned>> {
 			states.insert(migration.table.clone(), table_state(db, &migration.table).await?);
 		}
 		let state = &states[&migration.table];
-		let ran_before = state.ran.contains(&migration.name);
+		let ran_before = decide(&migration, state, None) == Decision::InEffect;
 		let indexes = match (ran_before, migration.field()) {
 			(false, Some(field)) => state
 				.indexes
@@ -619,18 +717,21 @@ pub(crate) async fn apply(
 			continue;
 		};
 		let state = &states[&migration.table];
-		if state.ran.contains(&migration.name) {
-			let key = ledger_key(&migration.table, &migration.name);
-			if ledger.get(&key).is_some_and(|hash| *hash != migration.clause_hash) {
-				bail!(
-					"{source}, line {}: migration `{}` on `{}` already ran with a different \
+		let entry = ledger.get(&ledger_key(&migration.table, &migration.name));
+		let decision = decide(migration, state, entry);
+		if decision != Decision::Run
+			&& entry.is_some_and(|e| e.clause_hash != migration.clause_hash)
+		{
+			bail!(
+				"{source}, line {}: migration `{}` on `{}` already ran with a different \
 					 transform. A table runs a name once, so the new transform needs a name of its \
 					 own",
-					migration.line,
-					migration.name,
-					migration.table
-				);
-			}
+				migration.line,
+				migration.name,
+				migration.table
+			);
+		}
+		if decision == Decision::InEffect {
 			log::info!(
 				"{source}: migration `{}` already ran on `{}`; applying the definition only",
 				migration.name,
@@ -643,6 +744,25 @@ pub(crate) async fn apply(
 			}
 			continue;
 		}
+		let mut server_names = entry.map(|e| e.server_names.clone()).unwrap_or_default();
+		let text = match &decision {
+			Decision::RunAs(fresh) => {
+				log::info!(
+					"{source}: migration `{}` ran on `{}` before, and a later migration of `{}` \
+					 has replaced it since; running it again as `{fresh}`",
+					migration.name,
+					migration.table,
+					migration.field().unwrap_or_default()
+				);
+				server_names.push(fresh.clone());
+				renamed(stmt, sql, migration, fresh)
+			}
+			_ => {
+				server_names.push(migration.name.clone());
+				stmt.text(sql).to_string()
+			}
+		};
+		server_names.dedup();
 		if let Some(field) = migration.field() {
 			for (name, definition) in &state.indexes {
 				if index_reads(definition, field)
@@ -656,8 +776,9 @@ pub(crate) async fn apply(
 				}
 			}
 		}
-		pending.push(migration.clone());
-		out.push_str(stmt.text(sql));
+		let ran_as = server_names.last().cloned().unwrap_or_else(|| migration.name.clone());
+		pending.push((migration.clone(), ran_as, server_names));
+		out.push_str(&text);
 		out.push_str(";\n");
 	}
 
@@ -705,11 +826,11 @@ pub(crate) async fn apply(
 
 	let restored = restore_indexes(db, &dropping, source).await;
 
-	for table in pending.iter().map(|m| m.table.clone()).collect::<BTreeSet<_>>() {
+	for table in pending.iter().map(|(m, ..)| m.table.clone()).collect::<BTreeSet<_>>() {
 		let now = table_state(db, &table).await?;
-		for migration in pending.iter().filter(|m| m.table == table) {
-			if now.ran.contains(&migration.name) {
-				record_in_ledger(db, module, migration, source).await?;
+		for (migration, ran_as, server_names) in pending.iter().filter(|(m, ..)| m.table == table) {
+			if now.ran.contains(ran_as) {
+				record_in_ledger(db, module, migration, server_names, source).await?;
 				log::info!("{source}: ran migration `{}` on `{table}`", migration.name);
 			}
 		}
@@ -852,8 +973,10 @@ pub(crate) fn hint(err: anyhow::Error, source: &str) -> anyhow::Error {
 			})
 			.unwrap_or_else(|| "the field".to_string());
 		return err.context(format!(
-			"{source}: the table has records and the new definition of {target} does not accept \
-			 every value they hold. Say what they become, in the same DEFINE FIELD: \
+			"{source}: the table has records, and the new definition of {target} accepts less \
+			 than the old one did. SurrealDB compares the two definitions, not the values the \
+			 records hold, so it asks what they become even when every value would fit. Say so \
+			 in the same DEFINE FIELD: \
 			 `MIGRATE EXISTING ROWS AS <name> USING <expression over $value> FALLBACK <value>`, \
 			 for example `MIGRATE EXISTING ROWS AS stock_to_int USING <int> $value FALLBACK 0`"
 		));
@@ -913,6 +1036,67 @@ pub(crate) fn compatibility(info: &Value) -> i64 {
 	info.get("compatibility").and_then(Value::as_i64).unwrap_or(3)
 }
 
+/// Words that start a statement, which a migration's transform may not hold.
+const STATEMENT_WORDS: &[&str] = &[
+	"IF", "ELSE", "SELECT", "LET", "FOR", "RETURN", "CREATE", "UPDATE", "UPSERT", "DELETE",
+	"INSERT", "RELATE", "DEFINE", "REMOVE", "ALTER", "BEGIN", "COMMIT", "CANCEL", "THROW", "BREAK",
+	"CONTINUE", "SLEEP", "INFO", "LIVE", "KILL", "USE", "SHOW", "REBUILD",
+];
+
+/// Why SurrealDB would refuse `text` as a migration's transform, or with
+/// `constant` as its FALLBACK, where that shows without the server: a
+/// statement, a parameter other than `$value`, or a call SurrealDB does not
+/// let a transform make. The server checks more; this catches the mistakes
+/// that would otherwise surface only when the step runs.
+pub(crate) fn transform_refusal(text: &str, constant: bool) -> Option<String> {
+	let statements = crate::surql_scan::scan(text).ok()?;
+	if statements.len() > 1 {
+		return Some("it may not hold more than one statement".to_string());
+	}
+	let stmt = statements.first()?;
+	for (i, tok) in stmt.tokens.iter().enumerate() {
+		let word = &text[tok.span.clone()];
+		let prev = i.checked_sub(1).and_then(|p| stmt.tok_text(text, p));
+		let next = stmt.tok_text(text, i + 1);
+		let after = stmt.tok_text(text, i + 2);
+		match tok.kind {
+			TokKind::Param => {
+				let name = unquote(word.trim_start_matches('$'));
+				if constant {
+					return Some(format!("a FALLBACK is a constant, so it cannot read `${name}`"));
+				}
+				if name != "value" {
+					return Some(format!("it reads only `$value`, not `${name}`"));
+				}
+			}
+			TokKind::Word => {
+				// A path step (`$value.select`) or an object key (`{ select: 1 }`).
+				if prev == Some(".") || (next == Some(":") && after != Some(":")) {
+					continue;
+				}
+				let upper = word.to_ascii_uppercase();
+				if STATEMENT_WORDS.contains(&upper.as_str()) {
+					return Some(format!(
+						"it may not hold a statement (`{word}`). Write it as an expression over \
+						 `$value`, for example `$value != NONE AND $value`, with a FALLBACK for \
+						 what does not convert"
+					));
+				}
+				if matches!(upper.as_str(), "FN" | "ML" | "MOD" | "EXT")
+					&& next == Some(":")
+					&& after == Some(":")
+				{
+					return Some(format!(
+						"it may not call `{word}::` functions; only built-in functions are allowed"
+					));
+				}
+			}
+			_ => {}
+		}
+	}
+	None
+}
+
 /// Offline checks of the migrations in a set of schema files: the ones the
 /// server is known to refuse, and a name used twice on a table for different
 /// transforms.
@@ -938,6 +1122,29 @@ pub(crate) fn check_files(files: &[crate::schema_state::SchemaFile]) -> Result<(
 						stmt.line,
 						migration.table
 					);
+				}
+				if let MigrationStep::Rewrite {
+					using,
+					fallback,
+					..
+				} = &migration.step
+				{
+					let refusal =
+						transform_refusal(using, false).map(|r| ("USING", r)).or_else(|| {
+							fallback
+								.as_deref()
+								.and_then(|f| transform_refusal(f, true))
+								.map(|r| ("FALLBACK", r))
+						});
+					if let Some((clause, reason)) = refusal {
+						bail!(
+							"schema file '{}', line {}: the {clause} of migration `{}` would be \
+							 refused: {reason}",
+							file.path,
+							stmt.line,
+							migration.name
+						);
+					}
 				}
 				if let MigrationStep::Rewrite {
 					fallback: None,
@@ -1129,6 +1336,58 @@ mod tests {
 	#[test_case("DEFINE INDEX i ON t COUNT", "active", false ; "a plain count")]
 	fn knows_which_indexes_read_a_field(definition: &str, field: &str, reads: bool) {
 		assert_eq!(index_reads(definition, field), reads);
+	}
+
+	#[test_case("<int> $value", false, None ; "a cast")]
+	#[test_case("$value != NONE AND $value", false, None ; "a boolean guard")]
+	#[test_case("{ published: 'live' }[$value] ?? $value", false, None ; "an object lookup")]
+	#[test_case("string::uppercase($value)", false, None ; "a builtin")]
+	#[test_case("$value.select", false, None ; "a path named like a keyword")]
+	#[test_case("IF $value = 1 { NONE } ELSE { $value }", false, Some("statement") ; "an if block")]
+	#[test_case("(SELECT VALUE 1 FROM ONLY t:1)", false, Some("statement") ; "a subquery")]
+	#[test_case("$value + $other", false, Some("`$other`") ; "another parameter")]
+	#[test_case("fn::fix($value)", false, Some("`fn::`") ; "a custom function")]
+	#[test_case("0", true, None ; "a constant fallback")]
+	#[test_case("$value", true, Some("constant") ; "a fallback that reads the value")]
+	fn checks_a_transform_without_the_server(text: &str, constant: bool, refused: Option<&str>) {
+		let found = transform_refusal(text, constant);
+		match refused {
+			None => assert_eq!(found, None),
+			Some(expected) => {
+				let found = found.expect("refused");
+				assert!(found.contains(expected), "{found}");
+			}
+		}
+	}
+
+	#[test]
+	fn runs_a_replaced_migration_again_under_a_new_name() {
+		let sql = "DEFINE FIELD f ON t TYPE int MIGRATE EXISTING ROWS AS to_int USING <int> $value FALLBACK 0;";
+		let (_, migration) = first(sql);
+		let migration = migration.unwrap();
+		let state = |ran: &[&str], latest: &str| TableState {
+			ran: ran.iter().map(|s| s.to_string()).collect(),
+			latest: [("f".to_string(), latest.to_string())].into(),
+			indexes: BTreeMap::new(),
+		};
+		assert_eq!(decide(&migration, &state(&[], ""), None), Decision::Run);
+		assert_eq!(decide(&migration, &state(&["to_int"], "to_int"), None), Decision::InEffect);
+		assert_eq!(
+			decide(&migration, &state(&["to_int", "to_int_revert"], "to_int_revert"), None),
+			Decision::RunAs("to_int_2".into())
+		);
+		let entry = LedgerEntry {
+			clause_hash: migration.clause_hash.clone(),
+			server_names: vec!["to_int".into(), "to_int_2".into()],
+		};
+		assert_eq!(
+			decide(
+				&migration,
+				&state(&["to_int", "to_int_revert", "to_int_2"], "to_int_2"),
+				Some(&entry)
+			),
+			Decision::InEffect
+		);
 	}
 
 	#[test]

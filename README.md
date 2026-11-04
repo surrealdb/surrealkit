@@ -1021,8 +1021,11 @@ Keep the clause in the schema file. Each name runs once per table:
 In a rollout, a migrated field is planned without `--allow-modified`. Its
 rollback is a reverse migration that you write: `rollout plan` adds a
 `revert_migration` step with an empty `using` (and `fallback`), and `rollout
-lint` and `rollout start` refuse the manifest until it is filled in. Delete the
-step instead to make the rollout irreversible. The complete phase starts with an
+lint` and `rollout start` refuse the manifest until it is filled in with an
+expression SurrealDB accepts. If the server refuses it when the rollback runs,
+fix the step and run `rollout rollback` again. Delete the step instead to make
+the rollout irreversible. A rollout started again after a rollback runs its
+migration again under a new name, since SurrealDB runs each name once. The complete phase starts with an
 `await_migrations` step, which waits for SurrealDB to finish rewriting and
 checking the migrated tables.
 

@@ -555,9 +555,17 @@ per entity; older snapshots read as before.
   fallback = ""     # the value stored when `using` fails, for example ''
   ```
 
-  `rollout lint` and `rollout start` refuse the manifest while `using` is empty.
-  Deleting the step makes the rollout irreversible: `rollout status` reports
-  `irreversible`, and `rollout rollback` refuses once the migrating step has run.
+  `rollout lint` and `rollout start` refuse the manifest while `using` is empty,
+  or when it holds something SurrealDB refuses in a transform: a statement such
+  as `IF` or `SELECT`, a parameter other than `$value`, or an `fn::` call. If
+  the server still refuses the revert when it runs, fix the step and run
+  `rollout rollback` again: a rollback accepts a manifest that changed only in
+  steps that have not run. Deleting the step makes the rollout irreversible:
+  `rollout status` reports `irreversible`, and `rollout rollback` refuses once
+  the migrating step has run.
+- SurrealDB runs each name once per table, even after a revert. When a rolled
+  back rollout is started again, or a file restates a migration that a later one
+  has replaced, SurrealKit runs it again under a new name (`stock_to_int_2`).
 - The complete phase starts with an `await_migrations` step, which waits until
   SurrealDB has rewritten and checked the migrated tables (an hour at most,
   `timeout_secs` to change it) and fails if any record does not fit.
