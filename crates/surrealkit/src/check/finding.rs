@@ -35,11 +35,16 @@ impl Severity {
 	}
 }
 
-/// A finding's code: a letter and a four-digit number, `E1002`.
+/// A finding's code: a letter and a number, `E1002` or `C10001`.
 ///
-/// The prefix follows the engine's catalog: `0xxx` is `S` (syntax), `7xxx` is `L` (lints),
-/// `1xxx` to `6xxx` are `E`. SurrealKit's own findings are `K9xxx`. Two codes with the same
-/// number are the same code.
+/// The prefix follows the engine's catalog: `0xxx` is `S` (syntax), `1xxx` to `6xxx` are `E`,
+/// `7xxx` is `L` (lints), `10xxx` is `C` (certainty), `11xxx` is `A` (access), `12xxx` is `M`
+/// (migration), `13xxx` is `D` (SQL dialects) and `14xxx` is `P` (performance). `8xxx` is
+/// retired. SurrealKit's own findings are `K9xxx`. Two codes with the same number are the same
+/// code.
+///
+/// A code below 10000 renders as its prefix and four digits; from 10000 up, as its prefix and the
+/// number.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Code {
 	prefix: char,
@@ -47,13 +52,20 @@ pub struct Code {
 }
 
 impl Code {
-	/// The code the engine's catalog gives `number`: `S` for `0xxx`, `L` for `7xxx`, `K` for
-	/// `9xxx`, `E` for the rest.
+	/// The code the engine's catalog gives `number`: `S` for `0xxx`, `E` for `1xxx` to `6xxx`,
+	/// `L` for `7xxx`, `K` for `9xxx`, then `C`, `A`, `M`, `D` and `P` for `10xxx` to `14xxx`.
+	/// A number outside the catalog is `E`.
 	pub const fn from_number(number: u16) -> Self {
 		let prefix = match number / 1000 {
 			0 => 'S',
+			1..=6 => 'E',
 			7 => 'L',
 			9 => 'K',
+			10 => 'C',
+			11 => 'A',
+			12 => 'M',
+			13 => 'D',
+			14 => 'P',
 			_ => 'E',
 		};
 		Self {
@@ -75,7 +87,7 @@ impl Code {
 		self.number
 	}
 
-	/// The family, the number's thousands: `1` for `E1002`.
+	/// The family, the number's thousands: `1` for `E1002`, `10` for `C10001`.
 	pub const fn family(self) -> u16 {
 		self.number / 1000
 	}
@@ -340,6 +352,13 @@ mod tests {
 		assert_eq!(Code::from_number(6004).to_string(), "E6004");
 		assert_eq!(Code::from_number(7001).to_string(), "L7001");
 		assert_eq!(Code::from_number(9003), K9003);
+		assert_eq!(Code::from_number(10001).to_string(), "C10001");
+		assert_eq!(Code::from_number(11042).to_string(), "A11042");
+		assert_eq!(Code::from_number(12001).to_string(), "M12001");
+		assert_eq!(Code::from_number(13001).to_string(), "D13001");
+		assert_eq!(Code::from_number(14001).to_string(), "P14001");
+		assert_eq!(Code::from_number(8001).to_string(), "E8001", "8xxx is retired: the fallback");
+		assert_eq!(Code::from_number(15001).to_string(), "E15001", "outside the catalog");
 		assert_eq!(Code::kit(9001).to_string(), "K9001");
 		assert_eq!(L7013.to_string(), "L7013");
 	}
@@ -349,6 +368,8 @@ mod tests {
 		assert_eq!(Code::from_number(1002).family(), 1);
 		assert_eq!(Code::from_number(7013).family(), 7);
 		assert_eq!(Code::from_number(1).family(), 0);
+		assert_eq!(Code::from_number(10001).family(), 10);
+		assert_eq!(Code::from_number(14999).family(), 14);
 	}
 
 	#[test]

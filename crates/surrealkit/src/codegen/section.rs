@@ -117,7 +117,7 @@ fn inline(root: &str, config: &QueriesConfig) -> Result<Vec<CollectedQuery>> {
 	let methods: Vec<&str> = config.methods.iter().map(String::as_str).collect();
 	let mut inline: Vec<CollectedQuery> = Vec::new();
 	let mut by_text: HashMap<String, usize> = HashMap::new();
-	for found in super::extract::scan(&config.sources, &methods)? {
+	for found in crate::host_queries::scan(&config.sources, &methods)? {
 		let source = QuerySource {
 			origin: QueryOrigin::Host,
 			path: relative(root, &found.file)?,

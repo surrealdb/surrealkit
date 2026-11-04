@@ -1023,6 +1023,17 @@ mod tests {
 	}
 
 	#[test]
+	fn queries_default_to_the_query_method_and_reject_an_empty_one() {
+		let parse = |raw: &str| toml::from_str::<TypegenConfig>(raw).unwrap();
+		let cfg = parse("[queries]\n").queries_config().unwrap().unwrap();
+		assert_eq!(cfg.methods, ["query"]);
+		assert!(cfg.sources.is_empty());
+		let err = parse("[queries]\nmethods = [\" \"]\n").queries_config().unwrap_err();
+		assert!(err.to_string().contains("a method name is empty"), "{err}");
+		assert!(toml::from_str::<TypegenConfig>("[queries]\nsourcez = []\n").is_err());
+	}
+
+	#[test]
 	fn json_path_rejects_an_empty_path() {
 		let cfg = TypegenConfig {
 			json: Some(PathBuf::new()),

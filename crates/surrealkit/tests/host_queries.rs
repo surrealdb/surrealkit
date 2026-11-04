@@ -1,11 +1,11 @@
-//! `codegen::extract::scan` over the fixture hosts under `tests/fixtures/codegen/hosts`.
+//! `host_queries::scan` over the fixture hosts under `tests/fixtures/codegen/hosts`.
 
 #![cfg(feature = "host-queries")]
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use surrealkit::codegen::extract::{DEFAULT_METHODS, FoundQuery, scan};
+use surrealkit::host_queries::{DEFAULT_METHODS, FoundQuery, scan};
 
 fn hosts() -> PathBuf {
 	Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codegen/hosts")

@@ -39,8 +39,8 @@ rustls = { version = '0.23', default-features = false, features = ['aws-lc-rs'],
 inquire = { version = '0.7', optional = true }
 tempfile = { version = '3', optional = true }
 indoc = "2"
-# `generate`'s host-code extraction: finds `db.query("…")` calls in TypeScript,
-# Svelte, Vue and Astro sources with the TypeScript grammar.
+# Host-code query extraction (`host_queries`): finds `db.query("…")` calls in
+# TypeScript, Svelte, Vue and Astro sources with the TypeScript grammar.
 tree-sitter = { version = '0.26', optional = true }
 tree-sitter-typescript = { version = '0.23', optional = true }
 # Model Context Protocol server. `server` brings ServerHandler and schemars (which
@@ -68,9 +68,9 @@ default = ['kv-mem', 'cli', 'analyze']
 # backend) and tempfile from a library consumer's dependency tree -- none of them
 # are used by the library itself.
 cli = ['templates', 'host-queries', 'dep:clap', 'dep:inquire', 'dep:rustls']
-# `generate`'s extraction of queries from host-language sources. The CLI enables
-# it; a library consumer that renders a `TypesDocument` it already has does not
-# need the grammars.
+# Extraction of the queries host-language sources send (`host_queries`), which
+# `check` lints and `compile` types. The CLI enables it; a library consumer that
+# reads no host code does not need the grammars.
 host-queries = ['dep:tree-sitter', 'dep:tree-sitter-typescript']
 # `surrealkit init`'s template engine. Shared by the CLI and the MCP server, so it
 # lives in the library rather than the binary. Interactive feature selection needs
