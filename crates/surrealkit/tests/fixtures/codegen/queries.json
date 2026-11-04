@@ -402,5 +402,166 @@
         "open": []
       }
     ]
+  },
+  {
+    "key": "CREATE ONLY user:ada SET name = 'Ada', age = 36; UPDATE ONLY user:bob SET age += 1; DELETE user:ada; DELETE user:bob RETURN AFTER; UPDATE user SET age += 1 RETURN DIFF;",
+    "text": "CREATE ONLY user:ada SET name = 'Ada', age = 36; UPDATE ONLY user:bob SET age += 1; DELETE user:ada; DELETE user:bob RETURN AFTER; UPDATE user SET age += 1 RETURN DIFF;",
+    "statements": [
+      {
+        "kind": {
+          "kind": "objectLiteral",
+          "fields": [
+            {
+              "name": "age",
+              "kind": {
+                "kind": "int"
+              },
+              "optional": false
+            },
+            {
+              "name": "id",
+              "kind": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "optional": false
+            },
+            {
+              "name": "name",
+              "kind": {
+                "kind": "string"
+              },
+              "optional": false
+            }
+          ]
+        },
+        "optional": false,
+        "certainty": "hint",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "objectLiteral",
+          "fields": [
+            {
+              "name": "age",
+              "kind": {
+                "kind": "int"
+              },
+              "optional": false
+            },
+            {
+              "name": "id",
+              "kind": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "optional": false
+            },
+            {
+              "name": "name",
+              "kind": {
+                "kind": "string"
+              },
+              "optional": false
+            }
+          ]
+        },
+        "optional": true,
+        "certainty": "hint",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "array",
+          "item": {
+            "kind": "any"
+          },
+          "length": 0
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "array",
+          "item": {
+            "kind": "none"
+          }
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "array",
+          "item": {
+            "kind": "array",
+            "item": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "op",
+                  "kind": {
+                    "kind": "union",
+                    "variants": [
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "add"
+                      },
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "change"
+                      },
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "remove"
+                      },
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "replace"
+                      }
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "path",
+                  "kind": {
+                    "kind": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "value",
+                  "kind": {
+                    "kind": "any"
+                  },
+                  "optional": false
+                }
+              ]
+            }
+          }
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      }
+    ]
   }
 ]

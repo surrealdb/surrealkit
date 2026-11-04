@@ -22,6 +22,7 @@ export type Queries = {
   "RETURN { a: 1 }": { result: [{ a: number; [key: string]: unknown } | undefined]; params: {} };
   "SELECT * FROM post WHERE published = $published AND author = $author": { result: [Array<{ author: RecordId<"user">; title: string; when: DateTime }>]; params: { published: boolean; author: RecordId<"user"> | undefined; since?: unknown } };
   "USE NS app DB main; INFO FOR USER admin;": { result: [{ database?: string; namespace?: string }, string]; params: {} };
+  "CREATE ONLY user:ada SET name = 'Ada', age = 36; UPDATE ONLY user:bob SET age += 1; DELETE user:ada; DELETE user:bob RETURN AFTER; UPDATE user SET age += 1 RETURN DIFF;": { result: [{ age: number; id: RecordId<"user">; name: string }, { age: number; id: RecordId<"user">; name: string } | undefined, [], Array<undefined>, Array<Array<{ op: "add" | "change" | "remove" | "replace"; path: string; value: unknown }>>]; params: {} };
 };
 
 /** Each named query's text, so `Queries[QueryNames["name"]]` finds its entry. */

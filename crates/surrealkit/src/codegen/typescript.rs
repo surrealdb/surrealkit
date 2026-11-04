@@ -244,6 +244,11 @@ impl Emitter<'_> {
 			Kind::Geometry {
 				types,
 			} => self.geometry(types),
+			// An array no element fits, such as the result of a plain DELETE.
+			Kind::Array {
+				length: Some(0),
+				..
+			} => "[]".to_string(),
 			Kind::Array {
 				item,
 				..
@@ -905,6 +910,15 @@ mod tests {
 			"key": "k", "text": "SELECT \"a\"\nFROM t\\", "statements": [],
 		}]));
 		assert!(out.contains(r#""SELECT \"a\"\nFROM t\\": {"#), "{out}");
+	}
+
+	#[test]
+	fn an_array_of_length_zero_is_the_empty_tuple() {
+		assert_eq!(value(json!({ "kind": "array", "item": { "kind": "any" }, "length": 0 })), "[]");
+		assert_eq!(
+			value(json!({ "kind": "array", "item": { "kind": "int" }, "length": 2 })),
+			"Array<number>"
+		);
 	}
 
 	#[test]

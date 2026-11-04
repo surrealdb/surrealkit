@@ -183,6 +183,20 @@ export async function main() {
   void n;
   void done;
 
+  const [created, updated, deleted, gone, diffs] = await db.query(
+    "CREATE ONLY user:ada SET name = 'Ada', age = 36; UPDATE ONLY user:bob SET age += 1; DELETE user:ada; DELETE user:bob RETURN AFTER; UPDATE user SET age += 1 RETURN DIFF;",
+  );
+  const age: number = created.age;
+  const maybe: number | undefined = updated?.age;
+  const empty: [] = deleted;
+  const after: undefined = gone[0];
+  const op: "add" | "change" | "remove" | "replace" = diffs[0][0].op;
+  void age;
+  void maybe;
+  void empty;
+  void after;
+  void op;
+
   const [events] = await db.query("SELECT * FROM event");
   const extra: unknown = events[0].anything;
   void extra;
