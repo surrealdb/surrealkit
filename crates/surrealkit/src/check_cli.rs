@@ -15,12 +15,13 @@ use notify::{EventKind, RecursiveMode, Watcher};
 use surrealkit::check::discover::{Ignore, discover};
 use surrealkit::check::drift::{ConfigFile, DriftIgnore, Env, check_targets};
 use surrealkit::check::engine::SchemaApply;
+use surrealkit::check::host;
 use surrealkit::check::policy::Policy;
 use surrealkit::check::{ExtraFile, Extras, Report, render, run_with};
 use surrealkit::module::Module;
 use surrealkit::project::{ProjectConfig, Target};
 use surrealkit::selection::select_modules;
-use surrealkit::variables::{TemplateVars, build_project_vars, load_typegen_config};
+use surrealkit::variables::{QueriesConfig, TemplateVars, build_project_vars, load_typegen_config};
 use tokio::sync::mpsc::unbounded_channel;
 
 use crate::output;
@@ -81,6 +82,8 @@ struct Loaded {
 	experimental: Vec<String>,
 	/// `[typegen] engine`.
 	engine: Option<String>,
+	/// `[typegen.queries]`: where host code is, when it is set.
+	queries: Option<QueriesConfig>,
 	vars: TemplateVars,
 }
 
@@ -93,6 +96,7 @@ fn load(opts: &Opts) -> Result<Loaded> {
 	// The same capabilities `compile` runs the engine with. Template variables come from the
 	// config file and `--var` only, never from `SURREALKIT_VAR_*`.
 	let typegen = load_typegen_config(None)?;
+	let queries = typegen.queries_config()?;
 	let vars = TemplateVars {
 		vars: build_project_vars(&opts.vars, None)?,
 	};
@@ -104,13 +108,14 @@ fn load(opts: &Opts) -> Result<Loaded> {
 		drift_ignore,
 		experimental: typegen.experimental,
 		engine: typegen.engine,
+		queries,
 		vars,
 	})
 }
 
 /// One check of the project at `root`, with a fresh engine: discover the sources, run them
-/// through the schema backend, compare the files with each target in `opts`, and return the
-/// report. The one function `watch` calls for every change, which has no target.
+/// through the schema backend, read the host code `[typegen.queries]` names, compare the files
+/// with each target in `opts`, and return the report. The one function `watch` calls for every change, which has no target.
 async fn run_once(loaded: &Loaded, opts: &Opts, root: &Path) -> Result<Report> {
 	let sources =
 		discover(&loaded.project, &opts.folder, root, &loaded.modules, &loaded.project.analyze)?;
@@ -128,6 +133,12 @@ async fn run_once(loaded: &Loaded, opts: &Opts, root: &Path) -> Result<Report> {
 		);
 	}
 	let mut extras = Extras::default();
+	if let Some(queries) = loaded.queries.as_ref().filter(|queries| !queries.sources.is_empty()) {
+		let linted = host::lint(root, queries)?;
+		extras.files.extend(linted.files);
+		extras.findings.extend(linted.findings);
+		extras.host = Some(linted.counts);
+	}
 	if !opts.targets.is_empty() {
 		let config = config_file(root)?;
 		let env = Env {
