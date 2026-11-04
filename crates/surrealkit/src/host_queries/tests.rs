@@ -400,7 +400,7 @@ db['createQuery'](\"computed\");
 	// A method still needs a receiver, and wins over a function of the same name.
 	let both = Queries {
 		methods: &["query"],
-		functions: &["query"],
+		functions: &[QueryFunction::first("query")],
 		..Queries::DEFAULT
 	};
 	let found = extract_with("a.ts", "query(\"F\"); db.query(\"M\");", &both);
@@ -423,6 +423,96 @@ fn function_calls_are_found_in_script_blocks() {
 	assert_eq!(&svelte[query.host_range], "SELECT * FROM person");
 	assert_eq!(all_texts("c.vue", "<script setup>\nconst r = useQuery(\"V\");\n</script>"), ["V"]);
 	assert_eq!(all_texts("p.astro", "---\nconst r = useLive(\"A\");\n---\n<p/>"), ["A"]);
+}
+
+#[test]
+fn preload_carries_its_query_in_the_second_argument_by_default() {
+	let source = "
+preload(db, \"A\");
+kit.preload(db, 'B');
+preload(db, `C ${x}`, { cache: true });
+preload(db /* the client */, /* the query */ \"D\");
+const rows = await preload(this.db, \"E\");
+";
+	let queries = all("a.ts", source);
+	assert_eq!(
+		queries.iter().map(|query| query.text.as_str()).collect::<Vec<_>>(),
+		["A", "B", "C $__host0", "D", "E"]
+	);
+	assert!(queries.iter().all(|query| {
+		query.source == HostQuerySource::Function("preload".to_string())
+			&& query.method == "preload"
+	}));
+	// The range is the literal's contents, so the position indexes the host file.
+	assert_eq!(&source[queries[3].host_range.clone()], "D");
+	assert_eq!((queries[0].line, queries[0].column), (2, 14));
+	for (file, text) in [
+		("p.svelte", "<script>\n\tconst rows = preload(db, \"S\");\n</script>\n"),
+		("p.vue", "<script setup>\nconst rows = preload(db, \"V\");\n</script>\n"),
+		("p.astro", "---\nconst rows = preload(db, \"A\");\n---\n<p/>"),
+		("p.tsx", "export const R = () => { preload(db, \"X\"); return <p/>; };"),
+		("p.jsx", "export const R = () => { kit.preload(db, \"J\"); return <p/>; };"),
+		("p.js", "preload(db, \"M\");"),
+	] {
+		assert_eq!(all_texts(file, text).len(), 1, "{file}");
+	}
+}
+
+#[test]
+fn a_call_with_too_few_arguments_or_a_non_literal_at_the_position_is_not_a_query() {
+	let source = "
+preload(db);
+preload();
+preload(\"not a query\", db);
+preload(db, sql);
+preload(db, surql`SELECT 1`);
+preload(db, 'a' + b);
+preload(db, ...rest);
+preload(/* only a comment */);
+kit.preload(db /* the query is missing */);
+";
+	assert!(all("a.ts", source).is_empty(), "{:#?}", all("a.ts", source));
+	// Position 0 of a position-1 function is not read, and position 1 of a position-0 one is not.
+	assert!(all("a.ts", "useQuery(db, \"SELECT 1\");").is_empty());
+	assert_eq!(all_texts("a.ts", "useQuery(\"SELECT 1\", db);"), ["SELECT 1"]);
+}
+
+#[test]
+fn a_function_reads_the_argument_it_names() {
+	let third = Queries {
+		functions: &[QueryFunction {
+			name: "run",
+			arg: 2,
+		}],
+		..Queries::DEFAULT
+	};
+	let source = "run(a, b, \"C\"); run(a, \"B\"); run(\"A\", b); run(a, b, c, \"D\");";
+	let found = extract_with("a.ts", source, &third);
+	assert_eq!(found.iter().map(|query| query.text.as_str()).collect::<Vec<_>>(), ["C"]);
+	assert_eq!(found[0].source, HostQuerySource::Function("run".to_string()));
+	// A method keeps position 0 even when a function of the same name reads another.
+	let both = Queries {
+		methods: &["run"],
+		functions: &[QueryFunction {
+			name: "run",
+			arg: 1,
+		}],
+		..Queries::DEFAULT
+	};
+	let found = extract_with("a.ts", "db.run(\"M\", \"x\"); run(\"x\", \"F\");", &both);
+	assert_eq!(
+		found.iter().map(|query| (query.text.as_str(), query.source.clone())).collect::<Vec<_>>(),
+		[
+			("M", HostQuerySource::Method("run".to_string())),
+			("F", HostQuerySource::Function("run".to_string()))
+		]
+	);
+	// With no functions configured nothing matches.
+	let none = Queries {
+		functions: &[],
+		..Queries::DEFAULT
+	};
+	assert!(extract_with("a.ts", "preload(db, \"A\"); useQuery(\"B\");", &none).is_empty());
 }
 
 #[test]

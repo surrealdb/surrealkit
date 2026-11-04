@@ -117,8 +117,15 @@ fn inline(root: &str, config: &QueriesConfig) -> Result<Vec<CollectedQuery>> {
 	fn names(list: &[String]) -> Vec<&str> {
 		list.iter().map(String::as_str).collect()
 	}
-	let (methods, functions, components) =
-		(names(&config.methods), names(&config.functions), names(&config.components));
+	let (methods, components) = (names(&config.methods), names(&config.components));
+	let functions: Vec<crate::host_queries::QueryFunction<'_>> = config
+		.functions
+		.iter()
+		.map(|function| crate::host_queries::QueryFunction {
+			name: &function.name,
+			arg: function.arg,
+		})
+		.collect();
 	let queries = crate::host_queries::Queries {
 		methods: &methods,
 		functions: &functions,
