@@ -810,8 +810,10 @@ then compared by table name and field path, on the normalised facts a v2 documen
   catalog on the target records it as managed (it was removed from the files and not yet
   synced), and `K9106` when it never was, or when the database was never synced by SurrealKit.
   Something a module outside this run manages is not reported.
-- `K9107`: the target runs another engine minor than the embedded one (4.0), so only normalised
-  facts were compared. Compare against a target on the embedded minor for an exact result.
+- `K9107`: the target runs another SurrealDB 4 minor than the embedded one (4.0), for example a
+  4.1 server, so only normalised facts were compared. Compare against a target on the embedded
+  minor for an exact result. SurrealKit refuses a 3.x server, so a 3.x target never gets this
+  far.
 
 SurrealKit's own metadata (`__entity`, `__rollout`, `__seed`, and whatever `setup.surql`
 defines) is left out on both sides. Provenance, the `INFO` text of a definition and diagnostics

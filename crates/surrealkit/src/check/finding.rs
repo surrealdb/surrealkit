@@ -138,8 +138,8 @@ pub const K9105: Code = Code::kit(9105);
 /// Drift: on the target and never managed by SurrealKit, as in a shared database or one
 /// another writer changes. A warning.
 pub const K9106: Code = Code::kit(9106);
-/// Drift: the target runs another engine minor than the one SurrealKit embeds, so only
-/// normalised facts were compared. A hint.
+/// Drift: the target runs another SurrealDB 4 minor than the one SurrealKit embeds, so only
+/// normalised facts were compared. A hint. A 3.x target is refused when it connects.
 pub const K9107: Code = Code::kit(9107);
 /// Host code: an untagged template literal with `${…}` passed to a query method, which splices
 /// the value into the SurrealQL text.
