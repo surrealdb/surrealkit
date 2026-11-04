@@ -908,7 +908,7 @@ event (always `null` in middleware mode, so nothing was ever cleaned up) to the
 `closeBundle` hook, and the plugin no longer imports anything from `vite` at
 runtime — only its types.
 
-### 23. `surrealkit check` and `watch`, and the `analyze` feature (unreleased)
+### 24. `surrealkit check` and `watch`, and the `analyze` feature (unreleased)
 
 Nothing to change. New: `surrealkit check` lints a project's SurrealQL with no database: it
 applies the schema to a throwaway in-memory engine, reports each statement the engine rejects,
@@ -924,7 +924,7 @@ checker in SurrealDB 4.1; see the README's "Checking SurrealQL".
 with `default-features = false` is unchanged. Without `analyze` the CLI has no `check` or
 `watch`, and `[analyze]` still parses.
 
-### 24. `check --target` and `[analyze] drift_ignore` (unreleased)
+### 25. `check --target` and `[analyze] drift_ignore` (unreleased)
 
 Nothing to change. New: `surrealkit check --target <name>` compares the schema files with the
 database a `[target.<name>]` names, read-only, and reports a table or field that is missing
