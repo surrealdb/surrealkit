@@ -67,7 +67,7 @@ The binding then manages the live query:
 | Event | Result |
 | --- | --- |
 | The last component that shows the query is destroyed | The live query is killed. |
-| The parameters change to different values | The old live query is killed and a new one opens. |
+| The parameters change to different values | A keyed query: the old live query is killed and a new one opens. A window query: its watcher stays (see below) and the `SELECT` runs with the new values. |
 | The parameters change to equal values | Nothing happens. |
 | The SDK reconnects after a dropped connection | Each shown live query opens again and reads its rows again. |
 | The engine kills the live query | The query goes to its error state, with the code `killed`. |
@@ -83,6 +83,8 @@ A query that is not shown keeps its last rows for five minutes (`gcTime`), so it
 | --- | --- | --- |
 | **Keyed** | The `SELECT` has only a projection, one target and `FETCH`. | Each notification is applied by record id: `CREATE` adds the row, `UPDATE` replaces it, `DELETE` removes it. |
 | **Window** | The `SELECT` has `WHERE`, `ORDER BY`, `LIMIT`, `START`, `GROUP`, `SPLIT`, `OMIT`, `VALUE`, `WITH`, `TIMEOUT`, `PARALLEL`, `TEMPFILES` or `EXPLAIN`. | A `LIVE SELECT * FROM <target>` watches the target. Each notification runs the `SELECT` again. |
+
+Window queries share their watcher. All window queries on one connection with the same watch text and the same values for the parameters it reads use one `LIVE SELECT`. For example, a page of `user`, a filtered list of `user` and a count of `user` share one `LIVE SELECT * FROM user`, and each runs its own `SELECT` again on a notification. The watcher is killed when the last of them is destroyed.
 
 In window mode the rows are always the ones the engine computes, so pagination works: `SELECT * FROM user ORDER BY name LIMIT $lim START $start` stays correct when a record moves into or out of the page. A burst of notifications runs the `SELECT` at most twice: once, and once more if a change arrived during the first run. Rows that did not change keep their object identity, so keyed `{#each}` blocks and React keys render only what changed.
 

@@ -130,7 +130,7 @@ export class MockDb implements SurrealLike {
 
 function split(text: string): string[] {
 	return text
-		.split(/;\s*\n/)
+		.split(/\n;\n?|;\s*\n/)
 		.map((statement) => statement.trim().replace(/;$/, ''))
 		.filter((statement) => statement !== '');
 }

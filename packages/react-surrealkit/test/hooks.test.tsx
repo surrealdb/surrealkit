@@ -117,7 +117,7 @@ describe('useLive', () => {
 		expect(db.open.size).toBe(0);
 	});
 
-	it('kills and resubscribes when params change, and not when they are equal', async () => {
+	it('re-runs the window when params change, and not when they are equal', async () => {
 		const db = database();
 		const tree = (params: Record<string, unknown>) => (
 			<SurrealProvider client={db}>
@@ -135,7 +135,9 @@ describe('useLive', () => {
 		view.rerender(tree({ lim: 2, start: 2 }));
 		await flush();
 		expect(names()).toEqual(['cy', 'dee']);
-		expect(db.killed).toEqual(['live-1']);
+		// The window's watcher watches the table, which the new page shares.
+		expect(db.ran(/^LIVE/)).toHaveLength(1);
+		expect(db.killed).toEqual([]);
 
 		view.unmount();
 		await settle();
@@ -184,9 +186,8 @@ describe('useLive', () => {
 		);
 		expect(names()).toEqual(['dee', 'eve']);
 		await flush();
-		expect([...db.open.values()].map((live) => live.params)).toEqual([
-			{ lim: 2, start: 3 },
-		]);
+		expect(db.ran(/^LIVE/)).toEqual(['LIVE SELECT * FROM user']);
+		expect(names()).toEqual(['dee', 'eve']);
 	});
 });
 

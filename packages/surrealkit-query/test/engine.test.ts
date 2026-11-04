@@ -90,6 +90,37 @@ describe.skipIf(!engineConfigured)(
 			expect(cache.stats().live).toBe(0);
 		});
 
+		it('shares one watcher between window queries on a table', async () => {
+			const page = cache.observeLive<Person>(
+				'SELECT * FROM person ORDER BY name LIMIT $lim',
+				{ lim: 1 },
+			);
+			const red = cache.observeLive<Person>(
+				'SELECT * FROM person WHERE team = $team',
+				{ team: 'red' },
+			);
+			const count = cache.observeLive<{ n: number }>(
+				'SELECT count() AS n FROM person GROUP ALL',
+			);
+			const offs = [page, red, count].map((live) =>
+				live.subscribe(() => {}),
+			);
+			await until(count, (rows) => rows?.length === 1);
+			expect(cache.stats().live).toBe(1);
+			const before = (count.get().data?.[0]?.n ?? 0) as number;
+			await engine.db.query(
+				"CREATE person:aa SET name = 'aa', team = 'red'",
+			);
+			await until(count, (rows) => rows?.[0]?.n === before + 1);
+			await until(page, (rows) => rows?.[0]?.name === 'aa');
+			await until(red, (rows) => names(rows).includes('aa'));
+			await engine.db.query('DELETE person:aa');
+			await until(count, (rows) => rows?.[0]?.n === before);
+			for (const off of offs) off();
+			await new Promise((go) => setTimeout(go, 50));
+			expect(cache.stats().live).toBe(0);
+		});
+
 		it('drops a record an update moves out of the WHERE', async () => {
 			const live = cache.observeLive<Person>(
 				'SELECT * FROM person WHERE team = $team',

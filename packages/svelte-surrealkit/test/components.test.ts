@@ -60,7 +60,7 @@ describe('<LiveQuery>', () => {
 		expect(names()).toEqual(['ada lovelace', 'cy', 'dee', 'eve']);
 	});
 
-	it('kills and resubscribes when params change, and not when they are equal', async () => {
+	it('re-runs the window when params change, and not when they are equal', async () => {
 		const db = database();
 		const view = render(Live, {
 			db,
@@ -77,10 +77,9 @@ describe('<LiveQuery>', () => {
 		await view.rerender({ params: { lim: 2, start: 2 } });
 		await settle();
 		expect(names()).toEqual(['cy', 'dee']);
-		expect(db.killed).toEqual(['live-1']);
-		expect([...db.open.values()].map((live) => live.params)).toEqual([
-			{ lim: 2, start: 2 },
-		]);
+		// The window's watcher watches the table, which the new page shares.
+		expect(db.ran(/^LIVE/)).toHaveLength(1);
+		expect(db.killed).toEqual([]);
 
 		view.unmount();
 		await settle();
@@ -115,6 +114,28 @@ describe('<LiveQuery>', () => {
 		await settle();
 		expect(db.open.size).toBe(1);
 		view.unmount();
+		await settle();
+		expect(db.open.size).toBe(0);
+	});
+
+	it('shares one watcher between different window queries on a table', async () => {
+		const db = database();
+		const page = render(Live, {
+			db,
+			q: PAGE,
+			params: { lim: 2, start: 0 },
+		});
+		const team = render(Live, {
+			db,
+			q: 'SELECT * FROM user WHERE team = $team',
+			params: { team: 'red' },
+		});
+		await settle();
+		expect(db.ran(/^LIVE/)).toEqual(['LIVE SELECT * FROM user']);
+		page.unmount();
+		await settle();
+		expect(db.open.size).toBe(1);
+		team.unmount();
 		await settle();
 		expect(db.open.size).toBe(0);
 	});
@@ -155,6 +176,29 @@ describe('setSurreal live', () => {
 		});
 		await settle();
 		expect(db.ran(/^LIVE/)).toEqual([`LIVE ${text}`]);
+		view.unmount();
+		await settle();
+		expect(db.open.size).toBe(0);
+	});
+});
+
+describe('keyed live queries with params', () => {
+	it('kill and resubscribe when params change', async () => {
+		const db = database();
+		const text = 'SELECT * FROM user WHERE team = $team';
+		const view = render(Live, {
+			db,
+			q: text,
+			params: { team: 'red' },
+			live: { [text]: { query: `LIVE ${text}`, exit: 'delete' } },
+		});
+		await settle();
+		await view.rerender({ params: { team: 'blue' } });
+		await settle();
+		expect(db.killed).toEqual(['live-1']);
+		expect([...db.open.values()].map((live) => live.params)).toEqual([
+			{ team: 'blue' },
+		]);
 		view.unmount();
 		await settle();
 		expect(db.open.size).toBe(0);
@@ -218,7 +262,7 @@ describe('createLive', () => {
 		await fireEvent.click(screen.getByText('next'));
 		await settle();
 		expect(names()).toEqual(['cy', 'dee']);
-		expect(db.killed).toEqual(['live-1']);
+		expect(db.ran(/^LIVE/)).toHaveLength(1);
 
 		view.unmount();
 		await settle();

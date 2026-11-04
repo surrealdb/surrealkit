@@ -95,6 +95,19 @@ describe('live lifecycle', () => {
 		expect(cache.stats()).toMatchObject({ observed: 0, live: 0 });
 	});
 
+	it('sends each statement whole when the text ends with a line comment', async () => {
+		const { db, cache } = setup();
+		const off = cache
+			.observeLive<Row>('SELECT * FROM user -- everyone')
+			.subscribe(() => {});
+		await settle();
+		expect(db.statements).toEqual([
+			'LIVE SELECT * FROM user -- everyone',
+			'SELECT * FROM user -- everyone',
+		]);
+		off();
+	});
+
 	it('keeps the live query across an unsubscribe and subscribe in one tick', async () => {
 		const { db, cache } = setup();
 		const live = cache.observeLive<Row>(USERS);
@@ -112,20 +125,99 @@ describe('live lifecycle', () => {
 
 	it('kills the old live query and opens a new one when params change', async () => {
 		const { db, cache } = setup();
-		const first = cache.observeLive<Row>(PAGE, { lim: 2, start: 0 });
+		const TEAM = 'SELECT * FROM user FETCH team';
+		const first = cache.observeLive<Row>(`${TEAM} -- $a`, { a: 1 });
 		const off = first.subscribe(() => {});
 		await settle();
-		const second = cache.observeLive<Row>(PAGE, { start: 2, lim: 2 });
-		const offSecond = second.subscribe(() => {});
+		const offSecond = cache
+			.observeLive<Row>(TEAM, { a: 2 })
+			.subscribe(() => {});
 		off();
 		await settle();
 		expect(db.killed).toEqual(['live-1']);
 		expect([...db.open.values()].map((live) => live.params)).toEqual([
-			{ start: 2, lim: 2 },
+			{ a: 2 },
 		]);
 		offSecond();
 		await settle();
 		expect(db.open.size).toBe(0);
+	});
+
+	it('keeps the shared watcher when a window query changes params', async () => {
+		const { db, cache } = setup();
+		const off = cache
+			.observeLive<Row>(PAGE, { lim: 2, start: 0 })
+			.subscribe(() => {});
+		await settle();
+		const offSecond = cache
+			.observeLive<Row>(PAGE, { lim: 2, start: 2 })
+			.subscribe(() => {});
+		off();
+		await settle();
+		expect(db.ran(/^LIVE/)).toEqual(['LIVE SELECT * FROM user']);
+		expect(db.killed).toEqual([]);
+		offSecond();
+		await settle();
+		expect(db.open.size).toBe(0);
+	});
+
+	it('shares one watcher between window queries on one target', async () => {
+		const { db, cache } = setup();
+		const texts: [string, object?][] = [
+			[PAGE, { lim: 2, start: 0 }],
+			['SELECT * FROM user WHERE team = $team', { team: 'red' }],
+			['SELECT count() FROM user GROUP ALL'],
+		];
+		const observed = texts.map(([text, params]) =>
+			cache.observeLive<Row>(text, params),
+		);
+		const offs = observed.map((live) => live.subscribe(() => {}));
+		await settle();
+		expect(db.ran(/^LIVE/)).toEqual(['LIVE SELECT * FROM user']);
+		expect(cache.stats().live).toBe(1);
+		const before = db.ran(/^SELECT/).length;
+
+		db.emit(USERS, {
+			action: 'CREATE',
+			recordId: 'user:cy',
+			value: { id: 'user:cy', name: 'cy' },
+		});
+		await settle();
+		expect(db.ran(/^SELECT/).length - before).toBe(3);
+
+		offs[0]?.();
+		offs[1]?.();
+		await settle();
+		expect(db.open.size).toBe(1);
+		offs[2]?.();
+		await settle();
+		expect(db.open.size).toBe(0);
+		expect(cache.stats().live).toBe(0);
+	});
+
+	it('keeps separate watchers for watch texts that read different params', async () => {
+		const { db, cache } = setup();
+		const text = 'SELECT * FROM user WHERE team = $team ORDER BY name';
+		const live = {
+			[text]: {
+				query: 'LIVE SELECT * FROM user WHERE team = $team',
+				exit: 'delete' as const,
+				refusal: { clauses: ['ORDER BY'], windowable: true },
+			},
+		};
+		const shared = new QueryCache(db, { live });
+		const offs = ['red', 'blue', 'red'].map((team) =>
+			shared.observeLive<Row>(text, { team }).subscribe(() => {}),
+		);
+		await settle();
+		expect([...db.open.values()].map((open) => open.params)).toEqual([
+			{ team: 'red' },
+			{ team: 'blue' },
+		]);
+		for (const off of offs) off();
+		await settle();
+		expect(db.open.size).toBe(0);
+		void cache;
 	});
 
 	it('kills a live query that resolves after its observer left', async () => {
@@ -451,9 +543,16 @@ describe('no leaked live queries', () => {
 		for (let step = 0; step < 400; step += 1) {
 			const roll = random(10);
 			if (roll < 4) {
+				const texts = [
+					PAGE,
+					USERS,
+					'SELECT * FROM post',
+					'SELECT * FROM post LIMIT $lim',
+				];
+				const text = texts[random(texts.length)] as string;
 				offs.push(
 					cache
-						.observeLive<Row>(PAGE, { lim: 2, start: random(3) })
+						.observeLive<Row>(text, { lim: 2, start: random(3) })
 						.subscribe(() => {}),
 				);
 			} else if (roll < 7 && offs.length > 0) {
@@ -470,7 +569,7 @@ describe('no leaked live queries', () => {
 		db.release();
 		for (const off of offs) off();
 		await settle();
-		expect(db.ran(/^LIVE/).length).toBeGreaterThan(100);
+		expect(db.ran(/^LIVE/).length).toBeGreaterThan(80);
 		expect(db.killed.length).toBeGreaterThan(30);
 		expect(db.open.size).toBe(0);
 		expect(cache.stats()).toMatchObject({ observed: 0, live: 0 });

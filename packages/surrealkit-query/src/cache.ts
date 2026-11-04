@@ -119,8 +119,11 @@ interface Entry {
 	running: boolean;
 	/** Bumped on every start and stop; work from an older run is discarded. */
 	run: number;
+	/** A keyed entry's own live query. */
 	subscription: LiveSubscriptionLike | undefined;
 	unsubscribe: (() => void) | undefined;
+	/** A window entry's shared watcher. */
+	watcher: Watcher | undefined;
 	/** The rows carry ids, so notifications can be applied by id. */
 	keyed: boolean;
 	/** A one-shot entry holds a server payload, so its first start skips the fetch. */
@@ -129,6 +132,24 @@ interface Entry {
 	dirty: boolean;
 	stopQueued: boolean;
 	gcTimer: ReturnType<typeof setTimeout> | undefined;
+}
+
+/**
+ * One live query that window entries share: every window entry whose watch
+ * text and parameters are the same re-runs on its notifications. It is
+ * killed when its last entry leaves.
+ */
+interface Watcher {
+	readonly key: string;
+	readonly text: string;
+	readonly params: Record<string, unknown> | undefined;
+	readonly dependents: Set<Entry>;
+	/** Settles once the live query is registered and subscribed to. */
+	ready: Promise<void>;
+	subscription: LiveSubscriptionLike | undefined;
+	unsubscribe: (() => void) | undefined;
+	/** Killed, forgotten or failed; it no longer serves new entries. */
+	closed: boolean;
 }
 
 const DEFAULT_GC_TIME = 5 * 60_000;
@@ -145,6 +166,7 @@ export class QueryCache {
 	readonly #trustWhere: boolean;
 	#manifest: LiveManifest;
 	readonly #entries = new Map<string, Entry>();
+	readonly #watchers = new Map<string, Watcher>();
 	readonly #offConnected: (() => void) | undefined;
 	#live = 0;
 
@@ -313,6 +335,7 @@ export class QueryCache {
 				run: 0,
 				subscription: undefined,
 				unsubscribe: undefined,
+				watcher: undefined,
 				keyed: false,
 				seeded: false,
 				refreshing: undefined,
@@ -406,10 +429,12 @@ export class QueryCache {
 	}
 
 	#reconnected(): void {
+		// The engine forgot this connection's live queries; drop the handles
+		// without a KILL, which would only be refused.
+		for (const watcher of [...this.#watchers.values()])
+			this.#forget(watcher);
 		for (const entry of this.#entries.values()) {
 			if (!entry.running) continue;
-			// The engine forgot this connection's live queries; drop the handle
-			// without a KILL, which would only be refused.
 			this.#release(entry);
 			void this.#start(entry);
 		}
@@ -448,11 +473,14 @@ export class QueryCache {
 			});
 			return;
 		}
+		if (plan.mode === 'window')
+			return this.#openWindow(entry, run, plan.liveText);
 		// The registered live query's id, until a subscription owns it.
 		let id: unknown;
 		try {
 			const result = await this.#db.query(
-				`${plan.liveText};\n${plan.snapshot};`,
+				// Each `;` on its own line, so a trailing line comment cannot hide it.
+				`${plan.liveText}\n;\n${plan.snapshot}\n;`,
 				entry.params,
 			);
 			id = result[0];
@@ -479,20 +507,134 @@ export class QueryCache {
 		}
 	}
 
+	/**
+	 * Opens a window entry: joins (or opens) the watcher for its watch text,
+	 * then reads its snapshot once the watcher is registered, so no change
+	 * falls between them.
+	 */
+	async #openWindow(
+		entry: Entry,
+		run: number,
+		liveText: string,
+	): Promise<void> {
+		const watcher = this.#watch(liveText, entry.params);
+		watcher.dependents.add(entry);
+		entry.watcher = watcher;
+		try {
+			await watcher.ready;
+		} catch (cause) {
+			if (run === entry.run) this.#fail(entry, cause, liveText);
+			return;
+		}
+		if (run !== entry.run) return;
+		await this.#refresh(entry);
+	}
+
+	/** The open watcher for `text` bound to the parameters it reads. */
+	#watch(text: string, params: Record<string, unknown> | undefined): Watcher {
+		const bound = paramsIn(text, params);
+		const key = queryKey(text, bound);
+		const existing = this.#watchers.get(key);
+		if (existing && !existing.closed) return existing;
+		const watcher: Watcher = {
+			key,
+			text,
+			params: bound,
+			dependents: new Set(),
+			ready: Promise.resolve(),
+			subscription: undefined,
+			unsubscribe: undefined,
+			closed: false,
+		};
+		this.#watchers.set(key, watcher);
+		watcher.ready = this.#register(watcher);
+		watcher.ready.catch(() => this.#close(watcher, false));
+		return watcher;
+	}
+
+	async #register(watcher: Watcher): Promise<void> {
+		// The registered live query's id, until the subscription owns it.
+		let id: unknown;
+		try {
+			const [registered] = await this.#db.query(
+				watcher.text,
+				watcher.params,
+			);
+			id = registered;
+			this.#live += 1;
+			if (watcher.closed) return;
+			const subscription = await this.#db.liveOf(id as Uuid);
+			id = undefined;
+			if (watcher.closed) return this.#killHandle(subscription);
+			watcher.subscription = subscription;
+			watcher.unsubscribe = subscription.subscribe((message) =>
+				this.#watched(watcher, message),
+			);
+		} finally {
+			if (id !== undefined) this.#killId(id);
+		}
+	}
+
+	#watched(watcher: Watcher, message: LiveMessageLike): void {
+		if (watcher.closed) return;
+		if (message.action === 'KILLED') {
+			const dependents = [...watcher.dependents];
+			this.#forget(watcher);
+			for (const entry of dependents) this.#killed(entry);
+			return;
+		}
+		for (const entry of watcher.dependents) void this.#refresh(entry);
+	}
+
+	/** Detaches an entry from its watcher, killing the watcher if it was the last. */
+	#leave(entry: Entry): void {
+		const watcher = entry.watcher;
+		entry.watcher = undefined;
+		if (!watcher) return;
+		watcher.dependents.delete(entry);
+		if (watcher.dependents.size === 0) this.#close(watcher, true);
+	}
+
+	/** Drops a watcher without a KILL: the engine has already forgotten it. */
+	#forget(watcher: Watcher): void {
+		for (const entry of watcher.dependents) entry.watcher = undefined;
+		watcher.dependents.clear();
+		this.#close(watcher, false);
+	}
+
+	#close(watcher: Watcher, kill: boolean): void {
+		if (watcher.closed) return;
+		watcher.closed = true;
+		if (this.#watchers.get(watcher.key) === watcher) {
+			this.#watchers.delete(watcher.key);
+		}
+		watcher.unsubscribe?.();
+		watcher.unsubscribe = undefined;
+		const subscription = watcher.subscription;
+		watcher.subscription = undefined;
+		if (!subscription) return;
+		if (kill) this.#killHandle(subscription);
+		else this.#live -= 1;
+	}
+
+	#killed(entry: Entry): void {
+		this.#release(entry);
+		this.#set(entry, {
+			status: 'error',
+			data: entry.state.data,
+			error: new SurrealQueryError(
+				'killed',
+				'the engine killed this live query',
+				entry.text,
+				entry.params,
+			),
+		});
+	}
+
 	#notify(entry: Entry, run: number, message: LiveMessageLike): void {
 		if (run !== entry.run) return;
 		if (message.action === 'KILLED') {
-			this.#release(entry);
-			this.#set(entry, {
-				status: 'error',
-				data: entry.state.data,
-				error: new SurrealQueryError(
-					'killed',
-					'the engine killed this live query',
-					entry.text,
-					entry.params,
-				),
-			});
+			this.#killed(entry);
 			return;
 		}
 		const applies =
@@ -518,7 +660,7 @@ export class QueryCache {
 	 */
 	#refresh(entry: Entry): Promise<void> {
 		if (entry.kind === 'query') return this.#load(entry, entry.run);
-		if (!entry.subscription) {
+		if (!entry.subscription && !entry.watcher?.subscription) {
 			// Opening already reads the snapshot; only a failed entry restarts.
 			const failed = entry.running && entry.state.status === 'error';
 			return failed ? this.#start(entry) : Promise.resolve();
@@ -561,8 +703,12 @@ export class QueryCache {
 		});
 	}
 
-	/** Detaches from the entry's live query without killing it. */
+	/**
+	 * Detaches from the entry's own live query without killing it, and from
+	 * its watcher (which is killed if no other entry needs it).
+	 */
 	#release(entry: Entry): void {
+		this.#leave(entry);
 		entry.unsubscribe?.();
 		entry.unsubscribe = undefined;
 		if (entry.subscription) this.#live -= 1;
@@ -618,6 +764,25 @@ function unwrap(result: readonly unknown[]): unknown {
 }
 
 function ignore(): void {}
+
+/** The parameters `text` reads, so watchers differing only in others share. */
+function paramsIn(
+	text: string,
+	params: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+	if (!params) return undefined;
+	const read = new Set(
+		[...text.matchAll(/\$(\w+)/g)].map((match) => match[1]),
+	);
+	const out: Record<string, unknown> = {};
+	let any = false;
+	for (const [name, value] of Object.entries(params)) {
+		if (!read.has(name)) continue;
+		out[name] = value;
+		any = true;
+	}
+	return any ? out : undefined;
+}
 
 const caches = new WeakMap<object, QueryCache>();
 
