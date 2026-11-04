@@ -249,12 +249,13 @@ pub struct QueriesConfig {
 	/// The client methods whose first argument is a query (default `["query"]`).
 	#[serde(default = "default_query_methods")]
 	pub methods: Vec<String>,
-	/// The bare functions whose first argument is a query (default `["createQuery",
-	/// "createLive", "useQuery", "useLive"]`). A name here also matches a member call
-	/// (`svelte.createQuery(…)`); `methods` match only member calls, so a bare `query(…)` is
-	/// not a query.
+	/// The functions that carry a query (default `["createQuery", "createLive", "useQuery",
+	/// "useLive", { name = "preload", arg = 1 }]`). An entry is a name, whose first argument is
+	/// the query, or `{ name = "…", arg = N }` with the 0-based index of the query argument. A
+	/// name here also matches a member call (`svelte.createQuery(…)`); `methods` match only
+	/// member calls, so a bare `query(…)` is not a query.
 	#[serde(default = "default_query_functions")]
-	pub functions: Vec<String>,
+	pub functions: Vec<QueryFunctionConfig>,
 	/// The markup components whose `attribute` carries a query (default `["Query",
 	/// "LiveQuery"]`), in Svelte, Vue and Astro templates and in JSX.
 	#[serde(default = "default_query_components")]
@@ -284,8 +285,69 @@ fn default_query_methods() -> Vec<String> {
 	vec!["query".to_string()]
 }
 
-fn default_query_functions() -> Vec<String> {
-	["createQuery", "createLive", "useQuery", "useLive"].map(str::to_string).to_vec()
+/// The largest `arg` of a `[typegen.queries] functions` entry.
+const MAX_QUERY_ARG: usize = 15;
+
+/// One `[typegen.queries] functions` entry: a function name and the index of its query argument.
+///
+/// Written as a bare string (the query is the first argument) or as a table, `{ name = "preload",
+/// arg = 1 }`, where `arg` is 0-based and defaults to 0.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(from = "QueryFunctionForm")]
+pub struct QueryFunctionConfig {
+	pub name: String,
+	/// The 0-based index of the argument that carries the query.
+	pub arg: usize,
+}
+
+impl QueryFunctionConfig {
+	fn new(name: &str, arg: usize) -> Self {
+		Self {
+			name: name.to_string(),
+			arg,
+		}
+	}
+}
+
+/// The two spellings of a [`QueryFunctionConfig`] in `surrealkit.toml`.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum QueryFunctionForm {
+	Name(String),
+	Table(QueryFunctionTable),
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct QueryFunctionTable {
+	name: String,
+	#[serde(default)]
+	arg: usize,
+}
+
+impl From<QueryFunctionForm> for QueryFunctionConfig {
+	fn from(form: QueryFunctionForm) -> Self {
+		match form {
+			QueryFunctionForm::Name(name) => Self {
+				name,
+				arg: 0,
+			},
+			QueryFunctionForm::Table(table) => Self {
+				name: table.name,
+				arg: table.arg,
+			},
+		}
+	}
+}
+
+fn default_query_functions() -> Vec<QueryFunctionConfig> {
+	vec![
+		QueryFunctionConfig::new("createQuery", 0),
+		QueryFunctionConfig::new("createLive", 0),
+		QueryFunctionConfig::new("useQuery", 0),
+		QueryFunctionConfig::new("useLive", 0),
+		QueryFunctionConfig::new("preload", 1),
+	]
 }
 
 fn default_query_components() -> Vec<String> {
@@ -426,9 +488,10 @@ impl TypegenConfig {
 		Ok(out)
 	}
 
-	/// `[typegen.queries]`, validated: no method, function or component is an empty name, the
-	/// attribute and `register` are not empty, and `typescript` names a TypeScript file that is
-	/// neither the `[typegen] json` nor the `[typegen] typescript` output.
+	/// `[typegen.queries]`, validated: no method, function or component is an empty name, no
+	/// function is listed twice or has an `arg` above 15, the attribute and `register` are not
+	/// empty, and `typescript` names a TypeScript file that is neither the `[typegen] json` nor
+	/// the `[typegen] typescript` output.
 	pub fn queries_config(&self) -> Result<Option<QueriesConfig>> {
 		let Some(queries) = &self.queries else {
 			return Ok(None);
@@ -436,8 +499,22 @@ impl TypegenConfig {
 		if queries.methods.iter().any(|method| method.trim().is_empty()) {
 			bail!("[typegen.queries] methods: a method name is empty");
 		}
-		if queries.functions.iter().any(|function| function.trim().is_empty()) {
-			bail!("[typegen.queries] functions: a function name is empty");
+		let mut seen = std::collections::BTreeSet::new();
+		for function in &queries.functions {
+			if function.name.trim().is_empty() {
+				bail!("[typegen.queries] functions: a function name is empty");
+			}
+			if !seen.insert(function.name.as_str()) {
+				bail!("[typegen.queries] functions: {:?} is listed twice", function.name);
+			}
+			if function.arg > MAX_QUERY_ARG {
+				bail!(
+					"[typegen.queries] functions: {:?} has arg {}, above the largest query \
+					 argument index ({MAX_QUERY_ARG}); arg is 0-based",
+					function.name,
+					function.arg
+				);
+			}
 		}
 		if queries.components.iter().any(|component| component.trim().is_empty()) {
 			bail!("[typegen.queries] components: a component name is empty");
@@ -1089,7 +1166,18 @@ mod tests {
 		assert!(cfg.sources.is_empty());
 		let err = parse("[queries]\nmethods = [\" \"]\n").queries_config().unwrap_err();
 		assert!(err.to_string().contains("a method name is empty"), "{err}");
-		assert_eq!(cfg.functions, ["createQuery", "createLive", "useQuery", "useLive"]);
+		let defaults: Vec<(&str, usize)> =
+			cfg.functions.iter().map(|function| (function.name.as_str(), function.arg)).collect();
+		assert_eq!(
+			defaults,
+			[
+				("createQuery", 0),
+				("createLive", 0),
+				("useQuery", 0),
+				("useLive", 0),
+				("preload", 1)
+			]
+		);
 		assert_eq!(cfg.components, ["Query", "LiveQuery"]);
 		assert_eq!(cfg.attribute, "q");
 		for (raw, message) in [
@@ -1106,9 +1194,63 @@ mod tests {
 			.unwrap();
 		assert_eq!(
 			(custom.functions, custom.attribute.as_str()),
-			(vec!["load".to_string()], "sql")
+			(vec![QueryFunctionConfig::new("load", 0)], "sql")
 		);
 		assert!(toml::from_str::<TypegenConfig>("[queries]\nsourcez = []\n").is_err());
+	}
+
+	#[test]
+	fn a_function_is_a_name_or_a_table_with_the_index_of_its_query_argument() {
+		let parse = |raw: &str| toml::from_str::<TypegenConfig>(raw).unwrap();
+		let cfg = parse(
+			"[queries]\nfunctions = [\"load\", { name = \"preload\", arg = 1 }, { name = \"run\" }]\n",
+		)
+		.queries_config()
+		.unwrap()
+		.unwrap();
+		assert_eq!(
+			cfg.functions,
+			[
+				QueryFunctionConfig::new("load", 0),
+				QueryFunctionConfig::new("preload", 1),
+				QueryFunctionConfig::new("run", 0),
+			]
+		);
+		// The bound itself is allowed.
+		let edge = parse("[queries]\nfunctions = [{ name = \"f\", arg = 15 }]\n")
+			.queries_config()
+			.unwrap()
+			.unwrap();
+		assert_eq!(edge.functions, [QueryFunctionConfig::new("f", 15)]);
+		// Neither a negative index, an unknown key, nor a table without a name is a function.
+		for raw in [
+			"functions = [{ name = \"f\", arg = -1 }]",
+			"functions = [{ name = \"f\", args = 1 }]",
+			"functions = [{ arg = 1 }]",
+			"functions = [3]",
+		] {
+			assert!(
+				toml::from_str::<TypegenConfig>(&format!("[queries]\n{raw}\n")).is_err(),
+				"{raw}"
+			);
+		}
+	}
+
+	#[test]
+	fn function_entries_are_rejected_when_empty_repeated_or_past_the_argument_bound() {
+		let parse = |raw: &str| toml::from_str::<TypegenConfig>(raw).unwrap();
+		for (raw, message) in [
+			("functions = [{ name = \" \", arg = 1 }]", "a function name is empty"),
+			("functions = [\"load\", \"load\"]", "\"load\" is listed twice"),
+			(
+				"functions = [\"preload\", { name = \"preload\", arg = 1 }]",
+				"\"preload\" is listed twice",
+			),
+			("functions = [{ name = \"f\", arg = 16 }]", "\"f\" has arg 16"),
+		] {
+			let err = parse(&format!("[queries]\n{raw}\n")).queries_config().unwrap_err();
+			assert!(err.to_string().contains(message), "{err}");
+		}
 	}
 
 	#[test]

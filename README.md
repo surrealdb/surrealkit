@@ -1044,15 +1044,24 @@ the `host-queries` cargo feature, which the CLI enables). It is the same section
 [typegen.queries]
 sources = ["src"]         # files or directories, relative to the project root
 methods = ["query"]       # the client methods whose first argument is a query (the default)
+functions = [             # the functions that carry a query (the default)
+	"createQuery", "createLive", "useQuery", "useLive",
+	{ name = "preload", arg = 1 },
+]
 ```
 
 A query is a string or template literal in one of three places:
 
 - the first argument of a call to a method in `methods`, such as `db.query("…")` (default
   `["query"]`; a bare `query("…")` does not count);
-- the first argument of a call to a function in `functions`, bare or namespaced, such as
-  `createQuery("…")` or `kit.useQuery("…")` (default `["createQuery", "createLive",
-  "useQuery", "useLive"]`);
+- the query argument of a call to a function in `functions`, bare or namespaced, such as
+  `createQuery("…")`, `kit.useQuery("…")` or `preload(db, "…")`. An entry is a name, whose first
+  argument is the query, or a table `{ name = "preload", arg = 1 }`, where `arg` is the **0-based**
+  index of the query argument (so `arg = 1` is the second). The default is `createQuery`,
+  `createLive`, `useQuery` and `useLive` (all `arg = 0`), and `preload` (`arg = 1`, the form the
+  SvelteKit bindings use to seed server-rendered data). A call with fewer arguments, or without a
+  literal at that position, is not a query. Setting `functions` replaces the whole list. `arg` is
+  at most 15, and a name may appear once;
 - the `attribute` of a component in `components`, such as `<Query q="…">` (default
   `components = ["Query", "LiveQuery"]`, `attribute = "q"`).
 

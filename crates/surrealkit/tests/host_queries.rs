@@ -56,6 +56,7 @@ fn scan_with_the_defaults_reads_bare_calls_and_component_attributes() {
 	assert_eq!(
 		seen,
 		[
+			("+page.server.ts", "SELECT * FROM person"),
 			("Bindings.svelte", "SELECT * FROM person"),
 			("Bindings.svelte", "SELECT * FROM person WHERE age > $__host0"),
 			("Bindings.svelte", "SELECT * FROM post"),
@@ -88,6 +89,10 @@ fn scan_with_the_defaults_reads_bare_calls_and_component_attributes() {
 			("bindings.tsx", "SELECT * FROM log WHERE body = 'a > b'"),
 			("page.astro", "SELECT * FROM comment"),
 			("page.astro", "SELECT * FROM comment WHERE flagged"),
+			// `preload(db, …)` carries its query in the second argument; `preload("…", db)` and
+			// `preload(db)` do not.
+			("preload.svelte", "SELECT * FROM person WHERE age > $__host0"),
+			("preload.svelte", "SELECT * FROM post"),
 			("widget.tsx", "SELECT * FROM widget"),
 		]
 	);
