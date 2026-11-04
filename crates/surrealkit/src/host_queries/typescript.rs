@@ -106,9 +106,9 @@ pub(super) fn comments(source: &str, content: Range<usize>, tsx: bool) -> Vec<Ra
 }
 
 /// The query a call carries, if it is `receiver.method(literal, …)` with a name in `methods`, or
-/// `function(literal, …)` or `receiver.function(literal, …)` with a name in `functions`, and the
-/// first argument is a string or template literal. `base` is the offset of the parsed region in
-/// `source`.
+/// `function(…)` or `receiver.function(…)` with a name in `functions`, and the argument at that
+/// function's `arg` (a method's is the first) is a string or template literal. Comments between
+/// arguments are not arguments. `base` is the offset of the parsed region in `source`.
 fn query_of(call: Node<'_>, source: &str, base: usize, queries: &Queries<'_>) -> Option<HostQuery> {
 	let function = call.child_by_field_name("function")?;
 	let (name, is_member) = match function.kind() {
@@ -117,10 +117,10 @@ fn query_of(call: Node<'_>, source: &str, base: usize, queries: &Queries<'_>) ->
 		_ => return None,
 	};
 	let name = &source[shifted(name, base)];
-	let origin = if is_member && queries.methods.contains(&name) {
-		HostQuerySource::Method(name.to_string())
-	} else if queries.functions.contains(&name) {
-		HostQuerySource::Function(name.to_string())
+	let (origin, arg) = if is_member && queries.methods.contains(&name) {
+		(HostQuerySource::Method(name.to_string()), 0)
+	} else if let Some(function) = queries.functions.iter().find(|function| function.name == name) {
+		(HostQuerySource::Function(name.to_string()), function.arg)
 	} else {
 		return None;
 	};
@@ -129,8 +129,9 @@ fn query_of(call: Node<'_>, source: &str, base: usize, queries: &Queries<'_>) ->
 		return None;
 	}
 	let mut walker = arguments.walk();
-	let first = arguments.named_children(&mut walker).find(|child| child.kind() != "comment")?;
-	literal_query(first, source, base, origin)
+	let argument =
+		arguments.named_children(&mut walker).filter(|child| child.kind() != "comment").nth(arg)?;
+	literal_query(argument, source, base, origin)
 }
 
 /// The queries a JSX element carries in its query attribute, if its name is one of the

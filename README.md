@@ -607,6 +607,7 @@ methods = ["query"]            # the client methods to look for (default)
 typescript = "src/generated/queries.ts"   # optional: the per-query TypeScript module
 dates = "class"                # `datetime` as the SDK's DateTime (default), or "native" for Date
 hints = "trust"                # kinds the engine only hints at: as declared (default), or "unknown"
+register = "surrealkit-query"  # optional: the bindings package whose `Register` the module augments
 ```
 
 A query file holds named queries, each behind a marker line:
@@ -622,6 +623,37 @@ from, the kind of each statement's result and its parameters, in the language-ne
 tree any emitter can render. The TypeScript module gives `Typed<Surreal>` a `query()` that
 returns the registry's result type for known query text. External emitters receive the
 section only when they opt in with `queries = true` in their `[typegen.emit.<name>]`.
+
+The module is not only types. It also exports `liveQueries`, a runtime value: for each
+single-statement `SELECT` the engine can describe a live subscription for, the facts a client
+needs to subscribe, keyed by the same text as `Queries`.
+
+```ts
+export const liveQueries = {
+  "SELECT * FROM user ORDER BY name LIMIT $lim": {
+    query: "LIVE SELECT * FROM user",   // the text to subscribe with
+    refusal: { clauses: ["ORDER BY", "LIMIT"], windowable: true },
+  },
+  "SELECT * FROM user WHERE team = $team": {
+    query: "LIVE SELECT * FROM user WHERE team = $team",
+    exit: "silent",                     // a record leaving the WHERE is not reported
+    watch: "LIVE SELECT id FROM user",  // the same targets without the WHERE
+  },
+  "SELECT * FROM ONLY user:ada": { refusal: { clauses: ["ONLY"], windowable: false } },
+} as const;
+```
+
+`LiveQueries` types it and adds `notification`, the union of the messages a subscription
+delivers as the SDK's `LiveMessage` carries them; `LiveQueryText` is the texts a subscription can
+serve (every entry but a refusal that cannot be windowed), and `LiveNotification<K>` is one text's
+notification. `liveQueries` is always exported, `{}` when there is none. A query the engine could
+not type is left out of both registries and reported as `query-invalid`; its text keeps the SDK's
+untyped `query()`.
+
+`register` names the bindings package to augment, so its components and functions are typed by
+the generated registry: the module ends with `declare module "<register>" { interface Register {
+queries: Queries; liveQueries: LiveQueries } }`. It must name the package that declares
+`Register`, not one that re-exports it.
 
 The engine types the queries without running them, which needs SurrealDB 4.1. On an older
 engine `compile` and `typegen` report the warning `queries-unsupported-engine` and write no
@@ -1012,15 +1044,24 @@ the `host-queries` cargo feature, which the CLI enables). It is the same section
 [typegen.queries]
 sources = ["src"]         # files or directories, relative to the project root
 methods = ["query"]       # the client methods whose first argument is a query (the default)
+functions = [             # the functions that carry a query (the default)
+	"createQuery", "createLive", "useQuery", "useLive",
+	{ name = "preload", arg = 1 },
+]
 ```
 
 A query is a string or template literal in one of three places:
 
 - the first argument of a call to a method in `methods`, such as `db.query("…")` (default
   `["query"]`; a bare `query("…")` does not count);
-- the first argument of a call to a function in `functions`, bare or namespaced, such as
-  `createQuery("…")` or `kit.useQuery("…")` (default `["createQuery", "createLive",
-  "useQuery", "useLive"]`);
+- the query argument of a call to a function in `functions`, bare or namespaced, such as
+  `createQuery("…")`, `kit.useQuery("…")` or `preload(db, "…")`. An entry is a name, whose first
+  argument is the query, or a table `{ name = "preload", arg = 1 }`, where `arg` is the **0-based**
+  index of the query argument (so `arg = 1` is the second). The default is `createQuery`,
+  `createLive`, `useQuery` and `useLive` (all `arg = 0`), and `preload` (`arg = 1`, the form the
+  SvelteKit bindings use to seed server-rendered data). A call with fewer arguments, or without a
+  literal at that position, is not a query. Setting `functions` replaces the whole list. `arg` is
+  at most 15, and a name may appear once;
 - the `attribute` of a component in `components`, such as `<Query q="…">` (default
   `components = ["Query", "LiveQuery"]`, `attribute = "q"`).
 

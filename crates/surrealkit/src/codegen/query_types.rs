@@ -23,7 +23,7 @@ use surrealdb::engine::any::Any;
 
 use super::document::{Certainty, TypesDocument};
 use super::engine;
-use super::queries::{self, QueryEntry};
+use super::queries::{self, LiveRefusal, QueryEntry, QueryLive};
 use super::typescript::{
 	QueryRender, RenderOptions, params_text, render_query, string_literal, tuple_text,
 };
@@ -296,6 +296,9 @@ pub async fn types(request: &Request, source: Source<'_>, opts: &RenderOptions) 
 	if document.queries.is_empty() {
 		bail!("the engine returned no typing for the query");
 	}
+	if let Some(error) = document.queries.first().and_then(|query| query.error.as_ref()) {
+		bail!("the engine cannot type the query ({}): {}", error.code, error.message);
+	}
 	Ok(report(request, &document, opts))
 }
 
@@ -371,7 +374,8 @@ pub struct Report {
 	/// fills (`__host…`) are not listed.
 	pub params: Vec<ParamReport>,
 	/// TypeScript to paste: the SDK imports it needs, `export type <Name> = [...]` (one
-	/// element per statement) and `export type <Name>Params = {...}`.
+	/// element per statement), `export type <Name>Params = {...}` and, for a single statement
+	/// with a live subscription, `export type <Name>Live = ...`, the notifications it delivers.
 	pub snippet: String,
 	/// What the caller should know: a hint the query does not use, a declared kind the engine
 	/// disagrees with.
@@ -407,6 +411,12 @@ pub struct StatementReport {
 	/// The statement's span in the query, as the engine states it.
 	#[serde(skip_serializing_if = "Option::is_none")]
 	pub span: Option<Value>,
+	/// What a live subscription to the statement delivers, as the `queries` section gives it.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub live: Option<QueryLive>,
+	/// Why `LIVE SELECT` cannot run the statement as written, as the `queries` section gives it.
+	#[serde(skip_serializing_if = "Option::is_none")]
+	pub live_refusal: Option<LiveRefusal>,
 }
 
 /// One parameter of the query.
@@ -439,9 +449,11 @@ pub fn report(request: &Request, document: &TypesDocument, opts: &RenderOptions)
 		sources: Vec::new(),
 		statements: Vec::new(),
 		params: Vec::new(),
+		error: None,
 	});
 
-	let mut notes = Vec::new();
+	let mut notes: Vec<String> =
+		converted.unknown_live.iter().map(|(_, unknown)| unknown.reason()).collect();
 	if !converted.unrepresented.is_empty() {
 		notes.push(format!(
 			"the engine reported kinds this version of SurrealKit cannot represent, typed as \
@@ -527,6 +539,8 @@ fn statements(
 				span: engine
 					.map(|statement| statement.span.clone())
 					.filter(|value| !value.is_null()),
+				live: statement.live.clone(),
+				live_refusal: statement.live_refusal.clone(),
 			}
 		})
 		.collect()
@@ -565,6 +579,9 @@ fn snippet(name: &str, render: &QueryRender, opts: &RenderOptions) -> String {
 	}
 	out.push_str(&format!("export type {name} = {};\n", tuple_text(&render.slots)));
 	out.push_str(&format!("export type {name}Params = {};\n", params_text(&render.params)));
+	if let Some(live) = &render.live {
+		out.push_str(&format!("export type {name}Live = {live};\n"));
+	}
 	out
 }
 

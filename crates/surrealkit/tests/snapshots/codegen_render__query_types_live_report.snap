@@ -1,0 +1,194 @@
+---
+source: crates/surrealkit/tests/codegen_render.rs
+expression: report
+---
+{
+  "name": "ListUsers",
+  "text": "SELECT * FROM user ORDER BY name LIMIT $lim",
+  "statements": [
+    {
+      "index": 0,
+      "typescript": "Array<{ id: RecordId<\"user\">; name: string; team: RecordId<\"team\"> }>",
+      "kind": "x",
+      "certainty": "fact",
+      "exact": true,
+      "support": {
+        "exact": true
+      },
+      "open": [],
+      "span": {
+        "column": 1,
+        "end": 1,
+        "end_column": 2,
+        "end_line": 1,
+        "line": 1,
+        "start": 0
+      },
+      "live": {
+        "diff": false,
+        "query": "LIVE SELECT * FROM user",
+        "notifications": [
+          {
+            "action": "CREATE",
+            "record": {
+              "kind": "record",
+              "tables": [
+                "user"
+              ]
+            },
+            "result": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "id",
+                  "kind": {
+                    "kind": "record",
+                    "tables": [
+                      "user"
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "name",
+                  "kind": {
+                    "kind": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "team",
+                  "kind": {
+                    "kind": "record",
+                    "tables": [
+                      "team"
+                    ]
+                  },
+                  "optional": false
+                }
+              ]
+            },
+            "certainty": "fact",
+            "open": []
+          },
+          {
+            "action": "UPDATE",
+            "record": {
+              "kind": "record",
+              "tables": [
+                "user"
+              ]
+            },
+            "result": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "id",
+                  "kind": {
+                    "kind": "record",
+                    "tables": [
+                      "user"
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "name",
+                  "kind": {
+                    "kind": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "team",
+                  "kind": {
+                    "kind": "record",
+                    "tables": [
+                      "team"
+                    ]
+                  },
+                  "optional": false
+                }
+              ]
+            },
+            "certainty": "fact",
+            "open": []
+          },
+          {
+            "action": "DELETE",
+            "record": {
+              "kind": "record",
+              "tables": [
+                "user"
+              ]
+            },
+            "result": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "id",
+                  "kind": {
+                    "kind": "record",
+                    "tables": [
+                      "user"
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "name",
+                  "kind": {
+                    "kind": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "team",
+                  "kind": {
+                    "kind": "record",
+                    "tables": [
+                      "team"
+                    ]
+                  },
+                  "optional": false
+                }
+              ]
+            },
+            "certainty": "fact",
+            "open": []
+          },
+          {
+            "action": "KILLED",
+            "record": {
+              "kind": "none"
+            },
+            "result": {
+              "kind": "none"
+            },
+            "certainty": "fact",
+            "open": []
+          }
+        ]
+      },
+      "liveRefusal": {
+        "code": "E4009",
+        "message": "LIVE SELECT cannot run a SELECT with ORDER BY, LIMIT",
+        "clauses": [
+          "ORDER BY",
+          "LIMIT"
+        ],
+        "windowable": true
+      }
+    }
+  ],
+  "params": [
+    {
+      "name": "lim",
+      "typescript": "number",
+      "kind": "x",
+      "required": true,
+      "source": "engine"
+    }
+  ],
+  "snippet": "import type { RecordId, Uuid } from \"surrealdb\";\n\nexport type ListUsers = [Array<{ id: RecordId<\"user\">; name: string; team: RecordId<\"team\"> }>];\nexport type ListUsersParams = { lim: number };\nexport type ListUsersLive = { queryId: Uuid; action: \"CREATE\"; recordId: RecordId<\"user\">; value: { id: RecordId<\"user\">; name: string; team: RecordId<\"team\"> } } | { queryId: Uuid; action: \"UPDATE\"; recordId: RecordId<\"user\">; value: { id: RecordId<\"user\">; name: string; team: RecordId<\"team\"> } } | { queryId: Uuid; action: \"DELETE\"; recordId: RecordId<\"user\">; value: { id: RecordId<\"user\">; name: string; team: RecordId<\"team\"> } } | { queryId: Uuid; action: \"KILLED\"; recordId?: undefined; value?: undefined };\n"
+}

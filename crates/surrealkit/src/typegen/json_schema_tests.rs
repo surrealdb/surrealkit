@@ -466,6 +466,168 @@ fn a_queries_section_validates_and_round_trips() {
 	assert!(at("types") < at("queries") && at("queries") < at("diagnostics"));
 }
 
+/// A `queries` section with live subscription facts and a query the engine could not type.
+fn live_queries_section() -> Value {
+	let user = serde_json::json!({ "kind": "objectLiteral", "fields": [
+		{ "name": "id", "kind": { "kind": "record", "tables": ["user"] }, "optional": false }
+	] });
+	let notification = |action: &str| {
+		serde_json::json!({
+			"action": action,
+			"record": { "kind": "record", "tables": ["user"] },
+			"result": user,
+			"certainty": "fact",
+			"open": [[]]
+		})
+	};
+	serde_json::json!([
+		{
+			"key": "SELECT * FROM user WHERE team = $team ORDER BY id",
+			"text": "SELECT * FROM user WHERE team = $team ORDER BY id",
+			"statements": [{
+				"kind": { "kind": "array", "item": user },
+				"optional": false,
+				"certainty": "fact",
+				"exact": true,
+				"open": [],
+				"live": {
+					"diff": false,
+					"query": "LIVE SELECT * FROM user WHERE team = $team",
+					"exit": "silent",
+					"watch": "LIVE SELECT id FROM user",
+					"notifications": [
+						notification("CREATE"), notification("UPDATE"), notification("DELETE"),
+						{
+							"action": "KILLED", "record": { "kind": "none" }, "result": { "kind": "none" },
+							"certainty": "fact", "open": []
+						}
+					]
+				},
+				"liveRefusal": {
+					"code": "E4009",
+					"message": "LIVE SELECT does not accept ORDER BY",
+					"clauses": ["ORDER BY"],
+					"windowable": true
+				}
+			}],
+			"params": [{ "name": "team", "optional": false, "required": true }]
+		},
+		{
+			"key": "SELEC",
+			"text": "SELEC",
+			"statements": [],
+			"error": { "code": "S0001", "message": "bad", "span": { "start": 0, "end": 5 } }
+		}
+	])
+}
+
+#[test]
+fn live_typing_and_a_query_error_validate_and_round_trip() {
+	let mut doc = serde_json::to_value(fixture_document("3.3.0")).unwrap();
+	doc["queries"] = live_queries_section();
+	assert_valid("a document with live queries", &doc);
+	let decoded: super::document::SchemaDocument = serde_json::from_value(doc.clone()).unwrap();
+	assert_eq!(serde_json::to_value(&decoded).unwrap(), doc);
+	let live = decoded.queries[0].statements[0].live.as_ref().unwrap();
+	assert_eq!(live.watch.as_deref(), Some("LIVE SELECT id FROM user"));
+	assert!(decoded.queries[1].error.is_some());
+}
+
+#[test]
+fn live_and_error_violations_are_rejected() {
+	let mut base = serde_json::to_value(fixture_document("3.3.0")).unwrap();
+	base["queries"] = live_queries_section();
+	assert_valid("the base document", &base);
+	type Mutation = (&'static str, Box<dyn Fn(&mut Value)>);
+	let mutations: Vec<Mutation> = vec![
+		(
+			"unknown live member",
+			Box::new(|d| d["queries"][0]["statements"][0]["live"]["extra"] = Value::from(1)),
+		),
+		(
+			"unknown notification member",
+			Box::new(|d| {
+				d["queries"][0]["statements"][0]["live"]["notifications"][0]["extra"] =
+					Value::from(1)
+			}),
+		),
+		(
+			"unknown refusal member",
+			Box::new(|d| d["queries"][0]["statements"][0]["liveRefusal"]["extra"] = Value::from(1)),
+		),
+		("unknown error member", Box::new(|d| d["queries"][1]["error"]["extra"] = Value::from(1))),
+		(
+			"action MOVE",
+			Box::new(|d| {
+				d["queries"][0]["statements"][0]["live"]["notifications"][0]["action"] =
+					Value::from("MOVE")
+			}),
+		),
+		(
+			"lowercase action",
+			Box::new(|d| {
+				d["queries"][0]["statements"][0]["live"]["notifications"][0]["action"] =
+					Value::from("create")
+			}),
+		),
+		(
+			"exit other",
+			Box::new(|d| d["queries"][0]["statements"][0]["live"]["exit"] = Value::from("move")),
+		),
+		(
+			"live without query",
+			Box::new(|d| {
+				d["queries"][0]["statements"][0]["live"].as_object_mut().unwrap().remove("query");
+			}),
+		),
+		(
+			"null watch",
+			Box::new(|d| d["queries"][0]["statements"][0]["live"]["watch"] = Value::Null),
+		),
+		(
+			"refusal without windowable",
+			Box::new(|d| {
+				d["queries"][0]["statements"][0]["liveRefusal"]
+					.as_object_mut()
+					.unwrap()
+					.remove("windowable");
+			}),
+		),
+		(
+			"notification certainty maybe",
+			Box::new(|d| {
+				d["queries"][0]["statements"][0]["live"]["notifications"][0]["certainty"] =
+					Value::from("maybe")
+			}),
+		),
+		(
+			"notification record that is not a kind",
+			Box::new(|d| {
+				d["queries"][0]["statements"][0]["live"]["notifications"][0]["record"] =
+					serde_json::json!({ "kind": "frob" })
+			}),
+		),
+		(
+			"error without message",
+			Box::new(|d| {
+				d["queries"][1]["error"].as_object_mut().unwrap().remove("message");
+			}),
+		),
+		("null error", Box::new(|d| d["queries"][1]["error"] = Value::Null)),
+		(
+			"error span without end",
+			Box::new(|d| {
+				d["queries"][1]["error"]["span"].as_object_mut().unwrap().remove("end");
+			}),
+		),
+	];
+	for (label, mutate) in mutations {
+		let mut doc = base.clone();
+		mutate(&mut doc);
+		assert!(!validation_errors(&doc).is_empty(), "{label} was accepted");
+	}
+}
+
 #[test]
 fn a_document_without_queries_serialises_without_the_member() {
 	let doc = serde_json::to_value(fixture_document("3.3.0")).unwrap();

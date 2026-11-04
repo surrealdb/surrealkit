@@ -174,6 +174,23 @@ pub struct QueryEntry {
 	/// The `$name` parameters the query reads without binding, sorted by name.
 	#[serde(default, skip_serializing_if = "Vec::is_empty")]
 	pub params: Vec<QueryParameter>,
+	/// Why the engine could not type the query. Such an entry has no `statements` and no
+	/// `params`.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub error: Option<QueryError>,
+}
+
+/// Why the engine could not type one query.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QueryError {
+	/// The engine's error code.
+	pub code: String,
+	/// The engine's message.
+	pub message: String,
+	/// The part of the query text at fault: a UTF-8 byte range within `text`.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub span: Option<Span>,
 }
 
 /// Where a query's text is written.
@@ -233,6 +250,108 @@ pub struct QueryStatement {
 	/// object literal field.
 	#[serde(default)]
 	pub open: Vec<Vec<String>>,
+	/// What a live subscription to this `SELECT` delivers. Present on every top-level `SELECT`
+	/// that `LIVE SELECT` can run, and on a `LIVE SELECT` itself.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub live: Option<QueryLive>,
+	/// Why `LIVE SELECT` cannot run this `SELECT` as written.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub live_refusal: Option<LiveRefusal>,
+}
+
+/// The live subscription of a statement.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct QueryLive {
+	/// Whether the subscription delivers patches (`LIVE SELECT DIFF`) rather than records.
+	pub diff: bool,
+	/// The `LIVE SELECT` text to subscribe with. For a refused `SELECT` that can be windowed,
+	/// it is the reduced query.
+	pub query: String,
+	/// How a record that leaves the `WHERE` filter is reported. Only with a `WHERE`.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub exit: Option<LiveExit>,
+	/// The `LIVE SELECT` text that watches the same targets without the `WHERE`, so a record
+	/// that silently leaves the filter is still seen. Only with `exit: "silent"`.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub watch: Option<String>,
+	/// One per action the subscription can deliver, in the order CREATE, UPDATE, DELETE,
+	/// KILLED.
+	pub notifications: Vec<LiveNotification>,
+}
+
+/// How a record that stops matching a live query's `WHERE` is reported.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum LiveExit {
+	/// As a `DELETE` notification.
+	Delete,
+	/// Not at all.
+	Silent,
+}
+
+impl LiveExit {
+	/// The exit as the document spells it.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			LiveExit::Delete => "delete",
+			LiveExit::Silent => "silent",
+		}
+	}
+}
+
+/// What a live subscription's action delivers. The variants are in the order the document
+/// lists them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "UPPERCASE")]
+pub enum LiveAction {
+	Create,
+	Update,
+	Delete,
+	/// The subscription ended; it carries no record.
+	Killed,
+}
+
+impl LiveAction {
+	/// The action as the document and the SDK spell it.
+	pub fn as_str(self) -> &'static str {
+		match self {
+			LiveAction::Create => "CREATE",
+			LiveAction::Update => "UPDATE",
+			LiveAction::Delete => "DELETE",
+			LiveAction::Killed => "KILLED",
+		}
+	}
+}
+
+/// The notification a live subscription delivers for one action.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LiveNotification {
+	pub action: LiveAction,
+	/// The kind of the notification's record id. A value kind: a `none` variant is an `option`.
+	pub record: Kind,
+	/// The kind of the notification's value, a value kind as `record` is.
+	pub result: Kind,
+	pub certainty: Certainty,
+	/// Positions inside `result` where an object admits undeclared keys, as a statement's
+	/// `open` gives them.
+	pub open: Vec<Vec<String>>,
+}
+
+/// Why `LIVE SELECT` cannot run a `SELECT` as written.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LiveRefusal {
+	/// The engine's error code.
+	pub code: String,
+	/// The engine's message.
+	pub message: String,
+	/// The clauses `LIVE SELECT` does not accept, as the engine names them.
+	pub clauses: Vec<String>,
+	/// Whether the `SELECT` can still be watched by dropping those clauses and running it
+	/// again on each change. Then the statement's `live` is the reduced query's.
+	pub windowable: bool,
 }
 
 /// A `$name` a query reads without binding it.

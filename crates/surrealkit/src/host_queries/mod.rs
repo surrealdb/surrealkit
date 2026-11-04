@@ -5,8 +5,9 @@
 //! - the first argument of a method call such as `db.query("SELECT * FROM person")`. The callee is
 //!   matched on its method name alone, so `db.query(…)`, `this.db.query(…)` and `tx.query(…)` all
 //!   count, while a bare `query(…)` or a call whose first argument is not a literal does not;
-//! - the first argument of a call to a configured function such as `createQuery(…)` or
-//!   `useQuery(…)`, bare or as a member (`svelte.createQuery(…)`);
+//! - the argument of a call to a configured function such as `createQuery(…)`, `useQuery(…)` or
+//!   `preload(db, …)`, bare or as a member (`svelte.createQuery(…)`). Each function says which
+//!   argument carries the query ([`QueryFunction::arg`]), the first by default;
 //! - the query attribute of a configured component in markup (`<Query q="…" />`), in JSX and in
 //!   Svelte, Vue and Astro templates.
 //!
@@ -44,8 +45,19 @@ pub const HOST_PARAM_PREFIX: &str = "__host";
 /// The method names that carry a query when none are configured.
 pub const DEFAULT_METHODS: &[&str] = &["query"];
 
-/// The bare function names that carry a query when none are configured.
-pub const DEFAULT_FUNCTIONS: &[&str] = &["createQuery", "createLive", "useQuery", "useLive"];
+/// The functions that carry a query when none are configured: the first argument of
+/// `createQuery`, `createLive`, `useQuery` and `useLive`, and the second of `preload`, which takes
+/// the client first.
+pub const DEFAULT_FUNCTIONS: &[QueryFunction<'static>] = &[
+	QueryFunction::first("createQuery"),
+	QueryFunction::first("createLive"),
+	QueryFunction::first("useQuery"),
+	QueryFunction::first("useLive"),
+	QueryFunction {
+		name: "preload",
+		arg: 1,
+	},
+];
 
 /// The markup components whose attribute carries a query when none are configured.
 pub const DEFAULT_COMPONENTS: &[&str] = &["Query", "LiveQuery"];
@@ -53,13 +65,35 @@ pub const DEFAULT_COMPONENTS: &[&str] = &["Query", "LiveQuery"];
 /// The attribute of a component that carries its query when none is configured.
 pub const DEFAULT_ATTRIBUTE: &str = "q";
 
+/// A function whose call carries a query, and which argument it is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct QueryFunction<'a> {
+	/// The function's name, compared exactly.
+	pub name: &'a str,
+	/// The 0-based index of the argument that carries the query. Comments between arguments do
+	/// not count. A call with fewer arguments, or a non-literal at this index, is not a query.
+	pub arg: usize,
+}
+
+impl<'a> QueryFunction<'a> {
+	/// A function whose first argument (index 0) is the query.
+	pub const fn first(name: &'a str) -> Self {
+		Self {
+			name,
+			arg: 0,
+		}
+	}
+}
+
 /// What to look for: the names that mark a literal as a query.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Queries<'a> {
 	/// Method names: `receiver.method("…")` carries a query. A bare `method("…")` does not.
 	pub methods: &'a [&'a str],
-	/// Function names: `function("…")` and `receiver.function("…")` carry a query.
-	pub functions: &'a [&'a str],
+	/// Functions: `function(…)` and `receiver.function(…)` carry a query in the argument each
+	/// names. A method of the same name wins on a member call, and its query is the first
+	/// argument.
+	pub functions: &'a [QueryFunction<'a>],
 	/// Markup component names, compared exactly. A member name such as `<Kit.Query>` matches on
 	/// its last segment.
 	pub components: &'a [&'a str],
@@ -122,7 +156,7 @@ pub struct HostQuery {
 pub enum HostQuerySource {
 	/// The first argument of `receiver.method("…")`, with the method name.
 	Method(String),
-	/// The first argument of `function("…")` or `receiver.function("…")`, with the function name.
+	/// The query argument of `function(…)` or `receiver.function(…)`, with the function name.
 	Function(String),
 	/// The attribute of a markup element: `<Component attribute="…">`. `attribute` is the
 	/// configured name, whatever form the host spells it in (`:q` in a Vue template).

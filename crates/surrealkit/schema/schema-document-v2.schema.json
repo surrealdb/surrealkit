@@ -906,6 +906,30 @@
 					"type": "array",
 					"minItems": 1,
 					"items": { "$ref": "#/$defs/queryParameter" }
+				},
+				"error": {
+					"description": "Why the engine could not type the query. An entry with an error has no statements and no params.",
+					"$ref": "#/$defs/queryError"
+				}
+			}
+		},
+		"queryError": {
+			"description": "Why the engine could not type one query.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["code", "message"],
+			"properties": {
+				"code": { "description": "The engine's error code.", "type": "string", "minLength": 1 },
+				"message": { "description": "The engine's message.", "type": "string" },
+				"span": {
+					"description": "UTF-8 byte range [start, end) of the part of the query text at fault.",
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["start", "end"],
+					"properties": {
+						"start": { "type": "integer", "minimum": 0 },
+						"end": { "type": "integer", "minimum": 0 }
+					}
 				}
 			}
 		},
@@ -965,7 +989,71 @@
 						"type": "array",
 						"items": { "type": "string", "minLength": 1 }
 					}
+				},
+				"live": {
+					"description": "What a live subscription to this statement delivers. Present on every top-level SELECT that LIVE SELECT can run, and on a LIVE SELECT.",
+					"$ref": "#/$defs/queryLive"
+				},
+				"liveRefusal": {
+					"description": "Why LIVE SELECT cannot run this SELECT as written.",
+					"$ref": "#/$defs/liveRefusal"
 				}
+			}
+		},
+		"queryLive": {
+			"description": "The live subscription of a statement.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["diff", "query", "notifications"],
+			"properties": {
+				"diff": { "description": "Whether the subscription delivers patches rather than records.", "type": "boolean" },
+				"query": { "description": "The LIVE SELECT text to subscribe with.", "type": "string", "minLength": 1 },
+				"exit": {
+					"description": "How a record that leaves the WHERE filter is reported. Only with a WHERE.",
+					"enum": ["delete", "silent"]
+				},
+				"watch": {
+					"description": "The LIVE SELECT text that watches the same targets without the WHERE. Only with exit `silent`.",
+					"type": "string",
+					"minLength": 1
+				},
+				"notifications": {
+					"description": "One per action, in the order CREATE, UPDATE, DELETE, KILLED.",
+					"type": "array",
+					"items": { "$ref": "#/$defs/liveNotification" }
+				}
+			}
+		},
+		"liveNotification": {
+			"description": "The notification a live subscription delivers for one action.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["action", "record", "result", "certainty", "open"],
+			"properties": {
+				"action": { "enum": ["CREATE", "UPDATE", "DELETE", "KILLED"] },
+				"record": { "description": "The kind of the record id. A value kind: NONE is an `option`.", "$ref": "#/$defs/kind" },
+				"result": { "description": "The kind of the value. A value kind: NONE is an `option`.", "$ref": "#/$defs/kind" },
+				"certainty": { "enum": ["fact", "hint"] },
+				"open": {
+					"description": "Positions inside `result` where an object admits undeclared keys, as for a statement.",
+					"type": "array",
+					"items": {
+						"type": "array",
+						"items": { "type": "string", "minLength": 1 }
+					}
+				}
+			}
+		},
+		"liveRefusal": {
+			"description": "Why LIVE SELECT cannot run a SELECT as written.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["code", "message", "clauses", "windowable"],
+			"properties": {
+				"code": { "type": "string", "minLength": 1 },
+				"message": { "type": "string" },
+				"clauses": { "description": "The clauses LIVE SELECT does not accept.", "type": "array", "items": { "type": "string", "minLength": 1 } },
+				"windowable": { "description": "Whether dropping those clauses and running the SELECT again on each change can serve it. The statement's `live` is then the reduced query's.", "type": "boolean" }
 			}
 		},
 		"queryParameter": {

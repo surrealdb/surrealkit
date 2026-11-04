@@ -732,5 +732,185 @@
         }
       ]
     }
+  },
+  {
+    "name": "live",
+    "request": {
+      "query": "SELECT * FROM user ORDER BY name LIMIT $lim",
+      "name": "ListUsers"
+    },
+    "document": {
+      "format": "surrealdb.types",
+      "version": 1,
+      "engine": "4.1.0",
+      "namespace": "app",
+      "database": "main",
+      "queries": [
+        {
+          "name": "ListUsers",
+          "text": "SELECT * FROM user ORDER BY name LIMIT $lim",
+          "statements": [
+            {
+              "kind": "x",
+              "kind_value": {
+                "Array": [
+                  {
+                    "Literal": {
+                      "Object": {
+                        "id": {
+                          "Record": [
+                            "user"
+                          ]
+                        },
+                        "name": "String",
+                        "team": {
+                          "Record": [
+                            "team"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  null
+                ]
+              },
+              "certainty": "fact",
+              "support": {
+                "exact": true
+              },
+              "open": [],
+              "span": {
+                "start": 0,
+                "end": 1,
+                "line": 1,
+                "column": 1,
+                "end_line": 1,
+                "end_column": 2
+              },
+              "live": {
+                "diff": false,
+                "query": "LIVE SELECT * FROM user",
+                "notifications": [
+                  {
+                    "action": "CREATE",
+                    "record": "record<user>",
+                    "record_value": {
+                      "Record": [
+                        "user"
+                      ]
+                    },
+                    "result": "object",
+                    "result_value": {
+                      "Literal": {
+                        "Object": {
+                          "id": {
+                            "Record": [
+                              "user"
+                            ]
+                          },
+                          "name": "String",
+                          "team": {
+                            "Record": [
+                              "team"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "certainty": "fact",
+                    "open": []
+                  },
+                  {
+                    "action": "UPDATE",
+                    "record": "record<user>",
+                    "record_value": {
+                      "Record": [
+                        "user"
+                      ]
+                    },
+                    "result": "object",
+                    "result_value": {
+                      "Literal": {
+                        "Object": {
+                          "id": {
+                            "Record": [
+                              "user"
+                            ]
+                          },
+                          "name": "String",
+                          "team": {
+                            "Record": [
+                              "team"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "certainty": "fact",
+                    "open": []
+                  },
+                  {
+                    "action": "DELETE",
+                    "record": "record<user>",
+                    "record_value": {
+                      "Record": [
+                        "user"
+                      ]
+                    },
+                    "result": "object",
+                    "result_value": {
+                      "Literal": {
+                        "Object": {
+                          "id": {
+                            "Record": [
+                              "user"
+                            ]
+                          },
+                          "name": "String",
+                          "team": {
+                            "Record": [
+                              "team"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "certainty": "fact",
+                    "open": []
+                  },
+                  {
+                    "action": "KILLED",
+                    "record": "none",
+                    "record_value": "None",
+                    "result": "none",
+                    "result_value": "None",
+                    "certainty": "fact",
+                    "open": []
+                  }
+                ]
+              },
+              "live_refusal": {
+                "code": "E4009",
+                "message": "LIVE SELECT cannot run a SELECT with ORDER BY, LIMIT",
+                "clauses": [
+                  "ORDER BY",
+                  "LIMIT"
+                ],
+                "windowable": true
+              }
+            }
+          ],
+          "params": [
+            {
+              "name": "lim",
+              "kind": "x",
+              "kind_value": "Int",
+              "certainty": "hint",
+              "required": true
+            }
+          ]
+        }
+      ]
+    }
   }
 ]
