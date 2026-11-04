@@ -487,7 +487,7 @@ mod tests {
 		let (host_a, host_b) = (host.find("A;").unwrap(), host.find("B;").unwrap());
 		let extras = Extras {
 			files: vec![
-				extra("h.ts", host, Some(vec![0..24])),
+				extra("h.ts", host, Some(std::iter::once(0..24).collect())),
 				// No comments: a directive-looking line here suppresses nothing.
 				extra("surrealkit.toml", config, None),
 			],

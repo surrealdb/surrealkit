@@ -649,6 +649,7 @@ sync runs inside an already-selected namespace/database. Provision these out-of-
 }
 
 /// A `DEFINE` statement of a schema file and the catalog entity it defines.
+#[cfg(feature = "analyze")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DefinedEntity {
 	pub key: EntityKey,
@@ -663,6 +664,7 @@ pub(crate) struct DefinedEntity {
 /// Names are read the way the catalog reads them, from the text after `vars` is substituted, so
 /// `DEFINE TABLE ${PREFIX}_t` is the table the engine got. A file that does not split into
 /// statements has none: the check reports that file itself.
+#[cfg(feature = "analyze")]
 pub(crate) fn defined_entities(
 	text: &str,
 	vars: &crate::variables::TemplateVars,
