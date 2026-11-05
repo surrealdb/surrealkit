@@ -179,7 +179,9 @@ pub enum FieldType {
 	},
 	/// Anything the parser did not recognise. Keeps the source so output is
 	/// never lossy and the parser never panics. Every `Unknown` with a source
-	/// comes with a `kind-unrecognized` error [`Diagnostic`](super::Diagnostic).
+	/// comes with a `kind-unrecognized` error [`Diagnostic`](super::Diagnostic), or with a
+	/// `kind-not-represented` warning when it is a SurrealDB 4.x kind (`date`, `enum<…>`, a
+	/// `DEFINE TYPE` name, …) that the parser understood and the document has no node for.
 	/// A field without `TYPE` is `Unknown` with an empty source, as v1 has
 	/// always written it (`unknown` in TypeScript), with a `field-kind-undeclared`
 	/// info or, when `COMPUTED`, a `field-computed-kind-undeclared` warning.

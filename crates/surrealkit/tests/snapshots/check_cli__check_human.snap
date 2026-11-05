@@ -1,0 +1,17 @@
+---
+source: crates/surrealkit/tests/check_cli.rs
+expression: stderr(&human)
+---
+error[K9003]: Cannot define field `x.y`: the field `x` it is nested in is not defined. Define `x` first
+ --> database/schema/002_bad.surql:2:1
+  |
+2 | DEFINE FIELD x.y ON t TYPE string;
+  | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+error[K9001]: string is never closed. If this statement has a regex literal, SurrealKit may have read its opening `/` as division; write it as <regex> "..." instead
+ --> database/schema/003_open.surql:1:29
+  |
+1 | DEFINE FIELD c ON t DEFAULT 'open;
+  |                             ^
+
+checked 3 schema files and 0 query files: 2 errors, 0 warnings

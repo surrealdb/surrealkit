@@ -1,0 +1,215 @@
+---
+source: crates/surrealkit/src/check/render.rs
+expression: text
+---
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "surreal kit check",
+          "informationUri": "https://github.com/surrealdb/surrealkit",
+          "version": "<version>",
+          "rules": [
+            {
+              "id": "E1002",
+              "shortDescription": {
+                "text": "E1002"
+              }
+            },
+            {
+              "id": "K9001",
+              "shortDescription": {
+                "text": "The file cannot be split into statements"
+              }
+            },
+            {
+              "id": "K9003",
+              "shortDescription": {
+                "text": "The engine rejected a schema statement"
+              }
+            },
+            {
+              "id": "L7005",
+              "shortDescription": {
+                "text": "L7005"
+              }
+            },
+            {
+              "id": "L7013",
+              "shortDescription": {
+                "text": "L7013"
+              }
+            }
+          ]
+        }
+      },
+      "columnKind": "unicodeCodePoints",
+      "results": [
+        {
+          "ruleId": "L7005",
+          "ruleIndex": 3,
+          "level": "note",
+          "message": {
+            "text": "`prénom` is never read"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "database/schema/001%20user.surql"
+                },
+                "region": {
+                  "startLine": 2,
+                  "startColumn": 14,
+                  "endLine": 2,
+                  "endColumn": 20,
+                  "byteOffset": 43,
+                  "byteLength": 7
+                }
+              }
+            }
+          ],
+          "properties": {
+            "source": "kit"
+          }
+        },
+        {
+          "ruleId": "K9003",
+          "ruleIndex": 2,
+          "level": "error",
+          "message": {
+            "text": "Parse error: unexpected token `nonsense`\nnote: expected a kind such as `string` or `int`\nnote: the table is defined here\nhelp: write `TYPE string`"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "database/schema/001%20user.surql"
+                },
+                "region": {
+                  "startLine": 3,
+                  "startColumn": 1,
+                  "endLine": 5,
+                  "endColumn": 11,
+                  "byteOffset": 96,
+                  "byteLength": 50
+                }
+              }
+            }
+          ],
+          "relatedLocations": [
+            {
+              "id": 0,
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "database/schema/001%20user.surql"
+                },
+                "region": {
+                  "startLine": 1,
+                  "startColumn": 1,
+                  "endLine": 1,
+                  "endColumn": 29,
+                  "byteOffset": 0,
+                  "byteLength": 28
+                }
+              },
+              "message": {
+                "text": "the table is defined here"
+              }
+            }
+          ],
+          "properties": {
+            "source": "kit"
+          }
+        },
+        {
+          "ruleId": "L7013",
+          "ruleIndex": 4,
+          "level": "warning",
+          "message": {
+            "text": "malformed suppression directive: the `)` after the code is missing"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "database/schema/001%20user.surql"
+                },
+                "region": {
+                  "startLine": 6,
+                  "startColumn": 1,
+                  "endLine": 6,
+                  "endColumn": 19,
+                  "byteOffset": 148,
+                  "byteLength": 18
+                }
+              }
+            }
+          ],
+          "properties": {
+            "source": "kit"
+          }
+        },
+        {
+          "ruleId": "K9001",
+          "ruleIndex": 1,
+          "level": "error",
+          "message": {
+            "text": "a finding with an empty span"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "queries/list.surql"
+                },
+                "region": {
+                  "startLine": 1,
+                  "startColumn": 1,
+                  "endLine": 1,
+                  "endColumn": 1,
+                  "byteOffset": 0,
+                  "byteLength": 0
+                }
+              }
+            }
+          ],
+          "properties": {
+            "source": "kit"
+          }
+        },
+        {
+          "ruleId": "E1002",
+          "ruleIndex": 0,
+          "level": "error",
+          "message": {
+            "text": "no field `nickname` on `user`"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "queries/list.surql"
+                },
+                "region": {
+                  "startLine": 2,
+                  "startColumn": 10,
+                  "endLine": 2,
+                  "endColumn": 18,
+                  "byteOffset": 29,
+                  "byteLength": 8
+                }
+              }
+            }
+          ],
+          "properties": {
+            "source": "kit"
+          }
+        }
+      ]
+    }
+  ]
+}

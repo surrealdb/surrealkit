@@ -269,13 +269,13 @@ pub fn collect_schema_files(folder: &str) -> Result<Vec<SchemaFile>> {
 	collect_schema_files_at(folder, &schema_dir(folder))
 }
 
-/// Collect `.surql` files from an explicit directory, recursively and in sorted
-/// order. Used by module-aware callers, which resolve the directory through
-/// [`Layout`](crate::constants::Layout) rather than the project folder.
-///
-/// `root` is the project folder. Tracking keys are relative to it, so the same
-/// file yields the same key no matter where the process runs from.
-pub fn collect_schema_files_at(root: &str, sd: &std::path::Path) -> Result<Vec<SchemaFile>> {
+/// The `.surql` files under `sd`, recursively and in sorted order, as the paths the walk
+/// found them at. `root` is the project folder: a schema directory configured to enclose it
+/// is walked without its `rollouts/`. A directory that does not exist has no files.
+pub(crate) fn schema_file_paths(
+	root: &str,
+	sd: &std::path::Path,
+) -> Result<Vec<std::path::PathBuf>> {
 	if !sd.exists() {
 		return Ok(Vec::new());
 	}
@@ -300,7 +300,17 @@ pub fn collect_schema_files_at(root: &str, sd: &std::path::Path) -> Result<Vec<S
 	}
 
 	files.sort();
+	Ok(files)
+}
 
+/// Collect `.surql` files from an explicit directory, recursively and in sorted
+/// order. Used by module-aware callers, which resolve the directory through
+/// [`Layout`](crate::constants::Layout) rather than the project folder.
+///
+/// `root` is the project folder. Tracking keys are relative to it, so the same
+/// file yields the same key no matter where the process runs from.
+pub fn collect_schema_files_at(root: &str, sd: &std::path::Path) -> Result<Vec<SchemaFile>> {
+	let files = schema_file_paths(root, sd)?;
 	let mut out = Vec::with_capacity(files.len());
 	for path in files {
 		let sql = fs::read_to_string(&path).with_context(|| format!("reading {:?}", path))?;
@@ -666,6 +676,52 @@ sync runs inside an already-selected namespace/database. Provision these out-of-
 		entities.push(entity);
 	}
 	Ok((entities, operations))
+}
+
+/// A `DEFINE` statement of a schema file and the catalog entity it defines.
+#[cfg(feature = "analyze")]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DefinedEntity {
+	pub key: EntityKey,
+	/// Byte range of the statement in the file's text, without its `;`.
+	pub span: std::ops::Range<usize>,
+	/// Index of the statement among the file's top-level statements.
+	pub statement: usize,
+}
+
+/// The entity each `DEFINE` of `text` defines, with its statement's position, in file order.
+///
+/// Names are read the way the catalog reads them, from the text after `vars` is substituted, so
+/// `DEFINE TABLE ${PREFIX}_t` is the table the engine got. A file that does not split into
+/// statements has none: the check reports that file itself.
+#[cfg(feature = "analyze")]
+pub(crate) fn defined_entities(
+	text: &str,
+	vars: &crate::variables::TemplateVars,
+) -> Vec<DefinedEntity> {
+	let Ok(statements) = crate::surql_scan::scan(text) else {
+		return Vec::new();
+	};
+	let mut out = Vec::new();
+	for (statement, stmt) in statements.iter().enumerate() {
+		if !stmt.is_word(text, 0, "DEFINE") {
+			continue;
+		}
+		let applied = vars.apply(stmt.text(text)).unwrap_or_else(|_| stmt.text(text).to_string());
+		let Ok(parsed) = crate::surql_scan::scan(&applied) else {
+			continue;
+		};
+		let Some(entity) = parsed.first().and_then(|first| parse_define_entity(first, &applied))
+		else {
+			continue;
+		};
+		out.push(DefinedEntity {
+			key: entity.key(),
+			span: stmt.span.clone(),
+			statement,
+		});
+	}
+	out
 }
 
 /// Whether a recorded name or scope is a fragment of a quoted identifier.

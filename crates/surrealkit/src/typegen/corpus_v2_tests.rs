@@ -532,3 +532,137 @@ async fn access_authenticate_changes_the_semantic_digest() {
 	}
 	assert_ne!(digests[0], digests[1]);
 }
+
+/// `DEFINE TYPE` and the 4.0 kinds, read from the embedded 4.0 engine through the STRUCTURE
+/// adapter. (SurrealKit schema files cannot define a type, so only introspection sees one.)
+#[tokio::test]
+async fn types_and_the_four_oh_kinds_are_read_from_the_engine() {
+	use super::document::Kind;
+	use super::json_schema_tests::assert_valid;
+
+	let db = crate::compile::engine(&[], "types_4x").await.expect("engine");
+	db.query(
+		"DEFINE TYPE mood AS 'sad' | 'ok' | 'meh';\n\
+		 DEFINE TYPE `my type` AS none | int COMMENT 'hi';\n\
+		 DEFINE TYPE pos AS int ASSERT $value > 0;\n\
+		 DEFINE TYPE shape AS { a: option<mood>, b: u8 };\n\
+		 DEFINE TABLE t SCHEMAFULL;\n\
+		 DEFINE FIELD m ON t TYPE mood;\n\
+		 DEFINE FIELD ms ON t TYPE array<option<`my type`>>;\n\
+		 DEFINE FIELD e ON t TYPE enum<'z', 'a', 'm', 'a'>;\n\
+		 DEFINE FIELD d ON t TYPE date | time | timestamp | interval | bigdecimal;\n\
+		 DEFINE FIELD w ON t TYPE option<u8>;",
+	)
+	.await
+	.expect("define")
+	.check()
+	.expect("defined");
+	let doc =
+		super::introspect_v2::introspect(&db, EngineMode::Embedded).await.expect("introspect");
+	assert_eq!(doc.provenance.adapter, "structure-4.0");
+	let errors: Vec<String> =
+		doc.diagnostics.iter().filter(|d| d.is_error()).map(|d| d.to_string()).collect();
+	assert!(errors.is_empty(), "{errors:?}");
+	let warnings: Vec<String> = doc
+		.diagnostics
+		.iter()
+		.filter(|d| d.severity == Severity::Warning)
+		.map(|d| format!("{}: {}", d.source, d.reason))
+		.collect();
+	assert_eq!(warnings.len(), 2, "{warnings:?}");
+	assert!(warnings.iter().any(|w| w.starts_with("type pos: ASSERT")), "{warnings:?}");
+	assert!(
+		warnings.iter().any(|w| w.starts_with("type mood: the declaration order")),
+		"{warnings:?}"
+	);
+
+	let json = serde_json::to_value(&doc).expect("json");
+	assert_valid("a document with types", &json);
+	let kinds: Vec<(&str, serde_json::Value)> = doc
+		.types
+		.iter()
+		.map(|t| (t.name.as_str(), serde_json::to_value(&t.kind).expect("json")))
+		.collect();
+	use serde_json::json;
+	assert_eq!(
+		kinds,
+		vec![
+			(
+				"mood",
+				json!({"kind": "union", "variants": [
+					{"kind": "literal", "type": "string", "value": "meh"},
+					{"kind": "literal", "type": "string", "value": "ok"},
+					{"kind": "literal", "type": "string", "value": "sad"},
+				]})
+			),
+			("my type", json!({"kind": "option", "item": {"kind": "int"}})),
+			("pos", json!({"kind": "int"})),
+			(
+				"shape",
+				json!({"kind": "objectLiteral", "fields": [
+					{"name": "a", "kind": {"kind": "named", "name": "mood"}, "optional": true},
+					{"name": "b", "kind": {"kind": "int", "width": 8, "signed": false}, "optional": false},
+				]})
+			),
+		]
+	);
+	assert_eq!(doc.types[1].comment.as_deref(), Some("hi"));
+	let field = |name: &str| {
+		let field = doc.tables[0].fields.iter().find(|f| f.path == [name]).expect(name);
+		(field.kind.clone().expect("kind"), field.optional)
+	};
+	assert_eq!(
+		field("m"),
+		(
+			Kind::Named {
+				name: "mood".into()
+			},
+			false
+		)
+	);
+	assert_eq!(
+		field("ms").0,
+		Kind::Array {
+			item: Box::new(Kind::Option {
+				item: Box::new(Kind::Named {
+					name: "my type".into()
+				})
+			}),
+			length: None
+		}
+	);
+	assert_eq!(
+		field("e").0,
+		Kind::Enum {
+			labels: ["z", "a", "m", "a"].map(String::from).to_vec()
+		}
+	);
+	assert_eq!(
+		field("w"),
+		(
+			Kind::Int {
+				width: Some(8),
+				signed: Some(false)
+			},
+			true
+		)
+	);
+
+	// Round trip, and the digest is a function of the content.
+	let decoded: SchemaDocument = serde_json::from_value(json.clone()).expect("decode");
+	assert_eq!(serde_json::to_value(&decoded).expect("json"), json);
+	assert_eq!(
+		super::canonical::semantic_digest(&json).expect("digest"),
+		doc.semantic_digest.as_str()
+	);
+}
+
+/// A document without types has no `types` key: it keeps the bytes and the digest it had
+/// before the collection existed.
+#[test]
+fn a_document_without_types_has_no_types_key() {
+	for version in ["3.2.4", "3.3.0", "4.0.0"] {
+		let json = serde_json::to_value(fixture_document(version)).expect("json");
+		assert!(json.get("types").is_none(), "{version}");
+	}
+}

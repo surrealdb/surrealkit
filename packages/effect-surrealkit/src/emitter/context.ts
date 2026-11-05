@@ -133,6 +133,8 @@ export interface PrintContext {
 	 * refuses every undeclared key of an object that is not FLEXIBLE.
 	 */
 	readonly closedObjects?: boolean;
+	/** The `DEFINE TYPE` names being expanded around this kind, outermost first. */
+	readonly expanding?: ReadonlyArray<string>;
 }
 
 export const profileFor = (options: EmitterOptions, key: string): Profile => {

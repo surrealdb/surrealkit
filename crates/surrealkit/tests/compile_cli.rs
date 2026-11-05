@@ -115,6 +115,37 @@ fn compile_check_reports_drift_and_writes_nothing() {
 	assert_eq!(fs::read(&json).expect("untouched"), first);
 }
 
+/// A 4.0 schema compiles under strict (the default): sized numbers carry their width, the other
+/// 4.0 kinds have nodes of their own, and `types` is absent without a `DEFINE TYPE`. The
+/// TypeScript interfaces (v1) read the kinds with no v1 form as `unknown`.
+#[test]
+fn compile_reads_the_four_oh_kinds() {
+	let tmp = tempfile::TempDir::new().expect("tempdir");
+	write(
+		&tmp.path().join("database/schema/001.surql"),
+		"DEFINE TABLE t SCHEMAFULL;\nDEFINE FIELD n ON t TYPE i32;\nDEFINE FIELD d ON t TYPE \
+		 option<date>;\nDEFINE FIELD s ON t TYPE enum<'b', 'a c'>;\n",
+	);
+	write(
+		&tmp.path().join("surrealkit.toml"),
+		"[typegen]\nschema_version = 2\njson = \"out/schema.json\"\ntypescript = \"out/types\"\n",
+	);
+	let (code, text) = surrealkit(tmp.path(), &["compile"]);
+	assert_eq!(code, Some(0), "{text}");
+	let json = fs::read_to_string(tmp.path().join("out/schema.json")).expect("schema.json");
+	let doc: serde_json::Value = serde_json::from_str(&json).expect("json");
+	let fields = doc["tables"][0]["fields"].as_array().expect("fields");
+	let field = |name: &str| fields.iter().find(|f| f["path"][0] == name).expect(name).clone();
+	assert_eq!(field("n")["kind"], serde_json::json!({"kind": "int", "width": 32}));
+	assert_eq!(field("d")["kind"], serde_json::json!({"kind": "date"}));
+	assert_eq!(field("d")["optional"], true);
+	assert_eq!(field("s")["kind"], serde_json::json!({"kind": "enum", "labels": ["b", "a c"]}));
+	assert_eq!(doc["diagnostics"], serde_json::json!([]));
+	assert!(doc.get("types").is_none());
+	let ts = fs::read_to_string(tmp.path().join("out/types/index.ts")).expect("index.ts");
+	assert!(ts.contains("export interface T"), "{ts}");
+}
+
 #[test]
 fn compile_selects_modules_and_writes_typescript_when_configured() {
 	let tmp = tempfile::TempDir::new().expect("tempdir");

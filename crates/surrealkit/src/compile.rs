@@ -91,7 +91,9 @@ pub struct Compiled {
 /// are accepted but name no engine feature: the embedded engine checks only `surrealism`, so
 /// `DEFINE BUCKET`, `DEFINE CONFIG GRAPHQL` and the GQL front-end need no capability. They
 /// stay in the second element, which is what `provenance.capabilities` records.
-fn experimental_features(names: &[String]) -> Result<(Vec<ExperimentalFeature>, Vec<String>)> {
+pub(crate) fn experimental_features(
+	names: &[String],
+) -> Result<(Vec<ExperimentalFeature>, Vec<String>)> {
 	let mut canonical: Vec<String> = names.iter().map(|n| n.trim().to_ascii_lowercase()).collect();
 	canonical.sort();
 	canonical.dedup();
@@ -112,7 +114,7 @@ fn experimental_features(names: &[String]) -> Result<(Vec<ExperimentalFeature>, 
 
 /// The capabilities of the compile engine: the defaults (every non-scripting function), no
 /// network target, no scripting, and only the experimental features given.
-fn capabilities(features: &[ExperimentalFeature]) -> Result<Capabilities> {
+pub(crate) fn capabilities(features: &[ExperimentalFeature]) -> Result<Capabilities> {
 	Capabilities::new()
 		.with_scripting(false)
 		.with_no_net_targets_allowed()
@@ -129,8 +131,8 @@ pub fn normalized_sha256(sql: &str) -> String {
 	hex::encode(Sha256::digest(text.as_bytes()))
 }
 
-/// Open the hermetic engine.
-async fn engine(features: &[ExperimentalFeature]) -> Result<Surreal<Any>> {
+/// Open the hermetic engine, with `name` as its namespace and database.
+pub(crate) async fn engine(features: &[ExperimentalFeature], name: &str) -> Result<Surreal<Any>> {
 	let config = Config::new().capabilities(capabilities(features)?);
 	let db = connect(("mem://", config)).await.map_err(|err| {
 		anyhow!(
@@ -138,8 +140,59 @@ async fn engine(features: &[ExperimentalFeature]) -> Result<Surreal<Any>> {
 			 default): {err}"
 		)
 	})?;
-	db.use_ns("compile").use_db("compile").await.context("selecting the compile database")?;
+	db.use_ns(name).use_db(name).await.with_context(|| format!("selecting the {name} database"))?;
 	Ok(db)
+}
+
+/// Why [`apply_statement`] did not apply a statement.
+#[cfg(feature = "analyze")]
+#[derive(Debug)]
+pub(crate) enum Rejection {
+	/// A template variable the statement uses is not set.
+	Variable(anyhow::Error),
+	/// The statement is one `sync` refuses (a `REMOVE`, a non-`DEFINE`, `DEFINE
+	/// NAMESPACE`) or that SurrealKit cannot prepare.
+	Refused(anyhow::Error),
+	/// The engine returned an error for it.
+	Engine(String),
+}
+
+/// Apply one statement to `db` the way [`compile`] applies a file: the checks `sync` makes of
+/// the statement as written, then the template variables, then [`prepare_schema_sql`] (every
+/// `DEFINE` but a sequence as `OVERWRITE`), then the engine, where a statement that fails is
+/// an error. `path` names the file in the messages.
+///
+/// `lets` are the `LET` statements the file ran before this one. A file is one query to
+/// [`compile`], so a `$param` a `LET` sets is visible to the statements after it; here each
+/// runs in front of `statement` to give it the same view.
+#[cfg(feature = "analyze")]
+pub(crate) async fn apply_statement(
+	db: &Surreal<Any>,
+	path: &str,
+	lets: &[&str],
+	statement: &str,
+	vars: &TemplateVars,
+) -> std::result::Result<(), Rejection> {
+	let as_written = SchemaFile {
+		path: path.to_string(),
+		hash: String::new(),
+		sql: statement.to_string(),
+	};
+	crate::schema_state::parse_schema_statements(&as_written, false).map_err(Rejection::Refused)?;
+	let mut sql = String::new();
+	for part in lets.iter().chain(std::iter::once(&statement)) {
+		sql.push_str(&vars.apply(part).map_err(Rejection::Variable)?);
+		sql.push_str(";\n");
+	}
+	let prepared = prepare_schema_sql(&sql).map_err(Rejection::Refused)?;
+	for warning in &prepared.warnings {
+		log::warn!("{path}: {warning}");
+	}
+	db.query(prepared.sql.as_str())
+		.await
+		.and_then(|response| response.check())
+		.map_err(|err| Rejection::Engine(err.to_string()))?;
+	Ok(())
 }
 
 /// A `definition-duplicate` warning for every entity the files define more than once.
@@ -318,7 +371,7 @@ fn engine_mismatch(expected: Option<&str>, version: &str) -> Result<Option<Diagn
 /// Compile `modules` (already in dependency order) into schema document v2.
 pub async fn compile(modules: &[CompileModule], opts: &CompileOpts) -> Result<Compiled> {
 	let (features, experimental) = experimental_features(&opts.experimental)?;
-	let db = engine(&features).await?;
+	let db = engine(&features, "compile").await?;
 
 	let files: Vec<&SchemaFile> = modules.iter().flat_map(|m| m.files.iter()).collect();
 	let mut diagnostics = duplicates(&files)?;
@@ -829,6 +882,142 @@ mod corpus {
 				.v1_diagnostics
 				.iter()
 				.any(|d| d.code == codes::FIELD_KIND_UNDECLARED && d.table.as_deref() == Some("t")),
+			"{:?}",
+			compiled.v1_diagnostics
+		);
+	}
+
+	/// SurrealDB 4.0's sized numbers compile clean. v2 carries the width (`int`/`float` with
+	/// `width`, and `signed: false` for `uN`); v1 reads them as plain `int` and `float`.
+	#[tokio::test]
+	async fn sized_numbers_compile_clean() {
+		let widths = ["i8", "i16", "i32", "u8", "u16", "u32", "u64", "f16", "f32"];
+		let mut sql = String::from("DEFINE TABLE t SCHEMAFULL;\n");
+		for width in widths {
+			sql.push_str(&format!("DEFINE FIELD w_{width} ON t TYPE {width};\n"));
+		}
+		sql.push_str("DEFINE FIELD nested ON t TYPE array<option<i32>, 3>;\n");
+		sql.push_str("DEFINE FIELD maybe ON t TYPE option<u8>;\n");
+		sql.push_str("DEFINE FIELD plain ON t TYPE i64;\n");
+		sql.push_str("DEFINE FUNCTION fn::f($a: i16, $b: f32) -> u32 { RETURN 1 };\n");
+		let compiled = compile(&one_file(&sql), &CompileOpts::default()).await.expect("compile");
+		let doc = &compiled.document;
+		assert!(doc.diagnostics.is_empty(), "{:?}", doc.diagnostics);
+		assert!(compiled.v1_diagnostics.is_empty(), "{:?}", compiled.v1_diagnostics);
+		let kind = |name: &str| {
+			let field = doc.tables[0].fields.iter().find(|f| f.path == [name]).expect(name);
+			(serde_json::to_value(&field.kind).expect("json"), field.optional)
+		};
+		for width in widths {
+			let bits: u64 = width[1..].parse().unwrap();
+			let mut node = serde_json::json!({"kind": if width.starts_with('f') { "float" } else { "int" }, "width": bits});
+			if width.starts_with('u') {
+				node["signed"] = false.into();
+			}
+			assert_eq!(kind(&format!("w_{width}")), (node, false), "{width}");
+		}
+		assert_eq!(
+			kind("nested"),
+			(
+				serde_json::json!({"kind": "array", "length": 3,
+					"item": {"kind": "option", "item": {"kind": "int", "width": 32}}}),
+				false
+			)
+		);
+		assert_eq!(
+			kind("maybe"),
+			(serde_json::json!({"kind": "int", "width": 8, "signed": false}), true)
+		);
+		// The engine renders `i64` as `int`: no width.
+		assert_eq!(kind("plain"), (serde_json::json!({"kind": "int"}), false));
+		let function = &doc.functions[0];
+		assert_eq!(
+			serde_json::to_value(&function.args[0].kind).unwrap(),
+			serde_json::json!({"kind": "int", "width": 16})
+		);
+		assert_eq!(
+			serde_json::to_value(&function.args[1].kind).unwrap(),
+			serde_json::json!({"kind": "float", "width": 32})
+		);
+		assert_eq!(
+			serde_json::to_value(&function.returns).unwrap(),
+			serde_json::json!({"kind": "int", "width": 32, "signed": false})
+		);
+		// v1 has no place for a width.
+		let v1 = &compiled.v1.tables[0].fields;
+		let v1_kind = |name: &str| {
+			serde_json::to_value(&v1.iter().find(|f| f.name == name).unwrap().r#type).unwrap()
+		};
+		assert_eq!(v1_kind("w_i8"), serde_json::json!({"kind": "primitive", "name": "int"}));
+		assert_eq!(v1_kind("w_f16"), serde_json::json!({"kind": "primitive", "name": "float"}));
+	}
+
+	/// The 4.0 kinds beyond the sized numbers compile to nodes of their own: no diagnostics in v2.
+	/// v1 has no such nodes: it reads each as `unknown` with a `kind-not-represented` warning.
+	#[tokio::test]
+	async fn the_four_oh_kinds_compile_to_nodes() {
+		let compiled = compile(
+			&one_file(
+				"DEFINE TABLE t SCHEMAFULL;\n\
+				 DEFINE FIELD d ON t TYPE date;\n\
+				 DEFINE FIELD tm ON t TYPE time;\n\
+				 DEFINE FIELD ts ON t TYPE timestamp;\n\
+				 DEFINE FIELD iv ON t TYPE interval;\n\
+				 DEFINE FIELD bd ON t TYPE bigdecimal;\n\
+				 DEFINE FIELD en ON t TYPE enum<'z', \"it's\", 'a', 'x,y>z'>;\n\
+				 DEFINE FIELD many ON t TYPE array<enum<'a'>> | none;\n\
+				 DEFINE FIELD ok ON t TYPE i8 | string;\n",
+			),
+			&CompileOpts::default(),
+		)
+		.await
+		.expect("compile");
+		let doc = &compiled.document;
+		assert!(doc.diagnostics.is_empty(), "{:?}", doc.diagnostics);
+		let kind = |name: &str| {
+			let field = doc.tables[0].fields.iter().find(|f| f.path == [name]).expect(name);
+			(serde_json::to_value(&field.kind).expect("json"), field.optional)
+		};
+		for (field, node) in [
+			("d", "date"),
+			("tm", "time"),
+			("ts", "timestamp"),
+			("iv", "interval"),
+			("bd", "bigdecimal"),
+		] {
+			assert_eq!(kind(field), (serde_json::json!({"kind": node}), false), "{field}");
+		}
+		assert_eq!(
+			kind("en"),
+			(serde_json::json!({"kind": "enum", "labels": ["z", "it's", "a", "x,y>z"]}), false)
+		);
+		assert_eq!(
+			kind("many"),
+			(serde_json::json!({"kind": "array", "item": {"kind": "enum", "labels": ["a"]}}), true)
+		);
+		assert_eq!(
+			kind("ok"),
+			(
+				serde_json::json!({"kind": "union", "variants": [
+					{"kind": "int", "width": 8}, {"kind": "string"},
+				]}),
+				false
+			)
+		);
+
+		let mut warned: Vec<String> = compiled
+			.v1_diagnostics
+			.iter()
+			.filter(|d| d.code == codes::KIND_NOT_REPRESENTED)
+			.map(|d| {
+				assert_eq!(d.severity, Severity::Warning);
+				d.field.clone().expect("field").join(".")
+			})
+			.collect();
+		warned.sort();
+		assert_eq!(warned, ["bd", "d", "en", "iv", "many", "many.*", "tm", "ts"]);
+		assert!(
+			compiled.v1_diagnostics.iter().all(|d| !d.is_error()),
 			"{:?}",
 			compiled.v1_diagnostics
 		);

@@ -10,7 +10,7 @@ on an existing project re-applies nothing and prunes nothing.
 Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and
 1.0.0-beta.7 two more (13 and 14), 1.0.0-beta.8 five more (15 to 19), and
 1.0.0-rc.1 three more (20 to 22). 1.0.0-rc.1 needs SurrealDB 4.0 (20); stay on
-1.0.0-beta.8 while your servers run 3.x.
+1.0.0-beta.8 while your servers run 3.x. Unreleased changes are 23 and up.
 Upgrading from 0.7.0 or any 1.0 beta carries existing state forward; CI checks
 that against every published release, written on SurrealDB 3.3 and carried on
 after the datastore is upgraded to 4.0.
@@ -907,3 +907,33 @@ Two smaller fixes ship with it: teardown moved from `httpServer`'s `close`
 event (always `null` in middleware mode, so nothing was ever cleaned up) to the
 `closeBundle` hook, and the plugin no longer imports anything from `vite` at
 runtime — only its types.
+
+### 24. `surrealkit check` and `watch`, and the `analyze` feature (unreleased)
+
+Nothing to change. New: `surrealkit check` lints a project's SurrealQL with no database: it
+applies the schema to a throwaway in-memory engine, reports each statement the engine rejects,
+counts the other `.surql` files, and exits 1 when a finding is an error. `--format json` and
+`--format sarif` write one document on stdout; `surrealkit watch` (or `check --watch`) checks
+again on every change. A new `[analyze]` section in `surrealkit.toml` sets the policy
+(`ignore`, `warnings_as_errors`, `require_suppression_reason`, `[analyze.lints]`), and
+`-- surreal: allow(E1002, K9201) reason="..."` comments suppress the rendered codes they list
+on one line (no bare numbers or wildcards). Query type checking arrives with the engine's
+checker in SurrealDB 4.1; see the README's "Checking SurrealQL".
+
+`analyze` is a new default cargo feature, which adds `notify` to the dependency tree. A build
+with `default-features = false` is unchanged. Without `analyze` the CLI has no `check` or
+`watch`, and `[analyze]` still parses.
+
+### 25. `check --target` and `[analyze] drift_ignore` (unreleased)
+
+Nothing to change. New: `surrealkit check --target <name>` compares the schema files with the
+database a `[target.<name>]` names, read-only, and reports a table or field that is missing
+(`K9101`, `K9103`) or differs (`K9102`, `K9104`), and what only the target has (`K9105` when
+SurrealKit managed it, `K9106` when it did not). Without `--target`, `check` still connects to
+nothing and reads no connection setting. `--watch` with `--target` is a usage error. The new
+`[analyze] drift_ignore = ["table", "table.field"]` lists tables and fields that are
+intentionally unmanaged. A `[typegen.queries] sources` section also makes `check` read host
+code, and report a `${…}` interpolated into a query string as `K9201`. The `--format json`
+summary gains `host_read`, `host_files`, `host_queries`, `targets_checked` and `drift`.
+`[analyze.lints]` keys also accept the five-digit codes and families of the 4.1 checker
+(`C10001`, `10xxx`). See the README's "Checking SurrealQL".

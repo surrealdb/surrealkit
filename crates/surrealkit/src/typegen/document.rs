@@ -43,6 +43,10 @@ pub struct SchemaDocument {
 	pub modules: Vec<ModuleDef>,
 	pub configs: Vec<Config>,
 	pub users: Vec<User>,
+	/// `DEFINE TYPE`, SurrealDB 4.0. Omitted when there are none, so a document without
+	/// types is byte-for-byte what it was before the collection existed (and keeps its digest).
+	#[serde(default, skip_serializing_if = "Vec::is_empty")]
+	pub types: Vec<TypeDef>,
 	/// Everything not structurally understood. Not part of the digest.
 	pub diagnostics: Vec<Diagnostic>,
 }
@@ -138,6 +142,34 @@ pub struct Capabilities {
 // Kinds
 // ---------------------------------------------------------------------------
 
+/// A `DEFINE TYPE` (SurrealDB 4.0): a named kind.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TypeDef {
+	pub name: String,
+	/// The type's kind, a value kind: a `none` variant is an `option`, not optionality.
+	pub kind: Kind,
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub comment: Option<String>,
+}
+
+impl Kind {
+	/// `int` with the engine's default width.
+	pub fn int() -> Kind {
+		Kind::Int {
+			width: None,
+			signed: None,
+		}
+	}
+
+	/// `float` with the engine's default width.
+	pub fn float() -> Kind {
+		Kind::Float {
+			width: None,
+		}
+	}
+}
+
 /// A SurrealQL value kind, tagged on `kind`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
@@ -146,8 +178,20 @@ pub enum Kind {
 	None,
 	Null,
 	Bool,
-	Int,
-	Float,
+	/// `int`, and SurrealDB 4.0's `i8`…`i32`, `u8`…`u64`. `width` is the bit width; absent
+	/// is the engine default, `i64` (which the engine renders as `int`, so a producer never
+	/// writes `i64` as a width). `signed` is `false` for `uN` and absent for `iN`.
+	Int {
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		width: Option<u8>,
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		signed: Option<bool>,
+	},
+	/// `float`, and SurrealDB 4.0's `f16` and `f32`. `width` is 16 or 32; absent is `f64`.
+	Float {
+		#[serde(default, skip_serializing_if = "Option::is_none")]
+		width: Option<u8>,
+	},
 	Decimal,
 	Number,
 	String,
@@ -159,6 +203,28 @@ pub enum Kind {
 	Range,
 	Function,
 	Object,
+	/// SurrealDB 4.0 `date`.
+	Date,
+	/// SurrealDB 4.0 `time`.
+	Time,
+	/// SurrealDB 4.0 `timestamp`.
+	Timestamp,
+	/// SurrealDB 4.0 `interval`.
+	Interval,
+	/// SurrealDB 4.0 `bigdecimal`.
+	#[serde(rename = "bigdecimal")]
+	BigDecimal,
+	/// SurrealDB 4.0 `enum<'a', 'b'>`: the string values themselves, in declaration order. The
+	/// engine compares, ranges and sorts an enum by that order, so it is kept: no sorting, no
+	/// deduplication. Not a union.
+	Enum {
+		labels: Vec<String>,
+	},
+	/// A field typed with the name of a `DEFINE TYPE` (SurrealDB 4.0); see
+	/// [`SchemaDocument::types`].
+	Named {
+		name: String,
+	},
 	/// `record<a | b>`; empty = any table.
 	Record {
 		tables: Vec<String>,
