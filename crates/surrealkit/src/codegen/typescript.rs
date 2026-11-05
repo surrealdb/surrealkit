@@ -1179,6 +1179,17 @@ mod tests {
 	}
 
 	#[test]
+	fn a_union_parameter_kind_renders_each_variant() {
+		// The engine infers `record<task> | string` for `<record<task>> $id`.
+		let query = json!([{ "key": "q", "text": "q", "statements": [], "params": [
+			{ "name": "id", "optional": false, "required": true, "kind": { "kind": "union",
+				"variants": [{ "kind": "record", "tables": ["task"] }, { "kind": "string" }] } },
+		] }]);
+		let out = render(&entries(query), &[], &RenderOptions::default());
+		assert!(out.contains("params: { id: RecordId<\"task\"> | string }"), "{out}");
+	}
+
+	#[test]
 	fn parameter_kinds_are_hints() {
 		let query = json!([{ "key": "q", "text": "q", "statements": [], "params": [
 			{ "name": "min", "kind": int(), "optional": false, "required": true },

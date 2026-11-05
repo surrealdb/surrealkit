@@ -25,7 +25,7 @@ const LIVE_SCHEMA: &str = "DEFINE TABLE team SCHEMAFULL;\n\
 	DEFINE TABLE user SCHEMAFULL;\n\
 	DEFINE FIELD name ON user TYPE string;\n\
 	DEFINE FIELD team ON user TYPE record<team>;\n";
-const LIVE_TEXTS: [&str; 7] = [
+const LIVE_TEXTS: [&str; 8] = [
 	"SELECT * FROM user",
 	"SELECT * FROM user ORDER BY name LIMIT $lim",
 	"SELECT * FROM user WHERE team = $team",
@@ -33,6 +33,7 @@ const LIVE_TEXTS: [&str; 7] = [
 	"LIVE SELECT DIFF FROM user",
 	"LET $n = 1; LIVE SELECT * FROM user;",
 	"SELEC * FROM user",
+	"SELECT team, count() AS n FROM user GROUP BY team",
 ];
 const BLOG: &str = include_str!("fixtures/codegen/blog.json");
 const OPEN: &str = include_str!("fixtures/codegen/open.json");
@@ -108,17 +109,26 @@ fn the_engines_types_document_converts_to_entries() {
 	insta::assert_json_snapshot!("engine_entries", all);
 }
 
-/// The queries of `QUERIES` the engine's `LIVE_ENGINE` document describes: the last seven.
+/// The entries of `QUERIES` the engine's `LIVE_ENGINE` document describes: those keyed by one of
+/// `LIVE_TEXTS`, in their order in `QUERIES`.
 fn live_entries() -> Vec<QueryEntry> {
-	let all = entries(QUERIES);
-	all[all.len() - 7..].to_vec()
+	entries(QUERIES).into_iter().filter(|entry| LIVE_TEXTS.contains(&entry.key.as_str())).collect()
+}
+
+/// `QUERIES` with its live entries replaced by `live`, at the end, as the fixture file reads.
+fn with_live_entries(live: &[QueryEntry]) -> String {
+	let mut all: Vec<serde_json::Value> = serde_json::from_str(QUERIES).expect("json");
+	all.retain(|entry| !entry["key"].as_str().is_some_and(|key| LIVE_TEXTS.contains(&key)));
+	all.extend(live.iter().map(|entry| serde_json::to_value(entry).expect("entry")));
+	let mut text = serde_json::to_string_pretty(&all).expect("serialises");
+	text.push('\n');
+	text
 }
 
 /// On an engine that types queries, `LIVE_ENGINE` is what it answers for `LIVE_TEXTS` against
 /// `LIVE_SCHEMA`, as this reader reads it (the engine's version left out). An engine that cannot
 /// type queries has no answer to compare. `SURREALKIT_BLESS=1` on a typing engine rewrites the
-/// fixture, and `the_engines_live_document_converts_to_the_v2_entries` then rewrites the
-/// entries of `QUERIES` it describes.
+/// fixture and the entries of `QUERIES` converted from it, in one step.
 #[cfg(feature = "kv-mem")]
 #[test]
 fn the_live_fixture_is_what_the_engine_answers() {
@@ -142,10 +152,16 @@ fn the_live_fixture_is_what_the_engine_answers() {
 		value
 	};
 	if std::env::var_os("SURREALKIT_BLESS").is_some() {
+		let root = Path::new(env!("CARGO_MANIFEST_DIR"));
 		let mut text = serde_json::to_string_pretty(&answered).expect("serialises");
 		text.push('\n');
-		std::fs::write(Path::new(env!("CARGO_MANIFEST_DIR")).join(LIVE_ENGINE_PATH), text)
-			.expect("bless");
+		std::fs::write(root.join(LIVE_ENGINE_PATH), text).expect("bless");
+		let converted = from_types_document(&answered);
+		std::fs::write(
+			root.join("tests/fixtures/codegen/queries.json"),
+			with_live_entries(&converted.queries),
+		)
+		.expect("bless");
 		return;
 	}
 	let pinned = TypesDocument::from_json(LIVE_ENGINE).expect("fixture document reads");
@@ -161,21 +177,6 @@ fn the_engines_live_document_converts_to_the_v2_entries() {
 	let doc = TypesDocument::from_json(LIVE_ENGINE).expect("fixture document reads");
 	let converted = from_types_document(&doc);
 	assert!(converted.unrepresented.is_empty(), "{:?}", converted.unrepresented);
-	if std::env::var_os("SURREALKIT_BLESS").is_some() {
-		// The entries the fixture describes are the last seven of `QUERIES`.
-		let mut all: Vec<serde_json::Value> = serde_json::from_str(QUERIES).expect("json");
-		let keep = all.len() - 7;
-		all.truncate(keep);
-		all.extend(converted.queries.iter().map(|q| serde_json::to_value(q).expect("entry")));
-		let mut text = serde_json::to_string_pretty(&all).expect("serialises");
-		text.push('\n');
-		std::fs::write(
-			Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/codegen/queries.json"),
-			text,
-		)
-		.expect("bless");
-		return;
-	}
 	assert_eq!(converted.queries, live_entries());
 	// The snake_case engine members reach the v2 camelCase ones.
 	let json = serde_json::to_value(&converted.queries).expect("serialises");
@@ -190,7 +191,7 @@ fn the_engines_live_document_converts_to_the_v2_entries() {
 fn a_query_the_engine_could_not_type_is_one_diagnostic_and_touches_no_other() {
 	let doc = TypesDocument::from_json(LIVE_ENGINE).expect("fixture document reads");
 	let (assembled, diagnostics) = assemble(&Collected::default(), Some(&doc));
-	assert_eq!(assembled.len(), 7);
+	assert_eq!(assembled.len(), doc.queries.len());
 	assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
 	let diagnostic = &diagnostics[0];
 	assert_eq!(diagnostic.code, "query-invalid");
