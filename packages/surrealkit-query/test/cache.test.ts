@@ -387,6 +387,24 @@ describe('reconciling notifications', () => {
 		expect(db.ran(/^SELECT/)).toHaveLength(2);
 		off();
 	});
+
+	it('re-reads a VALUE query on each change to its source', async () => {
+		const { db, cache } = setup();
+		db.select = () => ['ada'];
+		const live = cache.observeLive('SELECT VALUE name FROM user');
+		const off = live.subscribe(() => {});
+		await settle();
+		expect(db.ran(/^LIVE/)).toEqual(['LIVE SELECT id FROM user']);
+		db.select = () => ['ada', 'cy'];
+		db.emit('FROM user', {
+			action: 'CREATE',
+			recordId: 'user:cy',
+			value: 'cy',
+		});
+		await settle();
+		expect(live.get().data).toEqual(['ada', 'cy']);
+		off();
+	});
 });
 
 describe('windowed live queries', () => {

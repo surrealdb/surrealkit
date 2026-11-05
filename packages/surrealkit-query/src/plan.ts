@@ -1,20 +1,27 @@
 /**
  * How a SELECT becomes a live query.
  *
- * `LIVE SELECT` takes a projection (or `VALUE`), one target, `WHERE` and
- * `FETCH`, and nothing else: `ORDER BY`, `GROUP`, `LIMIT`, `START`, `SPLIT`,
- * `OMIT`, `TIMEOUT`, `PARALLEL`, `TEMPFILES`, `EXPLAIN`, `WITH`, `FROM ONLY`
- * and several targets are refused (the engine's E4009). So a SELECT is made
- * live in one of two ways:
+ * `LIVE SELECT` accepts a projection (or `VALUE`), one source (a table name,
+ * a param or a function call), `WHERE` and `FETCH`. The engine refuses the
+ * rest (E4009), in two classes:
  *
- * - **keyed**: the SELECT has only a projection, a target and `FETCH`. It
+ * - Clauses re-running the SELECT can serve: `OMIT`, `WITH`, `SPLIT`,
+ *   `GROUP BY`, `ORDER BY`, `LIMIT`, `START`, `VERSION`, `TIMEOUT`,
+ *   `TEMPFILES`, `EXPLAIN` and `FOR UPDATE`.
+ * - Sources it cannot serve: `FROM ONLY`, several sources, a record id, an
+ *   array or a subquery. These cannot be live at all.
+ *
+ * So a SELECT is made live in one of two ways:
+ *
+ * - **keyed**: the SELECT has only a projection, a source and `FETCH`. It
  *   runs as `LIVE <text>`, and each notification is applied to the rows by
- *   record id.
- * - **window**: the SELECT has a clause `LIVE SELECT` refuses, uses `VALUE`,
- *   or has a `WHERE`. A `LIVE SELECT id FROM <target>` watches the target, and
- *   each notification re-runs the SELECT itself, so the rows (their filter,
- *   order, offset, limit and grouping) are always the ones the engine
- *   computes.
+ *   record id. Rows without an id (a projection without `id`) re-run the
+ *   SELECT on each notification instead.
+ * - **window**: the SELECT has a clause re-running serves, `VALUE`, or a
+ *   `WHERE`. A
+ *   `LIVE SELECT id FROM <source>` watches the source, and each notification
+ *   re-runs the SELECT itself, so the rows (their filter, order, offset,
+ *   limit and grouping) are always the ones the engine computes.
  *
  * `WHERE` is windowed because the engine does not notify a record that an
  * update moves out of a live query's `WHERE` (SurrealDB 3.3), so applying
@@ -40,26 +47,41 @@ export type LivePlan =
 			readonly liveText: string;
 			/** The SELECT that produces the rows, without a trailing `;`. */
 			readonly snapshot: string;
-			/** The clauses that put the plan in window mode, upper-cased. */
+			/** The clauses that put the plan in window mode, as the engine spells them. */
 			readonly windowed: readonly string[];
 	  }
 	| { readonly mode: 'unsupported'; readonly reason: string };
 
-/** Clauses that end the target list of a SELECT. */
-const CLAUSES = new Set([
-	'WHERE',
-	'SPLIT',
-	'GROUP',
-	'ORDER',
-	'LIMIT',
-	'START',
-	'FETCH',
-	'TIMEOUT',
-	'PARALLEL',
-	'TEMPFILES',
-	'EXPLAIN',
-	'WITH',
+/**
+ * Clauses that end the source of a SELECT, with the spelling the engine
+ * reports a refused clause by.
+ */
+const CLAUSES = new Map([
+	['WHERE', 'WHERE'],
+	['WITH', 'WITH'],
+	['SPLIT', 'SPLIT'],
+	['GROUP', 'GROUP BY'],
+	['ORDER', 'ORDER BY'],
+	['LIMIT', 'LIMIT'],
+	['START', 'START'],
+	['FETCH', 'FETCH'],
+	['VERSION', 'VERSION'],
+	['TIMEOUT', 'TIMEOUT'],
+	['PARALLEL', 'PARALLEL'],
+	['TEMPFILES', 'TEMPFILES'],
+	['EXPLAIN', 'EXPLAIN'],
+	['FOR', 'FOR UPDATE'],
 ]);
+
+/** A source `LIVE SELECT` registers but refuses to run, and why. */
+const REFUSED_SOURCES: readonly [RegExp, string][] = [
+	[/^\(/, 'a live query cannot select FROM a subquery'],
+	[/^\[/, 'a live query cannot select FROM an array'],
+	[
+		/^(?:[A-Za-z_]\w*|`[^`]*`|⟨[^⟩]*⟩):(?!:)|^r["']/,
+		'a live query cannot select FROM a record id',
+	],
+];
 
 /** Clauses `LIVE SELECT` accepts after its target. */
 const LIVE_CLAUSES = new Set(['WHERE', 'FETCH']);
@@ -209,7 +231,13 @@ function planText(text: string, trustWhere: boolean): LivePlan {
 	}
 	const from = tokens.findIndex((token) => token.value === 'FROM');
 	if (from < 0) return unsupported('a live query must select FROM a table');
+	if (tokens[1]?.value === 'DIFF') {
+		return unsupported('DIFF live queries are not supported');
+	}
 	const windowed = new Set<string>();
+	// VALUE rows carry no id, so the SELECT re-runs either way; watching the
+	// source also serves an engine that never notifies a VALUE live query
+	// (SurrealDB 3.3).
 	if (tokens[1]?.value === 'VALUE') windowed.add('VALUE');
 	if (tokens.slice(1, from).some((token) => token.value === 'OMIT')) {
 		windowed.add('OMIT');
@@ -228,6 +256,9 @@ function planText(text: string, trustWhere: boolean): LivePlan {
 		firstClause < 0 ? snapshot.length : (rest[firstClause] as Token).start;
 	const target = snapshot.slice(fromToken.end, targetEnd).trim();
 	if (target === '') return unsupported('a live query must name its target');
+	for (const [pattern, reason] of REFUSED_SOURCES) {
+		if (pattern.test(target)) return unsupported(reason);
+	}
 
 	let where: string | undefined;
 	const clauses = firstClause < 0 ? [] : rest.slice(firstClause);
@@ -236,7 +267,7 @@ function planText(text: string, trustWhere: boolean): LivePlan {
 		const live =
 			LIVE_CLAUSES.has(token.value) &&
 			(token.value !== 'WHERE' || options.trustWhere === true);
-		if (!live) windowed.add(token.value);
+		if (!live) windowed.add(CLAUSES.get(token.value) as string);
 		if (token.value === 'WHERE') {
 			const end = clauses
 				.slice(index + 1)

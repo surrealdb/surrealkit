@@ -41,25 +41,32 @@ describe('planLive', () => {
 			mode: 'window',
 			liveText: 'LIVE SELECT id FROM user',
 			snapshot: text,
-			windowed: ['WHERE', 'ORDER', 'LIMIT', 'START'],
+			windowed: ['WHERE', 'ORDER BY', 'LIMIT', 'START'],
 		});
 		expect(planLive(text, { trustWhere: true })).toEqual({
 			mode: 'window',
 			liveText: 'LIVE SELECT id FROM user WHERE active = true',
 			snapshot: text,
-			windowed: ['ORDER', 'LIMIT', 'START'],
+			windowed: ['ORDER BY', 'LIMIT', 'START'],
 		});
 	});
 
 	it.each([
 		['SELECT VALUE name FROM user', ['VALUE']],
 		['SELECT * OMIT secret FROM user', ['OMIT']],
-		['SELECT count() FROM user GROUP ALL', ['GROUP']],
-		['SELECT * FROM user SPLIT tags', ['SPLIT']],
 		['SELECT * FROM user WITH NOINDEX', ['WITH']],
+		['SELECT * FROM user SPLIT tags', ['SPLIT']],
+		['SELECT count() FROM user GROUP ALL', ['GROUP BY']],
+		['SELECT team, count() FROM user GROUP BY team', ['GROUP BY']],
+		['SELECT * FROM user ORDER BY name', ['ORDER BY']],
+		['SELECT * FROM user LIMIT 3', ['LIMIT']],
+		['SELECT * FROM user START 3', ['START']],
+		['SELECT * FROM user VERSION d"2026-01-01"', ['VERSION']],
 		['SELECT * FROM user TIMEOUT 1s', ['TIMEOUT']],
-		['SELECT * FROM user PARALLEL', ['PARALLEL']],
 		['SELECT * FROM user TEMPFILES', ['TEMPFILES']],
+		['SELECT * FROM user EXPLAIN', ['EXPLAIN']],
+		['SELECT * FROM user FOR UPDATE', ['FOR UPDATE']],
+		['SELECT * FROM user PARALLEL', ['PARALLEL']],
 	])('windows %s', (text, windowed) => {
 		const plan = planLive(text, { trustWhere: true });
 		expect(plan.mode).toBe('window');
@@ -91,7 +98,7 @@ describe('planLive', () => {
 			'SELECT * FROM user WHERE tags CONTAINSANY [1, 2] AND meta = { limit: 3 }',
 		],
 		['SELECT * FROM user WHERE $limit > 3 AND settings.order = 1'],
-		['SELECT * FROM user:limit'],
+		['SELECT * FROM user WHERE id = user:limit'],
 	])('ignores keywords outside the top level: %s', (text) => {
 		expect(planLive(text, { trustWhere: true }).mode).toBe('keyed');
 	});
@@ -106,6 +113,51 @@ describe('planLive', () => {
 		['SELECT * FROM a, b', 'a live query must select FROM one target'],
 		['SELECT 1', 'a live query must select FROM a table'],
 	])('refuses %s', (text, reason) => {
+		expect(planLive(text)).toEqual({ mode: 'unsupported', reason });
+	});
+
+	it.each([
+		['SELECT * FROM $table'],
+		['SELECT * FROM type::table($name)'],
+		['SELECT * FROM user FETCH team'],
+	])('keys %s, which LIVE SELECT accepts and reflects', (text) => {
+		expect(planLive(text)).toMatchObject({
+			mode: 'keyed',
+			liveText: `LIVE ${text}`,
+		});
+	});
+
+	it.each([
+		[
+			'SELECT * FROM user:ada',
+			'a live query cannot select FROM a record id',
+		],
+		[
+			'SELECT * FROM user:⟨a b⟩',
+			'a live query cannot select FROM a record id',
+		],
+		[
+			'SELECT * FROM `the user`:ada',
+			'a live query cannot select FROM a record id',
+		],
+		[
+			'SELECT * FROM r"user:ada"',
+			'a live query cannot select FROM a record id',
+		],
+		[
+			'SELECT * FROM user:1..5',
+			'a live query cannot select FROM a record id',
+		],
+		[
+			'SELECT * FROM [user:a, user:b]',
+			'a live query cannot select FROM an array',
+		],
+		[
+			'SELECT * FROM (SELECT * FROM user)',
+			'a live query cannot select FROM a subquery',
+		],
+		['SELECT DIFF FROM user', 'DIFF live queries are not supported'],
+	])('refuses %s, which re-running cannot serve', (text, reason) => {
 		expect(planLive(text)).toEqual({ mode: 'unsupported', reason });
 	});
 

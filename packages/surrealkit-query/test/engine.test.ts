@@ -137,6 +137,23 @@ describe.skipIf(!engineConfigured)(
 			off();
 		});
 
+		it('follows a VALUE query by watching its source', async () => {
+			const live = cache.observeLive<string>(
+				'SELECT VALUE name FROM person',
+			);
+			const off = live.subscribe(() => {});
+			const before =
+				(await until(live, (rows) => (rows?.length ?? 0) > 0))
+					?.length ?? 0;
+			await engine.db.query(
+				"CREATE person:val SET name = 'val', team = 'red'",
+			);
+			await until(live, (rows) => rows?.includes('val') === true);
+			await engine.db.query('DELETE person:val');
+			await until(live, (rows) => rows?.length === before);
+			off();
+		});
+
 		it('re-runs a window on each change', async () => {
 			const live = cache.observeLive<Person>(
 				'SELECT * FROM person ORDER BY name LIMIT $lim',

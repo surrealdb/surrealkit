@@ -79,20 +79,20 @@ A query that is not shown keeps its last rows for five minutes (`gcTime`), so it
 
 ## Which clauses are live
 
-`LIVE SELECT` accepts a projection, one target, `WHERE` and `FETCH`. It refuses every other `SELECT` clause. The binding uses two modes:
+`LIVE SELECT` accepts a projection (or `VALUE`), one source (a table name, a param or a function call), `WHERE` and `FETCH`. The engine refuses every other `SELECT` clause (E4009). The binding uses two modes:
 
 | Mode | When | How rows change |
 | --- | --- | --- |
-| **Keyed** | The `SELECT` has only a projection, one target and `FETCH`. | Each notification is applied by record id: `CREATE` adds the row, `UPDATE` replaces it, `DELETE` removes it. |
-| **Window** | The `SELECT` has `WHERE`, `ORDER BY`, `LIMIT`, `START`, `GROUP`, `SPLIT`, `OMIT`, `VALUE`, `WITH`, `TIMEOUT`, `PARALLEL`, `TEMPFILES` or `EXPLAIN`. | A `LIVE SELECT id FROM <target>` watches the target. Each notification runs the `SELECT` again. |
+| **Keyed** | The `SELECT` has only a projection, one source and `FETCH`. | Each notification is applied by record id: `CREATE` adds the row, `UPDATE` replaces it, `DELETE` removes it. |
+| **Window** | The `SELECT` has `WHERE`, `VALUE`, `OMIT`, `WITH`, `SPLIT`, `GROUP BY`, `ORDER BY`, `LIMIT`, `START`, `VERSION`, `TIMEOUT`, `TEMPFILES`, `EXPLAIN` or `FOR UPDATE`. | A `LIVE SELECT id FROM <source>` watches the source. Each notification runs the `SELECT` again. |
 
 Window queries share their watcher. All window queries on one connection with the same watch text and the same values for the parameters it reads use one `LIVE SELECT`. For example, a page of `user`, a filtered list of `user` and a count of `user` share one `LIVE SELECT id FROM user`, and each runs its own `SELECT` again on a notification. The watcher is killed when the last of them is destroyed.
 
 In window mode the rows are always the ones the engine computes, so pagination works: `SELECT * FROM user ORDER BY name LIMIT $lim START $start` stays correct when a record moves into or out of the page. A burst of notifications runs the `SELECT` at most twice: once, and once more if a change arrived during the first run. Rows that did not change keep their object identity, so keyed `{#each}` blocks and React keys render only what changed.
 
-A keyed query whose rows have no `id` (for example `SELECT name FROM user`) also runs the `SELECT` again on each notification, because there is no id to apply a notification to.
+A keyed query whose rows have no `id` (for example `SELECT name FROM user`) also runs the `SELECT` again on each notification, because there is no id to apply a notification to. `VALUE` rows never have one, so `VALUE` is in window mode. Watching the source also serves an engine that never notifies a `VALUE` live query (SurrealDB 3.3).
 
-`WHERE` is in window mode because the engine does not notify a record that an update moves out of the filter (SurrealDB 3.3). If you apply notifications directly, that record stays in the rows. Set `trustWhere: true` on the cache to apply `WHERE` notifications by id when your engine sends them, or when no update moves a record out of the filter.
+`WHERE` is in window mode because the engine does not notify a record that an update moves out of the filter (SurrealDB 3.3 and 4.1). If you apply notifications directly, that record stays in the rows. Set `trustWhere: true` on the cache to apply `WHERE` notifications by id when your engine sends them, or when no update moves a record out of the filter.
 
 Both modes watch only the records of the target. A change to any other record does not update the rows, even when the query reads it. This includes a record that `FETCH` joins, a record that a graph traversal (`->knows->person`) reaches, and a record that a subquery reads. A notification for the target's own record does carry the current fetched values.
 
@@ -115,11 +115,13 @@ A window query's watcher only triggers its `SELECT`, so the bindings choose a wa
 These queries cannot be live, and go to the error state with the code `unsupported`:
 
 - More than one statement.
-- `SELECT … FROM ONLY …`.
-- More than one target (`FROM a, b`).
 - A statement that is not a `SELECT`.
+- `SELECT … FROM ONLY …`.
+- More than one source (`FROM a, b`).
+- A record id, an array or a subquery as the source (`FROM user:ada`, `FROM [user:a, user:b]`, `FROM (SELECT …)`). The engine registers these live queries but refuses to run them.
+- `SELECT DIFF …`. `DIFF` live queries are not supported yet.
 
-The types reject the first two cases: a live query must have one array of rows as its result.
+The types reject the first and third cases, because a live query must have one array of rows as its result. With the engine's `liveQueries`, they reject every case the engine refuses with `windowable: false`. Without it, a record-id, array or subquery source is an `unsupported` error at run time.
 
 ## Live row types
 
