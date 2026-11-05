@@ -554,6 +554,53 @@ fn the_embedded_engine_types_queries() -> bool {
 }
 
 #[test]
+fn a_query_the_engine_rejects_fails_the_compile_and_leaves_the_others_typed() {
+	let can_type = the_embedded_engine_types_queries();
+	let dir = tempfile::TempDir::new().expect("tempdir");
+	write_queries_project(dir.path(), true);
+	// A host file with one query the engine cannot parse between two it can.
+	write(
+		&dir.path().join("src/routes.ts"),
+		"db.query(\"SELECT name FROM person\");\n\
+		 db.query(`SELECT * FROM person\nWHERE;`);\n\
+		 db.query(\"SELECT count() FROM person GROUP ALL\");\n",
+	);
+	let (code, text) = surrealkit(dir.path(), &["compile"]);
+	if !can_type {
+		// Nothing is typed, so nothing fails: the section is absent, with its warning.
+		assert_eq!(code, Some(0), "{text}");
+		assert!(text.contains("queries-unsupported-engine"), "{text}");
+		return;
+	}
+	// The failure is an error at the line it is on, and a strict compile refuses it.
+	assert_ne!(code, Some(0), "{text}");
+	assert!(text.contains("query-invalid"), "{text}");
+	assert!(text.contains("src/routes.ts:3:"), "{text}");
+
+	let (code, text) = surrealkit(dir.path(), &["compile", "--lenient"]);
+	assert_eq!(code, Some(0), "{text}");
+	let json = fs::read_to_string(dir.path().join("out/schema.json")).expect("schema.json");
+	let doc: serde_json::Value = serde_json::from_str(&json).expect("json");
+	let queries = doc["queries"].as_array().expect("queries");
+	let failed: Vec<&serde_json::Value> =
+		queries.iter().filter(|q| q.get("error").is_some()).collect();
+	assert_eq!(failed.len(), 1, "{queries:?}");
+	assert_eq!(failed[0]["error"]["code"], "S0001");
+	assert!(failed[0]["statements"].as_array().is_some_and(Vec::is_empty));
+	let typed: Vec<&str> = queries
+		.iter()
+		.filter(|q| q.get("error").is_none())
+		.map(|q| q["key"].as_str().unwrap())
+		.collect();
+	assert!(typed.contains(&"SELECT name FROM person"), "{typed:?}");
+	assert!(typed.contains(&"SELECT count() FROM person GROUP ALL"), "{typed:?}");
+	// The registry has the good queries and not the failed one.
+	let module = fs::read_to_string(dir.path().join("src/queries.ts")).expect("queries.ts");
+	assert!(module.contains("\"SELECT name FROM person\""), "{module}");
+	assert!(!module.contains("WHERE;"), "{module}");
+}
+
+#[test]
 fn queries_on_an_engine_that_cannot_type_them_warn_and_change_nothing_else() {
 	// On an engine that can type queries, the same project is typed and not warned about.
 	let can_type = the_embedded_engine_types_queries();

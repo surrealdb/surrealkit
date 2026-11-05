@@ -143,6 +143,7 @@ mod tests {
 				path: format!("queries/{name}.surql"),
 				..source("", 0)
 			}],
+			maps: Vec::new(),
 		}
 	}
 
@@ -151,6 +152,7 @@ mod tests {
 			name: None,
 			text: text.to_string(),
 			sources: vec![source(path, start)],
+			maps: Vec::new(),
 		}
 	}
 

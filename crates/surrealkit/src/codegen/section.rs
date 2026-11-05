@@ -10,6 +10,8 @@
 use std::collections::BTreeMap;
 #[cfg(feature = "host-queries")]
 use std::collections::HashMap;
+#[cfg(feature = "host-queries")]
+use std::sync::Arc;
 
 use anyhow::Result;
 use surrealdb::Surreal;
@@ -36,6 +38,64 @@ pub struct CollectedQuery {
 	pub text: String,
 	/// Where it is written, in the order found.
 	pub sources: Vec<QuerySource>,
+	/// How offsets of `text` map into each source's file, one per source in the same order. A
+	/// source without one is located at its own line and column.
+	pub maps: Vec<TextMap>,
+}
+
+/// How a byte offset of a query's text maps to a place in the file the query is written in.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TextMap {
+	/// A query file's query: its lines are the file's lines from the source's own position (the
+	/// text reads CRLF as LF, which moves no line or column).
+	File,
+	/// Host code: the literal's own map, and the host file's text to count lines in.
+	#[cfg(feature = "host-queries")]
+	Host {
+		query: Box<crate::host_queries::HostQuery>,
+		file: Arc<str>,
+	},
+}
+
+impl TextMap {
+	/// The 1-based line and column (in Unicode scalar values) of `offset`, a byte offset of
+	/// `text`, in the file `source` names.
+	fn position(&self, source: &QuerySource, text: &str, offset: usize) -> (u32, u32) {
+		let offset = offset.min(text.len());
+		match self {
+			TextMap::File => {
+				// A query file's lines are the text's lines, from the source's own position.
+				let before = text.get(..offset).unwrap_or(text);
+				match before.rfind('\n') {
+					None => {
+						let column = source.column as usize + before.chars().count();
+						(source.line, u32::try_from(column).unwrap_or(u32::MAX))
+					}
+					Some(at) => {
+						let lines = before.bytes().filter(|byte| *byte == b'\n').count();
+						let line = source.line as usize + lines;
+						let column = before[at + 1..].chars().count() + 1;
+						(
+							u32::try_from(line).unwrap_or(u32::MAX),
+							u32::try_from(column).unwrap_or(u32::MAX),
+						)
+					}
+				}
+			}
+			#[cfg(feature = "host-queries")]
+			TextMap::Host {
+				query,
+				file,
+			} => {
+				let at = query.host_offset(offset).min(file.len());
+				let before = file.get(..at).unwrap_or(file);
+				let line = before.bytes().filter(|byte| *byte == b'\n').count() + 1;
+				let start = before.rfind('\n').map_or(0, |at| at + 1);
+				let column = before[start..].chars().count() + 1;
+				(u32::try_from(line).unwrap_or(u32::MAX), u32::try_from(column).unwrap_or(u32::MAX))
+			}
+		}
+	}
 }
 
 /// The queries of a project, before the engine types them.
@@ -88,6 +148,7 @@ pub fn collect(root: &str, config: &QueriesConfig) -> Result<Collected> {
 		named.push(CollectedQuery {
 			name: Some(query.name),
 			text: query.text,
+			maps: vec![TextMap::File],
 			sources: vec![QuerySource {
 				origin: QueryOrigin::File,
 				path: relative(root, &path)?,
@@ -134,7 +195,18 @@ fn inline(root: &str, config: &QueriesConfig) -> Result<Vec<CollectedQuery>> {
 	};
 	let mut inline: Vec<CollectedQuery> = Vec::new();
 	let mut by_text: HashMap<String, usize> = HashMap::new();
+	let mut files: HashMap<std::path::PathBuf, Arc<str>> = HashMap::new();
 	for found in crate::host_queries::scan_with(&config.sources, &queries)? {
+		let file = match files.get(&found.file) {
+			Some(file) => file.clone(),
+			None => {
+				let text: Arc<str> = std::fs::read_to_string(&found.file)
+					.map_err(|err| anyhow::anyhow!("reading {}: {err}", found.file.display()))?
+					.into();
+				files.insert(found.file.clone(), text.clone());
+				text
+			}
+		};
 		let source = QuerySource {
 			origin: QueryOrigin::Host,
 			path: relative(root, &found.file)?,
@@ -144,16 +216,24 @@ fn inline(root: &str, config: &QueriesConfig) -> Result<Vec<CollectedQuery>> {
 			},
 			line: found.query.line,
 			column: found.query.column,
-			method: Some(found.query.method),
+			method: Some(found.query.method.clone()),
+		};
+		let map = TextMap::Host {
+			query: Box::new(found.query.clone()),
+			file,
 		};
 		match by_text.get(&found.query.text) {
-			Some(&at) => inline[at].sources.push(source),
+			Some(&at) => {
+				inline[at].sources.push(source);
+				inline[at].maps.push(map);
+			}
 			None => {
 				by_text.insert(found.query.text.clone(), inline.len());
 				inline.push(CollectedQuery {
 					name: None,
 					text: found.query.text,
 					sources: vec![source],
+					maps: vec![map],
 				});
 			}
 		}
@@ -264,11 +344,36 @@ pub fn assemble(
 			);
 		}
 		if let Some(error) = &entry.error {
+			// Where the engine's span falls in the file the query is written in, so the error
+			// names the line a person has to change.
+			let found = match &entry.name {
+				Some(name) => collected.named.iter().find(|q| q.name.as_deref() == Some(name)),
+				None => collected.inline.iter().find(|q| q.text == entry.text),
+			};
+			let place = found.and_then(|query| {
+				let source = query.sources.first()?;
+				let offset = error.span.map_or(0, |span| span.start);
+				let (line, column) = match query.maps.first() {
+					Some(map) => map.position(source, &query.text, offset),
+					None => (source.line, source.column),
+				};
+				let more = match query.sources.len() - 1 {
+					0 => String::new(),
+					1 => " (and 1 more place)".to_string(),
+					n => format!(" (and {n} more places)"),
+				};
+				Some(format!("{}:{line}:{column}{more}: ", source.path))
+			});
 			let mut diagnostic = Diagnostic::new(
 				Severity::Error,
 				codes::QUERY_INVALID,
 				entry.text.as_str(),
-				format!("the engine cannot type the query ({}): {}", error.code, error.message),
+				format!(
+					"{}the engine cannot type the query ({}): {}",
+					place.unwrap_or_default(),
+					error.code,
+					error.message
+				),
 			)
 			.on_query(&entry.key);
 			if let Some(span) = error.span {
@@ -345,6 +450,7 @@ mod tests {
 			name: Some(name.to_string()),
 			text: text.to_string(),
 			sources,
+			maps: Vec::new(),
 		}
 	}
 
@@ -353,6 +459,7 @@ mod tests {
 			name: None,
 			text: text.to_string(),
 			sources,
+			maps: Vec::new(),
 		}
 	}
 
@@ -383,6 +490,104 @@ mod tests {
 		json!({ "kind_value": "String", "certainty": "fact", "support": { "exact": true },
 			"live": live,
 			"live_refusal": { "code": "E4009", "message": "m", "clauses": ["LIMIT"], "windowable": true } })
+	}
+
+	/// The engine's answer for `texts`: the first fails at `span` with S0001, the rest type.
+	fn one_failure(texts: &[&str], span: (usize, usize)) -> TypesDocument {
+		let queries: Vec<serde_json::Value> = texts
+			.iter()
+			.enumerate()
+			.map(|(at, text)| match at {
+				0 => json!({ "text": text, "statements": [], "params": [],
+					"error": { "code": "S0001", "message": "Unexpected token",
+						"span": { "start": span.0, "end": span.1 } } }),
+				_ => json!({ "text": text, "statements": [int_statement()] }),
+			})
+			.collect();
+		engine_document(json!(queries))
+	}
+
+	fn invalid(diagnostics: &[Diagnostic]) -> Vec<(&str, &str)> {
+		diagnostics
+			.iter()
+			.filter(|d| d.code == codes::QUERY_INVALID)
+			.map(|d| (d.query.as_deref().unwrap_or_default(), d.reason.as_str()))
+			.collect()
+	}
+
+	#[test]
+	fn a_failed_query_is_located_in_its_query_file() {
+		// The query starts at line 2, column 1 of its file; the engine blames `nope` on its
+		// second line.
+		let text = "SELECT *\nFROM nope WHERE;";
+		let mut query =
+			named("Broken", text, vec![source(Origin::File, "queries/a.surql", 9, None)]);
+		query.sources[0].line = 2;
+		query.maps = vec![TextMap::File];
+		let collected = Collected {
+			named: vec![query],
+			inline: vec![inline_query("RETURN 1", vec![])],
+			diagnostics: vec![],
+		};
+		let at = text.find("nope").unwrap();
+		let types = engine_document(json!([
+			{ "name": "Broken", "text": text, "statements": [], "params": [],
+				"error": { "code": "S0001", "message": "Unexpected token",
+					"span": { "start": at, "end": at + 4 } } },
+			{ "text": "RETURN 1", "statements": [int_statement()] },
+		]));
+		let (entries, diagnostics) = assemble(&collected, Some(&types));
+		assert_eq!(entries.len(), 2, "the failed entry carries its error; the others type");
+		assert!(entries.iter().any(|e| e.key == "RETURN 1" && e.error.is_none()));
+		assert_eq!(
+			invalid(&diagnostics),
+			[(
+				"Broken",
+				"queries/a.surql:3:6: the engine cannot type the query (S0001): Unexpected token"
+			)]
+		);
+	}
+
+	#[cfg(feature = "host-queries")]
+	#[test]
+	fn a_failed_inline_query_is_located_in_its_host_file() {
+		// A template literal on line 2 of the host file, with a substitution before the error.
+		let host = "const db = connect();\nawait db.query(`SELECT * FROM ${table} WHERE;`);\n";
+		let found = crate::host_queries::extract("a.ts", host, &["query"]);
+		let query = found.into_iter().next().expect("one query");
+		let text = query.text.clone();
+		let source = QuerySource {
+			origin: Origin::Host,
+			path: "src/a.ts".to_string(),
+			span: Span {
+				start: query.host_range.start,
+				end: query.host_range.end,
+			},
+			line: query.line,
+			column: query.column,
+			method: Some("query".to_string()),
+		};
+		let collected = Collected {
+			named: vec![],
+			inline: vec![CollectedQuery {
+				name: None,
+				text: text.clone(),
+				sources: vec![source],
+				maps: vec![TextMap::Host {
+					query: Box::new(query),
+					file: host.into(),
+				}],
+			}],
+			diagnostics: vec![],
+		};
+		let at = text.find("WHERE").unwrap();
+		let types = one_failure(&[text.as_str()], (at, at + 5));
+		let (_, diagnostics) = assemble(&collected, Some(&types));
+		let column = "await db.query(`SELECT * FROM ${table} ".chars().count() + 1;
+		let reason = format!(
+			"src/a.ts:2:{column}: the engine cannot type the query (S0001): Unexpected token"
+		);
+		assert_eq!(invalid(&diagnostics), [(text.as_str(), reason.as_str())]);
 	}
 
 	#[test]
