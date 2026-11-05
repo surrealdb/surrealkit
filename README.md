@@ -783,6 +783,16 @@ a warning, even for a hint, and `deny` an error. The planner runs only when the 
 planning work. Like the other engine families, these findings come from the engine's checker in
 SurrealDB 4.1; this build reports none of them.
 
+The access family, `A` for `11xxx`, covers `PERMISSIONS`. `A11001` (a field read whose kind
+gains nothing from a non-`FULL` `SELECT` permission) and `A11003` (a `PERMISSIONS` predicate
+that folds to true; write `FULL` instead) are off by default (allow). `A11002` (a `PERMISSIONS`
+predicate that folds to false; write `NONE` instead) is a warning by default. The migration
+family, `M` for `12xxx`, has `M12001` (`DEFINE FIELD … OVERWRITE` or `ALTER FIELD` changes a
+field's `TYPE` on a table that may hold rows, without `MIGRATE`), a warning by default. The
+engine decides "may hold rows" by reading the database it checks. Like the other engine
+families, these findings come from the engine's checker in SurrealDB 4.1; this build reports
+none of them.
+
 **Policy: `[analyze]` in `surrealkit.toml`.** The section parses in every build, with or
 without the `analyze` feature.
 
