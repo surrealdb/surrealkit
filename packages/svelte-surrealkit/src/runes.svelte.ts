@@ -56,8 +56,12 @@ import { createSubscriber } from 'svelte/reactivity';
 
 import { getSurreal } from './context.js';
 
+const HANDLE = Symbol.for('svelte-surrealkit.handle');
+
 /** A query's reactive view. */
-export interface QueryHandle<T> {
+export interface QueryHandle<T, Q extends string = string> {
+	/** The query text, typed as written, so a component given this handle is typed by it. */
+	readonly text: Q;
 	/** The result, once there is one. */
 	readonly data: T | undefined;
 	readonly error: SurrealQueryError | undefined;
@@ -75,7 +79,8 @@ export interface QueryHandle<T> {
 }
 
 /** A live query's reactive view. `data` is always the current rows. */
-export interface LiveHandle<Row> extends Omit<QueryHandle<Row[]>, 'data'> {
+export interface LiveHandle<Row, Q extends string = string>
+	extends Omit<QueryHandle<Row[], Q>, 'data'> {
 	/** The current rows, `[]` until the first snapshot. */
 	readonly data: Row[];
 }
@@ -83,6 +88,11 @@ export interface LiveHandle<Row> extends Omit<QueryHandle<Row[]>, 'data'> {
 export interface CreateOptions {
 	/** The client to use instead of the one {@link setSurreal} provided. */
 	client?: SurrealLike;
+	/**
+	 * While this returns `false`, nothing subscribes: `data` is `[]` (live) or
+	 * `undefined`, and `status` is `pending`. Default: always enabled.
+	 */
+	enabled?: () => boolean;
 }
 
 /** A value, or a getter for one that is re-read when its dependencies change. */
@@ -106,8 +116,11 @@ export type CreateArgs<Q extends string> =
 export function createQuery<Q extends QueryText>(
 	q: QuerySource<Q>,
 	...args: CreateArgs<Q>
-): QueryHandle<DataOf<Q>> {
-	return handle('query', q, args[0], args[1]) as QueryHandle<DataOf<Q>>;
+): QueryHandle<DataOf<Q>, Q> {
+	return handle('query', q, args[0], args[1]) as unknown as QueryHandle<
+		DataOf<Q>,
+		Q
+	>;
 }
 
 /**
@@ -118,8 +131,16 @@ export function createQuery<Q extends QueryText>(
 export function createLive<Q extends QueryText>(
 	q: Getter<LiveText<Q> | Preloaded<Q>>,
 	...args: CreateArgs<Q>
-): LiveHandle<LiveRowOf<Q>> {
-	return handle('live', q, args[0], args[1]) as LiveHandle<LiveRowOf<Q>>;
+): LiveHandle<LiveRowOf<Q>, Q> {
+	return handle('live', q, args[0], args[1]) as unknown as LiveHandle<
+		LiveRowOf<Q>,
+		Q
+	>;
+}
+
+/** Whether `value` is a handle from {@link createQuery} or {@link createLive}. */
+export function isHandle(value: unknown): value is QueryHandle<unknown> {
+	return typeof value === 'object' && value !== null && HANDLE in value;
 }
 
 type Kind = 'query' | 'live';
@@ -157,7 +178,7 @@ export function handle(
 	q: Getter<string | Preloaded>,
 	params: (() => object | undefined) | undefined,
 	options: CreateOptions | undefined,
-): QueryHandle<unknown> {
+): QueryHandle<unknown> & { readonly [HANDLE]: true } {
 	const cache = cacheFor(options?.client ?? getSurreal());
 
 	const request = $derived.by((): Request => {
@@ -177,8 +198,11 @@ export function handle(
 	// nothing downstream re-runs.
 	const key = $derived(queryKey(request.text, request.params));
 
-	const view = $derived.by((): View => {
+	const enabled = $derived(options?.enabled?.() ?? true);
+
+	const view = $derived.by((): View | undefined => {
 		void key;
+		if (!enabled) return undefined;
 		const { text, params, payload } = untrack(() => request);
 		let seed: unknown;
 		if (
@@ -211,6 +235,10 @@ export function handle(
 
 	const read = (): QueryState<unknown> & { stale: boolean } => {
 		const current = view;
+		if (!current) {
+			const data = kind === 'live' ? [] : undefined;
+			return { status: 'pending', data, error: undefined, stale: false };
+		}
 		current.track();
 		const state = current.observable.get();
 		const settled =
@@ -237,6 +265,10 @@ export function handle(
 	};
 
 	return {
+		[HANDLE]: true,
+		get text() {
+			return request.text;
+		},
 		get data() {
 			const data = read().data;
 			return kind === 'live' ? (data ?? []) : data;
@@ -253,6 +285,6 @@ export function handle(
 		get stale() {
 			return read().stale;
 		},
-		refetch: () => view.observable.refetch(),
+		refetch: () => view?.observable.refetch() ?? Promise.resolve(),
 	};
 }

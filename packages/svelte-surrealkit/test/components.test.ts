@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { cacheFor, preloadQuery } from '../../surrealkit-query/src/index.js';
 import { MockDb, settle } from '../../surrealkit-query/test/mock.js';
 import Extras from './harness/Extras.svelte';
+import Handle from './harness/Handle.svelte';
 import Live from './harness/Live.svelte';
 import OneShot from './harness/OneShot.svelte';
 import Runes from './harness/Runes.svelte';
@@ -243,6 +244,53 @@ describe('<LiveQuery> rows, empty and state', () => {
 		db.release();
 		await settle();
 		expect(names()).toEqual(['ada', 'bob']);
+	});
+});
+
+describe('one query text for a rune and a component', () => {
+	it('shows a createLive handle in <LiveQuery> from one live query', async () => {
+		const db = database();
+		const view = render(Handle, { db });
+		await settle();
+		expect(screen.getByTestId('count').textContent).toBe('5');
+		expect(names()).toEqual(NAMES);
+		expect(db.ran(/^LIVE/)).toHaveLength(1);
+		db.emit('FROM user', {
+			action: 'DELETE',
+			recordId: 'user:ada',
+			value: {},
+		});
+		await settle();
+		expect(screen.getByTestId('count').textContent).toBe('4');
+		expect(names()).toEqual(['bob', 'cy', 'dee', 'eve']);
+		view.unmount();
+		await settle();
+		expect(db.open.size).toBe(0);
+	});
+});
+
+describe('enabled', () => {
+	it('subscribes only while enabled, and renders nothing while not', async () => {
+		const db = database();
+		const view = render(Live, {
+			db,
+			q: 'SELECT * FROM user',
+			enabled: false,
+		});
+		await settle();
+		expect(db.statements).toEqual([]);
+		expect(screen.queryByText('loading')).toBeNull();
+		expect(names()).toEqual([]);
+
+		await view.rerender({ enabled: true });
+		await settle();
+		expect(names()).toEqual(NAMES);
+		expect(db.open.size).toBe(1);
+
+		await view.rerender({ enabled: false });
+		await settle();
+		expect(db.open.size).toBe(0);
+		expect(names()).toEqual([]);
 	});
 });
 

@@ -11,12 +11,14 @@
 		params,
 		copies = 1,
 		live,
+		enabled = true,
 	}: {
 		db: SurrealLike;
 		q: string;
 		params?: Record<string, unknown>;
 		copies?: number;
 		live?: LiveManifest;
+		enabled?: boolean;
 	} = $props();
 
 	// svelte-ignore state_referenced_locally
@@ -26,7 +28,7 @@
 </script>
 
 {#each Array.from({ length: copies }, (_, i) => i) as copy (copy)}
-	<LiveQuery {q} {params}>
+	<LiveQuery {q} {params} {enabled}>
 		{#snippet children(rows)}
 			<ul data-copy={copy}>
 				{#each asRows(rows) as row (row.id)}

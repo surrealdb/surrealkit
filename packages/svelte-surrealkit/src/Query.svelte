@@ -42,14 +42,23 @@
 	} from 'surrealkit-query';
 	import type { Snippet } from 'svelte';
 
-	import { handle } from './runes.svelte.js';
+	import { handle, isHandle, type QueryHandle } from './runes.svelte.js';
 	import type { QueryViewState } from './state.js';
 
 	type Props = {
-		/** The query text, or a payload from `preload`. */
-		q: Q | Preloaded<Q>;
+		/**
+		 * The query text, a payload from `preload`, or a handle from
+		 * `createQuery`, whose query this component then shows.
+		 */
+		q: Q | Preloaded<Q> | QueryHandle<DataOf<Q>, Q>;
 		/** The client to use instead of the one `setSurreal` provided. */
 		client?: SurrealLike | undefined;
+		/**
+		 * While `false`, nothing subscribes and nothing renders; the bound
+		 * value is `[]` (`<LiveQuery>`) or `undefined` (`<Query>`). Default
+		 * `true`. Ignored when `q` is a handle, which has its own `enabled`.
+		 */
+		enabled?: boolean;
 		/** The result, once there is one; for `bind:data`. */
 		data?: DataOf<Q> | undefined;
 		/** Rendered with the result and its state. */
@@ -66,6 +75,7 @@
 		q,
 		params,
 		client,
+		enabled = true,
 		data = $bindable(),
 		children,
 		empty,
@@ -73,14 +83,20 @@
 		error,
 	}: Props = $props();
 
+	// A handle is shown as it is; otherwise this component makes its own.
 	// The client is read once: a query's client does not change under it.
 	// svelte-ignore state_referenced_locally
-	const query = handle(
-		'query',
-		() => q,
-		() => params,
-		client ? { client } : undefined,
-	);
+	const query = isHandle(q)
+		? q
+		: handle(
+				'query',
+				() => q as string | Preloaded<Q>,
+				() => params,
+				client
+					? { client, enabled: () => enabled }
+					: { enabled: () => enabled },
+			);
+	const active = $derived(isHandle(q) || enabled);
 
 	const current = $derived(query.data as DataOf<Q>);
 	const failure = $derived(query.error);
@@ -105,7 +121,9 @@
 	});
 </script>
 
-{#if failed && failure}
+{#if !active}
+<!-- Disabled: nothing subscribes, nothing renders. -->
+{:else if failed && failure}
 	{@render error?.(failure)}
 {:else if ready}
 	{#if isEmpty && empty}

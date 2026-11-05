@@ -252,6 +252,34 @@ describe('SurrealProvider live', () => {
 	});
 });
 
+describe('enabled', () => {
+	function Toggle({ on }: { on: boolean }) {
+		const live = useLive('SELECT * FROM user', undefined, { enabled: on });
+		return <p data-testid='n'>{live.data.length}</p>;
+	}
+
+	it('subscribes only while enabled', async () => {
+		const db = database();
+		const tree = (on: boolean) => (
+			<SurrealProvider client={db}>
+				<Toggle on={on} />
+			</SurrealProvider>
+		);
+		const view = render(tree(false));
+		await flush();
+		expect(db.statements).toEqual([]);
+		expect(screen.getByTestId('n').textContent).toBe('0');
+		view.rerender(tree(true));
+		await flush();
+		expect(screen.getByTestId('n').textContent).toBe('5');
+		expect(db.open.size).toBe(1);
+		view.rerender(tree(false));
+		await flush();
+		expect(db.open.size).toBe(0);
+		expect(screen.getByTestId('n').textContent).toBe('0');
+	});
+});
+
 describe('useQuery', () => {
 	it('runs again when params change', async () => {
 		const db = database();

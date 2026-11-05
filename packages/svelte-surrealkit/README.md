@@ -53,13 +53,14 @@ Peer dependencies: `svelte` 5.7 or later, and `surrealdb` 2.1.1 or later.
 
 | Prop | Purpose |
 | --- | --- |
-| `q` | The query text (a key of `Queries`), or a payload from `preload`. |
+| `q` | The query text (a key of `Queries`), a payload from `preload`, or a handle from `createLive` / `createQuery`. |
 | `params` | The query's parameters. Required when the query has a required parameter. |
 | `children` | A snippet that gets the result (`<Query>`) or the current rows (`<LiveQuery>`), and a state object (see below). |
 | `empty` | A snippet shown instead of `children` when there are no rows (`<Query>`: the result is `undefined`, `null` or an empty array). Without it, `children([])` renders. |
 | `loading` | A snippet shown until the first result. |
 | `error` | A snippet that gets a `SurrealQueryError`. |
 | `bind:rows` (`<LiveQuery>`), `bind:data` (`<Query>`) | The same rows or result, outside the snippets: for a tab count or a derived map. They come from the component's own query, so there is no second live query. |
+| `enabled` | While `false`, nothing subscribes and nothing renders. Default `true`. |
 | `client` | A client to use instead of the one from `setSurreal`. |
 
 Every snippet is optional. With no `loading` or `error` snippet, nothing renders until there are rows, which is what a `<LiveQuery>` inside a `<select>` needs:
@@ -74,19 +75,32 @@ Every snippet is optional. With no `loading` or `error` snippet, nothing renders
 </select>
 ```
 
-To use the rows outside the component, bind them. A component with no `children` renders nothing:
+### Using the rows outside the component
+
+To use the same rows in a component and elsewhere (a tab count, a derived map), make the query once with `createLive` and give its handle to `<LiveQuery>` as `q`. The query text appears once, both uses share one live query, and both are typed:
 
 ```svelte
 <script lang="ts">
-	import type { LiveRowOf } from 'svelte-surrealkit';
+	import { createLive, LiveQuery } from 'svelte-surrealkit';
 
-	// The bound variable has the query's row type.
-	let research: LiveRowOf<"SELECT * FROM card WHERE kind = 'research'">[] = $state([]);
+	const research = createLive("SELECT * FROM card WHERE kind = 'research'");
 </script>
 
-<LiveQuery q="SELECT * FROM card WHERE kind = 'research'" bind:rows={research} />
-<button>Research {research.length}</button>
+<button>Research {research.data.length}</button>
+<LiveQuery q={research}>
+	{#snippet children(cards)}{#each cards as card (String(card.id))}<p>{card.title}</p>{/each}{/snippet}
+</LiveQuery>
 ```
+
+`createQuery` handles work the same way with `<Query>`. When `q` is a handle, the handle's own parameters, client and `enabled` apply, and the component's are ignored.
+
+`bind:rows` (and `bind:data`) also exposes the rows, but the bound variable must be declared with the query's row type, which repeats the query text: `let cards: LiveRowOf<"SELECT …">[] = $state([])`. Svelte cannot infer it from the binding. Prefer the handle.
+
+> NOTE: Keep the query text a literal at the call (`createLive("…")`, `q="…"`). SurrealKit types the queries it finds as literals; it does not follow a constant, so `const Q = "…"` with `q={Q}` is not typed.
+
+### Turning a query off
+
+`enabled={false}` stops the component's query: nothing subscribes, nothing renders, and `bind:rows` is `[]` (`bind:data` is `undefined`). Set it back to `true` and the query starts again. The runes take the same option as a getter: `createLive(q, params, { enabled: () => signedIn })`.
 
 ### The state passed to `children`
 

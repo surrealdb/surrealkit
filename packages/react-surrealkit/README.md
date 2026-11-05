@@ -52,7 +52,7 @@ Peer dependencies: `react` 18.3 or later, and `surrealdb` 2.1.1 or later.
 | `useQuery(q, params?, options?)` | Runs the query once. `data` is the query's result. |
 | `useLive(q, params?, options?)` | Keeps the rows current. `data` is always an array. |
 
-Both return `data`, `error`, `status`, `loading`, `stale` and `refetch()`. When the parameters change, `data` keeps the previous result, with `stale: true`, until the new one lands, so you can dim it. A result is never kept across `cacheFor(db).reset()`. `params` is required when the query has a required parameter. `options.client` overrides the provider's client.
+Both return `data`, `error`, `status`, `loading`, `stale` and `refetch()`. When the parameters change, `data` keeps the previous result, with `stale: true`, until the new one lands, so you can dim it. A result is never kept across `cacheFor(db).reset()`. `params` is required when the query has a required parameter. `options.client` overrides the provider's client. While `options.enabled` is `false`, nothing subscribes: `data` is `[]` (`useLive`) or `undefined` (`useQuery`).
 
 The hooks follow parameters by value: a new object with equal values does not run the query again. Hooks that show the same query and parameters share one live query. React's strict mode does not open a second one.
 

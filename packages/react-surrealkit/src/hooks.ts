@@ -75,6 +75,11 @@ export interface LiveResult<Row> extends Omit<QueryResult<Row[]>, 'data'> {
 export interface HookOptions {
 	/** The client to use instead of the provider's. */
 	client?: SurrealLike;
+	/**
+	 * While `false`, nothing subscribes: `data` is `[]` (live) or `undefined`,
+	 * and `status` is `pending`. Default `true`.
+	 */
+	enabled?: boolean;
 }
 
 /** The arguments after `q`: parameters (required when `Q` needs any), then options. */
@@ -104,6 +109,14 @@ export function useLive<Q extends QueryText>(
 }
 
 type Kind = 'query' | 'live';
+
+const IDLE: QueryState<unknown> = {
+	status: 'pending',
+	data: undefined,
+	error: undefined,
+};
+const idleSubscribe = () => () => {};
+const idleSnapshot = () => IDLE;
 
 const browser = typeof document !== 'undefined';
 
@@ -168,8 +181,13 @@ function useEntry(
 		(listener: () => void) => view.observable.subscribe(listener),
 		[view],
 	);
-	const state = useSyncExternalStore(subscribe, view.snapshot, view.snapshot);
-	const isStale = state === view.stale;
+	const enabled = options?.enabled ?? true;
+	const state = useSyncExternalStore(
+		enabled ? subscribe : idleSubscribe,
+		enabled ? view.snapshot : idleSnapshot,
+		enabled ? view.snapshot : idleSnapshot,
+	);
+	const isStale = enabled && state === view.stale;
 	if (state.status === 'success' && !isStale) {
 		last.current = { key, data: state.data };
 	}
