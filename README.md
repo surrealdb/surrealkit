@@ -789,8 +789,9 @@ that folds to true; write `FULL` instead) are off by default (allow). `A11002` (
 predicate that folds to false; write `NONE` instead) is a warning by default. The migration
 family, `M` for `12xxx`, has `M12001` (`DEFINE FIELD … OVERWRITE` or `ALTER FIELD` changes a
 field's `TYPE` on a table that may hold rows, without `MIGRATE`), a warning by default. The
-engine decides "may hold rows" by reading the database it checks. Like the other engine
-families, these findings come from the engine's checker in SurrealDB 4.1; this build reports
+engine decides "may hold rows" by reading the database it checks. M12001 needs a database
+with rows: offline `check` builds its schema in an empty sandbox, so it never reports it there.
+Like the other engine families, these findings come from the engine's checker in SurrealDB 4.1; this build reports
 none of them.
 
 **Policy: `[analyze]` in `surrealkit.toml`.** The section parses in every build, with or
