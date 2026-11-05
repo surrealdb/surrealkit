@@ -572,10 +572,11 @@ fn a_query_the_engine_rejects_fails_the_compile_and_leaves_the_others_typed() {
 		assert!(text.contains("queries-unsupported-engine"), "{text}");
 		return;
 	}
-	// The failure is an error at the line it is on, and a strict compile refuses it.
+	// The failure is an error at its statement's start, the literal's first character on line
+	// 2 (S0001's span starts where the failing statement does), and a strict compile refuses it.
 	assert_ne!(code, Some(0), "{text}");
 	assert!(text.contains("query-invalid"), "{text}");
-	assert!(text.contains("src/routes.ts:3:"), "{text}");
+	assert!(text.contains("src/routes.ts:2:11:"), "{text}");
 
 	let (code, text) = surrealkit(dir.path(), &["compile", "--lenient"]);
 	assert_eq!(code, Some(0), "{text}");
