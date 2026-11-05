@@ -32,14 +32,20 @@ fn project() -> TempDir {
 
 /// Drive `surrealkit mcp` with `requests` and return `(stdout, stderr)`.
 fn drive(dir: &TempDir, requests: &[&str], verbose: bool) -> (String, String) {
+	// A host that cannot be reached is fine: the point is what the server writes,
+	// not whether the database answered.
+	drive_on(dir, requests, verbose, "http://127.0.0.1:9")
+}
+
+/// As [`drive`], against `host`. Tools that only misbehave once they reach a
+/// database (a formatter runs after typegen succeeds) need a real one: `mem://`.
+fn drive_on(dir: &TempDir, requests: &[&str], verbose: bool, host: &str) -> (String, String) {
 	let mut cmd = Command::new(env!("CARGO_BIN_EXE_surrealkit"));
 	cmd.arg("mcp").current_dir(dir.path());
 	if verbose {
 		cmd.arg("--verbose");
 	}
-	// A host that cannot be reached is fine: the point is what the server writes,
-	// not whether the database answered.
-	cmd.env("SURREALDB_HOST", "http://127.0.0.1:9");
+	cmd.env("SURREALDB_HOST", host);
 
 	let mut child = cmd
 		.stdin(Stdio::piped())
@@ -164,6 +170,62 @@ fn a_failing_tool_call_keeps_stdout_pure() {
 	);
 	let messages = assert_pure(&stdout);
 	assert_eq!(messages.len(), 2);
+}
+
+/// A `[typegen] format` command that prints to stdout, as many formatters do.
+#[cfg(unix)]
+fn configure_noisy_formatter(dir: &TempDir) -> String {
+	use std::os::unix::fs::PermissionsExt;
+	let script = dir.path().join("noisy-format.sh");
+	std::fs::write(&script, "#!/bin/sh\necho \"NOISY $1\"\n").expect("writing the formatter");
+	std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+	let config = dir.path().join("surrealkit.toml");
+	let mut toml = std::fs::read_to_string(&config).unwrap_or_default();
+	// The scaffold documents `[typegen]` in comments; only a live table would clash.
+	assert!(
+		!toml.lines().any(|line| line.trim() == "[typegen]"),
+		"the scaffold already has a [typegen] table: {toml}"
+	);
+	toml.push_str(&format!(
+		"\n[typegen]\ntypescript = \"out/index.ts\"\nformat = \"{}\"\n",
+		script.display()
+	));
+	std::fs::write(&config, toml).expect("writing surrealkit.toml");
+	"NOISY".to_string()
+}
+
+#[cfg(unix)]
+#[test]
+fn a_formatter_that_prints_to_stdout_keeps_stdout_pure() {
+	let dir = project();
+	let marker = configure_noisy_formatter(&dir);
+	let (stdout, stderr) = drive_on(
+		&dir,
+		&[
+			INITIALIZE,
+			INITIALIZED,
+			r#"{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"typegen","arguments":{"write":true}}}"#,
+		],
+		false,
+		"mem://",
+	);
+	let messages = assert_pure(&stdout);
+	assert_eq!(messages.len(), 2, "expected one response per request, got {messages:#?}");
+	let call =
+		messages.iter().find(|m| m.get("id") == Some(&serde_json::json!(2))).expect("response");
+	assert_ne!(
+		call.pointer("/result/isError"),
+		Some(&serde_json::json!(true)),
+		"typegen must succeed so the formatter actually runs: {call:#?}"
+	);
+	assert!(
+		dir.path().join("out/index.ts").exists(),
+		"typegen should have written the TypeScript the formatter ran on"
+	);
+	assert!(
+		stderr.contains(&marker),
+		"the formatter's output belongs on stderr, so the run is still visible: {stderr:?}"
+	);
 }
 
 #[test]
