@@ -31,7 +31,7 @@
 
 	`bind:data` exposes the same result outside the snippets.
 -->
-<script lang="ts" generics="S extends QueryProp">
+<script lang="ts" generics="S extends QueryProp, R = DataOf<TextOf<S>>">
 	import type {
 		DataOf,
 		Preloaded,
@@ -55,9 +55,14 @@
 		enabled?: boolean;
 		/** The result, once there is one; for `bind:data`. */
 		data?: DataOf<Q> | undefined;
-		/** Rendered with the result and its state. */
-		children?: Snippet<[DataOf<Q>, QueryViewState]>;
-		/** Rendered instead of `children` when the result is empty. */
+		/**
+		 * Maps the result before `children` and the `empty` check. `bind:data`
+		 * still gets the result as it came.
+		 */
+		select?: (data: DataOf<Q>) => R;
+		/** Rendered with the result (or what `select` made of it) and its state. */
+		children?: Snippet<[R, QueryViewState]>;
+		/** Rendered instead of `children` when the result is empty (after `select`). */
 		empty?: Snippet;
 		/** Rendered until the first result. */
 		loading?: Snippet;
@@ -75,6 +80,7 @@
 		client,
 		enabled = true,
 		data = $bindable(),
+		select,
 		children,
 		empty,
 		loading,
@@ -106,8 +112,11 @@
 	const ready = $derived(
 		!failed && (query.status !== 'pending' || query.stale),
 	);
+	const shown = $derived(
+		(select && current !== undefined ? select(current) : current) as R,
+	);
 	const isEmpty = $derived(
-		current == null || (Array.isArray(current) && current.length === 0),
+		shown == null || (Array.isArray(shown) && shown.length === 0),
 	);
 
 	$effect.pre(() => {
@@ -127,7 +136,7 @@
 	{#if isEmpty && empty}
 		{@render empty()}
 	{:else}
-		{@render children?.(current, {
+		{@render children?.(shown, {
 			loading: query.stale,
 			stale: query.stale,
 			error: failure,

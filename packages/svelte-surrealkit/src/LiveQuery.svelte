@@ -34,7 +34,7 @@
 	`bind:rows` exposes the same rows outside the snippets (a tab count, a
 	derived map), from the same live query.
 -->
-<script lang="ts" generics="S extends LiveProp">
+<script lang="ts" generics="S extends LiveProp, R = LiveRowOf<TextOf<S>>[]">
 	import type {
 		LiveRowOf,
 		Preloaded,
@@ -58,9 +58,14 @@
 		enabled?: boolean;
 		/** The current rows, `[]` until the first snapshot; for `bind:rows`. */
 		rows?: LiveRowOf<Q>[];
-		/** Rendered with the current rows and their state. */
-		children?: Snippet<[LiveRowOf<Q>[], QueryViewState]>;
-		/** Rendered instead of `children` when there are no rows. */
+		/**
+		 * Maps the rows before `children` and the `empty` check: a filter, a
+		 * sort, a grouping. `bind:rows` still gets the rows as they came.
+		 */
+		select?: (rows: LiveRowOf<Q>[]) => R;
+		/** Rendered with the rows (or what `select` made of them) and their state. */
+		children?: Snippet<[R, QueryViewState]>;
+		/** Rendered instead of `children` when there are no rows (after `select`). */
 		empty?: Snippet;
 		/** Rendered until the first snapshot. */
 		loading?: Snippet;
@@ -78,6 +83,7 @@
 		client,
 		enabled = true,
 		rows = $bindable(),
+		select,
 		children,
 		empty,
 		loading,
@@ -110,6 +116,11 @@
 		!failed && (live.status !== 'pending' || live.stale),
 	);
 
+	const shown = $derived((select ? select(current) : current) as R);
+	const isEmpty = $derived(
+		shown == null || (Array.isArray(shown) && shown.length === 0),
+	);
+
 	$effect.pre(() => {
 		rows = current;
 	});
@@ -124,10 +135,10 @@
 {:else if failed && failure}
 	{@render error?.(failure)}
 {:else if ready}
-	{#if current.length === 0 && empty}
+	{#if isEmpty && empty}
 		{@render empty()}
 	{:else}
-		{@render children?.(current, {
+		{@render children?.(shown, {
 			loading: live.stale,
 			stale: live.stale,
 			error: failure,

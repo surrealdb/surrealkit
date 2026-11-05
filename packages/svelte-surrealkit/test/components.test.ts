@@ -8,6 +8,7 @@ import Handle from './harness/Handle.svelte';
 import Live from './harness/Live.svelte';
 import OneShot from './harness/OneShot.svelte';
 import Runes from './harness/Runes.svelte';
+import Select from './harness/Select.svelte';
 
 const PAGE = 'SELECT * FROM user ORDER BY name LIMIT $lim START $start';
 const NAMES = ['ada', 'bob', 'cy', 'dee', 'eve'];
@@ -266,6 +267,26 @@ describe('one query text for a rune and a component', () => {
 		view.unmount();
 		await settle();
 		expect(db.open.size).toBe(0);
+	});
+});
+
+describe('select', () => {
+	it('maps the rows before children and the empty check', async () => {
+		const db = database();
+		const view = render(Select, { db, letter: 'e' });
+		await settle();
+		expect(names()).toEqual(['eve']);
+		await view.rerender({ letter: 'z' });
+		await settle();
+		expect(screen.getByText('nobody starts with z')).toBeTruthy();
+		db.emit('FROM user', {
+			action: 'CREATE',
+			recordId: 'user:zed',
+			value: { id: 'user:zed', name: 'zed' },
+		});
+		await settle();
+		expect(names()).toEqual(['zed']);
+		expect(db.ran(/^LIVE/)).toHaveLength(1);
 	});
 });
 

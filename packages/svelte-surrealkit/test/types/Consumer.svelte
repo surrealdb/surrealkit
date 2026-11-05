@@ -147,3 +147,24 @@
 <LiveQuery q={byNameLive} params={{ name, limit }} />
 <!-- expect-error: is not assignable to type 'undefined' -->
 <Query q={byNameOnce} params={{ name, limit }} />
+<LiveQuery
+	q="SELECT kind FROM event"
+	select={(rows) => rows.map((row) => row.kind)}
+>
+	{#snippet children(kinds)}
+		{kinds satisfies string[]}
+	{/snippet}
+	{#snippet empty()}
+		none
+	{/snippet}
+</LiveQuery>
+<Query q={BY_NAME} params={{ name, limit }} select={(rows) => rows.length}>
+	{#snippet children(count)}
+		{count satisfies number}
+	{/snippet}
+</Query>
+<!-- expect-error: Property 'nope' does not exist -->
+<LiveQuery
+	q="SELECT kind FROM event"
+	select={(rows) => rows.filter((row) => row.nope)}
+/>

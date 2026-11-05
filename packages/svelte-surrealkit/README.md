@@ -59,11 +59,12 @@ Peer dependencies: `svelte` 5.7 or later, and `surrealdb` 2.1.1 or later.
 | `empty` | A snippet shown instead of `children` when there are no rows (`<Query>`: the result is `undefined`, `null` or an empty array). Without it, `children([])` renders. |
 | `loading` | A snippet shown until the first result. |
 | `error` | A snippet that gets a `SurrealQueryError`. |
+| `select` | A function that maps the rows (or result) before `children` and the `empty` check: a filter, a sort, a grouping. `children` gets its typed return value. |
 | `bind:rows` (`<LiveQuery>`), `bind:data` (`<Query>`) | The same rows or result, outside the snippets: for a tab count or a derived map. They come from the component's own query, so there is no second live query. |
 | `enabled` | While `false`, nothing subscribes and nothing renders. Default `true`. |
 | `client` | A client to use instead of the one from `setSurreal`. |
 
-Every snippet is optional. With no `loading` or `error` snippet, nothing renders until there are rows, which is what a `<LiveQuery>` inside a `<select>` needs:
+Every snippet is optional. With no `loading` or `error` snippet, nothing renders until there are rows, which is what a `<LiveQuery>` inside a `<select>` needs. When you convert markup that showed "Loading…" through an `{#if}` or a ternary, move that text into a `loading` snippet, or it is no longer shown:
 
 ```svelte
 <select bind:value={sprint}>
@@ -101,6 +102,20 @@ To use the same rows in a component and elsewhere (a tab count, a derived map), 
 ### Turning a query off
 
 `enabled={false}` stops the component's query: nothing subscribes, nothing renders, and `bind:rows` is `[]` (`bind:data` is `undefined`). Set it back to `true` and the query starts again. The runes take the same option as a getter: `createLive(q, params, { enabled: () => signedIn })`.
+
+### Filtering, sorting and grouping rows
+
+`select` maps the rows before they reach `children`, and `empty` renders when its result is empty. The component still shows `loading` and `error` for the query underneath:
+
+```svelte
+<LiveQuery q={signals} select={(rows) => rows.filter((s) => s.source === source)}>
+	{#snippet children(shown)}{#each shown as s (String(s.id))}<Signal {s} />{/each}{/snippet}
+	{#snippet empty()}<p>No signals from {source}.</p>{/snippet}
+	{#snippet loading()}<p>Loading…</p>{/snippet}
+</LiveQuery>
+```
+
+`select` re-runs when the rows change, or when a value it reads changes (`source` above). `bind:rows` still gets the rows as they came. When the same filtered list is also needed outside the component, derive it once from a `createLive` handle (`const shown = $derived(signals.data.filter(…))`) and pass the handle as `q`, with a `select` that returns `shown`.
 
 ### The state passed to `children`
 

@@ -1,7 +1,7 @@
 // Runs svelte-check on the type goldens and compares its errors with the
-// `<!-- expect-error: … -->` markers: each marker needs an error on the next
-// line whose message contains the marker's text, and every error needs a
-// marker.
+// `<!-- expect-error: … -->` markers: each marker needs an error in the next
+// line (or, when that line opens a tag, anywhere in the tag) whose message
+// contains the marker's text, and every error needs a marker.
 
 import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
@@ -11,13 +11,20 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 const file = path.join(here, 'Consumer.svelte');
 
+const lines = readFileSync(file, 'utf8').split('\n');
 const expected = [];
-readFileSync(file, 'utf8')
-	.split('\n')
-	.forEach((line, index) => {
-		const marker = line.match(/<!-- expect-error: (.*) -->/);
-		if (marker) expected.push({ line: index + 2, text: marker[1] });
-	});
+lines.forEach((line, index) => {
+	const marker = line.match(/<!-- expect-error: (.*) -->/);
+	if (!marker) return;
+	// The marked line, through the end of the tag it opens.
+	let last = index + 1;
+	if (/^\s*<[A-Za-z]/.test(lines[last] ?? '')) {
+		while (last < lines.length && !/>\s*$/.test(lines[last] ?? ''))
+			last += 1;
+	}
+	expected.push({ from: index + 2, to: last + 1, text: marker[1] });
+});
+const covers = (want, line) => line >= want.from && line <= want.to;
 
 let output = '';
 try {
@@ -52,17 +59,17 @@ for (const want of expected) {
 	const hit = errors.find(
 		(error) =>
 			error.file === file &&
-			error.line === want.line &&
+			covers(want, error.line) &&
 			error.message.includes(want.text),
 	);
-	if (!hit) problems.push(`missing error at line ${want.line}: ${want.text}`);
+	if (!hit) problems.push(`missing error at line ${want.from}: ${want.text}`);
 }
 for (const error of errors) {
 	const marked =
 		error.file === file &&
 		expected.some(
 			(want) =>
-				want.line === error.line && error.message.includes(want.text),
+				covers(want, error.line) && error.message.includes(want.text),
 		);
 	if (!marked)
 		problems.push(
