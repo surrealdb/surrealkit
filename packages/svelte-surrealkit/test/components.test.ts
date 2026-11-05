@@ -9,6 +9,7 @@ import Live from './harness/Live.svelte';
 import OneShot from './harness/OneShot.svelte';
 import Runes from './harness/Runes.svelte';
 import Select from './harness/Select.svelte';
+import Selected from './harness/Selected.svelte';
 
 const PAGE = 'SELECT * FROM user ORDER BY name LIMIT $lim START $start';
 const NAMES = ['ada', 'bob', 'cy', 'dee', 'eve'];
@@ -287,6 +288,29 @@ describe('select', () => {
 		await settle();
 		expect(names()).toEqual(['zed']);
 		expect(db.ran(/^LIVE/)).toHaveLength(1);
+	});
+});
+
+describe('bind:selected', () => {
+	it('keeps a count outside the component equal to what children shows', async () => {
+		const db = database();
+		db.select = () =>
+			['ada', 'bob', 'robert'].map((name) => ({
+				id: `user:${name}`,
+				name,
+			}));
+		render(Selected, { db });
+		await settle();
+		expect(screen.getByTestId('shown').textContent).toBe('2 shown');
+		expect(names()).toEqual(['ada', 'bob']);
+		db.emit('FROM user', {
+			action: 'CREATE',
+			recordId: 'user:cy',
+			value: { id: 'user:cy', name: 'cy' },
+		});
+		await settle();
+		expect(screen.getByTestId('shown').textContent).toBe('3 shown');
+		expect(names()).toEqual(['ada', 'bob', 'cy']);
 	});
 });
 

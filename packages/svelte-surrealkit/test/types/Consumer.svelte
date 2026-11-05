@@ -41,6 +41,10 @@
 
 	let kinds: Array<{ kind: string }> = $state([]);
 	const eventKinds = createLive('SELECT kind FROM event');
+	const pickKinds = (rows: Array<{ kind: string }>) =>
+		rows.map((row) => row.kind);
+	let pickedKinds = $state<ReturnType<typeof pickKinds>>([]);
+	let wrongPicked: number[] = $state([]);
 	const byNameLive = createLive(BY_NAME, () => ({ name, limit }));
 	const byNameOnce = createQuery(BY_NAME, () => ({ name, limit }));
 	let wrong: number[] = $state([]);
@@ -167,4 +171,15 @@
 <LiveQuery
 	q="SELECT kind FROM event"
 	select={(rows) => rows.filter((row) => row.nope)}
+/>
+<LiveQuery
+	q="SELECT kind FROM event"
+	select={pickKinds}
+	bind:selected={pickedKinds}
+/>
+<!-- expect-error: Type 'number[]' is not assignable to type 'string[]' -->
+<LiveQuery
+	q="SELECT kind FROM event"
+	select={pickKinds}
+	bind:selected={wrongPicked}
 />

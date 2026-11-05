@@ -60,6 +60,7 @@ Peer dependencies: `svelte` 5.7 or later, and `surrealdb` 2.1.1 or later.
 | `loading` | A snippet shown until the first result. |
 | `error` | A snippet that gets a `SurrealQueryError`. |
 | `select` | A function that maps the rows (or result) before `children` and the `empty` check: a filter, a sort, a grouping. `children` gets its typed return value. |
+| `bind:selected` | What `select` returned (or the rows or result, without `select`), updated with what `children` renders: for a "N shown" count outside the component. |
 | `bind:rows` (`<LiveQuery>`), `bind:data` (`<Query>`) | The same rows or result, outside the snippets: for a tab count or a derived map. They come from the component's own query, so there is no second live query. |
 | `enabled` | While `false`, nothing subscribes and nothing renders. Default `true`. |
 | `client` | A client to use instead of the one from `setSurreal`. |
@@ -115,7 +116,27 @@ To use the same rows in a component and elsewhere (a tab count, a derived map), 
 </LiveQuery>
 ```
 
-`select` re-runs when the rows change, or when a value it reads changes (`source` above). `bind:rows` still gets the rows as they came. When the same filtered list is also needed outside the component, derive it once from a `createLive` handle (`const shown = $derived(signals.data.filter(…))`) and pass the handle as `q`, with a `select` that returns `shown`.
+`select` re-runs when the rows change, or when a value it reads changes (`source` above). `bind:rows` still gets the rows as they came.
+
+To use the selected rows outside the component too (a "12 shown" header, counts on filter chips), bind them with `bind:selected`. Define `select` once, and type the bound variable by its return value. Type the function's parameter by the handle's rows, so the query text is not repeated:
+
+```svelte
+<script lang="ts">
+	import { createLive, LiveQuery } from 'svelte-surrealkit';
+
+	const signals = createLive('SELECT * FROM signal ORDER BY at DESC');
+	let source = $state('mail');
+	const pick = (rows: typeof signals.data) => rows.filter((s) => s.source === source);
+	let shown = $state<ReturnType<typeof pick>>([]);
+</script>
+
+<h2>{shown.length} shown</h2>
+<LiveQuery q={signals} select={pick} bind:selected={shown}>
+	{#snippet children(rows)}{#each rows as s (String(s.id))}<Signal {s} />{/each}{/snippet}
+</LiveQuery>
+```
+
+`shown` and `children` get the same value on the same update, so the header and the list always agree.
 
 ### The state passed to `children`
 

@@ -63,6 +63,11 @@
 		 * sort, a grouping. `bind:rows` still gets the rows as they came.
 		 */
 		select?: (rows: LiveRowOf<Q>[]) => R;
+		/**
+		 * What `select` returned, or the rows without one; for
+		 * `bind:selected`. Updated with what `children` renders.
+		 */
+		selected?: R;
 		/** Rendered with the rows (or what `select` made of them) and their state. */
 		children?: Snippet<[R, QueryViewState]>;
 		/** Rendered instead of `children` when there are no rows (after `select`). */
@@ -83,6 +88,7 @@
 		client,
 		enabled = true,
 		rows = $bindable(),
+		selected = $bindable(),
 		select,
 		children,
 		empty,
@@ -123,6 +129,7 @@
 
 	$effect.pre(() => {
 		rows = current;
+		selected = shown;
 	});
 
 	$effect(() => {

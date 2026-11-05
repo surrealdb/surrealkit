@@ -60,6 +60,11 @@
 		 * still gets the result as it came.
 		 */
 		select?: (data: DataOf<Q>) => R;
+		/**
+		 * What `select` returned, or the result without one; for
+		 * `bind:selected`. Updated with what `children` renders.
+		 */
+		selected?: R;
 		/** Rendered with the result (or what `select` made of it) and its state. */
 		children?: Snippet<[R, QueryViewState]>;
 		/** Rendered instead of `children` when the result is empty (after `select`). */
@@ -80,6 +85,7 @@
 		client,
 		enabled = true,
 		data = $bindable(),
+		selected = $bindable(),
 		select,
 		children,
 		empty,
@@ -121,6 +127,7 @@
 
 	$effect.pre(() => {
 		data = current;
+		selected = shown;
 	});
 
 	$effect(() => {
