@@ -1630,5 +1630,145 @@
     "key": "SELEC * FROM user",
     "statements": [],
     "text": "SELEC * FROM user"
+  },
+  {
+    "key": "SELECT team, count() AS n FROM user GROUP BY team",
+    "statements": [
+      {
+        "certainty": "hint",
+        "exact": true,
+        "kind": {
+          "item": {
+            "fields": [
+              {
+                "kind": {
+                  "kind": "int"
+                },
+                "name": "n",
+                "optional": false
+              },
+              {
+                "kind": {
+                  "kind": "record",
+                  "tables": [
+                    "team"
+                  ]
+                },
+                "name": "team",
+                "optional": false
+              }
+            ],
+            "kind": "objectLiteral"
+          },
+          "kind": "array"
+        },
+        "live": {
+          "diff": false,
+          "notifications": [
+            {
+              "action": "CREATE",
+              "certainty": "hint",
+              "open": [],
+              "record": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "result": {
+                "fields": [
+                  {
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "user"
+                      ]
+                    },
+                    "name": "id",
+                    "optional": false
+                  }
+                ],
+                "kind": "objectLiteral"
+              }
+            },
+            {
+              "action": "UPDATE",
+              "certainty": "hint",
+              "open": [],
+              "record": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "result": {
+                "fields": [
+                  {
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "user"
+                      ]
+                    },
+                    "name": "id",
+                    "optional": false
+                  }
+                ],
+                "kind": "objectLiteral"
+              }
+            },
+            {
+              "action": "DELETE",
+              "certainty": "hint",
+              "open": [],
+              "record": {
+                "kind": "record",
+                "tables": [
+                  "user"
+                ]
+              },
+              "result": {
+                "fields": [
+                  {
+                    "kind": {
+                      "kind": "record",
+                      "tables": [
+                        "user"
+                      ]
+                    },
+                    "name": "id",
+                    "optional": false
+                  }
+                ],
+                "kind": "objectLiteral"
+              }
+            },
+            {
+              "action": "KILLED",
+              "certainty": "fact",
+              "open": [],
+              "record": {
+                "kind": "none"
+              },
+              "result": {
+                "kind": "none"
+              }
+            }
+          ],
+          "query": "LIVE SELECT id FROM user"
+        },
+        "liveRefusal": {
+          "clauses": [
+            "GROUP BY"
+          ],
+          "code": "E4009",
+          "message": "a live query does not take GROUP BY: it notifies the changes of one table; serve GROUP BY by running the SELECT over the snapshot again",
+          "windowable": true
+        },
+        "open": [],
+        "optional": false
+      }
+    ],
+    "text": "SELECT team, count() AS n FROM user GROUP BY team"
   }
 ]

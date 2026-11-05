@@ -941,6 +941,138 @@
           "start": 0
         }
       }
+    },
+    {
+      "name": null,
+      "text": "SELECT team, count() AS n FROM user GROUP BY team",
+      "statements": [
+        {
+          "kind": "array<{ n: int, team: record<team> }>",
+          "kind_value": {
+            "Array": [
+              {
+                "Literal": {
+                  "Object": {
+                    "n": "Int",
+                    "team": {
+                      "Record": [
+                        "team"
+                      ]
+                    }
+                  }
+                }
+              },
+              null
+            ]
+          },
+          "certainty": "hint",
+          "support": {
+            "exact": true
+          },
+          "open": [],
+          "span": {
+            "column": 1,
+            "end": 49,
+            "end_column": 50,
+            "end_line": 1,
+            "line": 1,
+            "start": 0
+          },
+          "live": {
+            "diff": false,
+            "query": "LIVE SELECT id FROM user",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "{ id: record<user> }",
+                "result_value": {
+                  "Literal": {
+                    "Object": {
+                      "id": {
+                        "Record": [
+                          "user"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "{ id: record<user> }",
+                "result_value": {
+                  "Literal": {
+                    "Object": {
+                      "id": {
+                        "Record": [
+                          "user"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "{ id: record<user> }",
+                "result_value": {
+                  "Literal": {
+                    "Object": {
+                      "id": {
+                        "Record": [
+                          "user"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": "none",
+                "record_value": "None",
+                "result": "none",
+                "result_value": "None",
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          },
+          "live_refusal": {
+            "code": "E4009",
+            "message": "a live query does not take GROUP BY: it notifies the changes of one table; serve GROUP BY by running the SELECT over the snapshot again",
+            "clauses": [
+              "GROUP BY"
+            ],
+            "windowable": true
+          }
+        }
+      ],
+      "params": []
     }
   ]
 }
