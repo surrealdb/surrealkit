@@ -17,13 +17,13 @@ import type {
 import type { LiveHandle, QueryHandle } from './runes.svelte.js';
 
 /** What `<Query q>` accepts. */
-export type QuerySource =
+export type QueryProp =
 	| QueryText
 	| Preloaded<QueryText>
 	| QueryHandle<unknown, QueryText>;
 
 /** What `<LiveQuery q>` accepts. */
-export type LiveSource =
+export type LiveProp =
 	| QueryText
 	| Preloaded<QueryText>
 	| LiveHandle<unknown, QueryText>;

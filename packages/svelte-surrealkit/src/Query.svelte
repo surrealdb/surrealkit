@@ -31,7 +31,7 @@
 
 	`bind:data` exposes the same result outside the snippets.
 -->
-<script lang="ts" generics="S extends QuerySource">
+<script lang="ts" generics="S extends QueryProp">
 	import type {
 		DataOf,
 		Preloaded,
@@ -40,7 +40,7 @@
 	} from 'surrealkit-query';
 	import type { Snippet } from 'svelte';
 
-	import type { ParamsFor, QuerySource, TextOf } from './props.js';
+	import type { ParamsFor, QueryProp, TextOf } from './props.js';
 	import { handle, isHandle } from './runes.svelte.js';
 	import type { QueryViewState } from './state.js';
 

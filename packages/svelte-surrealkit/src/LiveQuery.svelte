@@ -34,7 +34,7 @@
 	`bind:rows` exposes the same rows outside the snippets (a tab count, a
 	derived map), from the same live query.
 -->
-<script lang="ts" generics="S extends LiveSource">
+<script lang="ts" generics="S extends LiveProp">
 	import type {
 		LiveRowOf,
 		Preloaded,
@@ -43,7 +43,7 @@
 	} from 'surrealkit-query';
 	import type { Snippet } from 'svelte';
 
-	import type { LiveGuard, LiveSource, ParamsFor, TextOf } from './props.js';
+	import type { LiveGuard, LiveProp, ParamsFor, TextOf } from './props.js';
 	import { handle, isHandle } from './runes.svelte.js';
 	import type { QueryViewState } from './state.js';
 
