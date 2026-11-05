@@ -73,6 +73,29 @@ describe('planLive', () => {
 		expect(plan.mode !== 'unsupported' && plan.windowed).toEqual(windowed);
 	});
 
+	it.each([
+		[
+			'SELECT count() AS n FROM run GROUP ALL',
+			{},
+			'LIVE SELECT id FROM run',
+		],
+		[
+			'SELECT team, math::sum(score) AS total FROM run WHERE done GROUP BY team',
+			{},
+			'LIVE SELECT id FROM run',
+		],
+		[
+			'SELECT team, math::sum(score) AS total FROM run WHERE done GROUP BY team',
+			{ trustWhere: true },
+			'LIVE SELECT id FROM run WHERE done',
+		],
+	])('never subscribes with the aggregate projection of %s', (text, options, liveText) => {
+		expect(planLive(text, options)).toMatchObject({
+			mode: 'window',
+			liveText,
+		});
+	});
+
 	it('stops a WHERE at the next clause', () => {
 		const plan = planLive(
 			'SELECT * FROM user WITH INDEX i WHERE a = 1 LIMIT 2',
