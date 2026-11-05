@@ -1,8 +1,9 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/svelte';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { preloadQuery } from '../../surrealkit-query/src/index.js';
+import { cacheFor, preloadQuery } from '../../surrealkit-query/src/index.js';
 import { MockDb, settle } from '../../surrealkit-query/test/mock.js';
+import Extras from './harness/Extras.svelte';
 import Live from './harness/Live.svelte';
 import OneShot from './harness/OneShot.svelte';
 import Runes from './harness/Runes.svelte';
@@ -179,6 +180,69 @@ describe('setSurreal live', () => {
 		view.unmount();
 		await settle();
 		expect(db.open.size).toBe(0);
+	});
+});
+
+describe('<LiveQuery> rows, empty and state', () => {
+	it('exposes rows with bind:rows from the same live query', async () => {
+		const db = database();
+		render(Extras, { db, q: 'SELECT * FROM user' });
+		await settle();
+		expect(screen.getByTestId('count').textContent).toBe('5');
+		expect(names()).toEqual(NAMES);
+		expect(db.ran(/^LIVE/)).toHaveLength(1);
+		db.emit('FROM user', {
+			action: 'DELETE',
+			recordId: 'user:ada',
+			value: {},
+		});
+		await settle();
+		expect(screen.getByTestId('count').textContent).toBe('4');
+	});
+
+	it('renders the empty snippet when there are no rows', async () => {
+		const db = database();
+		db.select = () => [];
+		render(Extras, { db, q: 'SELECT * FROM user' });
+		await settle();
+		expect(screen.getByText('nobody')).toBeTruthy();
+		expect(screen.queryAllByRole('list')).toHaveLength(0);
+	});
+
+	it('keeps the previous rows, marked stale, while new params load', async () => {
+		const db = database();
+		const view = render(Extras, {
+			db,
+			q: PAGE,
+			params: { lim: 2, start: 0 },
+		});
+		await settle();
+		expect(screen.getByRole('list').dataset.stale).toBe('false');
+
+		db.hold();
+		await view.rerender({ params: { lim: 2, start: 2 } });
+		await settle();
+		expect(names()).toEqual(['ada', 'bob']);
+		expect(screen.getByRole('list').dataset.stale).toBe('true');
+
+		db.release();
+		await settle();
+		expect(names()).toEqual(['cy', 'dee']);
+		expect(screen.getByRole('list').dataset.stale).toBe('false');
+	});
+
+	it('never keeps rows across a reset, so one identity never sees another', async () => {
+		const db = database();
+		render(Extras, { db, q: PAGE, params: { lim: 2, start: 0 } });
+		await settle();
+		expect(names()).toEqual(['ada', 'bob']);
+		db.hold();
+		void cacheFor(db).reset();
+		await settle();
+		expect(names()).toEqual([]);
+		db.release();
+		await settle();
+		expect(names()).toEqual(['ada', 'bob']);
 	});
 });
 

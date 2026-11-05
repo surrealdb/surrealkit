@@ -43,6 +43,7 @@ import {
 	type ParamsOptional,
 	type Preloaded,
 	preloadedParams,
+	type QueryCache,
 	type QueryState,
 	type QueryStatus,
 	type QueryText,
@@ -63,6 +64,12 @@ export interface QueryHandle<T> {
 	readonly status: QueryStatus;
 	/** `status === 'pending'`. */
 	readonly loading: boolean;
+	/**
+	 * The data is the previous parameters' result, kept while the result for
+	 * the new parameters loads. Never set across a {@link QueryCache.reset}, so
+	 * one identity's rows are never shown to the next.
+	 */
+	readonly stale: boolean;
 	/** Runs the query again. */
 	refetch(): Promise<void>;
 }
@@ -124,6 +131,7 @@ interface Request {
 }
 
 interface View {
+	readonly key: string;
 	readonly observable: Observable<unknown>;
 	readonly seed: unknown;
 	readonly track: () => void;
@@ -191,20 +199,41 @@ export function handle(
 				? cache.observeLive(text, params)
 				: cache.observe(text, params);
 		return {
+			key,
 			observable,
 			seed,
 			track: createSubscriber((update) => observable.subscribe(update)),
 		};
 	});
 
-	const read = (): QueryState<unknown> => {
+	// The last result shown, so new parameters can show it until theirs lands.
+	let last: { key: string; data: unknown } | undefined;
+
+	const read = (): QueryState<unknown> & { stale: boolean } => {
 		const current = view;
 		current.track();
 		const state = current.observable.get();
-		if (state.status === 'pending' && current.seed !== undefined) {
-			return { status: 'success', data: current.seed, error: undefined };
+		const settled =
+			state.status === 'pending' && current.seed !== undefined
+				? {
+						status: 'success' as const,
+						data: current.seed,
+						error: undefined,
+					}
+				: state;
+		if (settled.status === 'success') {
+			last = { key: current.key, data: settled.data };
+			return { ...settled, stale: false };
 		}
-		return state;
+		if (settled.status === 'pending' && last && last.key !== current.key) {
+			return {
+				status: 'success',
+				data: last.data,
+				error: undefined,
+				stale: true,
+			};
+		}
+		return { ...settled, stale: false };
 	};
 
 	return {
@@ -220,6 +249,9 @@ export function handle(
 		},
 		get loading() {
 			return read().status === 'pending';
+		},
+		get stale() {
+			return read().stale;
 		},
 		refetch: () => view.observable.refetch(),
 	};

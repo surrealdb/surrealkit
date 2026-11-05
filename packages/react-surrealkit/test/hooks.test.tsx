@@ -2,7 +2,7 @@ import { act, cleanup, render, screen } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { preloadQuery } from '../../surrealkit-query/src/index.js';
+import { cacheFor, preloadQuery } from '../../surrealkit-query/src/index.js';
 import { MockDb, settle } from '../../surrealkit-query/test/mock.js';
 import {
 	type Preloaded,
@@ -40,7 +40,7 @@ function Live({
 	if (live.error) return <p>error: {live.error.code}</p>;
 	if (live.loading) return <p>loading</p>;
 	return (
-		<ul>
+		<ul data-stale={String(live.stale)}>
 			{(live.data as Row[]).map((row) => (
 				<li key={row.id}>{row.name}</li>
 			))}
@@ -188,6 +188,47 @@ describe('useLive', () => {
 		await flush();
 		expect(db.ran(/^LIVE/)).toEqual(['LIVE SELECT id FROM user']);
 		expect(names()).toEqual(['dee', 'eve']);
+	});
+});
+
+describe('stale rows', () => {
+	const tree = (db: MockDb, start: number) => (
+		<SurrealProvider client={db}>
+			<Live q={PAGE} params={{ lim: 2, start }} />
+		</SurrealProvider>
+	);
+
+	it('keeps the previous rows, marked stale, while new params load', async () => {
+		const db = database();
+		const view = render(tree(db, 0));
+		await flush();
+		expect(screen.getByRole('list').dataset.stale).toBe('false');
+		db.hold();
+		view.rerender(tree(db, 2));
+		await flush();
+		expect(names()).toEqual(['ada', 'bob']);
+		expect(screen.getByRole('list').dataset.stale).toBe('true');
+		db.release();
+		await flush();
+		expect(names()).toEqual(['cy', 'dee']);
+		expect(screen.getByRole('list').dataset.stale).toBe('false');
+	});
+
+	it('never keeps rows across a reset', async () => {
+		const db = database();
+		render(tree(db, 0));
+		await flush();
+		db.hold();
+		await act(async () => {
+			void cacheFor(db).reset();
+			await settle();
+		});
+		expect(screen.getByText('loading')).toBeTruthy();
+		await act(async () => {
+			db.release();
+			await settle();
+		});
+		expect(names()).toEqual(['ada', 'bob']);
 	});
 });
 

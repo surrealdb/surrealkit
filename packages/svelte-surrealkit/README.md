@@ -55,12 +55,64 @@ Peer dependencies: `svelte` 5.7 or later, and `surrealdb` 2.1.1 or later.
 | --- | --- |
 | `q` | The query text (a key of `Queries`), or a payload from `preload`. |
 | `params` | The query's parameters. Required when the query has a required parameter. |
-| `children` | A snippet that gets the result (`<Query>`) or the current rows (`<LiveQuery>`). |
+| `children` | A snippet that gets the result (`<Query>`) or the current rows (`<LiveQuery>`), and a state object (see below). |
+| `empty` | A snippet shown instead of `children` when there are no rows (`<Query>`: the result is `undefined`, `null` or an empty array). Without it, `children([])` renders. |
 | `loading` | A snippet shown until the first result. |
-| `error` | A snippet that gets a `SurrealQueryError`. Without it, the error is thrown to the nearest `<svelte:boundary>`. |
+| `error` | A snippet that gets a `SurrealQueryError`. |
+| `bind:rows` (`<LiveQuery>`), `bind:data` (`<Query>`) | The same rows or result, outside the snippets: for a tab count or a derived map. They come from the component's own query, so there is no second live query. |
 | `client` | A client to use instead of the one from `setSurreal`. |
 
-A `<LiveQuery>` with an empty result renders `children([])`, not `loading`.
+Every snippet is optional. With no `loading` or `error` snippet, nothing renders until there are rows, which is what a `<LiveQuery>` inside a `<select>` needs:
+
+```svelte
+<select bind:value={sprint}>
+	<LiveQuery q="SELECT id, name FROM sprint ORDER BY name">
+		{#snippet children(sprints)}
+			{#each sprints as s (String(s.id))}<option value={String(s.id)}>{s.name}</option>{/each}
+		{/snippet}
+	</LiveQuery>
+</select>
+```
+
+To use the rows outside the component, bind them. A component with no `children` renders nothing:
+
+```svelte
+<script lang="ts">
+	import type { LiveRowOf } from 'svelte-surrealkit';
+
+	// The bound variable has the query's row type.
+	let research: LiveRowOf<"SELECT * FROM card WHERE kind = 'research'">[] = $state([]);
+</script>
+
+<LiveQuery q="SELECT * FROM card WHERE kind = 'research'" bind:rows={research} />
+<button>Research {research.length}</button>
+```
+
+### The state passed to `children`
+
+`children` gets a second argument, `{ loading, stale, error }`:
+
+| Field | Meaning |
+| --- | --- |
+| `stale` | The rows are the previous parameters' rows. When `params` change, they stay on screen until the new rows land, so you can dim them. |
+| `loading` | Newer rows are on their way. Today this is exactly when `stale` is set. |
+| `error` | A failure that left rows to show, when there is no `error` snippet. With an `error` snippet, a failure always renders it. With neither rows nor an `error` snippet, the failure is thrown to the nearest `<svelte:boundary>`. |
+
+```svelte
+<LiveQuery q="SELECT * FROM card ORDER BY at LIMIT $lim START $start" params={{ lim, start }}>
+	{#snippet children(cards, { stale })}
+		<ul class:dim={stale}>{#each cards as card (String(card.id))}<li>{card.title}</li>{/each}</ul>
+	{/snippet}
+</LiveQuery>
+```
+
+Rows are never kept across `cacheFor(db).reset()`, so one signed-in user's rows are never shown, stale, to the next.
+
+### Parameters and query text
+
+- `params` are compared by value. A new object literal on every render, such as `params={{ lim, start }}`, runs nothing again until a value changes.
+- `q="…"` is a plain attribute, so the SurrealQL inside it cannot contain `"`. Use single-quoted SurrealQL strings (`WHERE kind = 'research'`), or write the text as an expression, `` q={'…'} `` or ``q={`…`}``. SurrealKit extracts all three forms.
+- Never interpolate values into `q` (`q="… {x} …"`): Svelte would build a new string, which is not in the registry and is not typed. Pass values through `params`.
 
 ## Runes
 
@@ -78,7 +130,7 @@ A `<LiveQuery>` with an empty result renders `children([])`, not `loading`.
 {#each members.data as member (String(member.id))}<p>{member.name}</p>{/each}
 ```
 
-The handle has `data`, `error`, `status`, `loading` and `refetch()`. `createLive`'s `data` is always an array.
+The handle has `data`, `error`, `status`, `loading`, `stale` and `refetch()`. `createLive`'s `data` is always an array. `stale` works as in the components: when the parameters change, `data` keeps the previous result until the new one lands.
 
 The query starts the first time the handle is read in an effect (markup counts), and stops when nothing reads it. This works in a component and in a shared `.svelte.ts` module. Outside a component, pass `{ client }` as the third argument.
 

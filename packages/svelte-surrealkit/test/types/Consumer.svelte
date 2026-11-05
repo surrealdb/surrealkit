@@ -9,6 +9,7 @@
 	import {
 		createLive,
 		createQuery,
+		type DataOf,
 		LiveQuery,
 		type Preloaded,
 		Query,
@@ -37,6 +38,10 @@
 	untyped.data satisfies unknown[];
 
 	let { posts }: { posts: Preloaded<'SELECT kind FROM event'> } = $props();
+
+	let kinds: Array<{ kind: string }> = $state([]);
+	let wrong: number[] = $state([]);
+	let alice: DataOf<'SELECT * FROM ONLY user:alice'> = $state();
 	createLive(() => posts).data satisfies Array<{ kind: string }>;
 </script>
 
@@ -101,3 +106,15 @@
 		{rows.length}
 	{/snippet}
 </LiveQuery>
+<LiveQuery q="SELECT kind FROM event" bind:rows={kinds}>
+	{#snippet children(rows, state)}
+		{rows.length}{state.stale satisfies boolean}{state.error?.code}
+	{/snippet}
+	{#snippet empty()}
+		nothing
+	{/snippet}
+</LiveQuery>
+<LiveQuery q="SELECT kind FROM event" bind:rows={kinds} />
+<Query q="SELECT * FROM ONLY user:alice" bind:data={alice} />
+<!-- expect-error: Type 'number[]' is not assignable to type '{ kind: string; }[]' -->
+<LiveQuery q="SELECT kind FROM event" bind:rows={wrong} />

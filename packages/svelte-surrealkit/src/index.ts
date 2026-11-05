@@ -28,3 +28,4 @@ export {
 	type QueryHandle,
 	type QuerySource,
 } from './runes.svelte.js';
+export type { QueryViewState } from './state.js';

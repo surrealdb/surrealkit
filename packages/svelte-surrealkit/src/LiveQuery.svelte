@@ -16,10 +16,23 @@
 	again. Components showing the same query and parameters share one live
 	query.
 
-	`children` renders with the rows once the first snapshot arrives (an empty
-	result renders `children([])`), `loading` until then, and `error` on
-	failure. With no `error` snippet a failure is thrown, so the nearest
-	`<svelte:boundary>` handles it.
+	Snippets, all optional:
+
+	- `children(rows, state)` renders with the rows once the first snapshot
+	  arrives. When `params` change, the previous rows stay, with
+	  `state.stale` set, until the new ones land.
+	- `empty` renders instead of `children` when there are no rows. Without
+	  it, `children([])` renders.
+	- `loading` renders until the first snapshot.
+	- `error` renders on failure. Without it, a failure with rows to show
+	  renders `children` with `state.error` set, and a failure with none is
+	  thrown, so the nearest `<svelte:boundary>` handles it.
+
+	With no `loading` or `error` snippet, nothing renders until there are rows,
+	which is what a `<LiveQuery>` inside a `<select>` needs.
+
+	`bind:rows` exposes the same rows outside the snippets (a tab count, a
+	derived map), from the same live query.
 -->
 <script lang="ts" generics="Q extends QueryText">
 	import type {
@@ -34,21 +47,35 @@
 	import type { Snippet } from 'svelte';
 
 	import { handle } from './runes.svelte.js';
+	import type { QueryViewState } from './state.js';
 
 	type Props = {
 		/** The SELECT to make live, or a payload from `preload`. */
 		q: LiveText<Q> | Preloaded<Q>;
 		/** The client to use instead of the one `setSurreal` provided. */
 		client?: SurrealLike | undefined;
-		/** Rendered with the current rows. */
-		children: Snippet<[LiveRowOf<Q>[]]>;
+		/** The current rows, `[]` until the first snapshot; for `bind:rows`. */
+		rows?: LiveRowOf<Q>[];
+		/** Rendered with the current rows and their state. */
+		children?: Snippet<[LiveRowOf<Q>[], QueryViewState]>;
+		/** Rendered instead of `children` when there are no rows. */
+		empty?: Snippet;
 		/** Rendered until the first snapshot. */
 		loading?: Snippet;
 		/** Rendered on failure. */
 		error?: Snippet<[SurrealQueryError]>;
 	} & ParamsProp<Q>;
 
-	let { q, params, client, children, loading, error }: Props = $props();
+	let {
+		q,
+		params,
+		client,
+		rows = $bindable(),
+		children,
+		empty,
+		loading,
+		error,
+	}: Props = $props();
 
 	// The client is read once: a query's client does not change under it.
 	// svelte-ignore state_referenced_locally
@@ -59,15 +86,38 @@
 		client ? { client } : undefined,
 	);
 
+	const current = $derived(live.data as LiveRowOf<Q>[]);
+	const failure = $derived(live.error);
+	// A failure with rows still to show renders them, unless an `error` snippet
+	// claims it.
+	const failed = $derived(
+		failure !== undefined && (error !== undefined || current.length === 0),
+	);
+	const ready = $derived(
+		!failed && (live.status !== 'pending' || live.stale),
+	);
+
+	$effect.pre(() => {
+		rows = current;
+	});
+
 	$effect(() => {
-		if (live.error && !error) throw live.error;
+		if (failed && !error) throw failure;
 	});
 </script>
 
-{#if live.status === 'error' && live.error}
-	{@render error?.(live.error)}
-{:else if live.status === 'success'}
-	{@render children(live.data as LiveRowOf<Q>[])}
+{#if failed && failure}
+	{@render error?.(failure)}
+{:else if ready}
+	{#if current.length === 0 && empty}
+		{@render empty()}
+	{:else}
+		{@render children?.(current, {
+			loading: live.stale,
+			stale: live.stale,
+			error: failure,
+		})}
+	{/if}
 {:else}
 	{@render loading?.()}
 {/if}

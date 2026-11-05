@@ -26,7 +26,7 @@
  * renders the server's result at once.
  */
 
-import { useCallback, useMemo, useSyncExternalStore } from 'react';
+import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react';
 import {
 	cacheFor,
 	type DataOf,
@@ -56,6 +56,12 @@ export interface QueryResult<T> {
 	readonly status: QueryStatus;
 	/** `status === 'pending'`. */
 	readonly loading: boolean;
+	/**
+	 * The data is the previous parameters' result, kept while the result for
+	 * the new parameters loads. Never set across a cache `reset()`, so one
+	 * identity's rows are never shown to the next.
+	 */
+	readonly stale: boolean;
 	/** Runs the query again. */
 	refetch(): Promise<void>;
 }
@@ -112,6 +118,9 @@ function useEntry(
 	const text = payload ? payload.text : (q as string);
 	const bound = params ?? (payload ? preloadedParams(payload) : undefined);
 	const key = queryKey(text, bound);
+	// The last result this hook showed, so new parameters can show it until
+	// theirs lands.
+	const last = useRef<{ key: string; data: unknown } | undefined>(undefined);
 
 	// Keyed by value: `bound` is read only when the key changes.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the key stands for text and bound.
@@ -135,11 +144,24 @@ function useEntry(
 			kind === 'live'
 				? cache.observeLive(text, bound)
 				: cache.observe(text, bound);
+		const previous = last.current?.key === key ? undefined : last.current;
+		const stale: QueryState<unknown> | undefined = previous && {
+			status: 'success',
+			data: previous.data,
+			error: undefined,
+		};
+		// Once this key has a result, a later pending state (a reset) is shown
+		// as pending: the previous key's rows never come back.
+		let settled = false;
 		const snapshot = (): QueryState<unknown> => {
 			const state = observable.get();
-			return state.status === 'pending' && seeded ? seeded : state;
+			if (state.status === 'pending' && seeded) return seeded;
+			if (state.status !== 'pending') settled = true;
+			return state.status === 'pending' && !settled && stale
+				? stale
+				: state;
 		};
-		return { observable, snapshot };
+		return { observable, snapshot, stale };
 	}, [cache, kind, key, payload?.data]);
 
 	const subscribe = useCallback(
@@ -147,12 +169,17 @@ function useEntry(
 		[view],
 	);
 	const state = useSyncExternalStore(subscribe, view.snapshot, view.snapshot);
+	const isStale = state === view.stale;
+	if (state.status === 'success' && !isStale) {
+		last.current = { key, data: state.data };
+	}
 
 	return {
 		data: kind === 'live' ? (state.data ?? []) : state.data,
 		error: state.error,
 		status: state.status,
 		loading: state.status === 'pending',
+		stale: isStale,
 		refetch: view.observable.refetch,
 	};
 }
