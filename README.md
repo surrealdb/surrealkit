@@ -737,10 +737,12 @@ applies:
 The `K` family is `9xxx`, and `9xxx` is the only wildcard over it, so per-code keys tune the
 drift and the host-code lints separately: `K9106 = "allow"` silences unmanaged extras and leaves
 `K9104` alone. No other family uses a `9xxx` number, so `9xxx = "warn"` names SurrealKit's codes
-and nothing else. `K9107` is a hint by nature: under `warn` (its default) it stays a hint, and
-`warnings_as_errors` does not raise it. `K9202` (a query built by string concatenation) and
-`K9301` (a host argument's type against the parameter kind the engine infers) are reserved and
-not emitted by this build; the second is sketched in `docs/check/host-param-kinds.md`.
+and nothing else. At its default, `K9107` is a hint, and `warnings_as_errors` does not raise
+it. Set to `warn` explicitly, exact (`K9107`) or by family (`9xxx`), it is a warning, and `deny`
+makes it an error. That is the rule for every code, the engine's included. `K9202` (a query
+built by string concatenation) and `K9301` (a host argument's type against the parameter kind
+the engine infers) are reserved and not emitted by this build; the second is sketched in
+`docs/check/host-param-kinds.md`.
 
 Query type checking, the `E` and the other `L` codes, arrives with the engine's own checker
 (the SDK's `Surreal::check`, SurrealDB 4.1). The 4.0 build applies and reports schema only:
@@ -763,9 +765,9 @@ The certainty family, `C` for `10xxx`, has a rollup, `C10001` (a statement's res
 undeclared or FLEXIBLE fields, links that may dangle, cross-statement narrowing, or an
 approximated construct), and the details `C10002` (an undeclared-field read), `C10003` (a link
 read that may dangle), `C10004` (cross-statement narrowing) and `C10005` (a `LIVE SELECT … WHERE`
-is not notified when a record leaves the filter). All five default to allow, and are hints when
-turned on. `"10xxx" = "warn"` turns on the rollup and the details, while `C10001 = "warn"` turns
-on the rollup alone. Like the other engine families, these findings come from the engine's
+is not notified when a record leaves the filter). All five default to allow. Turning one on
+with `warn` reports it as a warning, and `deny` as an error. `"10xxx" = "warn"` turns on the
+rollup and the details, while `C10001 = "warn"` turns on the rollup alone. Like the other engine families, these findings come from the engine's
 checker in SurrealDB 4.1; this build reports none of them.
 
 **Policy: `[analyze]` in `surrealkit.toml`.** The section parses in every build, with or
@@ -800,7 +802,9 @@ code.
 
 A level is `allow` (drop the finding), `warn` or `deny`. The first entry that matches wins:
 the exact code, then its family, then the code's own default level (where
-`warnings_as_errors` applies). A code whose severity is a hint stays a hint under `warn`.
+`warnings_as_errors` applies). A level you set for a code is the severity it is reported with:
+`warn` is a warning, even for a code that is a hint by default, and `deny` is an error. Only a
+code no key covers keeps its own severity.
 There is no `strict` or `surrealdb_version` key: the checker runs against the engine
 SurrealKit embeds. An unknown key, or a key or level that is not understood, is an error.
 

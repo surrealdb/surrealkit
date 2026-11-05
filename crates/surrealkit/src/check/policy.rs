@@ -126,29 +126,40 @@ impl Policy {
 		self.require_suppression_reason
 	}
 
+	/// The level an `[analyze.lints]` key names for `code`, or `None` when no key covers it.
+	///
+	/// An exact key (`K9107`, `9107`) beats a family wildcard (`9xxx`, `9*`). `None` means the
+	/// code's catalog default applies; `Some` means the user set the level, and
+	/// [`resolve`](Self::resolve) reads it as written, whatever the code's intrinsic severity.
+	pub fn explicit_level(&self, code: Code) -> Option<Level> {
+		self.exact.get(&code.number()).or_else(|| self.families.get(&code.family())).copied()
+	}
+
 	/// The severity `code` is reported with, or `None` when policy silences it.
 	///
-	/// First match wins: an entry for the exact code, then one for its family, then the code's
-	/// own `default_level`. An entry's `warn` is a warning, and `deny` an error, whatever
-	/// `warnings_as_errors` says; only the default level is raised by it. A code whose
-	/// `intrinsic` severity is a hint stays a hint where it would be a warning.
+	/// With an [explicit level](Self::explicit_level), as the engine does it: `warn` is a
+	/// warning, even for a code whose `intrinsic` severity is a hint, `deny` an error, and
+	/// `allow` drops the finding; `warnings_as_errors` does not touch it. With none, the code's
+	/// own `default_level` applies: its `intrinsic` severity is kept (a hint stays a hint under
+	/// a default `warn`), and `warnings_as_errors` raises a default-`warn` warning to an error
+	/// and leaves a hint alone.
 	pub fn resolve(
 		&self,
 		code: Code,
 		intrinsic: Severity,
 		default_level: Level,
 	) -> Option<Severity> {
-		let named = self.exact.get(&code.number()).or_else(|| self.families.get(&code.family()));
-		let (level, raise) = match named {
-			Some(level) => (*level, false),
-			None => (default_level, self.warnings_as_errors),
-		};
-		match level {
-			Level::Allow => None,
-			Level::Deny => Some(Severity::Error),
-			Level::Warn if intrinsic == Severity::Hint => Some(Severity::Hint),
-			Level::Warn if raise => Some(Severity::Error),
-			Level::Warn => Some(Severity::Warning),
+		match self.explicit_level(code) {
+			Some(Level::Allow) => None,
+			Some(Level::Warn) => Some(Severity::Warning),
+			Some(Level::Deny) => Some(Severity::Error),
+			None => match default_level {
+				Level::Allow => None,
+				Level::Deny => Some(Severity::Error),
+				Level::Warn if intrinsic == Severity::Hint => Some(Severity::Hint),
+				Level::Warn if self.warnings_as_errors => Some(Severity::Error),
+				Level::Warn => Some(Severity::Warning),
+			},
 		}
 	}
 }
@@ -510,7 +521,7 @@ mod tests {
 	use std::path::PathBuf;
 
 	use super::*;
-	use crate::check::finding::{K9003, Severity::*};
+	use crate::check::finding::{K9003, K9105, K9107, Severity::*};
 
 	fn policy(toml: &str) -> Result<Policy> {
 		let raw = format!("[analyze]\n{}", toml.replace("[lints]", "[analyze.lints]"));
@@ -543,16 +554,89 @@ mod tests {
 	}
 
 	#[test]
-	fn an_intrinsic_hint_stays_a_hint_even_with_warnings_as_errors() {
+	fn an_intrinsic_hint_with_no_key_stays_a_hint_even_with_warnings_as_errors() {
 		let code = Code::from_number(7005);
+		let plain = policy("").unwrap();
+		assert_eq!(plain.resolve(code, Hint, Level::Warn), Some(Hint));
+		assert_eq!(plain.resolve(code, Hint, Level::Allow), None, "a default allow is dropped");
 		let strict = policy("warnings_as_errors = true\n").unwrap();
 		assert_eq!(strict.resolve(code, Hint, Level::Warn), Some(Hint));
-		let named = policy("[lints]\nL7005 = \"warn\"\n").unwrap();
-		assert_eq!(named.resolve(code, Hint, Level::Allow), Some(Hint));
-		assert_eq!(named.resolve(code, Hint, Level::Warn), Some(Hint));
-		// `deny` is an error whatever the intrinsic severity.
+		assert_eq!(strict.resolve(code, Hint, Level::Allow), None);
+		// A key that names another code leaves this one at its default.
+		let other = policy("[lints]\nL7006 = \"warn\"\n").unwrap();
+		assert_eq!(other.resolve(code, Hint, Level::Warn), Some(Hint));
+	}
+
+	#[test]
+	fn an_explicit_level_is_read_as_written_for_a_hint() {
+		let code = Code::from_number(7005);
+		let warn = policy("[lints]\nL7005 = \"warn\"\n").unwrap();
+		assert_eq!(warn.resolve(code, Hint, Level::Allow), Some(Warning), "turned on");
+		assert_eq!(warn.resolve(code, Hint, Level::Warn), Some(Warning));
 		let deny = policy("[lints]\nL7005 = \"deny\"\n").unwrap();
 		assert_eq!(deny.resolve(code, Hint, Level::Warn), Some(Error));
+		let allow = policy("[lints]\nL7005 = \"allow\"\n").unwrap();
+		assert_eq!(allow.resolve(code, Hint, Level::Warn), None);
+	}
+
+	#[test]
+	fn k9107_is_a_hint_by_default_and_a_warning_or_error_when_set() {
+		let hint = |toml: &str| policy_with(toml).resolve(K9107, Hint, Level::Warn);
+		assert_eq!(hint(""), Some(Hint));
+		assert_eq!(hint("warnings_as_errors = true\n"), Some(Hint), "a hint is not raised");
+		for key in ["K9107", "9107", "\"9xxx\"", "\"9XXX\"", "\"9*\""] {
+			assert_eq!(hint(&format!("[lints]\n{key} = \"warn\"\n")), Some(Warning), "{key}");
+			assert_eq!(hint(&format!("[lints]\n{key} = \"deny\"\n")), Some(Error), "{key}");
+			assert_eq!(hint(&format!("[lints]\n{key} = \"allow\"\n")), None, "{key}");
+		}
+		// A key for another code or family does not cover it.
+		assert_eq!(hint("[lints]\nK9106 = \"warn\"\n"), Some(Hint));
+		assert_eq!(hint("[lints]\n\"7xxx\" = \"warn\"\n"), Some(Hint));
+		// An exact key beats a family wildcard.
+		assert_eq!(hint("[lints]\n\"9xxx\" = \"deny\"\nK9107 = \"warn\"\n"), Some(Warning));
+		assert_eq!(hint("[lints]\n\"9xxx\" = \"warn\"\nK9107 = \"allow\"\n"), None);
+	}
+
+	#[test]
+	fn an_explicit_level_on_a_hint_ignores_warnings_as_errors() {
+		// `warnings_as_errors` promotes a default warning and leaves a hint alone; a level the
+		// user wrote is not raised, as for any code.
+		let warn = policy_with("warnings_as_errors = true\n[lints]\nK9107 = \"warn\"\n");
+		assert_eq!(warn.resolve(K9107, Hint, Level::Warn), Some(Warning));
+		let family = policy_with("warnings_as_errors = true\n[lints]\n\"9xxx\" = \"warn\"\n");
+		assert_eq!(family.resolve(K9107, Hint, Level::Warn), Some(Warning));
+		let deny = policy_with("warnings_as_errors = true\n[lints]\nK9107 = \"deny\"\n");
+		assert_eq!(deny.resolve(K9107, Hint, Level::Warn), Some(Error));
+		let allow = policy_with("warnings_as_errors = true\n[lints]\nK9107 = \"allow\"\n");
+		assert_eq!(allow.resolve(K9107, Hint, Level::Warn), None);
+	}
+
+	#[test]
+	fn an_intrinsic_warning_under_an_explicit_warn_is_unchanged() {
+		// The control: `K9105` is a warning by nature.
+		let warn = policy_with("[lints]\nK9105 = \"warn\"\n");
+		assert_eq!(warn.resolve(K9105, Warning, Level::Warn), Some(Warning));
+		let family = policy_with("[lints]\n\"9xxx\" = \"warn\"\n");
+		assert_eq!(family.resolve(K9105, Warning, Level::Warn), Some(Warning));
+		let strict = policy_with("warnings_as_errors = true\n[lints]\nK9105 = \"warn\"\n");
+		assert_eq!(strict.resolve(K9105, Warning, Level::Warn), Some(Warning));
+		assert_eq!(
+			policy_with("warnings_as_errors = true\n").resolve(K9105, Warning, Level::Warn),
+			Some(Error),
+			"a default warning is still raised"
+		);
+	}
+
+	#[test]
+	fn explicit_level_tells_a_key_from_a_default() {
+		let policy =
+			policy_with("[lints]\n\"9xxx\" = \"warn\"\nK9107 = \"deny\"\nC10001 = \"allow\"\n");
+		assert_eq!(policy.explicit_level(K9107), Some(Level::Deny), "exact beats family");
+		assert_eq!(policy.explicit_level(K9105), Some(Level::Warn), "family");
+		assert_eq!(policy.explicit_level(Code::from_number(10001)), Some(Level::Allow));
+		assert_eq!(policy.explicit_level(Code::from_number(10002)), None);
+		assert_eq!(policy.explicit_level(Code::from_number(7005)), None);
+		assert_eq!(policy_with("warnings_as_errors = true\n").explicit_level(K9107), None);
 	}
 
 	#[test]

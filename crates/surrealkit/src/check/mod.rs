@@ -461,6 +461,49 @@ mod tests {
 		assert_eq!(report.texts.len(), 2, "the files with findings");
 	}
 
+	#[tokio::test]
+	async fn an_explicit_warn_makes_a_k9107_hint_a_warning_in_a_report() {
+		use crate::check::finding::K9107;
+		// (config, K9107's severity, (hints, warnings, errors, allowed), passed)
+		let cases = [
+			("", Some(Severity::Hint), (1, 0, 0, 0), true),
+			("warnings_as_errors = true\n", Some(Severity::Hint), (1, 0, 0, 0), true),
+			("[lints]\nK9107 = \"warn\"\n", Some(Severity::Warning), (0, 1, 0, 0), true),
+			("[lints]\n\"9xxx\" = \"warn\"\n", Some(Severity::Warning), (0, 1, 0, 0), true),
+			(
+				"warnings_as_errors = true\n[lints]\nK9107 = \"warn\"\n",
+				Some(Severity::Warning),
+				(0, 1, 0, 0),
+				true,
+			),
+			("[lints]\nK9107 = \"deny\"\n", Some(Severity::Error), (0, 0, 1, 0), false),
+			("[lints]\nK9107 = \"allow\"\n", None, (0, 0, 0, 1), true),
+		];
+		for (toml, severity, (hints, warnings, errors, allowed), passed) in cases {
+			let mut mock = Mock::default();
+			mock.on_apply.push((
+				"a".to_string(),
+				Finding::new(
+					K9107,
+					Severity::Hint,
+					Level::Warn,
+					"m",
+					std::path::PathBuf::from("/p/a"),
+					0..1,
+				),
+			));
+			let sources = sources(vec![source("a", "0123", Role::Schema)], vec![]);
+			let report =
+				run(&mut mock, &sources, &policy(toml), &TemplateVars::default()).await.unwrap();
+			let got = report.findings.iter().find(|f| f.code == K9107).map(|f| f.severity);
+			assert_eq!(got, severity, "{toml}");
+			let summary = &report.summary;
+			let counts = (summary.hints, summary.warnings, summary.errors, summary.allowed);
+			assert_eq!(counts, (hints, warnings, errors, allowed), "{toml}");
+			assert_eq!(report.passed(), passed, "{toml}");
+		}
+	}
+
 	fn file_name_of(path: &std::path::Path) -> String {
 		path.file_name().expect("name").to_string_lossy().into_owned()
 	}
