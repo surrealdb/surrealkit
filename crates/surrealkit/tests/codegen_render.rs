@@ -196,8 +196,9 @@ fn a_query_the_engine_could_not_type_is_one_diagnostic_and_touches_no_other() {
 	assert_eq!(diagnostic.code, "query-invalid");
 	assert_eq!(diagnostic.query.as_deref(), Some("SELEC * FROM user"));
 	assert_eq!(diagnostic.source, "SELEC * FROM user");
-	assert_eq!(diagnostic.span.map(|span| (span.start, span.end)), Some((0, 5)));
-	assert!(diagnostic.reason.contains("S0001") && diagnostic.reason.contains("Parse error"));
+	// S0001's span covers the whole failing statement.
+	assert_eq!(diagnostic.span.map(|span| (span.start, span.end)), Some((0, 17)));
+	assert!(diagnostic.reason.contains("S0001") && diagnostic.reason.contains("Unexpected token"));
 	let failed: Vec<&str> =
 		assembled.iter().filter(|e| e.error.is_some()).map(|e| e.key.as_str()).collect();
 	assert_eq!(failed, ["SELEC * FROM user"]);
@@ -562,9 +563,10 @@ export function diff(message: LiveNotification<"LIVE SELECT DIFF FROM user">) {
   }
 }
 
-export function hinted(message: LiveNotification<"SELECT * FROM user WHERE team = $team">) {
+export function filtered(message: LiveNotification<"SELECT * FROM user WHERE team = $team">) {
   if (message.action === "CREATE") {
-    // An open result admits undeclared keys.
+    // A row of a SCHEMAFULL table is closed: it admits no undeclared key.
+    // @ts-expect-error a key the table does not declare
     const extra: unknown = message.value.anything;
     void extra;
   }
