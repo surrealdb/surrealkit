@@ -656,6 +656,8 @@ pub async fn files_side(
 		experimental: env.experimental.to_vec(),
 		vars: env.vars.clone(),
 		expected_engine: env.engine.map(str::to_string),
+		// Drift compares schemas; no query is typed.
+		queries: None,
 	};
 	let mut document =
 		compile(&grouped, &opts).await.context("compiling the schema files")?.document;

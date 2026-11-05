@@ -1,0 +1,107 @@
+---
+source: crates/surrealkit/tests/codegen_render.rs
+expression: report
+---
+{
+  "name": "Tally",
+  "text": "BEGIN; LET $n = 1; SELECT count() FROM post GROUP ALL; SELECT * FROM $__host0; COMMIT;",
+  "statements": [
+    {
+      "index": 0,
+      "typescript": "undefined",
+      "kind": "none",
+      "certainty": "fact",
+      "exact": true,
+      "support": {
+        "exact": true
+      },
+      "open": [],
+      "span": {
+        "column": 1,
+        "end": 10,
+        "end_column": 11,
+        "end_line": 1,
+        "line": 1,
+        "start": 0
+      }
+    },
+    {
+      "index": 1,
+      "typescript": "undefined",
+      "kind": "none",
+      "certainty": "fact",
+      "exact": true,
+      "support": {
+        "exact": true
+      },
+      "open": [],
+      "span": {
+        "column": 1,
+        "end": 10,
+        "end_column": 11,
+        "end_line": 1,
+        "line": 1,
+        "start": 0
+      }
+    },
+    {
+      "index": 2,
+      "typescript": "Array<{ count: number }>",
+      "kind": "array<{ count: int }>",
+      "certainty": "fact",
+      "exact": true,
+      "support": {
+        "exact": true
+      },
+      "open": [],
+      "span": {
+        "column": 1,
+        "end": 10,
+        "end_column": 11,
+        "end_line": 1,
+        "line": 1,
+        "start": 0
+      }
+    },
+    {
+      "index": 3,
+      "typescript": "Array<unknown>",
+      "kind": "array<any>",
+      "certainty": "hint",
+      "exact": true,
+      "support": {
+        "exact": true
+      },
+      "open": [],
+      "span": {
+        "column": 1,
+        "end": 10,
+        "end_column": 11,
+        "end_line": 1,
+        "line": 1,
+        "start": 0
+      }
+    },
+    {
+      "index": 4,
+      "typescript": "undefined",
+      "kind": "none",
+      "certainty": "fact",
+      "exact": true,
+      "support": {
+        "exact": true
+      },
+      "open": [],
+      "span": {
+        "column": 1,
+        "end": 10,
+        "end_column": 11,
+        "end_line": 1,
+        "line": 1,
+        "start": 0
+      }
+    }
+  ],
+  "params": [],
+  "snippet": "export type Tally = [undefined, undefined, Array<{ count: number }>, Array<unknown>, undefined];\nexport type TallyParams = {};\n"
+}

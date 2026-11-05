@@ -66,6 +66,28 @@ pub mod codes {
 	pub const TABLE_LIGHTWEIGHT_RELATION: &str = "table-lightweight-relation";
 	/// More than one middleware; their order is not preserved. Info.
 	pub const API_MIDDLEWARE_ORDER: &str = "api-middleware-order";
+
+	// The `queries` section (contract section 19).
+
+	/// A query file's marker names something that is not an identifier. Error.
+	pub const QUERY_NAME_INVALID: &str = "query-name-invalid";
+	/// Two named queries share a name. Error.
+	pub const QUERY_NAME_DUPLICATE: &str = "query-name-duplicate";
+	/// A query file has text before its first marker. Error.
+	pub const QUERY_TEXT_UNNAMED: &str = "query-text-unnamed";
+	/// A query file's marker is followed by no text. Error.
+	pub const QUERY_TEXT_EMPTY: &str = "query-text-empty";
+	/// The engine cannot type a query: it does not parse, or the engine refuses it. Error.
+	pub const QUERY_INVALID: &str = "query-invalid";
+	/// Queries are configured, but the engine cannot type them; the document has no `queries`.
+	/// Warning.
+	pub const QUERIES_UNSUPPORTED_ENGINE: &str = "queries-unsupported-engine";
+	/// The engine typed a query with a kind this reader does not know; it became `unknown`.
+	/// Warning.
+	pub const QUERY_KIND_UNRECOGNIZED: &str = "query-kind-unrecognized";
+	/// The engine reported a live notification `action` or `exit` this reader does not know; the
+	/// notification, or the statement's live facts, are left out. Warning.
+	pub const LIVE_UNKNOWN: &str = "live-unknown";
 }
 
 /// How serious a [`Diagnostic`] is.
@@ -113,6 +135,9 @@ pub struct Diagnostic {
 	/// The function (with its `fn::` prefix) the diagnostic is about, if any.
 	#[serde(default, skip_serializing_if = "Option::is_none")]
 	pub function: Option<String>,
+	/// The `key` of the query the diagnostic is about, if any.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub query: Option<String>,
 	/// The exact text the diagnostic is about.
 	pub source: String,
 	/// The part of `source` at fault, when narrower than all of it.
@@ -135,6 +160,7 @@ impl Diagnostic {
 			table: None,
 			field: None,
 			function: None,
+			query: None,
 			source: source.into(),
 			span: None,
 			reason: reason.into(),
@@ -156,12 +182,23 @@ impl Diagnostic {
 		self
 	}
 
+	pub(crate) fn on_query(mut self, key: &str) -> Self {
+		self.query = Some(key.to_string());
+		self
+	}
+
 	pub(crate) fn with_span(mut self, span: std::ops::Range<usize>) -> Self {
 		self.span = Some(Span {
 			start: span.start,
 			end: span.end,
 		});
 		self
+	}
+
+	/// Whether the diagnostic is about the `queries` section: it names a query, or its code
+	/// starts with `query-` or `queries-`.
+	pub fn concerns_queries(&self) -> bool {
+		self.query.is_some() || self.code.starts_with("query-") || self.code.starts_with("queries-")
 	}
 
 	/// Whether a strict run must fail on this diagnostic.
@@ -173,10 +210,11 @@ impl Diagnostic {
 impl fmt::Display for Diagnostic {
 	fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
 		write!(f, "{} {}", self.severity, self.code)?;
-		match (&self.table, &self.field, &self.function) {
-			(Some(table), Some(field), _) => write!(f, " at {table}.{}", field.join("."))?,
-			(Some(table), None, _) => write!(f, " at {table}")?,
-			(None, _, Some(function)) => write!(f, " at {function}")?,
+		match (&self.table, &self.field, &self.function, &self.query) {
+			(Some(table), Some(field), _, _) => write!(f, " at {table}.{}", field.join("."))?,
+			(Some(table), None, _, _) => write!(f, " at {table}")?,
+			(None, _, Some(function), _) => write!(f, " at {function}")?,
+			(None, _, None, Some(query)) => write!(f, " at query {query}")?,
 			_ => {}
 		}
 		write!(f, ": {} (`{}`)", self.reason, self.source)

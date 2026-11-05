@@ -1,0 +1,351 @@
+[
+  {
+    "kind": "any",
+    "kind_value": "Any"
+  },
+  {
+    "kind": "none",
+    "kind_value": "None"
+  },
+  {
+    "kind": "null",
+    "kind_value": "Null"
+  },
+  {
+    "kind": "bool",
+    "kind_value": "Bool"
+  },
+  {
+    "kind": "bytes",
+    "kind_value": "Bytes"
+  },
+  {
+    "kind": "datetime",
+    "kind_value": "Datetime"
+  },
+  {
+    "kind": "date",
+    "kind_value": "Date"
+  },
+  {
+    "kind": "time",
+    "kind_value": "Time"
+  },
+  {
+    "kind": "timestamp",
+    "kind_value": "Timestamp"
+  },
+  {
+    "kind": "interval",
+    "kind_value": "Interval"
+  },
+  {
+    "kind": "decimal",
+    "kind_value": "Decimal"
+  },
+  {
+    "kind": "bigdecimal",
+    "kind_value": "BigDecimal"
+  },
+  {
+    "kind": "duration",
+    "kind_value": "Duration"
+  },
+  {
+    "kind": "f16",
+    "kind_value": "F16"
+  },
+  {
+    "kind": "f32",
+    "kind_value": "F32"
+  },
+  {
+    "kind": "float",
+    "kind_value": "Float"
+  },
+  {
+    "kind": "i8",
+    "kind_value": "I8"
+  },
+  {
+    "kind": "i16",
+    "kind_value": "I16"
+  },
+  {
+    "kind": "i32",
+    "kind_value": "I32"
+  },
+  {
+    "kind": "int",
+    "kind_value": "Int"
+  },
+  {
+    "kind": "u8",
+    "kind_value": "U8"
+  },
+  {
+    "kind": "u16",
+    "kind_value": "U16"
+  },
+  {
+    "kind": "u32",
+    "kind_value": "U32"
+  },
+  {
+    "kind": "u64",
+    "kind_value": "U64"
+  },
+  {
+    "kind": "number",
+    "kind_value": "Number"
+  },
+  {
+    "kind": "object",
+    "kind_value": "Object"
+  },
+  {
+    "kind": "string",
+    "kind_value": "String"
+  },
+  {
+    "kind": "uuid",
+    "kind_value": "Uuid"
+  },
+  {
+    "kind": "regex",
+    "kind_value": "Regex"
+  },
+  {
+    "kind": "range",
+    "kind_value": "Range"
+  },
+  {
+    "kind": "table",
+    "kind_value": {
+      "Table": []
+    }
+  },
+  {
+    "kind": "table<user>",
+    "kind_value": {
+      "Table": [
+        "user"
+      ]
+    }
+  },
+  {
+    "kind": "record",
+    "kind_value": {
+      "Record": []
+    }
+  },
+  {
+    "kind": "record<user | team>",
+    "kind_value": {
+      "Record": [
+        "user",
+        "team"
+      ]
+    }
+  },
+  {
+    "kind": "geometry",
+    "kind_value": {
+      "Geometry": []
+    }
+  },
+  {
+    "kind": "geometry<point | polygon | multiline | collection>",
+    "kind_value": {
+      "Geometry": [
+        "Point",
+        "Polygon",
+        "MultiLine",
+        "Collection"
+      ]
+    }
+  },
+  {
+    "kind": "option<string>",
+    "kind_value": {
+      "Either": [
+        "None",
+        "String"
+      ]
+    }
+  },
+  {
+    "kind": "string | int | null",
+    "kind_value": {
+      "Either": [
+        "String",
+        "Int",
+        "Null"
+      ]
+    }
+  },
+  {
+    "kind": "set<string>",
+    "kind_value": {
+      "Set": [
+        "String",
+        null
+      ]
+    }
+  },
+  {
+    "kind": "set<int, 3>",
+    "kind_value": {
+      "Set": [
+        "Int",
+        3
+      ]
+    }
+  },
+  {
+    "kind": "array<string>",
+    "kind_value": {
+      "Array": [
+        "String",
+        null
+      ]
+    }
+  },
+  {
+    "kind": "array<int, 2>",
+    "kind_value": {
+      "Array": [
+        "Int",
+        2
+      ]
+    }
+  },
+  {
+    "kind": "function",
+    "kind_value": {
+      "Function": [
+        null,
+        null
+      ]
+    }
+  },
+  {
+    "kind": "function",
+    "kind_value": {
+      "Function": [
+        [
+          "Int"
+        ],
+        "String"
+      ]
+    }
+  },
+  {
+    "kind": "'active'",
+    "kind_value": {
+      "Literal": {
+        "String": "active"
+      }
+    }
+  },
+  {
+    "kind": "42",
+    "kind_value": {
+      "Literal": {
+        "Integer": 42
+      }
+    }
+  },
+  {
+    "kind": "1.5f",
+    "kind_value": {
+      "Literal": {
+        "Float": 1.5
+      }
+    }
+  },
+  {
+    "kind": "1.25dec",
+    "kind_value": {
+      "Literal": {
+        "Decimal": "1.25"
+      }
+    }
+  },
+  {
+    "kind": "1m30s",
+    "kind_value": {
+      "Literal": {
+        "Duration": {
+          "nanos": 0,
+          "secs": 90
+        }
+      }
+    }
+  },
+  {
+    "kind": "true",
+    "kind_value": {
+      "Literal": {
+        "Bool": true
+      }
+    }
+  },
+  {
+    "kind": "[string, int]",
+    "kind_value": {
+      "Literal": {
+        "Array": [
+          "String",
+          "Int"
+        ]
+      }
+    }
+  },
+  {
+    "kind": "{ name: string, nick: option<string>, \"weird key\": int }",
+    "kind_value": {
+      "Literal": {
+        "Object": {
+          "name": "String",
+          "nick": {
+            "Either": [
+              "None",
+              "String"
+            ]
+          },
+          "weird key": "Int"
+        }
+      }
+    }
+  },
+  {
+    "kind": "file",
+    "kind_value": {
+      "File": []
+    }
+  },
+  {
+    "kind": "file<avatars>",
+    "kind_value": {
+      "File": [
+        "avatars"
+      ]
+    }
+  },
+  {
+    "kind": "enum<'a', 'b'>",
+    "kind_value": {
+      "Enum": [
+        "a",
+        "b"
+      ]
+    }
+  },
+  {
+    "kind": "money",
+    "kind_value": {
+      "Named": "money"
+    }
+  }
+]

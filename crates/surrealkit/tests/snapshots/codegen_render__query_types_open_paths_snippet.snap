@@ -1,0 +1,8 @@
+---
+source: crates/surrealkit/tests/codegen_render.rs
+expression: report.snippet
+---
+import type { RecordId } from "surrealdb";
+
+export type Users = [Array<{ address: { city: string; [key: string]: unknown }; id: RecordId<"user">; [key: string]: unknown }>];
+export type UsersParams = {};

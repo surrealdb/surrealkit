@@ -11,18 +11,19 @@ use anyhow::{Context, Result, bail};
 use clap::builder::BoolishValueParser;
 use clap::{ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand};
 use rust_dotenv::dotenv::DotEnv;
+use surrealkit::compile_cmd::Plan;
 use surrealkit::config::{DbCfg, DbOverrides, connect};
 use surrealkit::core::exec_surql;
 use surrealkit::progress::CaptureLogger;
 use surrealkit::project::ProjectConfig;
 use surrealkit::rollout::{self, RolloutExecutionOpts, RolloutPlanOpts, RolloutUpOpts};
-use surrealkit::selection::{Selection, select_modules};
+use surrealkit::selection::Selection;
 use surrealkit::setup::force_setup;
 use surrealkit::sync::{self, SyncOpts};
 use surrealkit::templates::{self, InitOpts};
 use surrealkit::tester::{ReportFormat, TestOpts, run_test_to};
 use surrealkit::typegen::{TypegenOpts, run_typegen};
-use surrealkit::variables::{TemplateVars, build_project_vars, build_vars, parse_var_flag};
+use surrealkit::variables::{TemplateVars, build_vars, parse_var_flag};
 
 #[cfg(feature = "analyze")]
 use crate::check_cli::CheckFormat;
@@ -388,12 +389,33 @@ enum Commands {
 		#[arg(long, value_name = "SCHEMA_JSON")]
 		from: Option<PathBuf>,
 	},
+	/// Type one SurrealQL query without running it, and print its TypeScript.
+	///
+	/// The query is the argument, or stdin when the argument is `-` or absent. The engine
+	/// types it against the project's schema compiled on an embedded engine (reading no
+	/// connection settings), or against the database `--target` names. Prints the TypeScript
+	/// snippet; `--json` prints the full report. Nothing is executed. Needs SurrealDB 4.1 or
+	/// later.
+	Types {
+		/// The query, or `-` for stdin.
+		#[arg(value_name = "QUERY")]
+		query: Option<String>,
+		/// A name for the query: an identifier the TypeScript types are named after
+		/// (default: `Query`).
+		#[arg(long, value_name = "NAME")]
+		name: Option<String>,
+		/// Declare a parameter's kind, for one the engine cannot infer (repeatable):
+		/// --param min=int
+		#[arg(long = "param", value_name = "NAME=KIND")]
+		param: Vec<String>,
+	},
 	/// Compile the schema modules to schema document v2 without a database.
 	///
 	/// Applies the selected modules, in dependency order, to a throwaway embedded
 	/// engine with no network access, and writes what it stored as schema document
 	/// v2 (and the TypeScript interfaces, when configured). Reads no connection
 	/// settings. Strict: an error diagnostic fails the command.
+	#[command(alias = "generate")]
 	Compile {
 		/// Output path (default: `[typegen] json`, else
 		/// `{folder}/types/schema.json`).
@@ -417,6 +439,16 @@ enum Commands {
 		/// `[typegen] experimental`: surrealism, and files and gql, which change nothing.
 		#[arg(long = "allow-experimental", value_name = "FEATURE", value_delimiter = ',')]
 		allow_experimental: Vec<String>,
+		/// Keep running, and compile again whenever a schema file, `surrealkit.toml`,
+		/// `.env`, a query file or host code changes. A change to a query types only that
+		/// query. Until Ctrl-C.
+		#[cfg(feature = "watch")]
+		#[arg(long, conflicts_with_all = ["check", "stdout", "watch_paths"])]
+		watch: bool,
+		/// Print the files a compile reads and writes, as one JSON object, and exit
+		/// without compiling. For tools that watch the project themselves.
+		#[arg(long = "watch-paths", conflicts_with_all = ["check", "stdout"])]
+		watch_paths: bool,
 	},
 }
 
@@ -628,6 +660,59 @@ fn reject_json_watch(args: &Cli, what: &str) -> Result<()> {
 	Ok(())
 }
 
+/// The request `types` makes from its arguments. The query is `query`, or stdin when that is
+/// `-` or absent (and stdin is not a terminal).
+fn types_request(
+	query: Option<&str>,
+	name: Option<&str>,
+	params: &[String],
+) -> Result<surrealkit::codegen::query_types::Request> {
+	use std::io::{IsTerminal, Read};
+
+	let text = match query {
+		Some(text) if text != "-" => text.to_string(),
+		_ => {
+			if query.is_none() && std::io::stdin().is_terminal() {
+				bail!("no query given: pass it as an argument, or pipe it in with `-`");
+			}
+			let mut text = String::new();
+			std::io::stdin().read_to_string(&mut text).context("reading the query from stdin")?;
+			text
+		}
+	};
+	let mut request = surrealkit::codegen::query_types::Request::new(text);
+	request.name = name.map(str::to_string);
+	for flag in params {
+		let (param, hint) = surrealkit::codegen::query_types::parse_param_flag(flag)?;
+		request.params.insert(param, hint);
+	}
+	Ok(request)
+}
+
+/// How `types` renders: `[typegen.queries]`' `dates` and `hints` when it is configured.
+fn types_render_options(
+	typegen: &surrealkit::variables::TypegenConfig,
+) -> Result<surrealkit::codegen::typescript::RenderOptions> {
+	Ok(typegen.queries_config()?.map(|config| config.render_options()).unwrap_or_default())
+}
+
+/// What `types` prints: the report as JSON, or the snippet alone on stdout with the notes on
+/// stderr.
+fn print_types(report: &surrealkit::codegen::query_types::Report, json: bool) {
+	if json {
+		println!("{}", output::pretty(report));
+		return;
+	}
+	print!("{}", report.snippet);
+	for note in &report.notes {
+		eprintln!("note: {note}");
+	}
+	for finding in report.findings.iter().flatten() {
+		let field = |key: &str| finding.get(key).and_then(|v| v.as_str()).unwrap_or_default();
+		eprintln!("{} {}: {}", field("severity"), field("code"), field("message"));
+	}
+}
+
 /// The commands that read only files: `compile`, `typegen --from`, `check` and `watch`. They
 /// run before anything reads connection settings, so no `SURREALDB_*` variable or `.env` file
 /// can reach them. Returns the exit code of the command it ran, or `None` for every other
@@ -643,57 +728,91 @@ async fn run_offline(args: &Cli) -> Result<Option<i32>> {
 			check,
 			lenient,
 			allow_experimental,
+			#[cfg(feature = "watch")]
+			watch,
+			watch_paths,
 		} => {
 			warn_unused_connection_flags("compile", args);
-			let project = ProjectConfig::load(None)?;
-			let modules = select_modules(&project, &args.schema, args.all, args.no_deps)?;
-			let typegen_cfg = surrealkit::variables::load_typegen_config(None)?;
-			// `sync` and `typegen` write the configured JSON in the configured version; compile
-			// writing v2 there would make the commands overwrite one another.
-			if out.is_none()
-				&& !*stdout && typegen_cfg.json_path()?.is_some()
-				&& typegen_cfg.schema_version()? != surrealkit::typegen::SchemaVersion::V2
-			{
-				anyhow::bail!(
-					"compile writes schema document v2, but [typegen] json is the v1 document \
-					 `sync` and `typegen` write (schema_version is 1 unless set); set [typegen] \
-					 schema_version = 2 so that every command writes v2 there, or pass --out or \
-					 --stdout"
-				);
-			}
 			let raw_vars: Vec<(String, String)> =
 				args.var.iter().map(|s| parse_var_flag(s)).collect::<anyhow::Result<_>>()?;
-			let mut experimental = typegen_cfg.experimental.clone();
-			experimental.extend(allow_experimental.iter().cloned());
+			let compile_args = surrealkit::compile_cmd::CompileArgs {
+				folder: folder.clone(),
+				schemas: args.schema.clone(),
+				all: args.all,
+				no_deps: args.no_deps,
+				vars: raw_vars,
+				out: out.clone(),
+				compact: *compact,
+				lenient: *lenient,
+				allow_experimental: allow_experimental.clone(),
+			};
+			if *watch_paths {
+				let plan = Plan::load(&compile_args, *stdout, *check)?;
+				println!("{}", plan.watch_set(&folder)?.to_json());
+				return Ok(Some(0));
+			}
+			#[cfg(feature = "watch")]
+			if *watch {
+				return Ok(Some(surrealkit::compile_cmd::watch(&compile_args).await?));
+			}
+			let plan = Plan::load(&compile_args, *stdout, *check)?.collect()?;
 			surrealkit::compile::run_compile(
-				&project,
+				&plan.project,
 				&folder,
-				&modules,
-				&surrealkit::compile::CompileOpts {
-					experimental,
-					// Files and flags only: no SURREALKIT_VAR_* from the environment.
-					vars: TemplateVars {
-						vars: build_project_vars(&raw_vars, None)?,
-					},
-					expected_engine: typegen_cfg.engine.clone(),
-				},
-				&TypegenOpts {
-					out: out.clone().or(typegen_cfg.json_path()?),
-					stdout: *stdout,
-					pretty: !compact,
-					ts_out: typegen_cfg.typescript_path()?,
-					ts_format: typegen_cfg.format.clone(),
-					strict: !lenient,
-					check: *check,
-					omit_generated_at: true,
-					schema_version: surrealkit::typegen::SchemaVersion::V2,
-					emitters: typegen_cfg.emitters()?,
-					acknowledge: typegen_cfg.acknowledgements()?,
-					// --lenient tolerates diagnostics, never an emitter that cannot run.
-					emitter_failures_fatal: true,
-				},
+				&plan.modules,
+				&plan.compile,
+				&plan.outputs,
 			)
 			.await?;
+			Ok(Some(0))
+		}
+		// With `--target` it reads a database, and `run` takes it.
+		Commands::Types {
+			query,
+			name,
+			param,
+		} if args.target.is_empty() => {
+			warn_unused_connection_flags("types", args);
+			let request = types_request(query.as_deref(), name.as_deref(), param)?;
+			let compile_args = surrealkit::compile_cmd::CompileArgs {
+				folder: folder.clone(),
+				schemas: args.schema.clone(),
+				all: args.all,
+				no_deps: args.no_deps,
+				vars: args.var.iter().map(|s| parse_var_flag(s)).collect::<Result<_>>()?,
+				..Default::default()
+			};
+			// Nothing is written, so no output setting may refuse the command.
+			let plan = Plan::load(&compile_args, true, false)?;
+			let opts = types_render_options(&plan.typegen)?;
+			#[cfg_attr(not(feature = "analyze"), expect(unused_mut))]
+			let mut report = surrealkit::codegen::query_types::types(
+				&request,
+				surrealkit::codegen::query_types::Source::Project {
+					plan: &plan,
+					folder: &folder,
+				},
+				&opts,
+			)
+			.await?;
+			#[cfg(feature = "analyze")]
+			{
+				let root = std::env::current_dir()?;
+				surrealkit::codegen::query_types::check(
+					&mut report,
+					&request,
+					surrealkit::codegen::query_types::CheckScope {
+						project: &plan.project,
+						root: &root,
+						folder: &folder,
+						vars: &plan.compile.vars,
+						target: None,
+						schema: args.schema.clone(),
+					},
+				)
+				.await;
+			}
+			print_types(&report, args.json);
 			Ok(Some(0))
 		}
 		Commands::Typegen {
@@ -730,6 +849,7 @@ async fn run_offline(args: &Cli) -> Result<Option<i32>> {
 					emitters: typegen_cfg.emitters()?,
 					acknowledge: typegen_cfg.acknowledgements()?,
 					emitter_failures_fatal: false,
+					queries: None,
 				},
 			)?;
 			Ok(Some(0))
@@ -1502,6 +1622,48 @@ async fn run(args: Cli) -> Result<i32> {
 		}
 		#[cfg(feature = "mcp")]
 		Commands::Mcp => unreachable!("dispatched before logging is installed"),
+		Commands::Types {
+			query,
+			name,
+			param,
+		} => {
+			let request = types_request(query.as_deref(), name.as_deref(), &param)?;
+			let typegen_cfg = surrealkit::variables::load_typegen_config(None)?;
+			let opts = types_render_options(&typegen_cfg)?;
+			let target = selection.typegen_target(schema_selection_used)?;
+			let db = connect(target.cfg()).await?;
+			#[cfg_attr(not(feature = "analyze"), expect(unused_mut))]
+			let mut report = surrealkit::codegen::query_types::types(
+				&request,
+				surrealkit::codegen::query_types::Source::Live(&db),
+				&opts,
+			)
+			.await?;
+			#[cfg(feature = "analyze")]
+			{
+				let project = surrealkit::project::ProjectConfig::load(None)?;
+				let root = std::env::current_dir()?;
+				let pairs =
+					args.var.iter().map(|s| parse_var_flag(s)).collect::<Result<Vec<_>>>()?;
+				let vars = surrealkit::variables::TemplateVars {
+					vars: surrealkit::variables::build_project_vars(&pairs, None)?,
+				};
+				surrealkit::codegen::query_types::check(
+					&mut report,
+					&request,
+					surrealkit::codegen::query_types::CheckScope {
+						project: &project,
+						root: &root,
+						folder: &folder,
+						vars: &vars,
+						target: Some(target.name().to_string()),
+						schema: args.schema.clone(),
+					},
+				)
+				.await;
+			}
+			print_types(&report, json);
+		}
 		Commands::Typegen {
 			out,
 			stdout,
@@ -1566,6 +1728,7 @@ async fn run(args: Cli) -> Result<i32> {
 					emitters: typegen_cfg.emitters()?,
 					acknowledge: typegen_cfg.acknowledgements()?,
 					emitter_failures_fatal: false,
+					queries: surrealkit::typegen::queries_opts(&typegen_cfg)?,
 				},
 			)
 			.await?;

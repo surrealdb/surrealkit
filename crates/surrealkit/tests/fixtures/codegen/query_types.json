@@ -1,0 +1,916 @@
+[
+  {
+    "name": "projection",
+    "request": {
+      "query": "SELECT name, age FROM person WHERE age > $min",
+      "name": "ListPeople"
+    },
+    "document": {
+      "format": "surrealdb.types",
+      "version": 1,
+      "engine": "4.1.0",
+      "namespace": "app",
+      "database": "main",
+      "queries": [
+        {
+          "name": "ListPeople",
+          "text": "SELECT name, age FROM person WHERE age > $min",
+          "statements": [
+            {
+              "certainty": "hint",
+              "support": {
+                "exact": false,
+                "reason": "param"
+              },
+              "open": [],
+              "span": {
+                "start": 0,
+                "end": 45,
+                "line": 1,
+                "column": 1,
+                "end_line": 1,
+                "end_column": 46
+              },
+              "kind": "array<{ age: int, name: string }>",
+              "kind_value": {
+                "Array": [
+                  {
+                    "Literal": {
+                      "Object": {
+                        "age": "Int",
+                        "name": "String"
+                      }
+                    }
+                  },
+                  null
+                ]
+              }
+            }
+          ],
+          "params": [
+            {
+              "name": "min",
+              "kind": "int",
+              "kind_value": "Int",
+              "certainty": "hint",
+              "required": true
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "transaction",
+    "request": {
+      "query": "BEGIN; LET $n = 1; SELECT count() FROM post GROUP ALL; SELECT * FROM $__host0; COMMIT;",
+      "name": "Tally"
+    },
+    "document": {
+      "format": "surrealdb.types",
+      "version": 1,
+      "engine": "4.1.0",
+      "namespace": "app",
+      "database": "main",
+      "queries": [
+        {
+          "name": "Tally",
+          "text": "BEGIN; LET $n = 1; SELECT count() FROM post GROUP ALL; SELECT * FROM $__host0; COMMIT;",
+          "statements": [
+            {
+              "certainty": "fact",
+              "support": {
+                "exact": true
+              },
+              "open": [],
+              "span": {
+                "start": 0,
+                "end": 10,
+                "line": 1,
+                "column": 1,
+                "end_line": 1,
+                "end_column": 11
+              },
+              "kind": "none",
+              "kind_value": "None"
+            },
+            {
+              "certainty": "fact",
+              "support": {
+                "exact": true
+              },
+              "open": [],
+              "span": {
+                "start": 0,
+                "end": 10,
+                "line": 1,
+                "column": 1,
+                "end_line": 1,
+                "end_column": 11
+              },
+              "kind": "none",
+              "kind_value": "None"
+            },
+            {
+              "certainty": "fact",
+              "support": {
+                "exact": true
+              },
+              "open": [],
+              "span": {
+                "start": 0,
+                "end": 10,
+                "line": 1,
+                "column": 1,
+                "end_line": 1,
+                "end_column": 11
+              },
+              "kind": "array<{ count: int }>",
+              "kind_value": {
+                "Array": [
+                  {
+                    "Literal": {
+                      "Object": {
+                        "count": "Int"
+                      }
+                    }
+                  },
+                  null
+                ]
+              }
+            },
+            {
+              "certainty": "hint",
+              "support": {
+                "exact": true
+              },
+              "open": [],
+              "span": {
+                "start": 0,
+                "end": 10,
+                "line": 1,
+                "column": 1,
+                "end_line": 1,
+                "end_column": 11
+              },
+              "kind": "array<any>",
+              "kind_value": {
+                "Array": [
+                  "Any",
+                  null
+                ]
+              }
+            },
+            {
+              "certainty": "fact",
+              "support": {
+                "exact": true
+              },
+              "open": [],
+              "span": {
+                "start": 0,
+                "end": 10,
+                "line": 1,
+                "column": 1,
+                "end_line": 1,
+                "end_column": 11
+              },
+              "kind": "none",
+              "kind_value": "None"
+            }
+          ],
+          "params": [
+            {
+              "name": "__host0",
+              "kind": null,
+              "kind_value": null,
+              "certainty": "hint",
+              "required": true
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "untyped",
+    "request": {
+      "query": "SELECT * FROM mystery($x); RETURN 1"
+    },
+    "document": {
+      "format": "surrealdb.types",
+      "version": 1,
+      "engine": "4.1.0",
+      "namespace": "app",
+      "database": "main",
+      "queries": [
+        {
+          "name": null,
+          "text": "SELECT * FROM mystery($x); RETURN 1",
+          "statements": [
+            {
+              "certainty": "hint",
+              "support": {
+                "exact": false
+              },
+              "open": [],
+              "span": {
+                "start": 0,
+                "end": 10,
+                "line": 1,
+                "column": 1,
+                "end_line": 1,
+                "end_column": 11
+              }
+            },
+            {
+              "certainty": "fact",
+              "support": {
+                "exact": true
+              },
+              "open": [],
+              "span": {
+                "start": 0,
+                "end": 10,
+                "line": 1,
+                "column": 1,
+                "end_line": 1,
+                "end_column": 11
+              },
+              "kind": "int",
+              "kind_value": "Int"
+            }
+          ],
+          "params": [
+            {
+              "name": "x",
+              "kind": null,
+              "kind_value": null,
+              "certainty": "hint",
+              "required": true
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "open_paths",
+    "request": {
+      "query": "SELECT * FROM user",
+      "name": "Users"
+    },
+    "document": {
+      "format": "surrealdb.types",
+      "version": 1,
+      "engine": "4.1.0",
+      "namespace": "app",
+      "database": "main",
+      "queries": [
+        {
+          "name": "Users",
+          "text": "SELECT * FROM user",
+          "statements": [
+            {
+              "certainty": "fact",
+              "support": {
+                "exact": true
+              },
+              "open": [
+                [
+                  {
+                    "element": true
+                  }
+                ],
+                [
+                  {
+                    "element": true
+                  },
+                  {
+                    "field": "address"
+                  }
+                ]
+              ],
+              "span": {
+                "start": 0,
+                "end": 10,
+                "line": 1,
+                "column": 1,
+                "end_line": 1,
+                "end_column": 11
+              },
+              "kind": "array<object>",
+              "kind_value": {
+                "Array": [
+                  {
+                    "Literal": {
+                      "Object": {
+                        "address": {
+                          "Literal": {
+                            "Object": {
+                              "city": "String"
+                            }
+                          }
+                        },
+                        "id": {
+                          "Record": [
+                            "user"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  null
+                ]
+              }
+            }
+          ],
+          "params": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "enum_and_named",
+    "request": {
+      "query": "SELECT price, status, tags FROM item",
+      "name": "Items"
+    },
+    "document": {
+      "format": "surrealdb.types",
+      "version": 1,
+      "engine": "4.1.0",
+      "namespace": "app",
+      "database": "main",
+      "types": [
+        {
+          "name": "money",
+          "kind": "decimal",
+          "kind_value": "Decimal"
+        }
+      ],
+      "queries": [
+        {
+          "name": "Items",
+          "text": "SELECT price, status, tags FROM item",
+          "statements": [
+            {
+              "certainty": "fact",
+              "support": {
+                "exact": true
+              },
+              "open": [],
+              "span": {
+                "start": 0,
+                "end": 10,
+                "line": 1,
+                "column": 1,
+                "end_line": 1,
+                "end_column": 11
+              },
+              "kind": "array<object>",
+              "kind_value": {
+                "Array": [
+                  {
+                    "Literal": {
+                      "Object": {
+                        "price": {
+                          "Named": "money"
+                        },
+                        "status": {
+                          "Enum": [
+                            "draft",
+                            "live"
+                          ]
+                        },
+                        "tags": {
+                          "Array": [
+                            {
+                              "Named": "money"
+                            },
+                            null
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  null
+                ]
+              }
+            }
+          ],
+          "params": []
+        }
+      ]
+    }
+  },
+  {
+    "name": "engine_params",
+    "request": {
+      "query": "SELECT * FROM post WHERE author = $author AND published = $published AND at > $since LIMIT $limit",
+      "name": "Posts"
+    },
+    "document": {
+      "format": "surrealdb.types",
+      "version": 1,
+      "engine": "4.1.0",
+      "namespace": "app",
+      "database": "main",
+      "queries": [
+        {
+          "name": "Posts",
+          "text": "SELECT * FROM post WHERE author = $author AND published = $published AND at > $since LIMIT $limit",
+          "statements": [
+            {
+              "certainty": "fact",
+              "support": {
+                "exact": false
+              },
+              "open": [],
+              "span": {
+                "start": 0,
+                "end": 10,
+                "line": 1,
+                "column": 1,
+                "end_line": 1,
+                "end_column": 11
+              },
+              "kind": "array<object>",
+              "kind_value": {
+                "Array": [
+                  "Object",
+                  null
+                ]
+              }
+            }
+          ],
+          "params": [
+            {
+              "name": "author",
+              "kind": "record<user>",
+              "kind_value": {
+                "Record": [
+                  "user"
+                ]
+              },
+              "certainty": "hint",
+              "required": true
+            },
+            {
+              "name": "published",
+              "kind": "bool",
+              "kind_value": "Bool",
+              "certainty": "hint",
+              "required": true
+            },
+            {
+              "name": "since",
+              "kind": "datetime",
+              "kind_value": "Datetime",
+              "certainty": "hint",
+              "required": true
+            },
+            {
+              "name": "limit",
+              "kind": "option<int>",
+              "kind_value": {
+                "Either": [
+                  "None",
+                  "Int"
+                ]
+              },
+              "certainty": "hint",
+              "required": false
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "declared_hint",
+    "request": {
+      "query": "SELECT * FROM person WHERE id = $who AND created > $since",
+      "params": {
+        "who": {
+          "kind": "record<person>"
+        }
+      }
+    },
+    "document": {
+      "format": "surrealdb.types",
+      "version": 1,
+      "engine": "4.1.0",
+      "namespace": "app",
+      "database": "main",
+      "queries": [
+        {
+          "name": null,
+          "text": "SELECT * FROM person WHERE id = $who AND created > $since",
+          "statements": [
+            {
+              "certainty": "fact",
+              "support": {
+                "exact": false
+              },
+              "open": [],
+              "span": {
+                "start": 0,
+                "end": 10,
+                "line": 1,
+                "column": 1,
+                "end_line": 1,
+                "end_column": 11
+              },
+              "kind": "array<object>",
+              "kind_value": {
+                "Array": [
+                  "Object",
+                  null
+                ]
+              }
+            }
+          ],
+          "params": [
+            {
+              "name": "who",
+              "kind": null,
+              "kind_value": null,
+              "certainty": "hint",
+              "required": true
+            },
+            {
+              "name": "since",
+              "kind": "datetime",
+              "kind_value": "Datetime",
+              "certainty": "hint",
+              "required": true
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "example_hint",
+    "request": {
+      "query": "SELECT * FROM person WHERE id = $who AND created > $since",
+      "name": "ByExample",
+      "params": {
+        "who": {
+          "example": "person:ada"
+        }
+      }
+    },
+    "document": {
+      "format": "surrealdb.types",
+      "version": 1,
+      "engine": "4.1.0",
+      "namespace": "app",
+      "database": "main",
+      "queries": [
+        {
+          "name": null,
+          "text": "SELECT * FROM person WHERE id = $who AND created > $since",
+          "statements": [
+            {
+              "certainty": "fact",
+              "support": {
+                "exact": false
+              },
+              "open": [],
+              "span": {
+                "start": 0,
+                "end": 10,
+                "line": 1,
+                "column": 1,
+                "end_line": 1,
+                "end_column": 11
+              },
+              "kind": "array<object>",
+              "kind_value": {
+                "Array": [
+                  "Object",
+                  null
+                ]
+              }
+            }
+          ],
+          "params": [
+            {
+              "name": "who",
+              "kind": null,
+              "kind_value": null,
+              "certainty": "hint",
+              "required": true
+            },
+            {
+              "name": "since",
+              "kind": "datetime",
+              "kind_value": "Datetime",
+              "certainty": "hint",
+              "required": true
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "unused_hint",
+    "request": {
+      "query": "SELECT * FROM person WHERE age > $min",
+      "params": {
+        "limit": {
+          "kind": "int"
+        },
+        "min": {
+          "kind": "int"
+        }
+      }
+    },
+    "document": {
+      "format": "surrealdb.types",
+      "version": 1,
+      "engine": "4.1.0",
+      "namespace": "app",
+      "database": "main",
+      "queries": [
+        {
+          "name": null,
+          "text": "SELECT * FROM person WHERE age > $min",
+          "statements": [
+            {
+              "certainty": "fact",
+              "support": {
+                "exact": false
+              },
+              "open": [],
+              "span": {
+                "start": 0,
+                "end": 10,
+                "line": 1,
+                "column": 1,
+                "end_line": 1,
+                "end_column": 11
+              },
+              "kind": "array<object>",
+              "kind_value": {
+                "Array": [
+                  "Object",
+                  null
+                ]
+              }
+            }
+          ],
+          "params": [
+            {
+              "name": "min",
+              "kind": "int",
+              "kind_value": "Int",
+              "certainty": "hint",
+              "required": true
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "disagreeing_hint",
+    "request": {
+      "query": "SELECT * FROM person WHERE age > $min",
+      "params": {
+        "min": {
+          "kind": "string"
+        }
+      }
+    },
+    "document": {
+      "format": "surrealdb.types",
+      "version": 1,
+      "engine": "4.1.0",
+      "namespace": "app",
+      "database": "main",
+      "queries": [
+        {
+          "name": null,
+          "text": "SELECT * FROM person WHERE age > $min",
+          "statements": [
+            {
+              "certainty": "fact",
+              "support": {
+                "exact": false
+              },
+              "open": [],
+              "span": {
+                "start": 0,
+                "end": 10,
+                "line": 1,
+                "column": 1,
+                "end_line": 1,
+                "end_column": 11
+              },
+              "kind": "array<object>",
+              "kind_value": {
+                "Array": [
+                  "Object",
+                  null
+                ]
+              }
+            }
+          ],
+          "params": [
+            {
+              "name": "min",
+              "kind": "int",
+              "kind_value": "Int",
+              "certainty": "hint",
+              "required": true
+            }
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "live",
+    "request": {
+      "query": "SELECT * FROM user ORDER BY name LIMIT $lim",
+      "name": "ListUsers"
+    },
+    "document": {
+      "format": "surrealdb.types",
+      "version": 1,
+      "engine": "4.1.0",
+      "namespace": "app",
+      "database": "main",
+      "queries": [
+        {
+          "name": "ListUsers",
+          "text": "SELECT * FROM user ORDER BY name LIMIT $lim",
+          "statements": [
+            {
+              "kind": "x",
+              "kind_value": {
+                "Array": [
+                  {
+                    "Literal": {
+                      "Object": {
+                        "id": {
+                          "Record": [
+                            "user"
+                          ]
+                        },
+                        "name": "String",
+                        "team": {
+                          "Record": [
+                            "team"
+                          ]
+                        }
+                      }
+                    }
+                  },
+                  null
+                ]
+              },
+              "certainty": "fact",
+              "support": {
+                "exact": true
+              },
+              "open": [],
+              "span": {
+                "start": 0,
+                "end": 1,
+                "line": 1,
+                "column": 1,
+                "end_line": 1,
+                "end_column": 2
+              },
+              "live": {
+                "diff": false,
+                "query": "LIVE SELECT * FROM user",
+                "notifications": [
+                  {
+                    "action": "CREATE",
+                    "record": "record<user>",
+                    "record_value": {
+                      "Record": [
+                        "user"
+                      ]
+                    },
+                    "result": "object",
+                    "result_value": {
+                      "Literal": {
+                        "Object": {
+                          "id": {
+                            "Record": [
+                              "user"
+                            ]
+                          },
+                          "name": "String",
+                          "team": {
+                            "Record": [
+                              "team"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "certainty": "fact",
+                    "open": []
+                  },
+                  {
+                    "action": "UPDATE",
+                    "record": "record<user>",
+                    "record_value": {
+                      "Record": [
+                        "user"
+                      ]
+                    },
+                    "result": "object",
+                    "result_value": {
+                      "Literal": {
+                        "Object": {
+                          "id": {
+                            "Record": [
+                              "user"
+                            ]
+                          },
+                          "name": "String",
+                          "team": {
+                            "Record": [
+                              "team"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "certainty": "fact",
+                    "open": []
+                  },
+                  {
+                    "action": "DELETE",
+                    "record": "record<user>",
+                    "record_value": {
+                      "Record": [
+                        "user"
+                      ]
+                    },
+                    "result": "object",
+                    "result_value": {
+                      "Literal": {
+                        "Object": {
+                          "id": {
+                            "Record": [
+                              "user"
+                            ]
+                          },
+                          "name": "String",
+                          "team": {
+                            "Record": [
+                              "team"
+                            ]
+                          }
+                        }
+                      }
+                    },
+                    "certainty": "fact",
+                    "open": []
+                  },
+                  {
+                    "action": "KILLED",
+                    "record": "none",
+                    "record_value": "None",
+                    "result": "none",
+                    "result_value": "None",
+                    "certainty": "fact",
+                    "open": []
+                  }
+                ]
+              },
+              "live_refusal": {
+                "code": "E4009",
+                "message": "LIVE SELECT cannot run a SELECT with ORDER BY, LIMIT",
+                "clauses": [
+                  "ORDER BY",
+                  "LIMIT"
+                ],
+                "windowable": true
+              }
+            }
+          ],
+          "params": [
+            {
+              "name": "lim",
+              "kind": "x",
+              "kind_value": "Int",
+              "certainty": "hint",
+              "required": true
+            }
+          ]
+        }
+      ]
+    }
+  }
+]

@@ -1,0 +1,6 @@
+---
+source: crates/surrealkit/tests/codegen_render.rs
+expression: report.snippet
+---
+export type ListPeople = [Array<{ age: number; name: string }>];
+export type ListPeopleParams = { min: number };

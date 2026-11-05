@@ -46,6 +46,11 @@
 			"type": "array",
 			"items": { "$ref": "#/$defs/typeDef" }
 		},
+		"queries": {
+			"description": "The typed result of each query the project sends, sorted by key (contract section 19). Omitted when there are none. Excluded from semanticDigest.",
+			"type": "array",
+			"items": { "$ref": "#/$defs/queryEntry" }
+		},
 		"diagnostics": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } }
 	},
 	"$defs": {
@@ -118,7 +123,7 @@
 				},
 				"adapter": {
 					"description": "The version-qualified INFO STRUCTURE adapter that produced the document, or `info` for the plain-INFO fallback used on an engine minor without one.",
-					"enum": ["structure-3.2", "structure-3.3", "structure-4.0", "info"]
+					"enum": ["structure-3.2", "structure-3.3", "structure-4.0", "structure-4.1", "info"]
 				},
 				"source": {
 					"oneOf": [
@@ -729,6 +734,11 @@
 			"properties": {
 				"name": { "$ref": "#/$defs/name" },
 				"function": { "type": "string", "pattern": "^fn::" },
+				"query": {
+					"description": "The `key` of the query the diagnostic is about.",
+					"type": "string",
+					"minLength": 1
+				},
 				"tokenizers": { "type": "array", "items": { "type": "string" } },
 				"filters": { "type": "array", "items": { "type": "string" } },
 				"comment": { "type": "string" }
@@ -867,6 +877,197 @@
 				"comment": { "type": "string" }
 			}
 		},
+		"queryEntry": {
+			"description": "One query and the typed result of each of its statements.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["key", "text", "statements"],
+			"properties": {
+				"key": {
+					"description": "The entry's identity, unique in the array: `name` when the query has one, otherwise `text`, byte for byte.",
+					"type": "string",
+					"minLength": 1
+				},
+				"name": { "$ref": "#/$defs/queryName" },
+				"text": { "description": "The query exactly as the engine receives it.", "type": "string" },
+				"sources": {
+					"description": "Where the query comes from, sorted by path, then span.start. Omitted when empty.",
+					"type": "array",
+					"minItems": 1,
+					"items": { "$ref": "#/$defs/querySource" }
+				},
+				"statements": {
+					"description": "One per top-level statement, in source order.",
+					"type": "array",
+					"items": { "$ref": "#/$defs/queryStatement" }
+				},
+				"params": {
+					"description": "Each `$name` the query reads without binding it, sorted by name. Omitted when empty.",
+					"type": "array",
+					"minItems": 1,
+					"items": { "$ref": "#/$defs/queryParameter" }
+				},
+				"error": {
+					"description": "Why the engine could not type the query. An entry with an error has no statements and no params.",
+					"$ref": "#/$defs/queryError"
+				}
+			}
+		},
+		"queryError": {
+			"description": "Why the engine could not type one query.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["code", "message"],
+			"properties": {
+				"code": { "description": "The engine's error code.", "type": "string", "minLength": 1 },
+				"message": { "description": "The engine's message.", "type": "string" },
+				"span": {
+					"description": "UTF-8 byte range [start, end) of the part of the query text at fault.",
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["start", "end"],
+					"properties": {
+						"start": { "type": "integer", "minimum": 0 },
+						"end": { "type": "integer", "minimum": 0 }
+					}
+				}
+			}
+		},
+		"queryName": {
+			"description": "A named query's name: an identifier.",
+			"type": "string",
+			"pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+		},
+		"querySource": {
+			"description": "A place a query is written: a query file, or a call in host code.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["origin", "path", "span", "line", "column"],
+			"properties": {
+				"origin": { "enum": ["file", "host"] },
+				"path": { "type": "string", "pattern": "^[^\\\\]+$" },
+				"span": {
+					"description": "UTF-8 byte range [start, end) of the query text in the file.",
+					"type": "object",
+					"additionalProperties": false,
+					"required": ["start", "end"],
+					"properties": {
+						"start": { "type": "integer", "minimum": 0 },
+						"end": { "type": "integer", "minimum": 0 }
+					}
+				},
+				"line": { "description": "1-based line of span.start.", "type": "integer", "minimum": 1 },
+				"column": {
+					"description": "1-based column of span.start, in Unicode scalar values.",
+					"type": "integer",
+					"minimum": 1
+				},
+				"method": {
+					"description": "The client method the text was passed to. Host code only.",
+					"type": "string",
+					"minLength": 1
+				}
+			}
+		},
+		"queryStatement": {
+			"description": "The type of one top-level statement's slot in the response. Every statement has one.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["optional", "certainty", "exact", "open"],
+			"properties": {
+				"kind": {
+					"description": "Absent when the engine did not type the statement; exact is then false.",
+					"$ref": "#/$defs/kind"
+				},
+				"optional": { "description": "The top-level kind admitted NONE.", "type": "boolean" },
+				"certainty": { "enum": ["fact", "hint"] },
+				"exact": { "description": "False when the engine approximated part of the kind with `any`.", "type": "boolean" },
+				"open": {
+					"description": "Positions inside `kind` where an object admits undeclared keys, as path segments: [] is the kind itself, `*` steps into an array or set element, any other segment is an object-literal field.",
+					"type": "array",
+					"items": {
+						"type": "array",
+						"items": { "type": "string", "minLength": 1 }
+					}
+				},
+				"live": {
+					"description": "What a live subscription to this statement delivers. Present on every top-level SELECT that LIVE SELECT can run, and on a LIVE SELECT.",
+					"$ref": "#/$defs/queryLive"
+				},
+				"liveRefusal": {
+					"description": "Why LIVE SELECT cannot run this SELECT as written.",
+					"$ref": "#/$defs/liveRefusal"
+				}
+			}
+		},
+		"queryLive": {
+			"description": "The live subscription of a statement.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["diff", "query", "notifications"],
+			"properties": {
+				"diff": { "description": "Whether the subscription delivers patches rather than records.", "type": "boolean" },
+				"query": { "description": "The LIVE SELECT text to subscribe with.", "type": "string", "minLength": 1 },
+				"exit": {
+					"description": "How a record that leaves the WHERE filter is reported. Only with a WHERE.",
+					"enum": ["delete", "silent"]
+				},
+				"watch": {
+					"description": "The LIVE SELECT text that watches the same targets without the WHERE. Only with exit `silent`.",
+					"type": "string",
+					"minLength": 1
+				},
+				"notifications": {
+					"description": "One per action, in the order CREATE, UPDATE, DELETE, KILLED.",
+					"type": "array",
+					"items": { "$ref": "#/$defs/liveNotification" }
+				}
+			}
+		},
+		"liveNotification": {
+			"description": "The notification a live subscription delivers for one action.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["action", "record", "result", "certainty", "open"],
+			"properties": {
+				"action": { "enum": ["CREATE", "UPDATE", "DELETE", "KILLED"] },
+				"record": { "description": "The kind of the record id. A value kind: NONE is an `option`.", "$ref": "#/$defs/kind" },
+				"result": { "description": "The kind of the value. A value kind: NONE is an `option`.", "$ref": "#/$defs/kind" },
+				"certainty": { "enum": ["fact", "hint"] },
+				"open": {
+					"description": "Positions inside `result` where an object admits undeclared keys, as for a statement.",
+					"type": "array",
+					"items": {
+						"type": "array",
+						"items": { "type": "string", "minLength": 1 }
+					}
+				}
+			}
+		},
+		"liveRefusal": {
+			"description": "Why LIVE SELECT cannot run a SELECT as written.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["code", "message", "clauses", "windowable"],
+			"properties": {
+				"code": { "type": "string", "minLength": 1 },
+				"message": { "type": "string" },
+				"clauses": { "description": "The clauses LIVE SELECT does not accept.", "type": "array", "items": { "type": "string", "minLength": 1 } },
+				"windowable": { "description": "Whether dropping those clauses and running the SELECT again on each change can serve it. The statement's `live` is then the reduced query's.", "type": "boolean" }
+			}
+		},
+		"queryParameter": {
+			"description": "A `$name` a query reads without binding it.",
+			"type": "object",
+			"additionalProperties": false,
+			"required": ["name", "optional", "required"],
+			"properties": {
+				"name": { "description": "Without the `$`.", "$ref": "#/$defs/name" },
+				"kind": { "description": "Absent when nothing constrains the parameter.", "$ref": "#/$defs/kind" },
+				"optional": { "description": "The kind admitted NONE.", "type": "boolean" },
+				"required": { "description": "The caller must bind it.", "type": "boolean" }
+			}
+		},
 		"diagnostic": {
 			"type": "object",
 			"additionalProperties": false,
@@ -877,6 +1078,11 @@
 				"table": { "$ref": "#/$defs/name" },
 				"field": { "$ref": "#/$defs/path" },
 				"function": { "type": "string", "pattern": "^fn::" },
+				"query": {
+					"description": "The `key` of the query the diagnostic is about.",
+					"type": "string",
+					"minLength": 1
+				},
 				"source": { "description": "The exact text the diagnostic is about.", "type": "string" },
 				"span": {
 					"description": "UTF-8 byte range [start, end) within `source`.",

@@ -35,10 +35,11 @@ The key words MUST, MUST NOT, SHOULD and MAY are used as in RFC 2119.
 12. [Ordering](#12-ordering)
 13. [semanticDigest](#13-semanticdigest)
 14. [Diagnostics](#14-diagnostics)
-15. [Version adapters: 3.2, 3.3 and 4.0](#15-version-adapters-32-33-and-40)
+15. [Version adapters: 3.2, 3.3, 4.0 and 4.1](#15-version-adapters-32-33-40-and-41)
 16. [Engine hazards](#16-engine-hazards)
 17. [Golden corpus](#17-golden-corpus)
 18. [Design rationale](#18-design-rationale)
+19. [Queries](#19-queries)
 
 ## 1. Where the facts come from
 
@@ -73,7 +74,7 @@ read only through a version-qualified adapter (section 15) that maps each suppor
 engine minor onto this contract. An engine minor without an adapter MUST fail with the
 error diagnostic `structure-unsupported-engine`; a STRUCTURE key the adapter does not
 know MUST produce the error diagnostic `structure-unknown-key` rather than being
-dropped. Supported today: SurrealDB **3.2.x**, **3.3.x** and **4.0.x**.
+dropped. Supported today: SurrealDB **3.2.x**, **3.3.x**, **4.0.x** and **4.1.x**.
 
 Plain `INFO` (the `DEFINE …` strings) MAY be captured as evidence in `define`
 properties. It is never the source of a semantic value when STRUCTURE provides one.
@@ -98,17 +99,19 @@ every supported minor (`info_and_structure_agree_on_3_2_4`, `…_3_3_0`).
   "params": [ … ], "accesses": [ … ], "analyzers": [ … ], "sequences": [ … ],
   "buckets": [ … ], "apis": [ … ], "modules": [ … ], "configs": [ … ], "users": [ … ],
   "types": [ … ],                  // section 11; SurrealDB 4.0 DEFINE TYPE; omitted when empty
+  "queries": [ … ],                // section 19; omitted when empty; excluded from the digest
   "diagnostics": [ … ]             // section 14; excluded from the digest
 }
 ```
 
 Rules that apply everywhere:
 
-- Every top-level array is present, even when empty, except `types` (an additive extension,
-  like an access's `authenticate`, section 13): it is omitted when the database defines no
-  type. A document without types is therefore byte-for-byte, and digest-for-digest, what
-  it was before `types` existed, and a reader accepts an older document that lacks it
-  without inserting a default.
+- Every top-level array is present, even when empty, except `types` and `queries` (additive
+  extensions, like an access's `authenticate`, section 13): `types` is omitted when the
+  database defines no type, `queries` when the project sends no typed query. A document
+  without them is therefore byte-for-byte, and digest-for-digest, what it was before they
+  existed, and a reader accepts an older document that lacks them without inserting a
+  default.
 - Properties marked required in the JSON Schema are always present. Optional properties
   are omitted when they do not apply; they are never `null`.
 - There is no generation timestamp and no physical namespace or database in the
@@ -130,7 +133,7 @@ Rules that apply everywhere:
 | --- | --- |
 | `generator` | `{ name: "surrealkit", version, commit? }` |
 | `engine` | `{ version: "3.3.0", build?, mode: "embedded" \| "remote" }`. `version` is the `MAJOR.MINOR.PATCH` part; `build` the full string the engine reports (e.g. `surrealdb-3.2.4+20260803.93ab219`). |
-| `adapter` | `structure-3.2`, `structure-3.3` or `structure-4.0` (section 15), or `info` for the plain-`INFO` fallback (section 1) |
+| `adapter` | `structure-3.2`, `structure-3.3`, `structure-4.0` or `structure-4.1` (section 15), or `info` for the plain-`INFO` fallback (section 1) |
 | `source` | Compile: `{ kind: "compile", modules: [...], files: [{ path, sha256 }] }`. Introspection: `{ kind: "introspect", namespace, database }`. |
 | `capabilities` | `{ experimental: [...], network: false }` — the capabilities the compile engine ran with |
 
@@ -490,13 +493,15 @@ ML feature). Any entry in a category the contract does not model produces warnin
 
 | Collection | Order |
 | --- | --- |
-| tables, functions, params, accesses, analyzers, sequences, buckets, modules, users, types, indexes, events | `name`, byte order |
+| tables, functions, params, accesses, analyzers, sequences, buckets, modules, users, types, indexes, events, query `params` | `name`, byte order |
+| queries | `key`, byte order |
+| query `sources` | `path`, byte order, then `span.start` |
 | apis | `path`; configs: `type` |
 | fields | `path`, compared segment by segment in byte order, a prefix before its extensions |
 | relation `in`/`out`, `record.tables`, `table.tables`, `file.buckets`, `geometry.types`, api `methods`, user `roles`, `provenance.source.modules`, `capabilities.experimental` | sorted, deduplicated |
 | union variants, `literals` values, api `actions`, `diagnostics` | canonical JSON (section 13), byte order |
 | `provenance.source.files` | `path`, byte order |
-| function `args`, tuple `items`, event `then`, analyzer `tokenizers`/`filters`, `enum.labels` | declared order (meaningful) |
+| function `args`, tuple `items`, event `then`, analyzer `tokenizers`/`filters`, `enum.labels`, query `statements` | declared order (meaningful) |
 | literal-object `fields` | `name`, byte order |
 
 "Byte order" is the order of the UTF-8 encodings.
@@ -507,7 +512,7 @@ ML feature). Any entry in a category the contract does not model produces warnin
 
 `projection` removes, and nothing else:
 
-- the top-level `semanticDigest`, `provenance` and `diagnostics`;
+- the top-level `semanticDigest`, `provenance`, `diagnostics` and `queries` (section 19);
 - `define` on every table and field;
 - `value.readsInput` and `assert.recognized` on every field.
 
@@ -550,11 +555,13 @@ by two independent implementations, SurrealKit's (Rust) and `effect-surrealkit`'
 ```jsonc
 { "severity": "error" | "warning" | "info", "code": "kind-unrecognized",
   "table"?: "person", "field"?: ["address", "zip"], "function"?: "fn::greet",
+  "query"?: "ListPeople",
   "source": "<exact text the diagnostic is about>", "span"?: { "start": 0, "end": 4 },
   "reason": "human-readable explanation" }
 ```
 
-`span` is a UTF-8 byte range within `source`. Strict consumers fail on `error`.
+`span` is a UTF-8 byte range within `source`. `query` is the `key` of the query (section 19)
+the diagnostic is about. Strict consumers fail on `error`.
 Generation fails on any `error` unless the project acknowledges that specific code, with a
 reason, in its configuration. Codes are stable identifiers; reasons are not.
 
@@ -569,6 +576,14 @@ reason, in its configuration. Codes are stable identifiers; reasons are not.
 | `object-without-fields` | error | On a SCHEMAFULL table, an `object` field (also under `option`/`\| null`, or the element of an `array`/`set`) that is not FLEXIBLE and has no declared fields. SurrealDB 3.2 and 3.3 refuse every undeclared key of it, so it holds only `{}` (evidence: `semantics/objects.surql`). A FLEXIBLE array opens its elements. |
 | `field-name-run-together` | warning | A top-level field name is an object field's name run straight into a lowercase word (`envelopealgorithm` beside `envelope`): perhaps a child path missing its dot. Heuristic. |
 | `kind-not-represented` | warning | A kind parsed, but names a SurrealDB 4.x kind the reader has no node for (the v1 TypeScript generator reads `date`, `enum<…>` and a type name as `unknown`). A v2 producer with the 4.x nodes never raises it. |
+| `query-name-invalid` | error | A query file's marker names something that is not an identifier (section 19). |
+| `query-name-duplicate` | error | Two named queries share a name. |
+| `query-text-unnamed` | error | A query file has text before its first marker. |
+| `query-text-empty` | error | A query file's marker is followed by no text. |
+| `query-invalid` | error | The engine cannot type a query: it does not parse, or the engine refuses it. |
+| `queries-unsupported-engine` | warning | Queries are configured, but the engine cannot type them (SurrealDB before 4.1); the document has no `queries`. |
+| `query-kind-unrecognized` | warning | The engine typed a query with a kind this SurrealKit does not know; it is `unknown`. |
+| `live-unknown` | warning | The engine reported a live notification `action` or a live `exit` this SurrealKit does not know. An unknown action leaves out that notification; an unknown exit leaves out the statement's `live` and `liveRefusal`. |
 | `definition-unsupported` | warning | INFO returned an entry in a category this contract does not model (e.g. models). |
 | `field-id-clauses-ignored` | warning | `DEFINE FIELD id` carries clauses other than `TYPE`. |
 | `field-computed-kind-undeclared` | warning | `COMPUTED` without `TYPE`. |
@@ -586,12 +601,13 @@ reason, in its configuration. Codes are stable identifiers; reasons are not.
 New codes may be added in minor releases. A consumer MUST treat an unknown code by its
 severity.
 
-## 15. Version adapters: 3.2, 3.3 and 4.0
+## 15. Version adapters: 3.2, 3.3, 4.0 and 4.1
 
 The adapters read the same STRUCTURE shape; differences found by applying the corpus to
 3.2.4, 3.3.0 and 4.0.0 (`introspection/3.2.4`, `introspection/3.3.0` and
 `introspection/4.0.0`, the last from the embedded engine). 4.0 reads as 3.3 does, apart from
-the rows below its own table.
+the rows below its own table. 4.1 reads as 4.0 does: `structure-4.1` is `structure-4.0` under
+its own name, because 4.1 returns the same STRUCTURE keys.
 
 | Area | 3.2.4 | 3.3.0 | Adapter rule |
 | --- | --- | --- | --- |
@@ -719,3 +735,183 @@ decided. The choices below are deliberate:
 | `users` included, without credentials | users left out | They are authored `DEFINE USER` statements. |
 | `models` not modelled | a `models` collection | Rejected by supported engine builds; reported as `definition-unsupported` if seen. |
 | Function args carry `optional` and `omittable` | args as `{ name, kind }` | The engine does not enforce the trailing-optional rule. |
+| `queries` is outside the digest, and reaches only emitters that opt in | a version 3 document | Editing host code must not change the schema's identity, and a strict reader that does not know `queries` keeps working (section 19). |
+
+## 19. Queries
+
+`queries` is the typed result of each query the project sends: the named queries of its query
+files, and the queries its host code passes to a client. It is an additive v2 extension, like
+`types` (section 2): it is present only when the project configures `[typegen.queries]` and at
+least one query was found, and a reader accepts a document without it and inserts no default.
+It is excluded from `semanticDigest` (section 13): editing host code does not change the
+schema's identity. An external emitter receives it only when its configuration opts in
+([external emitters](external-emitters.md#queries)).
+
+The engine types each query against the compiled schema without executing it. An engine that
+cannot type queries (SurrealDB before 4.1) gives no `queries` and the warning
+`queries-unsupported-engine`.
+
+```jsonc
+"queries": [ {
+  "key": "ListPeople",            // the name of a named query; the exact text of an inline one
+  "name": "ListPeople",           // named queries only
+  "text": "SELECT name, age FROM person WHERE age >= $min ORDER BY name;",
+  "sources": [ {
+    "origin": "file",             // "file": a query file; "host": host code
+    "path": "database/queries/people.surql",
+    "span": { "start": 18, "end": 79 },
+    "line": 2, "column": 1
+  } ],
+  "statements": [ {
+    "kind": { "kind": "array", "item": { "kind": "objectLiteral", "fields": [
+      { "name": "age", "kind": { "kind": "int" }, "optional": false },
+      { "name": "name", "kind": { "kind": "string" }, "optional": false } ] } },
+    "optional": false,
+    "certainty": "fact",
+    "exact": true,
+    "open": []
+  } ],
+  "params": [ { "name": "min", "kind": { "kind": "int" }, "optional": false, "required": true } ]
+} ]
+```
+
+| Property | Meaning |
+| --- | --- |
+| `key` | The entry's identity, unique in the array: `name` when the query has one, otherwise `text`, byte for byte. |
+| `name` | A named query's name: an identifier (`[A-Za-z_][A-Za-z0-9_]*`), so a generator can use it as a function or type name as written. |
+| `text` | The query exactly as the engine receives it. For an inline query, each `${…}` substitution of a template literal is the parameter `$__hostN`, numbered from 0 in source order. |
+| `sources` | Where the query comes from, sorted by `path`, then `span.start`. A named query has one; an inline query has one per call site that passes the same text. `path` is relative to the directory the `[typegen.queries]` paths resolve against (the one SurrealKit runs in), `/`-separated. `span` is a UTF-8 byte range in the file: the query text of a named query, the literal's contents for an inline one. `line` and `column` are 1-based, of `span.start`; `column` counts Unicode scalar values. `method` (host only) is the client method the text was passed to. |
+| `statements` | One per top-level statement, in source order: every statement, `BEGIN`, `COMMIT`, `CANCEL`, `USE` and `OPTION` included, has exactly one slot in the response, so `statements[i]` describes slot `i`. |
+| `params` | Each `$name` the query reads without binding it, that is neither a `DEFINE PARAM` nor a session parameter, sorted by name. Names start without `$`. A `__host`-prefixed parameter is filled by the host-language template, not by the caller. |
+| `error` | Present when the engine could not type this query: `{ "code", "message", "span"? }`, the engine's code and message, and `span`, a UTF-8 byte range `[start, end)` within `text` of the part at fault. The entry has empty `statements` and no `params`; the diagnostic `query-invalid` names it. Other entries are unaffected. |
+
+A statement:
+
+| Property | Meaning |
+| --- | --- |
+| `kind` | The kind of the statement's slot in the response (section 4). `BEGIN`, `COMMIT`, `CANCEL`, `LET` and `DEFINE` have a slot of kind `none`. Absent when the engine did not type the statement: the slot is then any value, and `exact` is `false`. |
+| `optional` | The top-level kind admitted NONE. A statement's kind is a top position: NONE is folded into this flag, not into an `option`. |
+| `certainty` | `fact`: an engine invariant guarantees the kind. `hint`: the kind is declared but unproven (a schemaless or `FLEXIBLE` field, a computed field, anything inferred as `any`). |
+| `exact` | `false` when the engine approximated part of the kind with `any`. The kind is still a sound supertype of the result. |
+| `open` | Positions inside `kind` where an object admits undeclared keys, as path segments (section 6): `[]` is the kind itself, `"*"` steps into an array or set element, any other segment is an object-literal field. A path passes through `option` and `union`. |
+| `live` | What a live subscription to the statement delivers (below). Present on every top-level `SELECT` that `LIVE SELECT` can run, computed as if the statement began with `LIVE`, and on a `LIVE SELECT` statement. Its `kind` stays the `SELECT`'s result, or `uuid` for a `LIVE SELECT`. Absent on other statements and on a nested `SELECT`. |
+| `liveRefusal` | Present when `LIVE SELECT` cannot run the `SELECT` as written (below). |
+
+Each statement's kind assumes that every earlier statement of the query succeeded. After a
+statement fails, the kinds of the statements after it are not guaranteed.
+
+A parameter has `name`, `kind` (absent when nothing constrains it), `optional` (the kind
+admitted NONE, folded as for a statement) and `required` (the caller must bind it). A
+parameter's kind is inferred from how the query uses it, so it is always a hint.
+
+Kinds are v2 kinds, so they carry what any target language needs: an `int`'s `width` and
+`signed`, an `enum`'s labels in order, and a `named` kind that refers to `types`. A kind this
+SurrealKit does not know is `unknown`, with the warning `query-kind-unrecognized`.
+
+### Live subscriptions
+
+A statement's `live` describes the subscription that its `live.query` opens:
+
+```jsonc
+"live": {
+  "diff": false,                     // true: the value of a notification is a patch array
+  "query": "LIVE SELECT * FROM user WHERE team = $team",
+  "exit": "silent",                  // only with a WHERE
+  "watch": "LIVE SELECT id FROM user",   // only with exit "silent"
+  "notifications": [ {
+    "action": "CREATE",              // CREATE, UPDATE, DELETE, KILLED, in this order
+    "record": { "kind": "record", "tables": ["user"] },
+    "result": { "kind": "objectLiteral", "fields": [ … ] },
+    "certainty": "fact",
+    "open": []
+  } ]
+}
+```
+
+| Property | Meaning |
+| --- | --- |
+| `diff` | Whether the subscription delivers patches (`LIVE SELECT DIFF`): each notification's `result` is then the patch array's kind. |
+| `query` | The text to subscribe with. For a `SELECT` with a windowable `liveRefusal`, it is the reduced query: the `SELECT` without the refused clauses. |
+| `exit` | How a record that stops matching the `WHERE` is reported: `delete` as a `DELETE` notification, `silent` not at all. Absent without a `WHERE`. |
+| `watch` | With `exit: "silent"`, the text that watches the same targets without the `WHERE`, which a client uses to see the records that leave the filter. |
+| `notifications` | One per action the subscription can deliver, ordered CREATE, UPDATE, DELETE, KILLED. `record` is the kind of the record id and `result` the kind of the value; both are value kinds, so a NONE variant is an `option`. `open` is a statement's `open` for `result`. `KILLED` ends the subscription and carries no record. |
+
+A `liveRefusal` is `{ "code", "message", "clauses", "windowable" }`: the engine's code and message,
+and the clauses `LIVE SELECT` does not accept (`ORDER BY`, `LIMIT`, `ONLY`, …). With `windowable: true`
+the `SELECT` can still be served by watching the reduced query and running the `SELECT` again on
+each change, and the statement carries both `liveRefusal` and the `live` of the reduced query. With
+`windowable: false` it cannot, and there is no `live`.
+
+### Query files
+
+A query file is a `.surql` file under a directory listed in `[typegen.queries] files`. It
+holds named queries, each introduced by a marker comment on a line of its own:
+
+```surql
+-- name: ListPeople
+SELECT name, age FROM person WHERE age >= $min ORDER BY name;
+
+-- name: GetPerson
+-- Comments after the marker are part of the query text.
+SELECT * FROM ONLY $id;
+```
+
+A query's text runs from the line after its marker to the next marker or the end of the
+file, without leading and trailing whitespace, and with CRLF line endings read as LF.
+`span` is the range of that text in the file's bytes. Before the first marker the file holds
+only whitespace and line comments (`--`, `#`, `//`). A query may have several statements; it is one entry, with one
+`statements` item each. The marker is `--`, optional spaces, `name:`, optional spaces, and
+the name; nothing else follows it on the line.
+
+Errors, each with the offending line as `source`, the offending text's `span` in it, and the
+file and line in `reason`:
+
+| Code | When |
+| --- | --- |
+| `query-name-invalid` | A marker's name is not an identifier. |
+| `query-name-duplicate` | Two named queries share a name, in one file or across files. |
+| `query-text-unnamed` | A file has a statement before its first marker. |
+| `query-text-empty` | A marker is followed by no text. |
+| `query-invalid` | The engine cannot type the query (it does not parse, or the engine refuses it). The entry carries the engine's `error`; the diagnostic's `reason` holds its code and message, `source` is the query text and `span` the engine's, when it gave one. |
+
+A diagnostic about one query names it with `"query": "<key>"`.
+
+### What a generator does with an entry (informative)
+
+The entry is enough to generate a typed function in any language. A Go emitter in the style
+of sqlc turns `ListPeople` into:
+
+```go
+type ListPeopleRow struct {
+	Age  int64  `json:"age"`
+	Name string `json:"name"`
+}
+
+func (q *Queries) ListPeople(ctx context.Context, min int64) ([]ListPeopleRow, error)
+```
+
+`name` is the method and gives the row type its name. The statement's `array` kind makes the
+result a slice, and the `objectLiteral` item gives the row struct. An `int` without a width is
+`int64`. The sole required parameter is an argument; with more than one, a generator would use
+a `ListPeopleParams` struct in `params` order. A statement that is `optional` returns a pointer.
+
+A Python emitter writes `.pyi` overloads keyed by `text`, for inline queries and named ones
+alike:
+
+```python
+class ListPeopleRow(TypedDict):
+    age: int
+    name: str
+
+@overload
+async def query(
+    self,
+    query: Literal["SELECT name, age FROM person WHERE age >= $min ORDER BY name;"],
+    vars: ListPeopleParams,
+) -> tuple[list[ListPeopleRow]]: ...
+```
+
+The result is a tuple with one item for each statement, `Any` for one without a `kind`. A
+statement that is `optional` adds `None`, and a parameter that is not `required` becomes a
+`NotRequired` key.
+`open` paths make a row a plain `dict[str, Any]`, or a `TypedDict` with `extra_items`.

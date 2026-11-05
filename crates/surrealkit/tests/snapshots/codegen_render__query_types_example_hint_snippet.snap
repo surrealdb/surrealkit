@@ -1,0 +1,8 @@
+---
+source: crates/surrealkit/tests/codegen_render.rs
+expression: report.snippet
+---
+import type { DateTime } from "surrealdb";
+
+export type ByExample = [Array<{ [key: string]: unknown }>];
+export type ByExampleParams = { who: string; since: DateTime };

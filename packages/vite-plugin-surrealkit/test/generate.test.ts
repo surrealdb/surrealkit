@@ -1,3 +1,6 @@
+import fs from 'node:fs';
+import path from 'node:path';
+
 import { build, createServer, type Plugin, type ViteDevServer } from 'vite';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -314,6 +317,132 @@ describe('generate mode (dev server)', () => {
 			'the failed generation',
 		);
 		await sleep(200);
+		expect(reloads(payloads)).toBe(0);
+	});
+});
+
+describe('generate mode (generated files changed from outside)', () => {
+	const outside = (relative: string, contents: string) => {
+		if (!fixture) throw new Error('fixture not created');
+		fixture.write(relative, contents);
+	};
+
+	it('sends one full reload for a write to a generated file', async () => {
+		fixture = createFixture();
+		const devServer = await startServer({
+			generatedDirs: ['src/generated'],
+		});
+		const payloads = recordPayloads(devServer);
+		await settleWatcher();
+
+		outside(fixture.generatedFile, 'export const v = 1;\n');
+		await waitFor(() => reloads(payloads) === 1, 'a full reload');
+		await sleep(300);
+		expect(reloads(payloads)).toBe(1);
+		// The plugin did not generate.
+		expect(fixture.invocations()).toEqual(['compile']);
+	});
+
+	it('sends one full reload for a burst of generated files', async () => {
+		fixture = createFixture();
+		const devServer = await startServer({
+			generatedDirs: ['src/generated'],
+			debounceMs: 150,
+		});
+		const payloads = recordPayloads(devServer);
+		await settleWatcher();
+
+		for (const name of ['a', 'b', 'c', 'd']) {
+			outside(`src/generated/${name}.ts`, `export const ${name} = 1;\n`);
+		}
+		await waitFor(() => reloads(payloads) === 1, 'a full reload');
+		await sleep(400);
+		expect(reloads(payloads)).toBe(1);
+	});
+
+	it('does not reload for a generated file whose bytes did not change', async () => {
+		fixture = createFixture();
+		const file = path.join(fixture.root, fixture.generatedFile);
+		const contents = 'export const v = 1;\n';
+		outside(fixture.generatedFile, contents);
+		const stamp = new Date('2024-01-01T00:00:00Z');
+		fs.utimesSync(file, stamp, stamp);
+		const devServer = await startServer({
+			generatedDirs: ['src/generated'],
+		});
+		const payloads = recordPayloads(devServer);
+		await settleWatcher();
+
+		// An emitter leaves unchanged bytes alone, mtime included; the watcher
+		// may still announce the file again.
+		fs.writeFileSync(file, contents);
+		fs.utimesSync(file, stamp, stamp);
+		devServer.watcher.emit('change', file);
+		devServer.watcher.emit('add', file);
+		await sleep(400);
+		expect(reloads(payloads)).toBe(0);
+
+		// Changed bytes do reload.
+		fs.writeFileSync(file, 'export const v = 2;\n');
+		await waitFor(() => reloads(payloads) === 1, 'a full reload');
+	});
+
+	it("sends no extra reload for the plugin's own generation", async () => {
+		fixture = createFixture();
+		fixture.publish('export const v = 1;\n');
+		const devServer = await startServer({
+			generatedDirs: ['src/generated'],
+		});
+		const payloads = recordPayloads(devServer);
+		await settleWatcher();
+
+		fixture.publish('export const v = 2;\n');
+		fixture.write('database/schema/user.surql', 'DEFINE TABLE v2;\n');
+		await waitFor(() => reloads(payloads) === 1, 'a full reload');
+		await sleep(500);
+		expect(reloads(payloads)).toBe(1);
+		expect(fixture.invocations()).toEqual(['compile', 'compile']);
+	});
+
+	it('sends no extra reload when the generation outlasts the debounce window', async () => {
+		fixture = createFixture();
+		fixture.publish('export const v = 1;\n');
+		const devServer = await startServer({
+			generatedDirs: ['src/generated'],
+		});
+		const payloads = recordPayloads(devServer);
+		await settleWatcher();
+
+		fixture.sleepFor(0.4);
+		fixture.publish('export const v = 2;\n');
+		fixture.write('database/schema/user.surql', 'DEFINE TABLE slow;\n');
+		await waitFor(() => reloads(payloads) === 1, 'a full reload');
+		await sleep(500);
+		expect(reloads(payloads)).toBe(1);
+	});
+
+	it('does not reload for outside writes in sync mode', async () => {
+		fixture = createFixture();
+		const devServer = await createServer({
+			configFile: false,
+			root: fixture.root,
+			logLevel: 'silent',
+			appType: 'spa',
+			plugins: [
+				surrealkitPlugin({
+					binary: fixture.binary,
+					env: fixture.env,
+					debounceMs: 20,
+					reloadOnSync: true,
+				}),
+			],
+		});
+		server = devServer;
+		const payloads = recordPayloads(devServer);
+		await settleWatcher();
+
+		outside(fixture.generatedFile, 'export const v = 1;\n');
+		await sleep(400);
 		expect(reloads(payloads)).toBe(0);
 	});
 });
