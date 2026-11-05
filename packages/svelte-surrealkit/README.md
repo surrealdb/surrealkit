@@ -92,7 +92,7 @@ To use the same rows in a component and elsewhere (a tab count, a derived map), 
 </LiveQuery>
 ```
 
-`createQuery` handles work the same way with `<Query>`. When `q` is a handle, the handle's own parameters, client and `enabled` apply, and the component's are ignored.
+`createQuery` handles work the same way with `<Query>`. A handle carries its own parameters, so `params` beside it is a type error. Its own client and `enabled` apply too, and the component's are ignored.
 
 `bind:rows` (and `bind:data`) also exposes the rows, but the bound variable must be declared with the query's row type, which repeats the query text: `let cards: LiveRowOf<"SELECT …">[] = $state([])`. Svelte cannot infer it from the binding. Prefer the handle.
 

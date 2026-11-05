@@ -34,27 +34,20 @@
 	`bind:rows` exposes the same rows outside the snippets (a tab count, a
 	derived map), from the same live query.
 -->
-<script lang="ts" generics="Q extends QueryText">
+<script lang="ts" generics="S extends LiveSource">
 	import type {
 		LiveRowOf,
-		LiveText,
-		ParamsProp,
 		Preloaded,
-		QueryText,
 		SurrealLike,
 		SurrealQueryError,
 	} from 'surrealkit-query';
 	import type { Snippet } from 'svelte';
 
-	import { handle, isHandle, type LiveHandle } from './runes.svelte.js';
+	import type { LiveGuard, LiveSource, ParamsFor, TextOf } from './props.js';
+	import { handle, isHandle } from './runes.svelte.js';
 	import type { QueryViewState } from './state.js';
 
-	type Props = {
-		/**
-		 * The SELECT to make live, a payload from `preload`, or a handle from
-		 * `createLive`, whose query this component then shows.
-		 */
-		q: LiveText<Q> | Preloaded<Q> | LiveHandle<LiveRowOf<Q>, Q>;
+	type Common = {
 		/** The client to use instead of the one `setSurreal` provided. */
 		client?: SurrealLike | undefined;
 		/**
@@ -73,7 +66,11 @@
 		loading?: Snippet;
 		/** Rendered on failure. */
 		error?: Snippet<[SurrealQueryError]>;
-	} & ParamsProp<Q>;
+	};
+
+	type Q = TextOf<S>;
+
+	type Props = Common & { q: S & LiveGuard<S> } & ParamsFor<S>;
 
 	let {
 		q,
@@ -94,7 +91,7 @@
 		? q
 		: handle(
 				'live',
-				() => q as string | Preloaded<Q>,
+				() => q as string | Preloaded,
 				() => params,
 				client
 					? { client, enabled: () => enabled }

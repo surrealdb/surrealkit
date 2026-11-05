@@ -41,6 +41,8 @@
 
 	let kinds: Array<{ kind: string }> = $state([]);
 	const eventKinds = createLive('SELECT kind FROM event');
+	const byNameLive = createLive(BY_NAME, () => ({ name, limit }));
+	const byNameOnce = createQuery(BY_NAME, () => ({ name, limit }));
 	let wrong: number[] = $state([]);
 	let alice: DataOf<'SELECT * FROM ONLY user:alice'> = $state();
 	createLive(() => posts).data satisfies Array<{ kind: string }>;
@@ -131,3 +133,17 @@
 		{rows.map((row) => row.nope)}
 	{/snippet}
 </LiveQuery>
+<LiveQuery q={byNameLive}>
+	{#snippet children(rows)}
+		{rows.map((row) => row.email satisfies string)}
+	{/snippet}
+</LiveQuery>
+<Query q={byNameOnce}>
+	{#snippet children(rows)}
+		{rows.map((row) => row.email satisfies string)}
+	{/snippet}
+</Query>
+<!-- expect-error: is not assignable to type 'undefined' -->
+<LiveQuery q={byNameLive} params={{ name, limit }} />
+<!-- expect-error: is not assignable to type 'undefined' -->
+<Query q={byNameOnce} params={{ name, limit }} />

@@ -31,26 +31,20 @@
 
 	`bind:data` exposes the same result outside the snippets.
 -->
-<script lang="ts" generics="Q extends QueryText">
+<script lang="ts" generics="S extends QuerySource">
 	import type {
 		DataOf,
-		ParamsProp,
 		Preloaded,
-		QueryText,
 		SurrealLike,
 		SurrealQueryError,
 	} from 'surrealkit-query';
 	import type { Snippet } from 'svelte';
 
-	import { handle, isHandle, type QueryHandle } from './runes.svelte.js';
+	import type { ParamsFor, QuerySource, TextOf } from './props.js';
+	import { handle, isHandle } from './runes.svelte.js';
 	import type { QueryViewState } from './state.js';
 
-	type Props = {
-		/**
-		 * The query text, a payload from `preload`, or a handle from
-		 * `createQuery`, whose query this component then shows.
-		 */
-		q: Q | Preloaded<Q> | QueryHandle<DataOf<Q>, Q>;
+	type Common = {
 		/** The client to use instead of the one `setSurreal` provided. */
 		client?: SurrealLike | undefined;
 		/**
@@ -69,7 +63,11 @@
 		loading?: Snippet;
 		/** Rendered on failure. */
 		error?: Snippet<[SurrealQueryError]>;
-	} & ParamsProp<Q>;
+	};
+
+	type Q = TextOf<S>;
+
+	type Props = Common & { q: S } & ParamsFor<S>;
 
 	let {
 		q,
@@ -90,7 +88,7 @@
 		? q
 		: handle(
 				'query',
-				() => q as string | Preloaded<Q>,
+				() => q as string | Preloaded,
 				() => params,
 				client
 					? { client, enabled: () => enabled }
