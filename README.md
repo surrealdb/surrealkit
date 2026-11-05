@@ -759,6 +759,15 @@ below 10000 is its letter and four digits (`E1002`); from 10000 up, its letter a
 of them, but the policy keys below already accept them. Two spellings of one number are one
 code: `E1002`, `L1002` and `1002` are the same key.
 
+The certainty family, `C` for `10xxx`, has a rollup, `C10001` (a statement's result depends on
+undeclared or FLEXIBLE fields, links that may dangle, cross-statement narrowing, or an
+approximated construct), and the details `C10002` (an undeclared-field read), `C10003` (a link
+read that may dangle), `C10004` (cross-statement narrowing) and `C10005` (a `LIVE SELECT … WHERE`
+is not notified when a record leaves the filter). All five default to allow, and are hints when
+turned on. `"10xxx" = "warn"` turns on the rollup and the details, while `C10001 = "warn"` turns
+on the rollup alone. Like the other engine families, these findings come from the engine's
+checker in SurrealDB 4.1; this build reports none of them.
+
 **Policy: `[analyze]` in `surrealkit.toml`.** The section parses in every build, with or
 without the `analyze` feature.
 
