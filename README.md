@@ -770,6 +770,19 @@ with `warn` reports it as a warning, and `deny` as an error. `"10xxx" = "warn"` 
 rollup and the details, while `C10001 = "warn"` turns on the rollup alone. Like the other engine families, these findings come from the engine's
 checker in SurrealDB 4.1; this build reports none of them.
 
+The performance family, `P` for `14xxx`, holds the engine's query planner findings about queries
+that will not use the schema's indexes well. `P14001` (a table is scanned in full although an
+index covers a `WHERE` condition; it names the index), `P14002` (an indexed field is compared
+with a value or param whose kind cannot match the index key) and `P14003` (`ORDER BY … LIMIT`
+sorts although an index on the order key would serve it; it names the index) are warnings by
+default. `P14004` (a `FETCH`, record dereference or graph step is evaluated once per row of a
+scan, the N+1 shape) and `P14005` (a `SELECT *` whose result is used through only a few fields)
+are off by default (allow), and are hints at their default severity. An explicit `warn` reports
+a warning, even for a hint, and `deny` an error. The planner runs only when the policy reports
+`P14001`, `P14003` or `P14004`, so `"14xxx" = "allow"`, or allowing those three, skips the
+planning work. Like the other engine families, these findings come from the engine's checker in
+SurrealDB 4.1; this build reports none of them.
+
 **Policy: `[analyze]` in `surrealkit.toml`.** The section parses in every build, with or
 without the `analyze` feature.
 
