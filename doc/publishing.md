@@ -120,18 +120,27 @@ below.
 
 ## Security and prerequisites
 
-The bucket's credentials are the organisation secrets `AMAZON_ACCESS_KEY` and
-`AMAZON_SECRET_KEY`, shared with this repository. Only the one job that
-uploads names them, and it runs no compiler: the builds run `build.rs` for the
-whole dependency graph, which is arbitrary code from crates.io, and hold no
-credential. The workflow's token is read-only except in the job that writes the
-GitHub release.
+The bucket is reached through the IAM role
+`gh-publish-surrealdb-surrealkit` in the legacy AWS account (857808225976),
+assumed through GitHub OIDC; no static credential exists. Only the one job that
+uploads, `kit-publish`, assumes it, and it runs no compiler: the builds run
+`build.rs` for the whole dependency graph, which is arbitrary code from
+crates.io, and hold no credential. The workflow's token is read-only except in
+the job that writes the GitHub release and the OIDC token `kit-publish` requests.
 
-The key behind those secrets must be able to write `download.surrealdb.com/cli/kit/*`,
-and list and read that prefix and write the same prefix in each of the eleven
-regional buckets `propagate-kit` syncs to. A rehearsal cannot check this; a
-publish that is refused part-way through its uploads leaves the version
-needing its partial keys deleted (see republish protection above).
+The role trusts only `release-binaries.yml` running on a `refs/tags/v*` tag in
+the `release` environment. That environment admits only `v*` tags, and a tag
+ruleset on `refs/tags/v*` decides who may create, move or delete one, so it is
+the ruleset that decides who can publish. The role is defined in
+surrealdb/platform (`infra/pulumi/legacy`).
 
-If either secret stops reaching this repository, the publish fails at its
-first upload, after the GitHub release has been written.
+The role can write `download.surrealdb.com/cli/kit/*`, list and read that
+prefix, and list and write the same prefix in each of the eleven regional
+buckets `propagate-kit` syncs to; nothing else, and no deletes. A rehearsal
+cannot check this; a publish that is refused part-way through its uploads
+leaves the version needing its partial keys deleted (see republish protection
+above).
+
+If the role cannot be assumed (the environment missing, the tag outside `v*`,
+the role changed), the publish fails at its first AWS step, after the GitHub
+release has been written.

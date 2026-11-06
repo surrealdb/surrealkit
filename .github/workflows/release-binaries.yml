@@ -342,14 +342,19 @@ jobs:
                   generate_release_notes: true
                   fail_on_unmatched_files: true
 
-    # The only job that names the bucket's credentials, the organisation's
-    # AMAZON_ACCESS_KEY and AMAZON_SECRET_KEY, and it runs no compiler; see
+    # The only job that can reach the bucket, and it runs no compiler: it
+    # assumes the publish role through GitHub OIDC, which trusts only this
+    # workflow on a `v*` tag in the `release` environment; see
     # doc/publishing.md.
     kit-publish:
         name: Publish surreal-kit to download.surrealdb.com
         if: startsWith(github.ref, 'refs/tags/')
         needs: [kit-prepare, build]
         runs-on: ubuntu-22.04
+        environment: release
+        permissions:
+            contents: read
+            id-token: write
         steps:
             - name: Checkout
               uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -400,13 +405,11 @@ jobs:
                   latest: ${{ needs.kit-prepare.outputs.latest }}
                   major: ${{ needs.kit-prepare.outputs.major }}
                   publish: "true"
-                  aws-access-key-id: ${{ secrets.AMAZON_ACCESS_KEY }}
-                  aws-secret-access-key: ${{ secrets.AMAZON_SECRET_KEY }}
+                  role-to-assume: arn:aws:iam::857808225976:role/gh-publish-surrealdb-surrealkit
 
             - uses: ./.github/actions/propagate-kit
               with:
-                  aws-access-key-id: ${{ secrets.AMAZON_ACCESS_KEY }}
-                  aws-secret-access-key: ${{ secrets.AMAZON_SECRET_KEY }}
+                  role-to-assume: arn:aws:iam::857808225976:role/gh-publish-surrealdb-surrealkit
 
     # Split from `kit-publish` rather than gated inside it, so a rehearsal runs
     # every validation with no credential passed at all.
