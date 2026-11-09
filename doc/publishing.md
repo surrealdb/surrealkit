@@ -129,7 +129,9 @@ crates.io, and hold no credential. The workflow's token is read-only except in
 the job that writes the GitHub release and the OIDC token `kit-publish` requests.
 
 The role trusts only `release-binaries.yml` running on a `refs/tags/v*` tag in
-the `release` environment. That environment admits only `v*` tags, and a tag
+the `release` environment. That environment admits only `v*` tags (which
+include `vite-plugin-v*`; `kit-prepare` fails on any tag that is not
+`v<version>`, so those never reach `kit-publish`), and a tag
 ruleset on `refs/tags/v*` decides who may create, move or delete one, so it is
 the ruleset that decides who can publish. The role is defined in
 surrealdb/platform (`infra/pulumi/legacy`).
@@ -142,5 +144,5 @@ leaves the version needing its partial keys deleted (see republish protection
 above).
 
 If the role cannot be assumed (the environment missing, the tag outside `v*`,
-the role changed), the publish fails at its first AWS step, after the GitHub
-release has been written.
+the role changed), the publish fails at its first AWS step; the GitHub release,
+written by a job running alongside it, may already exist.
