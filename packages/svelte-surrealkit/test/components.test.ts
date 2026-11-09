@@ -187,7 +187,7 @@ describe('setSurreal live', () => {
 });
 
 describe('<LiveQuery> rows, empty and state', () => {
-	it('exposes rows with bind:rows from the same live query', async () => {
+	it('exposes rows with bind:data from the same live query', async () => {
 		const db = database();
 		render(Extras, { db, q: 'SELECT * FROM user' });
 		await settle();

@@ -9,10 +9,18 @@ export {
 	type QueryCache,
 	type QueryStatus,
 	type QueryText,
+	type QueryViewState,
 	type Register,
 	type SurrealLike,
 	SurrealQueryError,
 } from 'surrealkit-query';
+export {
+	type LiveProp,
+	LiveQuery,
+	Query,
+	type QueryProp,
+	type ViewProps,
+} from './components.js';
 export {
 	SurrealProvider,
 	type SurrealProviderProps,

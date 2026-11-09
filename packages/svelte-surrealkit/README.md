@@ -49,7 +49,14 @@ Peer dependencies: `svelte` 5.7 or later, and `surrealdb` 2.1.1 or later.
 
 ## Components
 
-`<Query>` runs a query once. `<LiveQuery>` keeps the rows current.
+`<Query>` runs a query once. `<LiveQuery>` keeps the rows current. They take the same props and snippets, so switching one for the other is a one-word change. The differences are only the ones live and one-shot need:
+
+| | `<Query>` | `<LiveQuery>` |
+| --- | --- | --- |
+| `q` | Any registered query | A single `SELECT` whose result is an array of rows (others are a type error) |
+| `data` before the first result | `undefined` | `[]` |
+| Updates | Runs once per query and parameters; `refetch()` on a handle runs it again | Follows every change to the records, by record id or by running the `SELECT` again |
+| Handle for `q` | `createQuery` | `createLive` |
 
 | Prop | Purpose |
 | --- | --- |
@@ -61,7 +68,7 @@ Peer dependencies: `svelte` 5.7 or later, and `surrealdb` 2.1.1 or later.
 | `error` | A snippet that gets a `SurrealQueryError`. |
 | `select` | A function that maps the rows (or result) before `children` and the `empty` check: a filter, a sort, a grouping. `children` gets its typed return value. |
 | `bind:selected` | What `select` returned (or the rows or result, without `select`), updated with what `children` renders: for a "N shown" count outside the component. |
-| `bind:rows` (`<LiveQuery>`), `bind:data` (`<Query>`) | The same rows or result, outside the snippets: for a tab count or a derived map. They come from the component's own query, so there is no second live query. |
+| `bind:data` | The same rows or result, outside the snippets: for a tab count or a derived map. They come from the component's own query, so there is no second live query. |
 | `enabled` | While `false`, nothing subscribes and nothing renders. Default `true`. |
 | `client` | A client to use instead of the one from `setSurreal`. |
 
@@ -96,13 +103,13 @@ To use the same rows in a component and elsewhere (a tab count, a derived map), 
 
 `createQuery` handles work the same way with `<Query>`. A handle carries its own parameters, so `params` beside it is a type error. Its own client and `enabled` apply too, and the component's are ignored.
 
-`bind:rows` (and `bind:data`) also exposes the rows, but the bound variable must be declared with the query's row type, which repeats the query text: `let cards: LiveRowOf<"SELECT …">[] = $state([])`. Svelte cannot infer it from the binding. Prefer the handle.
+`bind:data` also exposes the rows, but the bound variable must be declared with the query's row type, which repeats the query text: `let cards: LiveRowOf<"SELECT …">[] = $state([])`. Svelte cannot infer it from the binding. Prefer the handle.
 
 > NOTE: Keep the query text a literal at the call (`createLive("…")`, `q="…"`). SurrealKit types the queries it finds as literals; it does not follow a constant, so `const Q = "…"` with `q={Q}` is not typed.
 
 ### Turning a query off
 
-`enabled={false}` stops the component's query: nothing subscribes, nothing renders, and `bind:rows` is `[]` (`bind:data` is `undefined`). Set it back to `true` and the query starts again. The runes take the same option as a getter: `createLive(q, params, { enabled: () => signedIn })`.
+`enabled={false}` stops the component's query: nothing subscribes, nothing renders, and `bind:data` is `[]` (`<LiveQuery>`) or `undefined` (`<Query>`). Set it back to `true` and the query starts again. The runes take the same option as a getter: `createLive(q, params, { enabled: () => signedIn })`.
 
 ### Filtering, sorting and grouping rows
 
@@ -116,7 +123,7 @@ To use the same rows in a component and elsewhere (a tab count, a derived map), 
 </LiveQuery>
 ```
 
-`select` re-runs when the rows change, or when a value it reads changes (`source` above). `bind:rows` still gets the rows as they came.
+`select` re-runs when the rows change, or when a value it reads changes (`source` above). `bind:data` still gets the rows as they came.
 
 To use the selected rows outside the component too (a "12 shown" header, counts on filter chips), bind them with `bind:selected`. Define `select` once, and type the bound variable by its return value. Type the function's parameter by the handle's rows, so the query text is not repeated:
 

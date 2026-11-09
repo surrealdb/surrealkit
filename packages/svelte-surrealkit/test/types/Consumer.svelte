@@ -113,7 +113,7 @@
 		{rows.length}
 	{/snippet}
 </LiveQuery>
-<LiveQuery q="SELECT kind FROM event" bind:rows={kinds}>
+<LiveQuery q="SELECT kind FROM event" bind:data={kinds}>
 	{#snippet children(rows, state)}
 		{rows.length}{state.stale satisfies boolean}{state.error?.code}
 	{/snippet}
@@ -121,10 +121,10 @@
 		nothing
 	{/snippet}
 </LiveQuery>
-<LiveQuery q="SELECT kind FROM event" bind:rows={kinds} />
+<LiveQuery q="SELECT kind FROM event" bind:data={kinds} />
 <Query q="SELECT * FROM ONLY user:alice" bind:data={alice} />
 <!-- expect-error: Type 'number[]' is not assignable to type '{ kind: string; }[]' -->
-<LiveQuery q="SELECT kind FROM event" bind:rows={wrong} />
+<LiveQuery q="SELECT kind FROM event" bind:data={wrong} />
 <LiveQuery q={eventKinds}>
 	{#snippet children(rows)}
 		{rows.map((row) => row.kind satisfies string)}

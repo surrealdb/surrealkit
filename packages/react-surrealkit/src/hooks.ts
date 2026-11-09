@@ -49,7 +49,9 @@ import {
 import { useSurreal } from './context.js';
 
 /** A query's state. */
-export interface QueryResult<T> {
+export interface QueryResult<T, Q extends string = string> {
+	/** The query text, typed as written, so `<Query q={result}>` is typed by it. */
+	readonly text: Q;
 	/** The result, once there is one. */
 	readonly data: T | undefined;
 	readonly error: SurrealQueryError | undefined;
@@ -67,7 +69,8 @@ export interface QueryResult<T> {
 }
 
 /** A live query's state. `data` is always the current rows. */
-export interface LiveResult<Row> extends Omit<QueryResult<Row[]>, 'data'> {
+export interface LiveResult<Row, Q extends string = string>
+	extends Omit<QueryResult<Row[], Q>, 'data'> {
 	/** The current rows, `[]` until the first snapshot. */
 	readonly data: Row[];
 }
@@ -92,8 +95,8 @@ export type HookArgs<Q extends string> =
 export function useQuery<Q extends QueryText>(
 	q: Q | Preloaded<Q>,
 	...args: HookArgs<Q>
-): QueryResult<DataOf<Q>> {
-	return useEntry('query', q, args[0], args[1]) as QueryResult<DataOf<Q>>;
+): QueryResult<DataOf<Q>, Q> {
+	return useEntry('query', q, args[0], args[1]) as QueryResult<DataOf<Q>, Q>;
 }
 
 /**
@@ -104,8 +107,8 @@ export function useQuery<Q extends QueryText>(
 export function useLive<Q extends QueryText>(
 	q: LiveText<Q> | Preloaded<Q>,
 	...args: HookArgs<Q>
-): LiveResult<LiveRowOf<Q>> {
-	return useEntry('live', q, args[0], args[1]) as LiveResult<LiveRowOf<Q>>;
+): LiveResult<LiveRowOf<Q>, Q> {
+	return useEntry('live', q, args[0], args[1]) as LiveResult<LiveRowOf<Q>, Q>;
 }
 
 type Kind = 'query' | 'live';
@@ -120,7 +123,8 @@ const idleSnapshot = () => IDLE;
 
 const browser = typeof document !== 'undefined';
 
-function useEntry(
+/** @internal Shared by the hooks and the components. */
+export function useEntry(
 	kind: Kind,
 	q: string | Preloaded,
 	params: object | undefined,
@@ -193,6 +197,7 @@ function useEntry(
 	}
 
 	return {
+		text,
 		data: kind === 'live' ? (state.data ?? []) : state.data,
 		error: state.error,
 		status: state.status,

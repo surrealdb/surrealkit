@@ -31,21 +31,22 @@
 	With no `loading` or `error` snippet, nothing renders until there are rows,
 	which is what a `<LiveQuery>` inside a `<select>` needs.
 
-	`bind:rows` exposes the same rows outside the snippets (a tab count, a
+	`bind:data` exposes the same rows outside the snippets (a tab count, a
 	derived map), from the same live query.
 -->
 <script lang="ts" generics="S extends LiveProp, R = LiveRowOf<TextOf<S>>[]">
 	import type {
 		LiveRowOf,
 		Preloaded,
+		QueryViewState,
 		SurrealLike,
 		SurrealQueryError,
 	} from 'surrealkit-query';
+	import { isEmptyResult } from 'surrealkit-query';
 	import type { Snippet } from 'svelte';
 
 	import type { LiveGuard, LiveProp, ParamsFor, TextOf } from './props.js';
 	import { handle, isHandle } from './runes.svelte.js';
-	import type { QueryViewState } from './state.js';
 
 	type Common = {
 		/** The client to use instead of the one `setSurreal` provided. */
@@ -56,11 +57,11 @@
 		 * `true`. Ignored when `q` is a handle, which has its own `enabled`.
 		 */
 		enabled?: boolean;
-		/** The current rows, `[]` until the first snapshot; for `bind:rows`. */
-		rows?: LiveRowOf<Q>[];
+		/** The current rows, `[]` until the first snapshot; for `bind:data`. */
+		data?: LiveRowOf<Q>[];
 		/**
 		 * Maps the rows before `children` and the `empty` check: a filter, a
-		 * sort, a grouping. `bind:rows` still gets the rows as they came.
+		 * sort, a grouping. `bind:data` still gets the rows as they came.
 		 */
 		select?: (rows: LiveRowOf<Q>[]) => R;
 		/**
@@ -87,7 +88,7 @@
 		params,
 		client,
 		enabled = true,
-		rows = $bindable(),
+		data = $bindable(),
 		selected = $bindable(),
 		select,
 		children,
@@ -123,12 +124,10 @@
 	);
 
 	const shown = $derived((select ? select(current) : current) as R);
-	const isEmpty = $derived(
-		shown == null || (Array.isArray(shown) && shown.length === 0),
-	);
+	const isEmpty = $derived(isEmptyResult(shown));
 
 	$effect.pre(() => {
-		rows = current;
+		data = current;
 		selected = shown;
 	});
 

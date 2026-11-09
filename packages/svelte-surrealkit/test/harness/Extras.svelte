@@ -23,7 +23,7 @@
 </script>
 
 <p data-testid="count">{rows.length}</p>
-<LiveQuery {q} {params} bind:rows />
+<LiveQuery {q} {params} bind:data={rows} />
 <LiveQuery {q} {params}>
 	{#snippet children(list, state)}
 		<ul data-stale={String(state.stale)}>

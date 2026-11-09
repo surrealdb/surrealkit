@@ -11,6 +11,7 @@ export {
 	type QueryCacheOptions,
 	type QueryStatus,
 	type QueryText,
+	type QueryViewState,
 	type Register,
 	type SurrealLike,
 	SurrealQueryError,
@@ -28,4 +29,3 @@ export {
 	type QueryHandle,
 	type QuerySource,
 } from './runes.svelte.js';
-export type { QueryViewState } from './state.js';

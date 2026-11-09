@@ -35,14 +35,15 @@
 	import type {
 		DataOf,
 		Preloaded,
+		QueryViewState,
 		SurrealLike,
 		SurrealQueryError,
 	} from 'surrealkit-query';
+	import { isEmptyResult } from 'surrealkit-query';
 	import type { Snippet } from 'svelte';
 
 	import type { ParamsFor, QueryProp, TextOf } from './props.js';
 	import { handle, isHandle } from './runes.svelte.js';
-	import type { QueryViewState } from './state.js';
 
 	type Common = {
 		/** The client to use instead of the one `setSurreal` provided. */
@@ -121,9 +122,7 @@
 	const shown = $derived(
 		(select && current !== undefined ? select(current) : current) as R,
 	);
-	const isEmpty = $derived(
-		shown == null || (Array.isArray(shown) && shown.length === 0),
-	);
+	const isEmpty = $derived(isEmptyResult(shown));
 
 	$effect.pre(() => {
 		data = current;

@@ -56,6 +56,50 @@ Both return `data`, `error`, `status`, `loading`, `stale` and `refetch()`. When 
 
 The hooks follow parameters by value: a new object with equal values does not run the query again. Hooks that show the same query and parameters share one live query. React's strict mode does not open a second one.
 
+## Components
+
+`<Query>` and `<LiveQuery>` render a query from its result. They take the same props as svelte-surrealkit's components, with React's render props in place of snippets, and switching one for the other is a one-word change:
+
+```tsx
+<LiveQuery
+	q='SELECT * FROM card ORDER BY at LIMIT $lim START $start'
+	params={{ lim, start }}
+	select={(cards) => cards.filter((c) => c.kind === kind)}
+	empty={<p>No cards.</p>}
+	loading={<p>Loading…</p>}
+	error={(failure) => <p>{failure.message}</p>}
+>
+	{(cards, { stale }) => (
+		<ul className={stale ? 'dim' : undefined}>{cards.map((c) => <li key={String(c.id)}>{c.title}</li>)}</ul>
+	)}
+</LiveQuery>
+```
+
+| Prop | Purpose |
+| --- | --- |
+| `q` | The query text (a key of `Queries`), a payload from `preload`, or a `useQuery` / `useLive` result. |
+| `params` | The query's parameters. Required when the query has a required parameter; a type error beside a hook result, which has its own. |
+| `select` | Maps the result before `children` and the `empty` check. `children` gets its typed return value. |
+| `children` | `(data, { loading, stale, error }) => ReactNode`. `stale` is set while the previous parameters' result is shown. |
+| `empty`, `loading` | Elements shown when the result is empty, and until the first result. Without `loading`, nothing renders while loading. |
+| `error` | An element, or `(failure) => ReactNode`. Without it, a failure with a result to show renders `children` with `state.error`, and a failure with none is thrown to the nearest error boundary. |
+| `enabled` | While `false`, nothing subscribes and nothing renders. |
+| `client` | A client to use instead of the provider's. |
+
+React has no bindings, so there is no `bind:data`. To use a result outside the component (a tab count, say), call the hook and pass its result as `q`. Both then share one subscription:
+
+```tsx
+const research = useLive("SELECT * FROM card WHERE kind = 'research'");
+return (
+	<>
+		<button>Research {research.data.length}</button>
+		<LiveQuery q={research}>{(cards) => …}</LiveQuery>
+	</>
+);
+```
+
+The differences between the two are only the ones live and one-shot need. `<LiveQuery>` takes a single `SELECT` whose result is an array of rows (anything else is a type error), its `data` is `[]` before the first result where `<Query>`'s is `undefined`, and it follows every change to the records.
+
 ## Next.js App Router
 
 Run the query in a Server Component with `preload` from `react-surrealkit/server`, and give the payload to a client component. You write the query text once:

@@ -21,6 +21,14 @@ export {
 	type PlanOptions,
 	planLive,
 } from './plan.js';
+export {
+	type IsHandle,
+	isEmptyResult,
+	type LiveGuard,
+	type ParamsFor,
+	type QueryViewState,
+	type TextOf,
+} from './props.js';
 export { type LiveMessageLike, reconcile, share } from './reconcile.js';
 export type * from './types.js';
 export { decodeValue, encodeValue, queryKey } from './values.js';
