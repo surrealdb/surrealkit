@@ -263,6 +263,39 @@ describe('live lifecycle', () => {
 		expect(cache.stats().live).toBe(0);
 	});
 
+	it('fails with disconnected, keeping the rows, until the connection returns', async () => {
+		const { db, cache } = setup();
+		const live = cache.observeLive<Row>(USERS);
+		const once = cache.observe(USERS);
+		const offs = [live.subscribe(() => {}), once.subscribe(() => {})];
+		await settle();
+		db.disconnect();
+		expect(live.get()).toMatchObject({
+			status: 'error',
+			data: users('ada', 'bob'),
+			error: { code: 'disconnected' },
+		});
+		expect(once.get()).toMatchObject({
+			status: 'error',
+			error: { code: 'disconnected' },
+		});
+		expect(cache.stats().live).toBe(0);
+
+		db.select = () => users('ada', 'bob', 'cy');
+		db.reconnect();
+		await settle();
+		expect(live.get()).toEqual({
+			status: 'success',
+			data: users('ada', 'bob', 'cy'),
+			error: undefined,
+		});
+		expect(once.get().status).toBe('success');
+		expect(db.open.size).toBe(1);
+		for (const off of offs) off();
+		await settle();
+		expect(db.open.size).toBe(0);
+	});
+
 	it('restarts one-shot queries after a reconnect', async () => {
 		const { db, cache } = setup();
 		const off = cache.observe(USERS).subscribe(() => {});

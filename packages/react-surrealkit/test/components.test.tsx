@@ -155,6 +155,28 @@ describe('<LiveQuery>', () => {
 		expect(db.ran(/^LIVE/)).toHaveLength(1);
 	});
 
+	it('renders the error prop while the connection is down, and recovers', async () => {
+		const db = database();
+		render(
+			<SurrealProvider client={db}>
+				<LiveQuery
+					q='SELECT * FROM user'
+					error={(failure) => <p>error: {failure.code}</p>}
+				>
+					{(rows) => <List rows={rows} />}
+				</LiveQuery>
+			</SurrealProvider>,
+		);
+		await flush();
+		await act(async () => db.disconnect());
+		expect(screen.getByText('error: disconnected')).toBeTruthy();
+		await act(async () => {
+			db.reconnect();
+			await settle();
+		});
+		expect(names()).toEqual(NAMES);
+	});
+
 	it('renders the error prop when the engine kills the query', async () => {
 		const db = database();
 		render(

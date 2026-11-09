@@ -134,14 +134,18 @@ export function People({ people }: { people: Preloaded<Page> }) {
 
 The first render uses the payload. In the browser the hook opens its live query. The payload holds plain strings, so it crosses the Server Component boundary, and SDK values such as `RecordId` arrive as themselves.
 
-> WARNING: On the server, use a client for each request (for example, React's `cache()` around the connect). A module-level server client is shared by every user.
+> WARNING: On the server, use a client for each request (for example, React's `cache()` around the connect), and close it after the response with `after(() => db.close())`. A module-level server client is shared by every user.
+
+Connect the browser's client with `reconnect: { attempts: -1 }`. The SDK otherwise stops retrying after five attempts, and live views stay in their error state (`disconnected`) until a reload.
+
+[examples/next-live](../../examples/next-live) is a complete App Router app built this way.
 
 ## Signing in
 
 Connect both the browser and the server as the signed-in user, with record access (`DEFINE ACCESS … TYPE RECORD`). Table permissions then apply to every query, including live queries.
 
 1. Sign in on the server, in a server action or route handler: `db.signin({ namespace, database, access, variables })` returns the user's access token. Store it in an `httpOnly` cookie.
-2. In Server Components, connect a client for each request with that token (`authentication: token`), for example in a `cache()`-wrapped `getDb()`.
+2. In Server Components, connect a client for each request with that token (`authentication: token`), for example in a `cache()`-wrapped `getDb()`. Close it with `after(() => db.close())` from `next/server`, or every request leaves a connection open.
 3. Pass the token to the client provider as a prop. Connect the browser's client with it and give the client to `<SurrealProvider>`.
 4. When the user signs in or out, call `db.authenticate(token)` or `db.invalidate()` in the browser, then `cacheFor(db).reset()`, so no rows from the previous user stay on screen.
 

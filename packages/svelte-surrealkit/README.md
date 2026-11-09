@@ -43,7 +43,7 @@ Peer dependencies: `svelte` 5.7 or later, and `surrealdb` 2.1.1 or later.
    {@render children()}
    ```
 
-   The server render does not subscribe, so it does not need a connected client.
+   The server render does not subscribe, so it does not need a connected client. Connect the browser's client with `reconnect: { attempts: -1 }`: the SDK otherwise stops retrying after five attempts, and live views stay `disconnected` until a reload.
 
    `liveQueries` holds the engine's facts about each live query, so they subscribe as the engine describes them. See [the core README](../surrealkit-query/README.md#with-the-engines-live-entries).
 

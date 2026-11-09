@@ -5,7 +5,12 @@ export type SurrealQueryErrorCode =
 	/** The text cannot be made live; `message` says why. */
 	| 'unsupported'
 	/** The engine killed the live query (its table was removed, for one). */
-	| 'killed';
+	| 'killed'
+	/**
+	 * The connection to the database dropped. The query restarts by itself
+	 * once the client reconnects.
+	 */
+	| 'disconnected';
 
 /** A failed query, with the text and bindings that failed. */
 export class SurrealQueryError extends Error {

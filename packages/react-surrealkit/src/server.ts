@@ -11,6 +11,7 @@
  * export const getDb = cache(async () => {
  * 	const db = new Surreal();
  * 	await db.connect(process.env.SURREAL_URL!, { namespace: 'app', database: 'app' });
+ * 	after(() => db.close()); // from next/server: closed once the response is sent
  * 	return db;
  * });
  * ```

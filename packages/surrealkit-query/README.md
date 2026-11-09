@@ -71,11 +71,14 @@ The binding then manages the live query:
 | The last component that shows the query is destroyed | The live query is killed. |
 | The parameters change to different values | A keyed query: the old live query is killed and a new one opens. A window query: its watcher stays (see below) and the `SELECT` runs with the new values. |
 | The parameters change to equal values | Nothing happens. |
-| The SDK reconnects after a dropped connection | Each shown live query opens again and reads its rows again. |
+| The connection drops (the SDK's `reconnecting` or `disconnected` event) | Each shown query goes to its error state with the code `disconnected`, keeping its data. |
+| The SDK reconnects after a dropped connection | Each shown query runs again; a live query opens again and reads its rows again. |
 | The engine kills the live query | The query goes to its error state, with the code `killed`. |
 | A live query resolves after its component was destroyed | It is killed at once. |
 
 A query that is not shown keeps its last rows for five minutes (`gcTime`), so it renders at once if it is shown again.
+
+> NOTE: The SDK stops reconnecting after five attempts by default, a few seconds. A browser client behind live views should keep trying, so connect it with `reconnect: { attempts: -1 }`. Otherwise its queries stay `disconnected` until the page reloads.
 
 ## Which clauses are live
 

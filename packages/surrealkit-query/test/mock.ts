@@ -35,7 +35,7 @@ export class MockDb implements SurrealLike {
 	#next = 0;
 	#handlers = new Map<string, (message: LiveMessageLike) => void>();
 	#buffered = new Map<string, LiveMessageLike[]>();
-	#connected = new Set<() => void>();
+	#events = new Map<string, Set<() => void>>();
 	#held: (() => void)[] | undefined;
 
 	/** Holds every query until {@link release}. */
@@ -91,9 +91,14 @@ export class MockDb implements SurrealLike {
 		};
 	}
 
-	subscribe(_event: 'connected', listener: () => void): () => void {
-		this.#connected.add(listener);
-		return () => this.#connected.delete(listener);
+	subscribe(
+		event: 'connected' | 'reconnecting' | 'disconnected',
+		listener: () => void,
+	): () => void {
+		const listeners = this.#events.get(event) ?? new Set();
+		this.#events.set(event, listeners);
+		listeners.add(listener);
+		return () => listeners.delete(listener);
 	}
 
 	/** Sends a notification to every open live query whose text matches. */
@@ -114,12 +119,21 @@ export class MockDb implements SurrealLike {
 		}
 	}
 
+	/** Drops the connection, as the SDK announces it: `reconnecting`. */
+	disconnect(): void {
+		this.open.clear();
+		this.#handlers.clear();
+		this.#buffered.clear();
+		for (const listener of this.#events.get('reconnecting') ?? [])
+			listener();
+	}
+
 	/** Drops the connection's live queries and announces a new connection. */
 	reconnect(): void {
 		this.open.clear();
 		this.#handlers.clear();
 		this.#buffered.clear();
-		for (const listener of this.#connected) listener();
+		for (const listener of this.#events.get('connected') ?? []) listener();
 	}
 
 	/** The statements run that match. */

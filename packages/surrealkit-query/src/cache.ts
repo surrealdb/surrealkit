@@ -50,7 +50,10 @@ export interface SurrealLike {
 		bindings?: Record<string, unknown>,
 	): PromiseLike<unknown[]>;
 	liveOf(id: Uuid): PromiseLike<LiveSubscriptionLike>;
-	subscribe?(event: 'connected', listener: () => void): () => void;
+	subscribe?(
+		event: 'connected' | 'reconnecting' | 'disconnected',
+		listener: () => void,
+	): () => void;
 }
 
 export type QueryStatus = 'pending' | 'success' | 'error';
@@ -167,7 +170,7 @@ export class QueryCache {
 	#manifest: LiveManifest;
 	readonly #entries = new Map<string, Entry>();
 	readonly #watchers = new Map<string, Watcher>();
-	readonly #offConnected: (() => void) | undefined;
+	readonly #offEvents: (() => void)[];
 	#live = 0;
 
 	constructor(db: SurrealLike, options: QueryCacheOptions = {}) {
@@ -175,9 +178,13 @@ export class QueryCache {
 		this.#gcTime = options.gcTime ?? DEFAULT_GC_TIME;
 		this.#trustWhere = options.trustWhere ?? false;
 		this.#manifest = options.live ?? {};
-		this.#offConnected = db.subscribe?.('connected', () =>
-			this.#reconnected(),
-		);
+		this.#offEvents = db.subscribe
+			? [
+					db.subscribe('connected', () => this.#reconnected()),
+					db.subscribe('reconnecting', () => this.#disconnected()),
+					db.subscribe('disconnected', () => this.#disconnected()),
+				]
+			: [];
 	}
 
 	/**
@@ -297,7 +304,7 @@ export class QueryCache {
 	/** Clears the cache and stops listening for reconnects. */
 	dispose(): void {
 		this.clear();
-		this.#offConnected?.();
+		for (const off of this.#offEvents) off();
 	}
 
 	stats(): QueryCacheStats {
@@ -426,6 +433,32 @@ export class QueryCache {
 	#cancelGc(entry: Entry): void {
 		if (entry.gcTimer !== undefined) clearTimeout(entry.gcTimer);
 		entry.gcTimer = undefined;
+	}
+
+	/**
+	 * The connection dropped: every started entry fails with `disconnected`,
+	 * keeping its data, until `connected` restarts it. Work in flight is
+	 * discarded, and live handles are dropped without a KILL (the engine has
+	 * forgotten them).
+	 */
+	#disconnected(): void {
+		for (const watcher of [...this.#watchers.values()])
+			this.#forget(watcher);
+		for (const entry of this.#entries.values()) {
+			if (!entry.running) continue;
+			entry.run += 1;
+			this.#release(entry);
+			this.#set(entry, {
+				status: 'error',
+				data: entry.state.data,
+				error: new SurrealQueryError(
+					'disconnected',
+					'the connection to the database was lost',
+					entry.text,
+					entry.params,
+				),
+			});
+		}
 	}
 
 	#reconnected(): void {
