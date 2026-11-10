@@ -446,6 +446,14 @@ export class QueryCache {
 			this.#forget(watcher);
 		for (const entry of this.#entries.values()) {
 			if (!entry.running) continue;
+			// The SDK announces every retry; observers hear of the drop once.
+			const { state } = entry;
+			if (
+				state.status === 'error' &&
+				state.error.code === 'disconnected'
+			) {
+				continue;
+			}
 			entry.run += 1;
 			this.#release(entry);
 			this.#set(entry, {

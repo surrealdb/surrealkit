@@ -17,7 +17,15 @@
 
 	// The current token, read again whenever the SDK (re)connects.
 	let token = $derived(data.token);
-	if (browser) void db.connect(SURREAL_URL, { ...SCOPE, authentication: () => token });
+	// Retry for as long as the page is open: the SDK's default gives up after
+	// five attempts, and the live queries would stay in their error state.
+	if (browser) {
+		void db.connect(SURREAL_URL, {
+			...SCOPE,
+			authentication: () => token,
+			reconnect: { attempts: -1, retryDelayMax: 5000 },
+		});
+	}
 
 	// Signing in or out changes the identity under every cached query: switch
 	// the session, then reset the cache so no rows from the previous identity

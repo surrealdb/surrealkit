@@ -30,7 +30,10 @@ async function until<T>(
 	const deadline = Date.now() + ms;
 	while (Date.now() < deadline) {
 		const state = observable.get();
-		if (state.status === 'error') throw state.error;
+		// `disconnected` is the expected state while a restarted engine comes back.
+		if (state.status === 'error' && state.error.code !== 'disconnected') {
+			throw state.error;
+		}
 		if (state.status === 'success' && test(state.data)) return state.data;
 		await new Promise((go) => setTimeout(go, 20));
 	}

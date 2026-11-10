@@ -281,6 +281,18 @@ describe('live lifecycle', () => {
 		});
 		expect(cache.stats().live).toBe(0);
 
+		// The SDK announces every retry; observers hear of the drop once.
+		let heard = 0;
+		const offHeard = live.subscribe(() => {
+			heard += 1;
+		});
+		const before = live.get();
+		db.disconnect();
+		db.disconnect();
+		expect(heard).toBe(0);
+		expect(live.get()).toBe(before);
+		offHeard();
+
 		db.select = () => users('ada', 'bob', 'cy');
 		db.reconnect();
 		await settle();
