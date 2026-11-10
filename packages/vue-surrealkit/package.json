@@ -1,0 +1,69 @@
+{
+	"name": "vue-surrealkit",
+	"version": "0.1.0",
+	"description": "Vue 3 bindings for SurrealKit's typed queries: useQuery, useLive, <Query> and <LiveQuery>",
+	"license": "Apache-2.0",
+	"type": "module",
+	"main": "./dist/index.js",
+	"module": "./dist/index.js",
+	"types": "./dist/index.d.ts",
+	"exports": {
+		".": {
+			"types": "./dist/index.d.ts",
+			"import": "./dist/index.js"
+		}
+	},
+	"files": [
+		"dist",
+		"README.md",
+		"LICENSE"
+	],
+	"sideEffects": false,
+	"engines": {
+		"node": "^20.19.0 || >=22.12.0"
+	},
+	"scripts": {
+		"build": "rm -rf dist && tsup",
+		"clean": "rm -rf dist",
+		"format": "biome check --write .",
+		"lint": "biome ci .",
+		"test": "vitest run",
+		"typecheck": "tsc --noEmit && node test/types/golden.mjs"
+	},
+	"keywords": [
+		"vue",
+		"composables",
+		"surrealdb",
+		"surrealkit",
+		"live-query"
+	],
+	"dependencies": {
+		"surrealkit-query": "file:../surrealkit-query"
+	},
+	"peerDependencies": {
+		"surrealdb": "^2.1.1",
+		"vue": "^3.5.0"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "2.4.2",
+		"@types/node": "^24.3.0",
+		"@vitejs/plugin-vue": "^6.0.10",
+		"@vue/test-utils": "^2.5.1",
+		"jsdom": "^26.1.0",
+		"surrealdb": "2.1.1",
+		"tsup": "^8.5.1",
+		"typescript": "^5.9.3",
+		"vitest": "^3.2.7",
+		"vue": "^3.5.45",
+		"vue-tsc": "^3.3.14"
+	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/surrealdb/surrealkit.git",
+		"directory": "packages/vue-surrealkit"
+	},
+	"homepage": "https://github.com/surrealdb/surrealkit/tree/main/packages/vue-surrealkit#readme",
+	"bugs": {
+		"url": "https://github.com/surrealdb/surrealkit/issues"
+	}
+}

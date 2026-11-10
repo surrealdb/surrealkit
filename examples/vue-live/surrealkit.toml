@@ -1,0 +1,10 @@
+# SurrealKit for this example: `npm run types` writes src/generated/queries.ts
+# from the schema and every query in src, and registers it with the bindings.
+
+[typegen]
+schema_version = 2
+
+[typegen.queries]
+sources = ["src", "server"]
+typescript = "src/generated/queries.ts"
+register = "surrealkit-query"

@@ -3,7 +3,8 @@
 Use `surrealkit-query` to run typed SurrealQL queries and live queries from a shared cache. It is the core of the framework bindings:
 
 - **[svelte-surrealkit](../svelte-surrealkit):** `<Query>`, `<LiveQuery>`, `createQuery` and `createLive` for Svelte 5 and SvelteKit.
-- **[react-surrealkit](../react-surrealkit):** `useQuery` and `useLive` for React and Next.js.
+- **[react-surrealkit](../react-surrealkit):** `useQuery`, `useLive`, `<Query>` and `<LiveQuery>` for React and Next.js.
+- **[vue-surrealkit](../vue-surrealkit):** `useQuery`, `useLive`, `<Query>` and `<LiveQuery>` for Vue 3.
 
 Most apps use a binding and never call this package directly. Read this page for the type setup and for how live queries behave.
 
