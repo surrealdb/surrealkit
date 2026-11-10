@@ -490,7 +490,7 @@ the property still decode with their existing digest; regenerate them to
 include any authentication expressions their schema declares.
 
 The document is read through `INFO … STRUCTURE`, by an adapter for each
-supported engine minor (SurrealDB 3.2.x, 3.3.x and 4.0.x). Any other minor is read from
+supported engine minor (SurrealDB 3.2.x, 3.3.x, 4.0.x and 4.1.x). Any other minor is read from
 plain `INFO` instead, with the error diagnostic `structure-unsupported-engine`,
 so a `strict` run refuses it.
 

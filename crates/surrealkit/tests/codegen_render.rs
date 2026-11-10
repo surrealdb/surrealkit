@@ -16,8 +16,25 @@ const KINDS: &str = include_str!("fixtures/codegen/queries_kinds.json");
 /// The `types` the `named` kinds of `KINDS` refer to.
 const KIND_TYPES: &str = include_str!("fixtures/codegen/queries_kinds_types.json");
 const EMPTY: &str = include_str!("fixtures/codegen/queries_empty.json");
-/// The engine's document for the live and failed queries at the end of `QUERIES`.
+/// The engine's document for the live and failed queries at the end of `QUERIES`: what an
+/// engine that types queries answers for `LIVE_TEXTS` against `LIVE_SCHEMA`
+/// (`the_live_fixture_is_what_the_engine_answers`).
 const LIVE_ENGINE: &str = include_str!("fixtures/codegen/queries_live_engine.json");
+const LIVE_ENGINE_PATH: &str = "tests/fixtures/codegen/queries_live_engine.json";
+const LIVE_SCHEMA: &str = "DEFINE TABLE team SCHEMAFULL;\n\
+	DEFINE TABLE user SCHEMAFULL;\n\
+	DEFINE FIELD name ON user TYPE string;\n\
+	DEFINE FIELD team ON user TYPE record<team>;\n";
+const LIVE_TEXTS: [&str; 8] = [
+	"SELECT * FROM user",
+	"SELECT * FROM user ORDER BY name LIMIT $lim",
+	"SELECT * FROM user WHERE team = $team",
+	"SELECT * FROM ONLY user:ada",
+	"LIVE SELECT DIFF FROM user",
+	"LET $n = 1; LIVE SELECT * FROM user;",
+	"SELEC * FROM user",
+	"SELECT team, count() AS n FROM user GROUP BY team",
+];
 const BLOG: &str = include_str!("fixtures/codegen/blog.json");
 const OPEN: &str = include_str!("fixtures/codegen/open.json");
 /// Cases of `query_types`: a request and the engine's document for it.
@@ -92,10 +109,67 @@ fn the_engines_types_document_converts_to_entries() {
 	insta::assert_json_snapshot!("engine_entries", all);
 }
 
-/// The queries of `QUERIES` the engine's `LIVE_ENGINE` document describes: the last seven.
+/// The entries of `QUERIES` the engine's `LIVE_ENGINE` document describes: those keyed by one of
+/// `LIVE_TEXTS`, in their order in `QUERIES`.
 fn live_entries() -> Vec<QueryEntry> {
-	let all = entries(QUERIES);
-	all[all.len() - 7..].to_vec()
+	entries(QUERIES).into_iter().filter(|entry| LIVE_TEXTS.contains(&entry.key.as_str())).collect()
+}
+
+/// `QUERIES` with its live entries replaced by `live`, at the end, as the fixture file reads.
+fn with_live_entries(live: &[QueryEntry]) -> String {
+	let mut all: Vec<serde_json::Value> = serde_json::from_str(QUERIES).expect("json");
+	all.retain(|entry| !entry["key"].as_str().is_some_and(|key| LIVE_TEXTS.contains(&key)));
+	all.extend(live.iter().map(|entry| serde_json::to_value(entry).expect("entry")));
+	let mut text = serde_json::to_string_pretty(&all).expect("serialises");
+	text.push('\n');
+	text
+}
+
+/// On an engine that types queries, `LIVE_ENGINE` is what it answers for `LIVE_TEXTS` against
+/// `LIVE_SCHEMA`, as this reader reads it (the engine's version left out). An engine that cannot
+/// type queries has no answer to compare. `SURREALKIT_BLESS=1` on a typing engine rewrites the
+/// fixture and the entries of `QUERIES` converted from it, in one step.
+#[cfg(feature = "kv-mem")]
+#[test]
+fn the_live_fixture_is_what_the_engine_answers() {
+	let runtime =
+		tokio::runtime::Builder::new_current_thread().enable_all().build().expect("runtime");
+	let answered = runtime.block_on(async {
+		let db = surrealdb::engine::any::connect("mem://").await.expect("embedded engine");
+		db.use_ns("live").use_db("live").await.expect("namespace");
+		db.query(LIVE_SCHEMA).await.and_then(|r| r.check()).expect("schema");
+		let inputs: Vec<(Option<String>, String)> =
+			LIVE_TEXTS.iter().map(|text| (None, text.to_string())).collect();
+		surrealkit::codegen::engine::types_document(&db, &inputs).await.expect("ask the engine")
+	});
+	let Some(answered) = answered else {
+		// SurrealDB before 4.1: the fixture stands for the engine.
+		return;
+	};
+	let comparable = |doc: &TypesDocument| {
+		let mut value = serde_json::to_value(doc).expect("serialises");
+		value["engine"] = serde_json::Value::Null;
+		value
+	};
+	if std::env::var_os("SURREALKIT_BLESS").is_some() {
+		let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+		let mut text = serde_json::to_string_pretty(&answered).expect("serialises");
+		text.push('\n');
+		std::fs::write(root.join(LIVE_ENGINE_PATH), text).expect("bless");
+		let converted = from_types_document(&answered);
+		std::fs::write(
+			root.join("tests/fixtures/codegen/queries.json"),
+			with_live_entries(&converted.queries),
+		)
+		.expect("bless");
+		return;
+	}
+	let pinned = TypesDocument::from_json(LIVE_ENGINE).expect("fixture document reads");
+	assert!(
+		comparable(&pinned) == comparable(&answered),
+		"{LIVE_ENGINE_PATH} is not what the engine answers; review and rerun with \
+		 SURREALKIT_BLESS=1"
+	);
 }
 
 #[test]
@@ -117,14 +191,15 @@ fn the_engines_live_document_converts_to_the_v2_entries() {
 fn a_query_the_engine_could_not_type_is_one_diagnostic_and_touches_no_other() {
 	let doc = TypesDocument::from_json(LIVE_ENGINE).expect("fixture document reads");
 	let (assembled, diagnostics) = assemble(&Collected::default(), Some(&doc));
-	assert_eq!(assembled.len(), 7);
+	assert_eq!(assembled.len(), doc.queries.len());
 	assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
 	let diagnostic = &diagnostics[0];
 	assert_eq!(diagnostic.code, "query-invalid");
 	assert_eq!(diagnostic.query.as_deref(), Some("SELEC * FROM user"));
 	assert_eq!(diagnostic.source, "SELEC * FROM user");
-	assert_eq!(diagnostic.span.map(|span| (span.start, span.end)), Some((0, 5)));
-	assert!(diagnostic.reason.contains("S0001") && diagnostic.reason.contains("Parse error"));
+	// S0001's span covers the whole failing statement.
+	assert_eq!(diagnostic.span.map(|span| (span.start, span.end)), Some((0, 17)));
+	assert!(diagnostic.reason.contains("S0001") && diagnostic.reason.contains("Unexpected token"));
 	let failed: Vec<&str> =
 		assembled.iter().filter(|e| e.error.is_some()).map(|e| e.key.as_str()).collect();
 	assert_eq!(failed, ["SELEC * FROM user"]);
@@ -489,9 +564,10 @@ export function diff(message: LiveNotification<"LIVE SELECT DIFF FROM user">) {
   }
 }
 
-export function hinted(message: LiveNotification<"SELECT * FROM user WHERE team = $team">) {
+export function filtered(message: LiveNotification<"SELECT * FROM user WHERE team = $team">) {
   if (message.action === "CREATE") {
-    // An open result admits undeclared keys.
+    // A row of a SCHEMAFULL table is closed: it admits no undeclared key.
+    // @ts-expect-error a key the table does not declare
     const extra: unknown = message.value.anything;
     void extra;
   }

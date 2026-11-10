@@ -7,15 +7,16 @@
 //! with no adapter is an error (`structure-unsupported-engine`) — the caller then falls back
 //! to [`super::info_v2`].
 //!
-//! Supported: SurrealDB 3.2.x (`structure-3.2`), 3.3.x (`structure-3.3`) and 4.0.x
-//! (`structure-4.0`). The adapters differ only where the engines do (section 15): 3.3 adds `lightweight`, `inline`, a module's
+//! Supported: SurrealDB 3.2.x (`structure-3.2`), 3.3.x (`structure-3.3`), 4.0.x
+//! (`structure-4.0`) and 4.1.x (`structure-4.1`). The adapters differ only where the engines do
+//! (section 15): 3.3 adds `lightweight`, `inline`, a module's
 //! `unsigned`, a sequence's `resume`, a user's `scram`, an access's `context` and a JWT's
 //! `audience` (both reported as `definition-unsupported`), and parenthesises statements in
 //! event `THEN` lists and access `SIGNUP`/`SIGNIN`/`AUTHENTICATE`, which `structure-3.3` removes.
 //! 4.0 reads as 3.3 does and renames modules to extensions (`extensions`, which also carry
 //! `digest` and `capabilities`, both reported as `definition-unsupported`), adds `DEFINE TYPE`
 //! (`types`, read into the document's `types`) and the bookkeeping `compatibility`, a bucket's
-//! `presign_nonce` and a table's `migrations`, none of which is schema.
+//! `presign_nonce` and a table's `migrations`, none of which is schema. 4.1 reads as 4.0 does.
 //!
 //! Plain `INFO` text, when the caller has it, is attached to tables and fields as `define`
 //! evidence. It is never the source of a semantic value.
@@ -40,6 +41,8 @@ pub enum Adapter {
 	Structure33,
 	/// SurrealDB 4.0.x.
 	Structure40,
+	/// SurrealDB 4.1.x, which reads as 4.0.x does.
+	Structure41,
 }
 
 impl Adapter {
@@ -51,6 +54,7 @@ impl Adapter {
 			(Some("3"), Some("2")) => Some(Adapter::Structure32),
 			(Some("3"), Some("3")) => Some(Adapter::Structure33),
 			(Some("4"), Some("0")) => Some(Adapter::Structure40),
+			(Some("4"), Some("1")) => Some(Adapter::Structure41),
 			_ => None,
 		}
 	}
@@ -61,17 +65,19 @@ impl Adapter {
 			Adapter::Structure32 => "structure-3.2",
 			Adapter::Structure33 => "structure-3.3",
 			Adapter::Structure40 => "structure-4.0",
+			Adapter::Structure41 => "structure-4.1",
 		}
 	}
 
 	/// Whether the engine has what 3.3 added: its keys, and statements written without the
 	/// parentheses 3.2 puts around them.
 	fn is_33(self) -> bool {
-		matches!(self, Adapter::Structure33 | Adapter::Structure40)
+		matches!(self, Adapter::Structure33 | Adapter::Structure40 | Adapter::Structure41)
 	}
 
+	/// Whether the engine has what 4.0 added: its keys. 4.1 reads as 4.0 does.
 	fn is_40(self) -> bool {
-		self == Adapter::Structure40
+		matches!(self, Adapter::Structure40 | Adapter::Structure41)
 	}
 }
 
@@ -107,7 +113,7 @@ struct Reader {
 
 impl Reader {
 	/// The object `value` is, after reporting every key outside `known` (and outside `known33`
-	/// unless the adapter is 3.3 or later, and outside [`KEYS_40`] unless it is 4.0).
+	/// unless the adapter is 3.3 or later, and outside [`KEYS_40`] unless it is 4.0 or later).
 	fn object<'v>(
 		&mut self,
 		value: &'v Value,
@@ -1062,17 +1068,21 @@ mod tests {
 	use super::*;
 
 	#[test]
-	fn adapters_exist_for_3_2_3_3_and_4_0_only() {
+	fn adapters_exist_for_3_2_3_3_4_0_and_4_1_only() {
 		assert_eq!(Adapter::for_engine("3.2.4"), Some(Adapter::Structure32));
 		assert_eq!(Adapter::for_engine("3.3.0"), Some(Adapter::Structure33));
 		assert_eq!(Adapter::for_engine("3.3.7+build"), Some(Adapter::Structure33));
 		assert_eq!(Adapter::for_engine("4.0.0"), Some(Adapter::Structure40));
 		assert_eq!(Adapter::for_engine("4.0.2+build"), Some(Adapter::Structure40));
+		assert_eq!(Adapter::for_engine("4.1.0"), Some(Adapter::Structure41));
+		assert_eq!(Adapter::for_engine("4.1.3-nightly+build"), Some(Adapter::Structure41));
 		assert_eq!(Adapter::for_engine("3.4.0"), None);
-		assert_eq!(Adapter::for_engine("4.1.0"), None);
+		assert_eq!(Adapter::for_engine("4.2.0"), None);
+		assert_eq!(Adapter::for_engine("5.0.0"), None);
 		assert_eq!(Adapter::for_engine("2.3.10"), None);
 		assert_eq!(Adapter::Structure33.name(), "structure-3.3");
 		assert_eq!(Adapter::Structure40.name(), "structure-4.0");
+		assert_eq!(Adapter::Structure41.name(), "structure-4.1");
 	}
 
 	#[test]
@@ -1226,6 +1236,13 @@ mod tests {
 		assert_eq!(on_40.modules[0].name, "mod::demo");
 		assert_eq!(on_40.modules[0].executable.bucket.as_deref(), Some("avatars"));
 		assert_eq!(on_40.buckets.len(), 1);
+
+		// 4.1 reads exactly as 4.0 does.
+		let on_41 = read(Adapter::Structure41, &input);
+		assert_eq!(on_41.diagnostics, on_40.diagnostics);
+		assert_eq!(on_41.modules.len(), on_40.modules.len());
+		assert_eq!(on_41.types.len(), on_40.types.len());
+		assert_eq!(on_41.buckets.len(), on_40.buckets.len());
 
 		let on_33 = read(Adapter::Structure33, &input);
 		let unknown: Vec<&str> = on_33

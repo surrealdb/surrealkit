@@ -63,7 +63,9 @@ export interface SurrealkitPluginOptions {
 	 * Directories (relative to Vite root) the generation writes (generate
 	 * mode). Vite's per-file updates for them are suppressed while the plugin
 	 * is active; one full reload follows a successful generation that changed
-	 * them, so the browser never sees a half-written module set.
+	 * them, so the browser never sees a half-written module set. A change to
+	 * them from outside the plugin (a `surrealkit compile` run elsewhere) also
+	 * sends one full reload.
 	 */
 	generatedDirs?: string[];
 	/** Where the plugin runs. Default: ['serve']. */
@@ -558,8 +560,13 @@ export function surrealkitPlugin(
 	let server: ViteDevServer | undefined;
 	let matchesSchemaFile: ((filePath: string) => boolean) | undefined;
 	let generatedDirs: string[] = [];
-	// Files whose per-file update was held back while a generation ran.
+	// Files whose per-file update was held back, or whose change on disk has
+	// not reached the browser yet: one full reload covers them all.
 	const heldBack = new Set<string>();
+	// Fingerprints of the files the watcher has already accounted for. Only
+	// the dev server fills it; the plugin's own runs resync the generated files.
+	const known = new Map<string, string>();
+	let reloadTimer: NodeJS.Timeout | undefined;
 
 	let queued = false;
 	let queuedReason: string | undefined;
@@ -640,6 +647,56 @@ export function surrealkitPlugin(
 		log.debug('sent full-reload to browser');
 	};
 
+	// Under `generatedDirs`, apart from the temporary siblings an emitter
+	// renames into place.
+	const isGenerated = (file: string): boolean =>
+		generatedDirs.some((dir) => isInside(dir, file)) &&
+		!path.basename(file).includes(TEMP_SIBLING);
+
+	// The plugin's own generation writes the generated files. Taking their
+	// fingerprints when it ends makes the watcher events that announce those
+	// writes, which may arrive after it, look unchanged: only a write from
+	// outside the plugin differs.
+	const resyncGenerated = (): void => {
+		if (!server || generatedDirs.length === 0) return;
+
+		for (const file of known.keys()) {
+			if (generatedDirs.some((dir) => isInside(dir, file))) {
+				known.delete(file);
+			}
+		}
+		for (const [file, print] of snapshotExisting(
+			generatedDirs,
+			() => true,
+		)) {
+			known.set(file, print);
+		}
+	};
+
+	/**
+	 * A generated file changed while the plugin was not generating. One full
+	 * reload follows, coalesced over the debounce window. A generation that
+	 * starts in the meantime sends it when it ends, so there is never a second.
+	 */
+	const reloadForGeneratedChange = (file: string): void => {
+		if (!server || disposed) return;
+
+		heldBack.add(file);
+		if (reloadTimer) clearTimeout(reloadTimer);
+		reloadTimer = setTimeout(() => {
+			reloadTimer = undefined;
+			if (running || !server) return;
+
+			const held = heldBack.size;
+			heldBack.clear();
+			if (held > 0) {
+				server.hot.send({ type: 'full-reload' });
+				log.debug(
+					`sent full-reload to browser (${held} generated file change(s) from outside)`,
+				);
+			}
+		}, options.debounceMs);
+	};
 	const runOnce = async (reason: string): Promise<void> => {
 		if (!config) return;
 
@@ -670,6 +727,8 @@ export function surrealkitPlugin(
 
 		// Closed while running: the child was terminated on purpose.
 		if (disposed) return;
+
+		if (generating) resyncGenerated();
 
 		if (result.code === 0) {
 			log.info(
@@ -828,12 +887,24 @@ export function surrealkitPlugin(
 
 			const root = devServer.config.root;
 			const dirs = watchRoots(root, options.schemaGlobs);
-			const known = snapshotExisting(dirs, (file) =>
+			for (const [file, print] of snapshotExisting(dirs, (file) =>
 				Boolean(matchesSchemaFile?.(file)),
-			);
+			)) {
+				known.set(file, print);
+			}
 
 			for (const dir of dirs) {
 				devServer.watcher.add(dir);
+			}
+
+			// A compile run outside the plugin writes `generatedDirs`. Vite's own
+			// watcher normally covers them already; `known` tells a re-announced file
+			// from a changed one.
+			if (generating) {
+				resyncGenerated();
+				for (const dir of existingDirs(root, options.generatedDirs)) {
+					devServer.watcher.add(dir);
+				}
 			}
 
 			// The paths in the `--watch-paths` answer are relative to the
@@ -900,13 +971,20 @@ export function surrealkitPlugin(
 				(filePath: string): void => {
 					const kind = matchesSchemaFile?.(filePath)
 						? 'schema'
-						: queryWatch?.classify(filePath);
+						: (queryWatch?.classify(filePath) ??
+							(isGenerated(filePath) ? 'generated' : undefined));
 					if (kind === undefined) {
 						return;
 					}
 
+					// The plugin's own generation writes these; its end decides the
+					// reload and resyncs `known`.
+					if (kind === 'generated' && running) return;
+
 					if (event === 'unlink') {
-						known.delete(filePath);
+						// A generated file the watcher never accounted for was not served.
+						if (!known.delete(filePath) && kind === 'generated')
+							return;
 					} else {
 						const print = fingerprint(filePath);
 
@@ -921,6 +999,10 @@ export function surrealkitPlugin(
 					log.debug(
 						`${event}: ${normalizePath(path.relative(root, filePath))}`,
 					);
+					if (kind === 'generated') {
+						reloadForGeneratedChange(filePath);
+						return;
+					}
 					if (kind === 'config') {
 						if (refreshTimer) clearTimeout(refreshTimer);
 						refreshTimer = setTimeout(() => {
@@ -957,6 +1039,10 @@ export function surrealkitPlugin(
 					clearTimeout(refreshTimer);
 					refreshTimer = undefined;
 				}
+				if (reloadTimer) {
+					clearTimeout(reloadTimer);
+					reloadTimer = undefined;
+				}
 				if (watching) await terminate(watching);
 
 				// A generation half-way through is safe to stop: emitters write
@@ -980,7 +1066,8 @@ export function surrealkitPlugin(
 		},
 
 		// Per-file updates of generated output are replaced by one full reload
-		// after a successful generation. While a generation runs, its module set
+		// after a successful generation, or after a change from outside the
+		// plugin (see `reloadForGeneratedChange`). While a generation runs, its module set
 		// may be half published, so no per-file update goes out at all, whether
 		// or not `generatedDirs` names where it lands: the run ends with a reload.
 		hotUpdate({ file }) {

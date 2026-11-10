@@ -387,6 +387,7 @@ export const Provenance = Schema.Struct({
 		'structure-3.2',
 		'structure-3.3',
 		'structure-4.0',
+		'structure-4.1',
 	]),
 	source: Schema.Union([
 		Schema.Struct({
