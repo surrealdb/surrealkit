@@ -1,0 +1,30 @@
+{
+	"name": "surrealkit-example-next-live",
+	"private": true,
+	"type": "module",
+	"description": "react-surrealkit in a Next.js App Router app: a server-rendered first paint, live queries, and server actions that write",
+	"scripts": {
+		"db": "surreal start --user root --pass root --allow-guests --bind 127.0.0.1:8000 memory",
+		"seed": "node scripts/seed.mjs",
+		"types": "${SURREALKIT_BIN:-surrealkit} compile",
+		"types:check": "${SURREALKIT_BIN:-surrealkit} compile --check",
+		"typecheck": "tsc --noEmit",
+		"dev": "next dev",
+		"build": "next build",
+		"start": "next start"
+	},
+	"dependencies": {
+		"next": "16.4.5",
+		"react": "19.3.1",
+		"react-dom": "19.3.1",
+		"react-surrealkit": "file:../../packages/react-surrealkit",
+		"surrealdb": "2.1.1",
+		"surrealkit-query": "file:../../packages/surrealkit-query"
+	},
+	"devDependencies": {
+		"@types/node": "^24.3.0",
+		"@types/react": "^19.3.0",
+		"@types/react-dom": "^19.3.0",
+		"typescript": "^5.9.3"
+	}
+}

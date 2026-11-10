@@ -1,0 +1,1372 @@
+{
+  "version": 2,
+  "semanticDigest": "sha256:ccecc7fdcebf71f1e253ae2cf36f692f986068f42183fda604daa629c2259b73",
+  "provenance": {
+    "generator": {
+      "name": "surrealkit",
+      "version": "1.0.0-rc.1"
+    },
+    "engine": {
+      "version": "4.1.0",
+      "build": "surrealdb-4.1.0-nightly",
+      "mode": "embedded"
+    },
+    "adapter": "structure-4.1",
+    "source": {
+      "kind": "compile",
+      "modules": [
+        "default"
+      ],
+      "files": [
+        {
+          "path": "schema/blocks.surql",
+          "sha256": "39760a324885e4a93099878c8f81148586f6de74eee479bdbfb6748a5f6e2080"
+        },
+        {
+          "path": "schema/person.surql",
+          "sha256": "1e5dcc041630bf1c56b426af5fbad48aa8627e09b987be71c354305f9ceb5bd8"
+        },
+        {
+          "path": "schema/task.surql",
+          "sha256": "5328ccbb5203838f51ccaf9808fccf4b9423708721045b870b63e1b95154c584"
+        }
+      ]
+    },
+    "capabilities": {
+      "experimental": [],
+      "network": false
+    }
+  },
+  "tables": [
+    {
+      "name": "blocks",
+      "type": {
+        "kind": "relation",
+        "in": [
+          "task"
+        ],
+        "out": [
+          "task"
+        ],
+        "enforced": false,
+        "lightweight": false
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": true,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "in"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "task"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD in ON blocks TYPE record<task> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "out"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "task"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD out ON blocks TYPE record<task> PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE blocks TYPE RELATION IN task OUT task SCHEMAFULL PERMISSIONS FOR select FULL, FOR create, update, delete NONE"
+    },
+    {
+      "name": "person",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": true,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "name"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD name ON person TYPE string PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE person TYPE NORMAL SCHEMAFULL PERMISSIONS FOR select FULL, FOR create, update, delete NONE"
+    },
+    {
+      "name": "task",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": true,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "created"
+          ],
+          "kind": {
+            "kind": "datetime"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": true,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "time::now()"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD created ON task TYPE datetime DEFAULT time::now() READONLY PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "owner"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD owner ON task TYPE none | record<person> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "status"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "doing"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "done"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "todo"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "default": {
+            "mode": "create",
+            "expr": "'todo'"
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD status ON task TYPE 'todo' | 'doing' | 'done' DEFAULT 'todo' PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "title"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "assert": {
+            "expr": "string::len($value) > 0",
+            "recognized": [
+              {
+                "type": "length",
+                "target": "string",
+                "min": 1
+              }
+            ]
+          },
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD title ON task TYPE string ASSERT string::len($value) > 0 PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE task TYPE NORMAL SCHEMAFULL PERMISSIONS FOR select FULL, FOR create, update, delete NONE"
+    }
+  ],
+  "functions": [],
+  "params": [],
+  "accesses": [],
+  "analyzers": [],
+  "sequences": [],
+  "buckets": [],
+  "apis": [],
+  "modules": [],
+  "configs": [],
+  "users": [],
+  "queries": [
+    {
+      "key": "CREATE task SET title = $title, owner = $owner",
+      "text": "CREATE task SET title = $title, owner = $owner",
+      "sources": [
+        {
+          "origin": "host",
+          "path": "server/api.ts",
+          "span": {
+            "start": 1777,
+            "end": 1823
+          },
+          "line": 49,
+          "column": 20,
+          "method": "query"
+        }
+      ],
+      "statements": [
+        {
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "created",
+                  "kind": {
+                    "kind": "datetime"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "id",
+                  "kind": {
+                    "kind": "record",
+                    "tables": [
+                      "task"
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "owner",
+                  "kind": {
+                    "kind": "record",
+                    "tables": [
+                      "person"
+                    ]
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "status",
+                  "kind": {
+                    "kind": "union",
+                    "variants": [
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "doing"
+                      },
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "done"
+                      },
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "todo"
+                      }
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "title",
+                  "kind": {
+                    "kind": "string"
+                  },
+                  "optional": false
+                }
+              ]
+            }
+          },
+          "optional": false,
+          "certainty": "fact",
+          "exact": true,
+          "open": []
+        }
+      ],
+      "params": [
+        {
+          "name": "owner",
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": true,
+          "required": true
+        },
+        {
+          "name": "title",
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "required": true
+        }
+      ]
+    },
+    {
+      "key": "DELETE $id",
+      "text": "DELETE $id",
+      "sources": [
+        {
+          "origin": "host",
+          "path": "server/api.ts",
+          "span": {
+            "start": 2382,
+            "end": 2392
+          },
+          "line": 66,
+          "column": 20,
+          "method": "query"
+        },
+        {
+          "origin": "host",
+          "path": "src/TypeErrors.vue",
+          "span": {
+            "start": 1048,
+            "end": 1058
+          },
+          "line": 24,
+          "column": 12,
+          "method": "Query"
+        }
+      ],
+      "statements": [
+        {
+          "kind": {
+            "kind": "any"
+          },
+          "optional": false,
+          "certainty": "hint",
+          "exact": false,
+          "open": []
+        }
+      ],
+      "params": [
+        {
+          "name": "id",
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "array",
+                "item": {
+                  "kind": "record",
+                  "tables": []
+                }
+              },
+              {
+                "kind": "record",
+                "tables": []
+              },
+              {
+                "kind": "table",
+                "tables": []
+              }
+            ]
+          },
+          "optional": false,
+          "required": true
+        }
+      ]
+    },
+    {
+      "key": "SELECT id, name FROM person ORDER BY name",
+      "text": "SELECT id, name FROM person ORDER BY name",
+      "sources": [
+        {
+          "origin": "host",
+          "path": "src/components/NewTask.vue",
+          "span": {
+            "start": 632,
+            "end": 673
+          },
+          "line": 23,
+          "column": 18,
+          "method": "LiveQuery"
+        }
+      ],
+      "statements": [
+        {
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "id",
+                  "kind": {
+                    "kind": "record",
+                    "tables": [
+                      "person"
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "name",
+                  "kind": {
+                    "kind": "string"
+                  },
+                  "optional": false
+                }
+              ]
+            }
+          },
+          "optional": false,
+          "certainty": "hint",
+          "exact": true,
+          "open": [],
+          "live": {
+            "diff": false,
+            "query": "LIVE SELECT id, name FROM person",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "person"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "person"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "name",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "person"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "person"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "name",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "person"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "person"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "name",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": {
+                  "kind": "none"
+                },
+                "result": {
+                  "kind": "none"
+                },
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          },
+          "liveRefusal": {
+            "code": "E4009",
+            "message": "a live query does not take ORDER BY: it notifies the changes of one table; serve ORDER BY by running the SELECT over the snapshot again",
+            "clauses": [
+              "ORDER BY"
+            ],
+            "windowable": true
+          }
+        }
+      ]
+    },
+    {
+      "key": "SELECT id, title, status, ->blocks->task.title AS blocks FROM task WHERE string::contains(string::lowercase(title), $text) ORDER BY title",
+      "text": "SELECT id, title, status, ->blocks->task.title AS blocks FROM task WHERE string::contains(string::lowercase(title), $text) ORDER BY title",
+      "sources": [
+        {
+          "origin": "host",
+          "path": "src/components/Search.vue",
+          "span": {
+            "start": 606,
+            "end": 743
+          },
+          "line": 15,
+          "column": 3,
+          "method": "useQuery"
+        }
+      ],
+      "statements": [
+        {
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "blocks",
+                  "kind": {
+                    "kind": "array",
+                    "item": {
+                      "kind": "string"
+                    }
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "id",
+                  "kind": {
+                    "kind": "record",
+                    "tables": [
+                      "task"
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "status",
+                  "kind": {
+                    "kind": "union",
+                    "variants": [
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "doing"
+                      },
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "done"
+                      },
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "todo"
+                      }
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "title",
+                  "kind": {
+                    "kind": "string"
+                  },
+                  "optional": false
+                }
+              ]
+            }
+          },
+          "optional": false,
+          "certainty": "hint",
+          "exact": true,
+          "open": [],
+          "live": {
+            "diff": false,
+            "query": "LIVE SELECT id, title, status, ->blocks->task.title AS blocks FROM task WHERE string::contains(string::lowercase(title), $text)",
+            "exit": "silent",
+            "watch": "LIVE SELECT id FROM task",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "task"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "blocks",
+                      "kind": {
+                        "kind": "array",
+                        "item": {
+                          "kind": "string"
+                        }
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "task"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "status",
+                      "kind": {
+                        "kind": "union",
+                        "variants": [
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "doing"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "done"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "todo"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "task"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "blocks",
+                      "kind": {
+                        "kind": "array",
+                        "item": {
+                          "kind": "string"
+                        }
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "task"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "status",
+                      "kind": {
+                        "kind": "union",
+                        "variants": [
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "doing"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "done"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "todo"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "task"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "blocks",
+                      "kind": {
+                        "kind": "array",
+                        "item": {
+                          "kind": "string"
+                        }
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "task"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "status",
+                      "kind": {
+                        "kind": "union",
+                        "variants": [
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "doing"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "done"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "todo"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": {
+                  "kind": "none"
+                },
+                "result": {
+                  "kind": "none"
+                },
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          },
+          "liveRefusal": {
+            "code": "E4009",
+            "message": "a live query does not take ORDER BY: it notifies the changes of one table; serve ORDER BY by running the SELECT over the snapshot again",
+            "clauses": [
+              "ORDER BY"
+            ],
+            "windowable": true
+          }
+        }
+      ],
+      "params": [
+        {
+          "name": "text",
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "required": true
+        }
+      ]
+    },
+    {
+      "key": "SELECT id, title, status, owner.name AS owner, created FROM task ORDER BY created DESC",
+      "text": "SELECT id, title, status, owner.name AS owner, created FROM task ORDER BY created DESC",
+      "sources": [
+        {
+          "origin": "host",
+          "path": "src/App.vue",
+          "span": {
+            "start": 444,
+            "end": 530
+          },
+          "line": 14,
+          "column": 3,
+          "method": "useLive"
+        },
+        {
+          "origin": "host",
+          "path": "src/TypeErrors.vue",
+          "span": {
+            "start": 349,
+            "end": 435
+          },
+          "line": 10,
+          "column": 3,
+          "method": "useLive"
+        }
+      ],
+      "statements": [
+        {
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "created",
+                  "kind": {
+                    "kind": "datetime"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "id",
+                  "kind": {
+                    "kind": "record",
+                    "tables": [
+                      "task"
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "owner",
+                  "kind": {
+                    "kind": "string"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "status",
+                  "kind": {
+                    "kind": "union",
+                    "variants": [
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "doing"
+                      },
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "done"
+                      },
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "todo"
+                      }
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "title",
+                  "kind": {
+                    "kind": "string"
+                  },
+                  "optional": false
+                }
+              ]
+            }
+          },
+          "optional": false,
+          "certainty": "hint",
+          "exact": true,
+          "open": [],
+          "live": {
+            "diff": false,
+            "query": "LIVE SELECT id, title, status, owner.name AS owner, created FROM task",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "task"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "created",
+                      "kind": {
+                        "kind": "datetime"
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "task"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "owner",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": true
+                    },
+                    {
+                      "name": "status",
+                      "kind": {
+                        "kind": "union",
+                        "variants": [
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "doing"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "done"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "todo"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "task"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "created",
+                      "kind": {
+                        "kind": "datetime"
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "task"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "owner",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": true
+                    },
+                    {
+                      "name": "status",
+                      "kind": {
+                        "kind": "union",
+                        "variants": [
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "doing"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "done"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "todo"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "task"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "created",
+                      "kind": {
+                        "kind": "datetime"
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "task"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "owner",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": true
+                    },
+                    {
+                      "name": "status",
+                      "kind": {
+                        "kind": "union",
+                        "variants": [
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "doing"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "done"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "todo"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": {
+                  "kind": "none"
+                },
+                "result": {
+                  "kind": "none"
+                },
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          },
+          "liveRefusal": {
+            "code": "E4009",
+            "message": "a live query does not take ORDER BY: it notifies the changes of one table; serve ORDER BY by running the SELECT over the snapshot again",
+            "clauses": [
+              "ORDER BY"
+            ],
+            "windowable": true
+          }
+        }
+      ]
+    },
+    {
+      "key": "UPDATE $id SET status = $status",
+      "text": "UPDATE $id SET status = $status",
+      "sources": [
+        {
+          "origin": "host",
+          "path": "server/api.ts",
+          "span": {
+            "start": 2188,
+            "end": 2219
+          },
+          "line": 59,
+          "column": 20,
+          "method": "query"
+        },
+        {
+          "origin": "host",
+          "path": "src/TypeErrors.vue",
+          "span": {
+            "start": 754,
+            "end": 785
+          },
+          "line": 17,
+          "column": 11,
+          "method": "useQuery"
+        }
+      ],
+      "statements": [
+        {
+          "kind": {
+            "kind": "any"
+          },
+          "optional": false,
+          "certainty": "hint",
+          "exact": false,
+          "open": []
+        }
+      ],
+      "params": [
+        {
+          "name": "id",
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "array",
+                "item": {
+                  "kind": "record",
+                  "tables": []
+                }
+              },
+              {
+                "kind": "record",
+                "tables": []
+              },
+              {
+                "kind": "table",
+                "tables": []
+              }
+            ]
+          },
+          "optional": false,
+          "required": true
+        },
+        {
+          "name": "status",
+          "optional": false,
+          "required": true
+        }
+      ]
+    }
+  ],
+  "diagnostics": []
+}
