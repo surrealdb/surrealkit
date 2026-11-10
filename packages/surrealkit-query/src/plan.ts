@@ -198,7 +198,12 @@ export function planLive(text: string, options: PlanOptions = {}): LivePlan {
 	}
 	const snapshot = text.trim().replace(/;\s*$/, '').trimEnd();
 	const silent = entry.exit === 'silent';
+	// The engine accepts a VALUE live query, but its notifications never reach
+	// a subscription (see planText), so VALUE stays windowed.
+	const value =
+		fromText.mode !== 'unsupported' && fromText.windowed.includes('VALUE');
 	const windowed = [
+		...(value ? ['VALUE'] : []),
 		...(entry.refusal?.clauses ?? []),
 		...(silent ? ['WHERE'] : []),
 	];
@@ -235,9 +240,10 @@ function planText(text: string, trustWhere: boolean): LivePlan {
 		return unsupported('DIFF live queries are not supported');
 	}
 	const windowed = new Set<string>();
-	// VALUE rows carry no id, so the SELECT re-runs either way; watching the
-	// source also serves an engine that never notifies a VALUE live query
-	// (SurrealDB 3.3).
+	// VALUE rows carry no id, so the SELECT re-runs either way. A VALUE live
+	// query's notifications also never reach a subscription: the JS SDK (2.1
+	// through 2.2.2) drops a notification whose result is not an object, and
+	// SurrealDB 3.3 sends none. The source watcher's notifications arrive.
 	if (tokens[1]?.value === 'VALUE') windowed.add('VALUE');
 	if (tokens.slice(1, from).some((token) => token.value === 'OMIT')) {
 		windowed.add('OMIT');

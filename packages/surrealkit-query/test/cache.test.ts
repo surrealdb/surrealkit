@@ -1,4 +1,4 @@
-import { DateTime, RecordId } from 'surrealdb';
+import { DateTime, RecordId, Table } from 'surrealdb';
 import { describe, expect, it, vi } from 'vitest';
 
 import { preloadQuery, QueryCache } from '../src/index.js';
@@ -485,6 +485,27 @@ describe('windowed live queries', () => {
 		off();
 		await settle();
 		expect(db.open.size).toBe(0);
+	});
+
+	it('keys a param source by its table value, apart from a string', async () => {
+		const { db, cache } = setup();
+		const text = 'SELECT * FROM $t WHERE active';
+		const offs = [
+			{ t: new Table('user') },
+			{ t: new Table('user') },
+			{ t: new Table('post') },
+			{ t: 'user' },
+		].map((params) =>
+			cache.observeLive<Row>(text, params).subscribe(() => {}),
+		);
+		await settle();
+		expect(db.ran(/^LIVE/)).toEqual([
+			'LIVE SELECT id FROM $t',
+			'LIVE SELECT id FROM $t',
+			'LIVE SELECT id FROM $t',
+		]);
+		expect(cache.stats().live).toBe(3);
+		for (const off of offs) off();
 	});
 
 	it('coalesces a burst of notifications into one re-run plus one follow-up', async () => {

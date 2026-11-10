@@ -8,7 +8,7 @@ import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 
-import { RecordId, Surreal } from 'surrealdb';
+import { RecordId, Surreal, Table } from 'surrealdb';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { type Observable, QueryCache } from '../src/index.js';
@@ -154,6 +154,46 @@ describe.skipIf(!engineConfigured)(
 			await until(live, (rows) => rows?.includes('val') === true);
 			await engine.db.query('DELETE person:val');
 			await until(live, (rows) => rows?.length === before);
+			off();
+		});
+
+		it('follows a param source bound to a table value', async () => {
+			const keyed = cache.observeLive<Person>('SELECT * FROM $t', {
+				t: new Table('person'),
+			});
+			const window = cache.observeLive<Person>(
+				'SELECT * FROM $t WHERE team = $team',
+				{ t: new Table('person'), team: 'red' },
+			);
+			const offs = [keyed, window].map((live) =>
+				live.subscribe(() => {}),
+			);
+			const before =
+				(await until(keyed, (rows) => (rows?.length ?? 0) > 0))
+					?.length ?? 0;
+			await until(window, (rows) => (rows?.length ?? 0) > 0);
+			await engine.db.query(
+				"CREATE person:src SET name = 'src', team = 'red'",
+			);
+			await until(keyed, (rows) => rows?.length === before + 1);
+			await until(window, (rows) => names(rows).includes('src'));
+			await engine.db.query('DELETE person:src');
+			await until(keyed, (rows) => rows?.length === before);
+			for (const off of offs) off();
+		});
+
+		it('reports the engine refusing a param source bound to a string', async () => {
+			const live = cache.observeLive<Person>('SELECT * FROM $t', {
+				t: 'person',
+			});
+			const off = live.subscribe(() => {});
+			const deadline = Date.now() + 5000;
+			while (live.get().status === 'pending' && Date.now() < deadline) {
+				await new Promise((go) => setTimeout(go, 20));
+			}
+			const state = live.get();
+			expect(state.status).toBe('error');
+			expect(state.error?.code).toBe('query');
 			off();
 		});
 

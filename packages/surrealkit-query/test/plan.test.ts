@@ -285,6 +285,19 @@ describe('planLive with an engine entry', () => {
 		);
 	});
 
+	it('windows a VALUE query the engine accepts', () => {
+		expect(
+			planLive('SELECT VALUE name FROM person', {
+				entry: { query: 'LIVE SELECT VALUE name FROM person' },
+			}),
+		).toEqual({
+			mode: 'window',
+			liveText: 'LIVE SELECT id FROM person',
+			snapshot: 'SELECT VALUE name FROM person',
+			windowed: ['VALUE'],
+		});
+	});
+
 	it('refuses what the engine says re-running cannot serve', () => {
 		expect(
 			planLive('SELECT * FROM a, b', {

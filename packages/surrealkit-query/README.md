@@ -94,9 +94,11 @@ Window queries share their watcher. All window queries on one connection with th
 
 In window mode the rows are always the ones the engine computes, so pagination works: `SELECT * FROM user ORDER BY name LIMIT $lim START $start` stays correct when a record moves into or out of the page. A burst of notifications runs the `SELECT` at most twice: once, and once more if a change arrived during the first run. Rows that did not change keep their object identity, so keyed `{#each}` blocks and React keys render only what changed.
 
-A keyed query whose rows have no `id` (for example `SELECT name FROM user`) also runs the `SELECT` again on each notification, because there is no id to apply a notification to. `VALUE` rows never have one, so `VALUE` is in window mode. Watching the source also serves an engine that never notifies a `VALUE` live query (SurrealDB 3.3).
+A keyed query whose rows have no `id` (for example `SELECT name FROM user`) also runs the `SELECT` again on each notification, because there is no id to apply a notification to. `VALUE` rows never have one, so `VALUE` is in window mode, also when the engine's entry accepts it. A `LIVE SELECT VALUE` cannot be followed directly: SurrealDB 3.3 sends no notifications for it, and the JavaScript SDK (2.1 through 2.2.2) drops a notification whose result is not an object. The source watcher's notifications are objects, so they arrive.
 
 `WHERE` is in window mode because the engine does not notify a record that an update moves out of the filter (SurrealDB 3.3 and 4.1). If you apply notifications directly, that record stays in the rows. Set `trustWhere: true` on the cache to apply `WHERE` notifications by id when your engine sends them, or when no update moves a record out of the filter.
+
+A param source (`FROM $t`) must be bound to a table value, `new Table('user')` from `surrealdb`, not to the string `'user'`. The engine refuses a string source when the live query runs, and the query goes to its error state with the code `query`. The cache key tells the two apart, so they never share a live query.
 
 Both modes watch only the records of the target. A change to any other record does not update the rows, even when the query reads it. This includes a record that `FETCH` joins, a record that a graph traversal (`->knows->person`) reaches, and a record that a subquery reads. A notification for the target's own record does carry the current fetched values.
 
@@ -106,6 +108,7 @@ When the bindings have `liveQueries`, the engine's entry for a query decides its
 
 | Engine entry | Mode | Subscription |
 | --- | --- | --- |
+| `VALUE`, with or without a refusal | Window | The entry's `watch`, else `LIVE SELECT id FROM <target>` (with the `WHERE` when `exit` is `"delete"`). See above for why. |
 | No refusal, no `WHERE` | Keyed | The entry's `query`, as written. |
 | No refusal, `exit: "delete"` | Keyed | The entry's `query`, as written. |
 | No refusal, `exit: "silent"` | Window | The entry's `watch`, a `LIVE SELECT` without the `WHERE`, because a record leaving the filter is not notified. Without `watch`, `LIVE SELECT id FROM <target>`. |
