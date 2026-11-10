@@ -24,7 +24,7 @@ use super::{engine, query_files};
 use crate::typegen::Span;
 use crate::typegen::document::SchemaDocument;
 use crate::typegen::{Diagnostic, Severity, codes};
-use crate::variables::QueriesConfig;
+use crate::variables::{PythonConfig, QueriesConfig};
 
 /// The text of the warning raised when queries are configured and the engine cannot type them.
 const UNSUPPORTED_SOURCE: &str = "[typegen.queries]";
@@ -107,6 +107,9 @@ pub struct Collected {
 	pub inline: Vec<CollectedQuery>,
 	/// What reading the query files found wrong.
 	pub diagnostics: Vec<Diagnostic>,
+	/// What reading the Python sources found: `python: 12 queries in 4 files; skipped 3
+	/// (f-string 2, concatenation 1)`. `None` when `[typegen.python]` is not configured.
+	pub python_summary: Option<String>,
 }
 
 impl Collected {
@@ -163,7 +166,30 @@ pub fn collect(root: &str, config: &QueriesConfig) -> Result<Collected> {
 		named,
 		inline: inline(root, config)?,
 		diagnostics,
+		python_summary: None,
 	})
+}
+
+/// Collects the project's queries as `queries` and `python` name them, either of which may be
+/// absent. A text written in both TypeScript and Python is one query with a source in each.
+///
+/// # Errors
+///
+/// Fails as [`collect`] does, and when the Python sources cannot be read, or `python` is set in
+/// a build without the `host-queries` feature.
+pub fn collect_all(
+	root: &str,
+	queries: Option<&QueriesConfig>,
+	python: Option<&PythonConfig>,
+) -> Result<Collected> {
+	let mut collected = match queries {
+		Some(config) => collect(root, config)?,
+		None => Collected::default(),
+	};
+	if let Some(config) = python {
+		add_python(root, config, &mut collected)?;
+	}
+	Ok(collected)
 }
 
 fn relative(root: &str, path: &std::path::Path) -> Result<String> {
@@ -194,51 +220,87 @@ fn inline(root: &str, config: &QueriesConfig) -> Result<Vec<CollectedQuery>> {
 		attribute: &config.attribute,
 	};
 	let mut inline: Vec<CollectedQuery> = Vec::new();
-	let mut by_text: HashMap<String, usize> = HashMap::new();
 	let mut files: HashMap<std::path::PathBuf, Arc<str>> = HashMap::new();
 	for found in crate::host_queries::scan_with(&config.sources, &queries)? {
-		let file = match files.get(&found.file) {
-			Some(file) => file.clone(),
-			None => {
-				let text: Arc<str> = std::fs::read_to_string(&found.file)
-					.map_err(|err| anyhow::anyhow!("reading {}: {err}", found.file.display()))?
-					.into();
-				files.insert(found.file.clone(), text.clone());
-				text
-			}
-		};
-		let source = QuerySource {
-			origin: QueryOrigin::Host,
-			path: relative(root, &found.file)?,
-			span: Span {
-				start: found.query.host_range.start,
-				end: found.query.host_range.end,
-			},
-			line: found.query.line,
-			column: found.query.column,
-			method: Some(found.query.method.clone()),
-		};
-		let map = TextMap::Host {
-			query: Box::new(found.query.clone()),
-			file,
-		};
-		match by_text.get(&found.query.text) {
-			Some(&at) => {
-				inline[at].sources.push(source);
-				inline[at].maps.push(map);
-			}
-			None => {
-				by_text.insert(found.query.text.clone(), inline.len());
-				inline.push(CollectedQuery {
-					name: None,
-					text: found.query.text,
-					sources: vec![source],
-					maps: vec![map],
-				});
-			}
-		}
+		push_found(&mut inline, &mut files, root, found)?;
 	}
 	Ok(inline)
+}
+
+/// Adds one query found in host code to `inline`: a new entry, or one more source of the entry
+/// that has its text. `files` holds the text of each host file read, which a source's positions
+/// are counted in.
+#[cfg(feature = "host-queries")]
+fn push_found(
+	inline: &mut Vec<CollectedQuery>,
+	files: &mut HashMap<std::path::PathBuf, Arc<str>>,
+	root: &str,
+	found: crate::host_queries::FoundQuery,
+) -> Result<()> {
+	let file = match files.get(&found.file) {
+		Some(file) => file.clone(),
+		None => {
+			let text: Arc<str> = std::fs::read_to_string(&found.file)
+				.map_err(|err| anyhow::anyhow!("reading {}: {err}", found.file.display()))?
+				.into();
+			files.insert(found.file.clone(), text.clone());
+			text
+		}
+	};
+	let source = QuerySource {
+		origin: QueryOrigin::Host,
+		path: relative(root, &found.file)?,
+		span: Span {
+			start: found.query.host_range.start,
+			end: found.query.host_range.end,
+		},
+		line: found.query.line,
+		column: found.query.column,
+		method: Some(found.query.method.clone()),
+	};
+	let map = TextMap::Host {
+		query: Box::new(found.query.clone()),
+		file,
+	};
+	match inline.iter().position(|query| query.text == found.query.text) {
+		Some(at) => {
+			inline[at].sources.push(source);
+			inline[at].maps.push(map);
+		}
+		None => inline.push(CollectedQuery {
+			name: None,
+			text: found.query.text,
+			sources: vec![source],
+			maps: vec![map],
+		}),
+	}
+	Ok(())
+}
+
+/// Reads the Python sources `config` names and adds their queries to `collected`.
+#[cfg(feature = "host-queries")]
+fn add_python(root: &str, config: &PythonConfig, collected: &mut Collected) -> Result<()> {
+	let methods: Vec<&str> = config.methods.iter().map(String::as_str).collect();
+	let scan = crate::host_queries::python::scan(
+		std::path::Path::new(root),
+		&config.files,
+		&methods,
+		std::slice::from_ref(&config.out),
+	)?;
+	collected.python_summary = Some(scan.summary());
+	let mut files: HashMap<std::path::PathBuf, Arc<str>> = HashMap::new();
+	for found in scan.found {
+		push_found(&mut collected.inline, &mut files, root, found)?;
+	}
+	Ok(())
+}
+
+#[cfg(not(feature = "host-queries"))]
+fn add_python(_root: &str, _config: &PythonConfig, _collected: &mut Collected) -> Result<()> {
+	anyhow::bail!(
+		"[typegen.python] needs the `host-queries` feature, which this build of SurrealKit does \
+		 not have; remove `[typegen.python]`, or use a build with it"
+	)
 }
 
 #[cfg(not(feature = "host-queries"))]
@@ -528,6 +590,7 @@ mod tests {
 			named: vec![query],
 			inline: vec![inline_query("RETURN 1", vec![])],
 			diagnostics: vec![],
+			..Default::default()
 		};
 		let at = text.find("nope").unwrap();
 		let types = engine_document(json!([
@@ -579,6 +642,7 @@ mod tests {
 				}],
 			}],
 			diagnostics: vec![],
+			..Default::default()
 		};
 		let at = text.find("WHERE").unwrap();
 		let types = one_failure(&[text.as_str()], (at, at + 5));
@@ -599,6 +663,7 @@ mod tests {
 				inline_query("SELECT b FROM user", vec![]),
 			],
 			diagnostics: vec![],
+			..Default::default()
 		};
 		let types = engine_document(json!([
 			// An action this reader does not know: that notification is left out.
@@ -641,6 +706,7 @@ mod tests {
 			named: vec![named("A", "RETURN 1", vec![])],
 			inline: vec![inline_query("RETURN 2", vec![])],
 			diagnostics: vec![],
+			..Default::default()
 		};
 		assert_eq!(
 			collected.inputs(),
@@ -665,6 +731,7 @@ mod tests {
 				],
 			)],
 			diagnostics: vec![],
+			..Default::default()
 		};
 		let types = engine_document(json!([
 			{ "name": "Zeta", "text": "RETURN $b + $a", "statements": [int_statement()],
@@ -766,6 +833,7 @@ mod tests {
 				vec![source(Origin::Host, "a.ts", 3, Some("query"))],
 			)],
 			diagnostics: vec![],
+			..Default::default()
 		};
 		// The engine refuses two inputs with one key, so the inline query is not sent.
 		assert_eq!(collected.inputs(), [(Some("Clash".to_string()), "RETURN 1".to_string())]);

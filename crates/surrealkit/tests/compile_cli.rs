@@ -716,6 +716,9 @@ fn watch_paths_prints_the_files_a_compile_reads_and_writes() {
 				"node_modules", "dist", "build", "target", ".svelte-kit", ".next", ".nuxt",
 				".astro", ".output"
 			],
+			"pythonFiles": [],
+			"pythonIgnoredDirectories":
+				[".venv", "venv", "__pycache__", "site-packages", "node_modules"],
 			"outputs": [
 				"generated/schema.json",
 				"src/generated/types.ts",
@@ -731,6 +734,22 @@ fn watch_paths_prints_the_files_a_compile_reads_and_writes() {
 	let one = watch_paths(tmp.path(), &["--schema", "core", "--out", "elsewhere/doc.json"]);
 	assert_eq!(one["schema"], serde_json::json!(["database/modules/core/schema"]));
 	assert_eq!(one["outputs"][0], "elsewhere/doc.json");
+}
+
+#[test]
+fn watch_paths_names_the_python_globs_and_module() {
+	let tmp = tempfile::TempDir::new().expect("tempdir");
+	write(
+		&tmp.path().join("surrealkit.toml"),
+		"[typegen]\nschema_version = 2\n\n[typegen.python]\nout = \"app/surreal_queries.py\"\n\
+		 files = [\"app/**/*.py\", \"tools/run.py\"]\n",
+	);
+	let paths = watch_paths(tmp.path(), &[]);
+	assert_eq!(paths["pythonFiles"], serde_json::json!(["app/**/*.py", "tools/run.py"]));
+	assert!(paths["outputs"].as_array().unwrap().contains(&"app/surreal_queries.py".into()));
+	// Python alone sets no TypeScript source.
+	assert_eq!(paths["querySources"], serde_json::json!([]));
+	assert_eq!(paths["queryExtensions"].as_array().unwrap().iter().any(|e| e == "py"), false);
 }
 
 #[test]

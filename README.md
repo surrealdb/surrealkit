@@ -659,6 +659,33 @@ The engine types the queries without running them, which needs SurrealDB 4.1. On
 engine `compile` and `typegen` report the warning `queries-unsupported-engine` and write no
 `queries`.
 
+#### Python
+
+`[typegen.python]` writes the same per-query types as a Python module for the `surrealdb`
+Python SDK. It reads the `.py` files its `files` globs name, so a project that only wants Python
+needs no `[typegen.queries] sources`; named queries still come from `[typegen.queries] files`.
+
+```toml
+[typegen.python]
+out = "app/surreal_queries.py"   # required: a .py file
+files = ["**/*.py"]              # globs, relative to the project root (default)
+methods = ["query", "query_raw", "live_query"]   # the client methods to look for (default)
+hints = "trust"                  # kinds the engine only hints at: as declared (default), or "unknown"
+models = "typeddict"             # rows as TypedDicts (default), or "pydantic" models
+```
+
+A query is a call `receiver.method("…")` (or `query="…"`) whose argument is one plain or
+triple-quoted string literal. An f-string, a `bytes` literal, a concatenation, a name or an
+escape the reader does not decode is skipped and counted in the compile summary
+(`python: 12 queries in 4 files; skipped 3 (f-string 2, concatenation 1)`), not reported as a
+diagnostic.
+
+The module gives `TypedAsyncSurreal(connection)` and `TypedSurreal(connection)` a `query()` with
+one overload per query text, so `(rows,) = await db.query("SELECT …")` is a typed
+`list[…Row]`. Text the module does not know has no overload; send it through `db.raw`. See
+[docs/typegen/python.md](docs/typegen/python.md) for the type mapping, live queries and the
+limits.
+
 #### `compile --watch`
 
 `surrealkit compile --watch` (also `generate --watch`) compiles, then regenerates the outputs

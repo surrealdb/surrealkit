@@ -5,6 +5,7 @@ use std::path::Path;
 use std::process::Command;
 
 use surrealkit::codegen::document::TypesDocument;
+use surrealkit::codegen::python::{self, ModelStyle};
 use surrealkit::codegen::queries::{QueryEntry, from_types_document};
 use surrealkit::codegen::query_types::{Report, Request, report};
 use surrealkit::codegen::section::{Collected, assemble};
@@ -74,6 +75,80 @@ fn queries_with_native_dates_and_distrusted_hints() {
 	insta::assert_snapshot!(
 		"queries_native_unknown",
 		render(&entries(QUERIES), &[], &native_unknown())
+	);
+}
+
+fn python_options(models: ModelStyle, hints: HintStyle) -> python::RenderOptions {
+	python::RenderOptions {
+		hints,
+		models,
+	}
+}
+
+fn python_default() -> python::RenderOptions {
+	python_options(ModelStyle::TypedDict, HintStyle::Trust)
+}
+
+#[test]
+fn python_queries() {
+	insta::assert_snapshot!(
+		"python_queries",
+		python::render(&[], &entries(QUERIES), &python_default())
+	);
+}
+
+#[test]
+fn python_queries_as_models() {
+	let options = python_options(ModelStyle::Pydantic, HintStyle::Trust);
+	insta::assert_snapshot!(
+		"python_queries_pydantic",
+		python::render(&[], &entries(QUERIES), &options)
+	);
+}
+
+#[test]
+fn python_queries_with_distrusted_hints() {
+	let options = python_options(ModelStyle::TypedDict, HintStyle::Unknown);
+	insta::assert_snapshot!(
+		"python_queries_unknown",
+		python::render(&[], &entries(QUERIES), &options)
+	);
+}
+
+#[test]
+fn python_every_v2_kind() {
+	let all = entries(KINDS);
+	insta::assert_snapshot!(
+		"python_kinds",
+		python::render(&types(KIND_TYPES), &all, &python_default())
+	);
+	let options = python_options(ModelStyle::Pydantic, HintStyle::Trust);
+	insta::assert_snapshot!(
+		"python_kinds_pydantic",
+		python::render(&types(KIND_TYPES), &all, &options)
+	);
+}
+
+#[test]
+fn python_the_engines_live_answer() {
+	let doc = TypesDocument::from_json(LIVE_ENGINE).expect("fixture document reads");
+	let converted = from_types_document(&doc);
+	insta::assert_snapshot!(
+		"python_live_engine",
+		python::render(&converted.types, &converted.queries, &python_default())
+	);
+	let options = python_options(ModelStyle::Pydantic, HintStyle::Trust);
+	insta::assert_snapshot!(
+		"python_live_engine_pydantic",
+		python::render(&converted.types, &converted.queries, &options)
+	);
+}
+
+#[test]
+fn python_empty_list() {
+	insta::assert_snapshot!(
+		"python_empty",
+		python::render(&[], &entries(EMPTY), &python_default())
 	);
 }
 

@@ -879,3 +879,242 @@ fn comments_include_javascript_comments_in_template_braces() {
 	let vue = "<template><p>{{ x /* in vue */ }}</p></template>\n<script>\n// s\n</script>\n";
 	assert_eq!(comment_texts("c.vue", vue), ["// s"]);
 }
+
+mod python {
+	use super::super::python::{self, Skip, scan};
+	use super::*;
+
+	const PY_METHODS: &[&str] = &["query", "query_raw", "live_query"];
+
+	fn queries(source: &str) -> Vec<HostQuery> {
+		python::extract(source, PY_METHODS).queries
+	}
+
+	fn texts(source: &str) -> Vec<String> {
+		queries(source).into_iter().map(|query| query.text).collect()
+	}
+
+	fn skipped(source: &str) -> Vec<(Skip, usize)> {
+		let counts = python::extract(source, PY_METHODS).skipped;
+		[
+			Skip::FString,
+			Skip::Bytes,
+			Skip::Concatenation,
+			Skip::NotALiteral,
+			Skip::UnsupportedEscape,
+		]
+		.into_iter()
+		.filter(|skip| counts.get(*skip) > 0)
+		.map(|skip| (skip, counts.get(skip)))
+		.collect()
+	}
+
+	#[test]
+	fn every_literal_form_is_a_query() {
+		let source = "
+db.query(\"A\")
+db.query('B')
+db.query(\"\"\"C\"\"\")
+db.query('''D''')
+db.query(r\"E\")
+db.query(R'F')
+db.query(u\"G\")
+db.query(U'H')
+db.query((\"J\"))
+";
+		assert_eq!(texts(source), ["A", "B", "C", "D", "E", "F", "G", "H", "J"]);
+	}
+
+	#[test]
+	fn contents_are_the_host_range() {
+		let source = "db.query(\"\"\"SELECT 1\"\"\")";
+		let query = &queries(source)[0];
+		assert_eq!(&source[query.host_range.clone()], "SELECT 1");
+		assert!(query.keyable());
+		assert_eq!(query.source, HostQuerySource::Method("query".to_string()));
+	}
+
+	#[test]
+	fn the_query_is_the_first_positional_argument_or_the_keyword() {
+		let source = "
+db.query(\"A\", {\"x\": 1})
+db.query(query=\"B\")
+db.query({\"x\": 1}, query=\"C\")
+db.query(vars, \"D\")
+db.query(\"E\", query=\"F\")
+db.query()
+";
+		// A positional argument that is not a literal wins over `query=`.
+		assert_eq!(texts(source), ["A", "B", "E"]);
+		assert_eq!(skipped(source), [(Skip::NotALiteral, 2)]);
+	}
+
+	#[test]
+	fn only_a_method_call_with_a_configured_name_counts() {
+		let source = "
+db.query(\"A\")
+db.query_raw(\"B\")
+db.live_query(\"C\")
+db.run(\"D\")
+query(\"E\")
+db[\"query\"](\"F\")
+";
+		assert_eq!(texts(source), ["A", "B", "C"]);
+		let queries = python::extract("db.run(\"R\"); db.query(\"Q\")", &["run"]).queries;
+		assert_eq!(queries.len(), 1);
+		assert_eq!(queries[0].method, "run");
+	}
+
+	#[test]
+	fn nested_and_chained_calls_are_found() {
+		let source = "
+await self.db.query(\"A\")
+x = [db.query(\"B\"), tx.query(\"C\")]
+db.query(db.query(\"D\"))
+db.query(\"E\").first()
+";
+		assert_eq!(texts(source), ["A", "B", "C", "D", "E"]);
+		assert_eq!(skipped(source), [(Skip::NotALiteral, 1)]);
+	}
+
+	#[test]
+	fn escapes_decode_to_the_runtime_value() {
+		let source = r#"
+db.query("a\nb\tc\\d\'e\"f")
+db.query("\x41é\U0001F600\101\0")
+db.query("a\
+b")
+db.query("keep \d and \q")
+db.query(r"no \n escape")
+"#;
+		let found = texts(source);
+		assert_eq!(found[0], "a\nb\tc\\d'e\"f");
+		assert_eq!(found[1], "A\u{e9}\u{1F600}A\0");
+		assert_eq!(found[2], "ab");
+		assert_eq!(found[3], "keep \\d and \\q");
+		assert_eq!(found[4], "no \\n escape");
+	}
+
+	#[test]
+	fn an_escape_the_reader_does_not_decode_skips_the_call() {
+		let source = r#"
+db.query("\N{DIGIT ONE}")
+db.query("\ud800")
+db.query("\x4")
+db.query("fine")
+"#;
+		assert_eq!(texts(source), ["fine"]);
+		assert_eq!(skipped(source), [(Skip::UnsupportedEscape, 3)]);
+	}
+
+	#[test]
+	fn line_breaks_read_as_line_feeds() {
+		let source = "db.query(\"\"\"a\r\nb\rc\"\"\")";
+		let query = &queries(source)[0];
+		assert_eq!(query.text, "a\nb\nc");
+		let second = query.text.find('b').unwrap();
+		assert_eq!(&source[query.host_offset(second)..][..1], "b");
+	}
+
+	#[test]
+	fn each_skip_has_a_reason() {
+		let source = r#"
+db.query(f"SELECT {x}")
+db.query(rf"SELECT {x}")
+db.query(b"SELECT 1")
+db.query("a" "b")
+db.query("a" + "b")
+db.query("a" + name)
+db.query(sql)
+db.query(sql + other)
+db.query(make())
+db.query("%s" % x)
+db.query("SELECT {}".format(x))
+db.query(("a" "b"))
+"#;
+		assert!(texts(source).is_empty());
+		assert_eq!(
+			skipped(source),
+			[
+				(Skip::FString, 2),
+				(Skip::Bytes, 1),
+				(Skip::Concatenation, 4),
+				(Skip::NotALiteral, 5),
+			]
+		);
+	}
+
+	#[test]
+	fn positions_are_found_inside_a_triple_quoted_literal() {
+		let source = "def f(db):\n    return db.query(\"\"\"\n        SELECT 1;\n        SELECT bad;\n    \"\"\")\n";
+		let query = &queries(source)[0];
+		assert_eq!((query.line, query.column), (2, 24));
+		let bad = query.text.find("bad").unwrap();
+		let at = query.host_offset(bad);
+		assert_eq!(&source[at..][..3], "bad");
+		let (line, column) = line_and_column(source, at);
+		assert_eq!((line, column), (4, 16));
+	}
+
+	#[test]
+	fn offsets_map_back_through_escapes_and_multibyte_text() {
+		let source = "db.query(\"h\u{e9}llo\\n\\x41 x\")";
+		let query = &queries(source)[0];
+		let newline = query.text.find('\n').unwrap();
+		assert_eq!(&source[query.host_offset(newline)..][..2], "\\n");
+		let a = query.text.find('A').unwrap();
+		assert_eq!(&source[query.host_offset(a)..][..4], "\\x41");
+		let x = query.text.find('x').unwrap();
+		assert_eq!(&source[query.host_offset(x)..][..1], "x");
+		assert_eq!(&source[query.host_span(0..1)], "h");
+		assert_eq!(query.embed_offset(query.host_offset(x)), Some(x));
+	}
+
+	#[test]
+	fn the_summary_names_the_counts() {
+		let mut scan = python::PythonScan::default();
+		assert_eq!(scan.summary(), "python: 0 queries in 0 files");
+		scan.skipped.add(Skip::FString);
+		scan.skipped.add(Skip::FString);
+		scan.skipped.add(Skip::Concatenation);
+		assert_eq!(
+			scan.summary(),
+			"python: 0 queries in 0 files; skipped 3 (f-string 2, concatenation 1)"
+		);
+	}
+
+	#[test]
+	fn the_scan_reads_py_files_the_globs_name() {
+		let dir = tempfile::TempDir::new().unwrap();
+		let write = |path: &str, text: &str| {
+			let path = dir.path().join(path);
+			std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+			std::fs::write(path, text).unwrap();
+		};
+		write("app.py", "db.query(\"TOP\")\ndb.query(f\"x{y}\")\n");
+		write("pkg/a.py", "db.query(\"A\")\n");
+		write("pkg/stub.pyi", "db.query(\"STUB\")\n");
+		write("pkg/.hidden/b.py", "db.query(\"HIDDEN\")\n");
+		write("pkg/__pycache__/c.py", "db.query(\"CACHE\")\n");
+		write(".venv/lib/site-packages/d.py", "db.query(\"VENV\")\n");
+		write("venv/e.py", "db.query(\"VENV2\")\n");
+		write("node_modules/f.py", "db.query(\"NODE\")\n");
+		write("pkg/generated.py", "db.query(\"OUT\")\n");
+		write("other/g.py", "db.query(\"G\")\n");
+		let run = |globs: &[&str]| {
+			let globs: Vec<String> = globs.iter().map(|g| g.to_string()).collect();
+			scan(dir.path(), &globs, PY_METHODS, &[dir.path().join("pkg/generated.py")]).unwrap()
+		};
+		let names = |scan: &python::PythonScan| -> Vec<String> {
+			scan.found.iter().map(|found| found.query.text.clone()).collect()
+		};
+		let all = run(&["**/*.py"]);
+		assert_eq!(names(&all), ["TOP", "G", "A"]);
+		assert_eq!(all.files, 3);
+		assert_eq!(all.skipped.get(Skip::FString), 1);
+		assert_eq!(all.summary(), "python: 3 queries in 3 files; skipped 1 (f-string 1)");
+		assert_eq!(names(&run(&["pkg/**/*.py"])), ["A"]);
+		assert_eq!(names(&run(&["app.py"])), ["TOP"]);
+		assert!(run(&[]).found.is_empty());
+	}
+}

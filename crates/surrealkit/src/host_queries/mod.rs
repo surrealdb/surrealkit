@@ -26,6 +26,7 @@
 mod frameworks;
 mod literal;
 mod markup;
+pub mod python;
 mod typescript;
 
 use std::collections::BTreeSet;

@@ -21,6 +21,37 @@ pub use crate::typegen::document::{
 	QueryOrigin, QueryParameter, QuerySource, QueryStatement,
 };
 
+/// Whether `source` is a Python file, by its extension. A source path is relative to the project
+/// root, so its directories say nothing about whether a file is read.
+fn is_python_source(source: &QuerySource) -> bool {
+	source.origin == QueryOrigin::Host
+		&& source.path.rsplit_once('.').is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("py"))
+}
+
+/// The entries the TypeScript module takes: every named query, and each inline query written in
+/// a file that is not Python. An inline entry with no source is kept.
+pub fn typescript_entries(entries: &[QueryEntry]) -> Vec<QueryEntry> {
+	entries
+		.iter()
+		.filter(|entry| {
+			entry.name.is_some()
+				|| entry.sources.is_empty()
+				|| entry.sources.iter().any(|source| !is_python_source(source))
+		})
+		.cloned()
+		.collect()
+}
+
+/// The entries the Python module takes: every named query, and each inline query written in a
+/// `.py` file.
+pub fn python_entries(entries: &[QueryEntry]) -> Vec<QueryEntry> {
+	entries
+		.iter()
+		.filter(|entry| entry.name.is_some() || entry.sources.iter().any(is_python_source))
+		.cloned()
+		.collect()
+}
+
 /// The v2 spelling of a path step into a collection's elements.
 pub const ELEMENT_SEGMENT: &str = "*";
 

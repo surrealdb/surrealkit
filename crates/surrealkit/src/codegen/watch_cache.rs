@@ -161,6 +161,7 @@ mod tests {
 			named,
 			inline,
 			diagnostics: Vec::new(),
+			..Default::default()
 		}
 	}
 
