@@ -32,3 +32,12 @@ export {
 export { type LiveMessageLike, reconcile, share } from './reconcile.js';
 export type * from './types.js';
 export { decodeValue, encodeValue, queryKey } from './values.js';
+export {
+	idleState,
+	type QueryKind,
+	resolveRequest,
+	seedState,
+	ViewMemory,
+	type ViewRequest,
+	type ViewState,
+} from './view.js';

@@ -30,20 +30,21 @@ import { useCallback, useMemo, useRef, useSyncExternalStore } from 'react';
 import {
 	cacheFor,
 	type DataOf,
-	decodeValue,
-	isPreloaded,
+	idleState,
 	type LiveRowOf,
 	type LiveText,
 	type ParamsOf,
 	type ParamsOptional,
 	type Preloaded,
-	preloadedParams,
-	type QueryState,
+	type QueryKind,
 	type QueryStatus,
 	type QueryText,
-	queryKey,
+	resolveRequest,
 	type SurrealLike,
 	type SurrealQueryError,
+	seedState,
+	ViewMemory,
+	type ViewState,
 } from 'surrealkit-query';
 
 import { useSurreal } from './context.js';
@@ -111,17 +112,17 @@ export function useLive<Q extends QueryText>(
 	return useEntry('live', q, args[0], args[1]) as LiveResult<LiveRowOf<Q>, Q>;
 }
 
-type Kind = 'query' | 'live';
+type Kind = QueryKind;
 
-const IDLE: QueryState<unknown> = {
-	status: 'pending',
-	data: undefined,
-	error: undefined,
-};
 const idleSubscribe = () => () => {};
-const idleSnapshot = () => IDLE;
-
-const browser = typeof document !== 'undefined';
+const IDLE: Record<Kind, ViewState> = {
+	query: { ...idleState('query'), stale: false },
+	live: { ...idleState('live'), stale: false },
+};
+const idleSnapshots: Record<Kind, () => ViewState> = {
+	query: () => IDLE.query,
+	live: () => IDLE.live,
+};
 
 /** @internal Shared by the hooks and the components. */
 export function useEntry(
@@ -131,55 +132,25 @@ export function useEntry(
 	options: HookOptions | undefined,
 ): QueryResult<unknown> {
 	const cache = cacheFor(useSurreal(options?.client));
-	const payload = isPreloaded(q) ? q : undefined;
-	const text = payload ? payload.text : (q as string);
-	const bound = params ?? (payload ? preloadedParams(payload) : undefined);
-	const key = queryKey(text, bound);
-	// The last result this hook showed, so new parameters can show it until
-	// theirs lands.
-	const last = useRef<{ key: string; data: unknown } | undefined>(undefined);
+	const request = resolveRequest(q, params);
+	const { key } = request;
+	const memory = useRef<ViewMemory | undefined>(undefined);
+	memory.current ??= new ViewMemory();
 
-	// Keyed by value: `bound` is read only when the key changes.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: the key stands for text and bound.
+	// Keyed by value: the request's text and params are read only when the key
+	// changes.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the key stands for the request.
 	const view = useMemo(() => {
-		let seeded: QueryState<unknown> | undefined;
-		if (
-			payload &&
-			queryKey(payload.text, preloadedParams(payload)) === key
-		) {
-			const result = decodeValue<unknown[]>(payload.data);
-			const data =
-				kind === 'live'
-					? result[0]
-					: result.length === 1
-						? result[0]
-						: result;
-			seeded = { status: 'success', data, error: undefined };
-			if (browser) cache.hydrate(payload);
-		}
+		const seed = seedState(kind, request, cache);
 		const observable =
 			kind === 'live'
-				? cache.observeLive(text, bound)
-				: cache.observe(text, bound);
-		const previous = last.current?.key === key ? undefined : last.current;
-		const stale: QueryState<unknown> | undefined = previous && {
-			status: 'success',
-			data: previous.data,
-			error: undefined,
-		};
-		// Once this key has a result, a later pending state (a reset) is shown
-		// as pending: the previous key's rows never come back.
-		let settled = false;
-		const snapshot = (): QueryState<unknown> => {
-			const state = observable.get();
-			if (state.status === 'pending' && seeded) return seeded;
-			if (state.status !== 'pending') settled = true;
-			return state.status === 'pending' && !settled && stale
-				? stale
-				: state;
-		};
-		return { observable, snapshot, stale };
-	}, [cache, kind, key, payload?.data]);
+				? cache.observeLive(request.text, request.params)
+				: cache.observe(request.text, request.params);
+		const shown = memory.current as ViewMemory;
+		const snapshot = (): ViewState =>
+			shown.show(key, observable.get(), seed);
+		return { observable, snapshot };
+	}, [cache, kind, key, request.payload?.data]);
 
 	const subscribe = useCallback(
 		(listener: () => void) => view.observable.subscribe(listener),
@@ -188,13 +159,10 @@ export function useEntry(
 	const enabled = options?.enabled ?? true;
 	const state = useSyncExternalStore(
 		enabled ? subscribe : idleSubscribe,
-		enabled ? view.snapshot : idleSnapshot,
-		enabled ? view.snapshot : idleSnapshot,
+		enabled ? view.snapshot : idleSnapshots[kind],
+		enabled ? view.snapshot : idleSnapshots[kind],
 	);
-	const isStale = enabled && state === view.stale;
-	if (state.status === 'success' && !isStale) {
-		last.current = { key, data: state.data };
-	}
+	const { text } = request;
 
 	return {
 		text,
@@ -202,7 +170,7 @@ export function useEntry(
 		error: state.error,
 		status: state.status,
 		loading: state.status === 'pending',
-		stale: isStale,
+		stale: state.stale,
 		refetch: view.observable.refetch,
 	};
 }

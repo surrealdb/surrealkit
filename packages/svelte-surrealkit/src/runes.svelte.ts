@@ -34,22 +34,24 @@
 import {
 	cacheFor,
 	type DataOf,
-	decodeValue,
-	isPreloaded,
+	idleState,
 	type LiveRowOf,
 	type LiveText,
 	type Observable,
 	type ParamsOf,
 	type ParamsOptional,
 	type Preloaded,
-	preloadedParams,
 	type QueryCache,
+	type QueryKind,
 	type QueryState,
 	type QueryStatus,
 	type QueryText,
-	queryKey,
+	resolveRequest,
 	type SurrealLike,
 	type SurrealQueryError,
+	seedState,
+	ViewMemory,
+	type ViewState,
 } from 'surrealkit-query';
 import { untrack } from 'svelte';
 import { createSubscriber } from 'svelte/reactivity';
@@ -143,33 +145,13 @@ export function isHandle(value: unknown): value is QueryHandle<unknown> {
 	return typeof value === 'object' && value !== null && HANDLE in value;
 }
 
-type Kind = 'query' | 'live';
-
-interface Request {
-	readonly text: string;
-	readonly params: object | undefined;
-	readonly payload: Preloaded | undefined;
-}
+type Kind = QueryKind;
 
 interface View {
 	readonly key: string;
 	readonly observable: Observable<unknown>;
-	readonly seed: unknown;
+	readonly seed: QueryState<unknown> | undefined;
 	readonly track: () => void;
-}
-
-const browser = typeof document !== 'undefined';
-
-/** The decoded result of each payload, so a payload is decoded once. */
-const decoded = new WeakMap<Preloaded, unknown[]>();
-
-function resultOf(payload: Preloaded): unknown[] {
-	let result = decoded.get(payload);
-	if (!result) {
-		result = decodeValue<unknown[]>(payload.data);
-		decoded.set(payload, result);
-	}
-	return result;
 }
 
 /** Shared by the runes and the components. */
@@ -181,47 +163,23 @@ export function handle(
 ): QueryHandle<unknown> & { readonly [HANDLE]: true } {
 	const cache = cacheFor(options?.client ?? getSurreal());
 
-	const request = $derived.by((): Request => {
-		const source = typeof q === 'function' ? q() : q;
-		const explicit = params?.();
-		if (isPreloaded(source)) {
-			return {
-				text: source.text,
-				params: explicit ?? preloadedParams(source),
-				payload: source,
-			};
-		}
-		return { text: source, params: explicit, payload: undefined };
-	});
+	const request = $derived(
+		resolveRequest(typeof q === 'function' ? q() : q, params?.()),
+	);
 
-	// A string, so a getter that returns equal values leaves it unchanged and
-	// nothing downstream re-runs.
-	const key = $derived(queryKey(request.text, request.params));
+	const key = $derived(request.key);
 
 	const enabled = $derived(options?.enabled?.() ?? true);
 
 	const view = $derived.by((): View | undefined => {
 		void key;
 		if (!enabled) return undefined;
-		const { text, params, payload } = untrack(() => request);
-		let seed: unknown;
-		if (
-			payload &&
-			queryKey(payload.text, preloadedParams(payload)) === key
-		) {
-			const result = resultOf(payload);
-			seed =
-				kind === 'live'
-					? result[0]
-					: result.length === 1
-						? result[0]
-						: result;
-			if (browser) cache.hydrate(payload);
-		}
+		const current = untrack(() => request);
+		const seed = seedState(kind, current, cache);
 		const observable =
 			kind === 'live'
-				? cache.observeLive(text, params)
-				: cache.observe(text, params);
+				? cache.observeLive(current.text, current.params)
+				: cache.observe(current.text, current.params);
 		return {
 			key,
 			observable,
@@ -230,38 +188,13 @@ export function handle(
 		};
 	});
 
-	// The last result shown, so new parameters can show it until theirs lands.
-	let last: { key: string; data: unknown } | undefined;
+	const memory = new ViewMemory();
 
-	const read = (): QueryState<unknown> & { stale: boolean } => {
+	const read = (): ViewState => {
 		const current = view;
-		if (!current) {
-			const data = kind === 'live' ? [] : undefined;
-			return { status: 'pending', data, error: undefined, stale: false };
-		}
+		if (!current) return { ...idleState(kind), stale: false };
 		current.track();
-		const state = current.observable.get();
-		const settled =
-			state.status === 'pending' && current.seed !== undefined
-				? {
-						status: 'success' as const,
-						data: current.seed,
-						error: undefined,
-					}
-				: state;
-		if (settled.status === 'success') {
-			last = { key: current.key, data: settled.data };
-			return { ...settled, stale: false };
-		}
-		if (settled.status === 'pending' && last && last.key !== current.key) {
-			return {
-				status: 'success',
-				data: last.data,
-				error: undefined,
-				stale: true,
-			};
-		}
-		return { ...settled, stale: false };
+		return memory.show(current.key, current.observable.get(), current.seed);
 	};
 
 	return {
