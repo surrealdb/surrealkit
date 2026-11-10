@@ -293,10 +293,10 @@
           "origin": "host",
           "path": "server/api.ts",
           "span": {
-            "start": 1968,
-            "end": 2014
+            "start": 1777,
+            "end": 1823
           },
-          "line": 53,
+          "line": 49,
           "column": 20,
           "method": "query"
         }
@@ -405,10 +405,10 @@
           "origin": "host",
           "path": "server/api.ts",
           "span": {
-            "start": 2573,
-            "end": 2583
+            "start": 2382,
+            "end": 2392
           },
-          "line": 70,
+          "line": 66,
           "column": 20,
           "method": "query"
         },
@@ -1304,10 +1304,10 @@
           "origin": "host",
           "path": "server/api.ts",
           "span": {
-            "start": 2379,
-            "end": 2410
+            "start": 2188,
+            "end": 2219
           },
-          "line": 63,
+          "line": 59,
           "column": 20,
           "method": "query"
         },

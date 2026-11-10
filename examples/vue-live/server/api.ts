@@ -15,10 +15,6 @@ import type { IncomingMessage, ServerResponse } from 'node:http';
 import { RecordId, Surreal } from 'surrealdb';
 import type { Connect, Plugin } from 'vite';
 
-// The generated module augments surrealkit-query's Register; TypeScript
-// resolves that augmentation only when the program also imports the module.
-import type {} from 'surrealkit-query';
-
 import type { Typed } from '../src/generated/queries';
 
 const SCOPE = { namespace: 'demo', database: 'demo' };

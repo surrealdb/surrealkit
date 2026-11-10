@@ -10,6 +10,7 @@
 // Everything here is a type except `liveQueries`, a runtime value: import it as a value.
 
 import type { BoundQuery, DateTime, QueryLike, RecordId, SurrealQueryable, Table, Uuid } from "surrealdb";
+import type {} from "surrealkit-query";
 
 /** Every query, keyed by its exact text. */
 export type Queries = {
