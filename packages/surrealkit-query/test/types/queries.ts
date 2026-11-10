@@ -28,6 +28,7 @@ export type Queries = {
   "SELECT * FROM ONLY user:ada": { result: [{ id: RecordId<"user">; name: string; team: RecordId<"team"> } | undefined]; params: {} };
   "LIVE SELECT DIFF FROM user": { result: [Uuid]; params: {} };
   "LET $n = 1; LIVE SELECT * FROM user;": { result: [undefined, Uuid]; params: {} };
+  "SELECT team, count() AS n FROM user GROUP BY team": { result: [Array<{ n: number; team: RecordId<"team"> }>]; params: {} };
 };
 
 /** Each named query's text, so `Queries[QueryNames["name"]]` finds its entry. */
@@ -43,16 +44,21 @@ export const liveQueries = {
     refusal: { clauses: ["ORDER BY", "LIMIT"], windowable: true },
   },
   "SELECT * FROM user WHERE team = $team": { query: "LIVE SELECT * FROM user WHERE team = $team", exit: "silent", watch: "LIVE SELECT id FROM user" },
-  "SELECT * FROM ONLY user:ada": { refusal: { clauses: ["ONLY"], windowable: false } },
+  "SELECT * FROM ONLY user:ada": { refusal: { clauses: ["ONLY", "FROM"], windowable: false } },
   "LIVE SELECT DIFF FROM user": { query: "LIVE SELECT DIFF FROM user" },
+  "SELECT team, count() AS n FROM user GROUP BY team": {
+    query: "LIVE SELECT id FROM user",
+    refusal: { clauses: ["GROUP BY"], windowable: true },
+  },
 } as const;
 
 /** The notification a live subscription delivers, per query, as the SDK's `LiveMessage` carries it. */
 type LiveNotifications = {
   "SELECT * FROM user": { queryId: Uuid; action: "CREATE"; recordId: RecordId<"user">; value: { id: RecordId<"user">; name: string; team: RecordId<"team"> } } | { queryId: Uuid; action: "UPDATE"; recordId: RecordId<"user">; value: { id: RecordId<"user">; name: string; team: RecordId<"team"> } } | { queryId: Uuid; action: "DELETE"; recordId: RecordId<"user">; value: { id: RecordId<"user">; name: string; team: RecordId<"team"> } } | { queryId: Uuid; action: "KILLED"; recordId?: undefined; value?: undefined };
   "SELECT * FROM user ORDER BY name LIMIT $lim": { queryId: Uuid; action: "CREATE"; recordId: RecordId<"user">; value: { id: RecordId<"user">; name: string; team: RecordId<"team"> } } | { queryId: Uuid; action: "UPDATE"; recordId: RecordId<"user">; value: { id: RecordId<"user">; name: string; team: RecordId<"team"> } } | { queryId: Uuid; action: "DELETE"; recordId: RecordId<"user">; value: { id: RecordId<"user">; name: string; team: RecordId<"team"> } } | { queryId: Uuid; action: "KILLED"; recordId?: undefined; value?: undefined };
-  "SELECT * FROM user WHERE team = $team": { queryId: Uuid; action: "CREATE"; recordId: RecordId<"user">; value: { id: RecordId<"user">; name: string; team: RecordId<"team">; [key: string]: unknown } } | { queryId: Uuid; action: "UPDATE"; recordId: RecordId<"user">; value: { id: RecordId<"user">; name: string; team: RecordId<"team">; [key: string]: unknown } } | { queryId: Uuid; action: "DELETE"; recordId: RecordId<"user">; value: { id: RecordId<"user">; name: string; team: RecordId<"team">; [key: string]: unknown } } | { queryId: Uuid; action: "KILLED"; recordId?: undefined; value?: undefined };
+  "SELECT * FROM user WHERE team = $team": { queryId: Uuid; action: "CREATE"; recordId: RecordId<"user">; value: { id: RecordId<"user">; name: string; team: RecordId<"team"> } } | { queryId: Uuid; action: "UPDATE"; recordId: RecordId<"user">; value: { id: RecordId<"user">; name: string; team: RecordId<"team"> } } | { queryId: Uuid; action: "DELETE"; recordId: RecordId<"user">; value: { id: RecordId<"user">; name: string; team: RecordId<"team"> } } | { queryId: Uuid; action: "KILLED"; recordId?: undefined; value?: undefined };
   "LIVE SELECT DIFF FROM user": { queryId: Uuid; action: "CREATE"; recordId: RecordId<"user">; value: Array<{ op: "add" | "change" | "remove" | "replace"; path: string; value: unknown }> } | { queryId: Uuid; action: "UPDATE"; recordId: RecordId<"user">; value: Array<{ op: "add" | "change" | "remove" | "replace"; path: string; value: unknown }> } | { queryId: Uuid; action: "DELETE"; recordId: RecordId<"user">; value: Array<{ op: "add" | "change" | "remove" | "replace"; path: string; value: unknown }> } | { queryId: Uuid; action: "KILLED"; recordId?: undefined; value?: undefined };
+  "SELECT team, count() AS n FROM user GROUP BY team": { queryId: Uuid; action: "CREATE"; recordId: RecordId<"user">; value: { id: RecordId<"user"> } } | { queryId: Uuid; action: "UPDATE"; recordId: RecordId<"user">; value: { id: RecordId<"user"> } } | { queryId: Uuid; action: "DELETE"; recordId: RecordId<"user">; value: { id: RecordId<"user"> } } | { queryId: Uuid; action: "KILLED"; recordId?: undefined; value?: undefined };
 };
 export type LiveQueries = {
   [K in keyof typeof liveQueries]: (typeof liveQueries)[K] & {
