@@ -9,7 +9,9 @@ use surrealkit::codegen::python::{self, ModelStyle};
 use surrealkit::codegen::queries::{QueryEntry, from_types_document};
 use surrealkit::codegen::query_types::{Report, Request, report};
 use surrealkit::codegen::section::{Collected, assemble};
-use surrealkit::codegen::typescript::{DateStyle, HintStyle, RenderOptions, render};
+use surrealkit::codegen::typescript::{
+	DateStyle, HintStyle, RenderOptions, render, render_declarations,
+};
 use surrealkit::typegen::document::TypeDef;
 
 const QUERIES: &str = include_str!("fixtures/codegen/queries.json");
@@ -150,6 +152,33 @@ fn python_empty_list() {
 		"python_empty",
 		python::render(&[], &entries(EMPTY), &python_default())
 	);
+}
+
+#[test]
+fn declarations_and_the_runtime_file() {
+	let split = render_declarations(&entries(QUERIES), &[], &RenderOptions::default(), "queries");
+	insta::assert_snapshot!("queries_declarations", split.declarations);
+	insta::assert_snapshot!("queries_runtime", split.runtime);
+	// The declarations are the module's types: the same text, with `liveQueries` declared.
+	assert!(split.declarations.contains("export declare const liveQueries: {\n"));
+	assert!(!split.declarations.contains("as const"));
+	assert!(split.runtime.contains("export const liveQueries = {\n"));
+	assert!(split.runtime.contains("@type {typeof import(\"./queries\").liveQueries}"));
+	let empty = render_declarations(&entries(EMPTY), &[], &RenderOptions::default(), "queries");
+	assert!(empty.declarations.contains("export declare const liveQueries: {};\n"));
+	assert!(empty.runtime.contains("export const liveQueries = {};\n"));
+}
+
+#[test]
+fn declarations_with_register_import_the_package_they_augment() {
+	let opts = RenderOptions {
+		register: Some("surrealkit-query".to_string()),
+		..RenderOptions::default()
+	};
+	let split = render_declarations(&entries(QUERIES), &[], &opts, "queries");
+	assert!(split.declarations.contains("\nimport type {} from \"surrealkit-query\";\n"));
+	assert!(split.declarations.contains("declare module \"surrealkit-query\" {"));
+	assert!(!split.runtime.contains("surrealkit-query"));
 }
 
 #[test]
@@ -478,6 +507,45 @@ fn typecheck_golden_with_register_with_tsc() {
 	run_tsc(&tsc, root);
 	// The module alone, in a program where nothing else imports the package it augments.
 	write_tsconfig(root, &["queries.ts".to_string()]);
+	run_tsc(&tsc, root);
+}
+
+/// The declarations file and its runtime file, typechecked and run through `checkJs` together.
+#[test]
+#[ignore = "needs SURREALKIT_TSC and SURREALKIT_TS_SDK"]
+fn typecheck_golden_declarations_with_tsc() {
+	let (Some(tsc), Some(sdk)) =
+		(std::env::var_os("SURREALKIT_TSC"), std::env::var_os("SURREALKIT_TS_SDK"))
+	else {
+		return;
+	};
+	let dir = tempfile::tempdir().expect("tempdir");
+	let root = dir.path();
+	let modules = root.join("node_modules");
+	std::fs::create_dir_all(&modules).expect("node_modules");
+	symlink(Path::new(&sdk), &modules.join("surrealdb"));
+	let split = render_declarations(&entries(QUERIES), &[], &RenderOptions::default(), "queries");
+	write(&root.join("queries.d.ts"), &split.declarations);
+	write(&root.join("queries.js"), &split.runtime);
+	write(&root.join("use.ts"), USE_TS);
+	write(
+		&root.join("tsconfig.json"),
+		r#"{
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": true,
+    "target": "es2022",
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "skipLibCheck": true,
+    "types": []
+  },
+  "files": ["use.ts", "queries.d.ts", "queries.js"]
+}
+"#,
+	);
 	run_tsc(&tsc, root);
 }
 

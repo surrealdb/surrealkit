@@ -478,11 +478,32 @@ fn queries_modules(v2: Option<&SchemaDocument>, opts: &TypegenOpts) -> Result<Ve
 	let mut modules = Vec::new();
 	if let Some(path) = &queries.typescript {
 		let entries = crate::codegen::queries::typescript_entries(&v2.queries);
-		modules.push(Artifact {
-			path: path.clone(),
-			bytes: crate::codegen::typescript::render(&entries, &v2.types, &queries.render)
-				.into_bytes(),
-		});
+		match crate::variables::declaration_runtime_file(path) {
+			// `x.d.ts` holds the types and `x.js` the runtime value, for plain JavaScript.
+			Some(runtime) => {
+				let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+				let stem = &name[..name.len() - ".d.ts".len()];
+				let split = crate::codegen::typescript::render_declarations(
+					&entries,
+					&v2.types,
+					&queries.render,
+					stem,
+				);
+				modules.push(Artifact {
+					path: path.clone(),
+					bytes: split.declarations.into_bytes(),
+				});
+				modules.push(Artifact {
+					path: runtime,
+					bytes: split.runtime.into_bytes(),
+				});
+			}
+			None => modules.push(Artifact {
+				path: path.clone(),
+				bytes: crate::codegen::typescript::render(&entries, &v2.types, &queries.render)
+					.into_bytes(),
+			}),
+		}
 	}
 	if let Some(python) = &queries.python {
 		let entries = crate::codegen::queries::python_entries(&v2.queries);

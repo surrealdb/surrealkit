@@ -263,7 +263,7 @@ pub fn watch_set(
 			.unwrap_or_else(|| crate::constants::typegen_output_path(folder)),
 	];
 	outputs.extend(typegen.typescript_path()?.map(|path| crate::typegen::typescript_file(&path)));
-	outputs.extend(typegen.queries_typescript()?);
+	outputs.extend(typegen.queries_outputs()?);
 	outputs.extend(typegen.python_out()?);
 	outputs.extend(typegen.emitters()?.into_iter().map(|emitter| emitter.out));
 	Ok(WatchSet {

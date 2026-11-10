@@ -264,3 +264,53 @@ fn scan_names_a_missing_root() {
 	let error = scan(&[missing], DEFAULT_METHODS).expect_err("missing root fails");
 	assert!(error.to_string().contains("does-not-exist"), "{error}");
 }
+
+/// A text written in both a TypeScript and a Python file is one query with a source in each, and
+/// each language's module takes it.
+#[test]
+fn a_text_in_typescript_and_python_is_one_entry_for_both_modules() {
+	use surrealkit::codegen::document::TypesDocument;
+	use surrealkit::codegen::queries::{python_entries, typescript_entries};
+	use surrealkit::codegen::section::{assemble, collect_all};
+	use surrealkit::variables::{PythonConfig, QueriesConfig};
+
+	let dir = tempfile::TempDir::new().expect("tempdir");
+	let write = |path: &str, text: &str| {
+		let path = dir.path().join(path);
+		fs::create_dir_all(path.parent().expect("parent")).expect("dirs");
+		fs::write(path, text).expect("write");
+	};
+	write("web/app.ts", "db.query(\"SELECT 1\"); db.query(\"SELECT 'ts only'\");\n");
+	write("api/main.py", "db.query(\"SELECT 1\")\ndb.query(\"SELECT 'py only'\")\n");
+	let root = dir.path().to_str().expect("utf-8");
+	let queries = QueriesConfig {
+		sources: vec![dir.path().join("web")],
+		..QueriesConfig::default()
+	};
+	let python: PythonConfig = toml::from_str("out = \"api/queries.py\"").expect("python config");
+	let collected = collect_all(root, Some(&queries), Some(&python)).expect("collect");
+	assert_eq!(collected.inline.len(), 3);
+
+	let statement = serde_json::json!({
+		"kind_value": "Int", "certainty": "fact", "support": { "exact": true }
+	});
+	let typed = |text: &str| serde_json::json!({ "text": text, "statements": [statement] });
+	let doc = serde_json::json!({
+		"format": "surrealdb.types", "version": 1,
+		"queries": [typed("SELECT 1"), typed("SELECT 'ts only'"), typed("SELECT 'py only'")],
+	});
+	let doc = TypesDocument::from_json(&doc.to_string()).expect("document");
+	let (entries, diagnostics) = assemble(&collected, Some(&doc));
+	assert!(diagnostics.is_empty(), "{diagnostics:?}");
+	assert_eq!(entries.len(), 3);
+
+	let shared = entries.iter().find(|entry| entry.text == "SELECT 1").expect("shared entry");
+	let paths: Vec<&str> = shared.sources.iter().map(|source| source.path.as_str()).collect();
+	assert_eq!(paths, ["api/main.py", "web/app.ts"]);
+
+	let keys = |entries: &[surrealkit::codegen::queries::QueryEntry]| -> Vec<String> {
+		entries.iter().map(|entry| entry.text.clone()).collect()
+	};
+	assert_eq!(keys(&typescript_entries(&entries)), ["SELECT 'ts only'", "SELECT 1"]);
+	assert_eq!(keys(&python_entries(&entries)), ["SELECT 'py only'", "SELECT 1"]);
+}

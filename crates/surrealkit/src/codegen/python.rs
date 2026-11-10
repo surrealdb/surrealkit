@@ -14,9 +14,9 @@
 //! # Optionality has two spellings, and the position picks
 //!
 //! A SurrealQL `option<string>` is `none | string`. As the type of an object field it is
-//! `NotRequired[str]` (`str | None = None` for a model), because the SDK leaves a field that is
-//! NONE out of the row. Anywhere a value stands on its own (a tuple slot, an array element, a
-//! statement result) it is `str | None`.
+//! `NotRequired[str | None]` (`str | None = None` for a model): a field that is NONE is absent
+//! from a `SELECT *` row and present as `None` in a projection that names it. Anywhere a value
+//! stands on its own (a tuple slot, an array element, a statement result) it is `str | None`.
 //!
 //! # Names
 //!
@@ -756,7 +756,11 @@ impl Module<'_> {
 				kind => (kind, field.optional),
 			};
 			let child = format!("{hint}{}", pascal(&field.name));
-			let type_ = self.kind(kind, &child, &into_field(open, &field.name), style);
+			let mut type_ = self.kind(kind, &child, &into_field(open, &field.name), style);
+			// A NONE field is absent from a `SELECT *` row but present as `None` in a projection.
+			if optional {
+				type_ = or_none(type_);
+			}
 			members.push(Member::new(&field.name, type_, optional));
 		}
 		let class = self.class_kind(style, &members);
@@ -927,6 +931,7 @@ impl Module<'_> {
 			Member::new("id", "uuid.UUID".to_string(), false),
 			Member::new("record", record, false),
 			Member::new("result", result.clone(), false),
+			Member::new("session", "uuid.UUID".to_string(), false),
 		];
 		let name = self.define(&format!("{prefix}{suffix}"), ClassKind::TypedDict, members, false);
 		(name, result)
@@ -1565,7 +1570,9 @@ mod tests {
 			]))])
 		)]));
 		assert!(
-			out.contains("    a: str\n    b: NotRequired[str]\n    c: NotRequired[str]\n"),
+			out.contains(
+				"    a: str\n    b: NotRequired[str | None]\n    c: NotRequired[str | None]\n"
+			),
 			"{out}"
 		);
 	}
@@ -1668,7 +1675,7 @@ mod tests {
 		)]));
 		assert!(
 			out.contains(
-				"KeysRow = TypedDict(\n    \"KeysRow\",\n    {\n        \"from\": str,\n        \"weird key\": NotRequired[int],\n    },\n)"
+				"KeysRow = TypedDict(\n    \"KeysRow\",\n    {\n        \"from\": str,\n        \"weird key\": NotRequired[int | None],\n    },\n)"
 			),
 			"{out}"
 		);
@@ -1799,7 +1806,7 @@ mod tests {
 			query("SELECT 1", None, json!([statement(int())])),
 		]));
 		assert!(out.contains(
-			"class WatchCreate(TypedDict):\n    action: Literal[\"CREATE\"]\n    id: uuid.UUID\n    record: RecordID\n    result: WatchRow\n"
+			"class WatchCreate(TypedDict):\n    action: Literal[\"CREATE\"]\n    id: uuid.UUID\n    record: RecordID\n    result: WatchRow\n    session: uuid.UUID\n"
 		), "{out}");
 		assert!(out.contains("class WatchDelete(TypedDict):"), "{out}");
 		// KILLED ends the stream and has no type.

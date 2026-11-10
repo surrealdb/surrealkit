@@ -650,6 +650,13 @@ notification. `liveQueries` is always exported, `{}` when there is none. A query
 not type is left out of both registries and reported as `query-invalid`; its text keeps the SDK's
 untyped `query()`.
 
+For plain JavaScript, name a declarations file: `typescript = "src/queries.d.ts"`. SurrealKit
+then writes the module as declarations only (`liveQueries` becomes `export declare const`) and
+`liveQueries` as a value in `src/queries.js` beside it, typed by the declarations. Both files are
+outputs of the compile, so `--check`, `--watch` and `--watch-paths` know them. With
+`// @ts-check` (or `checkJs`), `/** @type {import("./queries").Typed<Surreal>} */` types
+`db.query()` in a `.js` file. See [examples/js-typed](examples/js-typed).
+
 `register` names the bindings package to augment, so its components and functions are typed by
 the generated registry: the module ends with `declare module "<register>" { interface Register {
 queries: Queries; liveQueries: LiveQueries } }`. It must name the package that declares
@@ -684,7 +691,9 @@ The module gives `TypedAsyncSurreal(connection)` and `TypedSurreal(connection)` 
 one overload per query text, so `(rows,) = await db.query("SELECT …")` is a typed
 `list[…Row]`. Text the module does not know has no overload; send it through `db.raw`. See
 [docs/typegen/python.md](docs/typegen/python.md) for the type mapping, live queries and the
-limits.
+limits. A live notification carries `action`, `id`, `record`, `result` and `session`. A runnable
+example, with schema, named queries, a deliberately wrong file and a runtime check against a
+server, is in [examples/python-typed](examples/python-typed).
 
 #### `compile --watch`
 

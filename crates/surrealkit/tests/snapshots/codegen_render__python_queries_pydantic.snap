@@ -131,6 +131,7 @@ class Query_8469792bCreate(TypedDict):
     id: uuid.UUID
     record: RecordID
     result: Query_8469792bRow
+    session: uuid.UUID
 
 
 class Query_8469792bUpdate(TypedDict):
@@ -138,6 +139,7 @@ class Query_8469792bUpdate(TypedDict):
     id: uuid.UUID
     record: RecordID
     result: Query_8469792bRow
+    session: uuid.UUID
 
 
 class Query_8469792bDelete(TypedDict):
@@ -145,6 +147,7 @@ class Query_8469792bDelete(TypedDict):
     id: uuid.UUID
     record: RecordID
     result: Query_8469792bRow
+    session: uuid.UUID
 
 
 Query_8469792bNotification: TypeAlias = Query_8469792bCreate | Query_8469792bUpdate | Query_8469792bDelete
@@ -179,6 +182,7 @@ class Query_4b375711Create(TypedDict):
     id: uuid.UUID
     record: RecordID
     result: Query_4b375711Row
+    session: uuid.UUID
 
 
 class Query_4b375711Update(TypedDict):
@@ -186,6 +190,7 @@ class Query_4b375711Update(TypedDict):
     id: uuid.UUID
     record: RecordID
     result: Query_4b375711Row
+    session: uuid.UUID
 
 
 class Query_4b375711Delete(TypedDict):
@@ -193,6 +198,7 @@ class Query_4b375711Delete(TypedDict):
     id: uuid.UUID
     record: RecordID
     result: Query_4b375711Row
+    session: uuid.UUID
 
 
 Query_4b375711Notification: TypeAlias = Query_4b375711Create | Query_4b375711Update | Query_4b375711Delete
@@ -219,6 +225,7 @@ class Query_f84f4da5Create(TypedDict):
     id: uuid.UUID
     record: RecordID
     result: list[Query_f84f4da5Result]
+    session: uuid.UUID
 
 
 class Query_f84f4da5Update(TypedDict):
@@ -226,6 +233,7 @@ class Query_f84f4da5Update(TypedDict):
     id: uuid.UUID
     record: RecordID
     result: list[Query_f84f4da5Result]
+    session: uuid.UUID
 
 
 class Query_f84f4da5Delete(TypedDict):
@@ -233,6 +241,7 @@ class Query_f84f4da5Delete(TypedDict):
     id: uuid.UUID
     record: RecordID
     result: list[Query_f84f4da5Result]
+    session: uuid.UUID
 
 
 Query_f84f4da5Notification: TypeAlias = Query_f84f4da5Create | Query_f84f4da5Update | Query_f84f4da5Delete

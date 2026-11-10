@@ -497,12 +497,12 @@ impl TypegenConfig {
 		let lexical = |p: &Path| -> PathBuf {
 			p.components().filter(|c| !matches!(c, std::path::Component::CurDir)).collect()
 		};
-		let mut own: Vec<PathBuf> =
-			[self.json_path()?, self.typescript_path()?, self.queries_typescript()?]
-				.into_iter()
-				.flatten()
-				.map(|p| lexical(&p))
-				.collect();
+		let mut own: Vec<PathBuf> = [self.json_path()?, self.typescript_path()?]
+			.into_iter()
+			.flatten()
+			.chain(self.queries_outputs()?)
+			.map(|p| lexical(&p))
+			.collect();
 		own.extend(self.python_out()?.map(|p| lexical(&p)));
 		for emitter in &out {
 			let dir = lexical(&emitter.out);
@@ -639,6 +639,16 @@ impl TypegenConfig {
 		Ok(Some(python.out.clone()))
 	}
 
+	/// Every file the per-query TypeScript output writes: the module, and for a `.d.ts` the
+	/// `.js` file of the runtime value beside it. Empty without `[typegen.queries] typescript`.
+	pub fn queries_outputs(&self) -> Result<Vec<PathBuf>> {
+		let Some(typescript) = self.queries_typescript()? else {
+			return Ok(Vec::new());
+		};
+		let runtime = declaration_runtime_file(&typescript);
+		Ok(std::iter::once(typescript).chain(runtime).collect())
+	}
+
 	/// The per-query TypeScript file, if `[typegen.queries] typescript` is set. It names a file.
 	pub fn queries_typescript(&self) -> Result<Option<PathBuf>> {
 		let Some(typescript) = self.queries.as_ref().and_then(|q| q.typescript.as_ref()) else {
@@ -719,6 +729,25 @@ pub const DEFAULT_JSON_FILE: &str = "schema.json";
 /// Whether `path` names a JSON file rather than a directory.
 pub fn is_json_file(path: &Path) -> bool {
 	path.extension().is_some_and(|ext| ext == "json")
+}
+
+/// Whether `path` names a declarations file, `x.d.ts`: a per-query module with that name holds
+/// only types, and its runtime value is written to a `.js` file beside it.
+pub fn is_declaration_file(path: &Path) -> bool {
+	path.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
+		name.len() > ".d.ts".len()
+			&& name[name.len() - ".d.ts".len()..].eq_ignore_ascii_case(".d.ts")
+	})
+}
+
+/// The `.js` file beside the declarations file `path` (`x.d.ts` has `x.js`); `None` when `path`
+/// is not a declarations file.
+pub fn declaration_runtime_file(path: &Path) -> Option<PathBuf> {
+	if !is_declaration_file(path) {
+		return None;
+	}
+	let name = path.file_name()?.to_str()?;
+	Some(path.with_file_name(format!("{}.js", &name[..name.len() - ".d.ts".len()])))
 }
 
 /// Whether `path` names a TypeScript file rather than a directory.
@@ -1082,6 +1111,36 @@ mod tests {
 		)
 		.unwrap();
 		assert_eq!(ok.emitters().unwrap().len(), 1);
+	}
+
+	#[test]
+	fn a_declarations_file_has_a_runtime_file_beside_it() {
+		let parse = |raw: &str| toml::from_str::<ProjectConfig>(raw).unwrap().typegen;
+		assert!(is_declaration_file(Path::new("src/queries.d.ts")));
+		assert!(!is_declaration_file(Path::new("src/queries.ts")));
+		assert!(!is_declaration_file(Path::new(".d.ts")));
+		assert_eq!(
+			declaration_runtime_file(Path::new("src/queries.d.ts")),
+			Some(PathBuf::from("src/queries.js"))
+		);
+		assert_eq!(declaration_runtime_file(Path::new("src/queries.ts")), None);
+
+		let plain = parse("[typegen.queries]\ntypescript = \"src/queries.ts\"\n");
+		assert_eq!(plain.queries_outputs().unwrap(), [PathBuf::from("src/queries.ts")]);
+		let plain_js = parse("[typegen.queries]\ntypescript = \"src/queries.d.ts\"\n");
+		assert_eq!(
+			plain_js.queries_outputs().unwrap(),
+			[PathBuf::from("src/queries.d.ts"), PathBuf::from("src/queries.js")]
+		);
+		assert!(parse("[typegen.queries]\n").queries_outputs().unwrap().is_empty());
+
+		// Both files are the project's own: neither may be inside an emitter's directory.
+		let inside = parse(
+			"[typegen.queries]\ntypescript = \"gen/queries.d.ts\"\n[typegen.emit.e]\ncommand = \
+			 \"x\"\nout = \"gen\"\n",
+		);
+		let err = inside.emitters().unwrap_err().to_string();
+		assert!(err.contains("which SurrealKit writes itself"), "{err}");
 	}
 
 	#[test]

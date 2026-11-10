@@ -61,13 +61,16 @@ skipped is counted by reason in the compile summary and raises no diagnostic:
 | `set<T>` | `SurrealSet` |
 | tuple | `tuple[…]` |
 | literal, enum, union of literals | `Literal["a", "b"]` |
-| `option<T>` as an object field | `NotRequired[T]` (`T \| None = None` in a model) |
+| `option<T>` as an object field | `NotRequired[T \| None]` (`T \| None = None` in a model) |
 | `option<T>` elsewhere, an optional statement | `T \| None` |
 | union | `A \| B` |
 | `DEFINE TYPE` name | expanded inline |
 
-An `option<T>` field that is NONE is absent from the row the SDK returns, which is why it is
-`NotRequired`. A key that is not an identifier or is a keyword makes that class use the functional
+An `option<T>` field is NONE in two shapes: absent from a `SELECT *` row, and present as `None`
+when a projection names it (`SELECT title, due`). `NotRequired[T | None]` covers both; read it with
+`.get(...)`.
+
+A key that is not an identifier or is a keyword makes that class use the functional
 `TypedDict("X", {...})` syntax, or a model field with `Field(alias=…)`.
 
 Types are named after the query: a named query `ListCards` has `ListCardsRow` (statement 0;
@@ -107,7 +110,7 @@ async for notification in db.live_query("SELECT * FROM user WHERE team = $team",
 ```
 
 A notification is one of `…Create`, `…Update` and `…Delete`, each a `TypedDict` with `action`,
-`id`, `record` and `result`; `…Notification` is their union. `KILLED` ends the stream and is not
+`id` (the live query's id), `record`, `result` and `session`; `…Notification` is their union. `KILLED` ends the stream and is not
 yielded. A statement `LIVE SELECT` refuses has no overload, and the module has a comment naming the
 clauses.
 
@@ -122,3 +125,9 @@ clauses.
 - **Only literals.** A query built at runtime has no type.
 - **Not checked at runtime.** A `TypedDict` describes the SDK's dicts and checks nothing. Only
   `models = "pydantic"` validates.
+
+## Example
+
+`examples/python-typed` has a schema, named queries, a typed `app/main.py`, `app/bad.py` (a file of
+deliberate mistakes that both checkers must reject), and `app/runtime_check.py`, which runs the
+typed clients against a real server. Its README says how to run each.

@@ -49,14 +49,14 @@ else:
 
 
 class ObjectsRowNested(TypedDict):
-    deep: NotRequired[NullType]
+    deep: NotRequired[NullType | None]
 
 
 ObjectsRow = TypedDict(
     "ObjectsRow",
     {
         "name": str,
-        "nick": NotRequired[str],
+        "nick": NotRequired[str | None],
         "weird key": int,
         "nested": ObjectsRowNested,
     },

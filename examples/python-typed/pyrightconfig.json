@@ -1,0 +1,7 @@
+{
+  "include": ["app"],
+  "typeCheckingMode": "strict",
+  "enableTypeIgnoreComments": false,
+  "reportUnnecessaryTypeIgnoreComment": "error",
+  "pythonVersion": "3.12"
+}
