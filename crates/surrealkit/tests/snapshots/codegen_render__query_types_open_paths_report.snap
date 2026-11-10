@@ -1,0 +1,39 @@
+---
+source: crates/surrealkit/tests/codegen_render.rs
+expression: report
+---
+{
+  "name": "Users",
+  "text": "SELECT * FROM user",
+  "statements": [
+    {
+      "index": 0,
+      "typescript": "Array<{ address: { city: string; [key: string]: unknown }; id: RecordId<\"user\">; [key: string]: unknown }>",
+      "kind": "array<object>",
+      "certainty": "fact",
+      "exact": true,
+      "support": {
+        "exact": true
+      },
+      "open": [
+        [
+          "*"
+        ],
+        [
+          "*",
+          "address"
+        ]
+      ],
+      "span": {
+        "column": 1,
+        "end": 10,
+        "end_column": 11,
+        "end_line": 1,
+        "line": 1,
+        "start": 0
+      }
+    }
+  ],
+  "params": [],
+  "snippet": "import type { RecordId } from \"surrealdb\";\n\nexport type Users = [Array<{ address: { city: string; [key: string]: unknown }; id: RecordId<\"user\">; [key: string]: unknown }>];\nexport type UsersParams = {};\n"
+}

@@ -1,0 +1,56 @@
+---
+source: crates/surrealkit/tests/codegen_render.rs
+expression: report
+---
+{
+  "name": "Query",
+  "text": "SELECT * FROM mystery($x); RETURN 1",
+  "statements": [
+    {
+      "index": 0,
+      "typescript": "unknown",
+      "certainty": "hint",
+      "exact": false,
+      "support": {
+        "exact": false
+      },
+      "open": [],
+      "span": {
+        "column": 1,
+        "end": 10,
+        "end_column": 11,
+        "end_line": 1,
+        "line": 1,
+        "start": 0
+      }
+    },
+    {
+      "index": 1,
+      "typescript": "number",
+      "kind": "int",
+      "certainty": "fact",
+      "exact": true,
+      "support": {
+        "exact": true
+      },
+      "open": [],
+      "span": {
+        "column": 1,
+        "end": 10,
+        "end_column": 11,
+        "end_line": 1,
+        "line": 1,
+        "start": 0
+      }
+    }
+  ],
+  "params": [
+    {
+      "name": "x",
+      "typescript": "unknown",
+      "required": true,
+      "source": "engine"
+    }
+  ],
+  "snippet": "export type Query = [unknown, number];\nexport type QueryParams = { x: unknown };\n"
+}

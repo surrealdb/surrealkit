@@ -39,6 +39,28 @@ pub struct Emitter {
 	pub command: Vec<String>,
 	/// The directory the emitter's files go to.
 	pub out: PathBuf,
+	/// Whether the emitter receives the document's `queries` and the diagnostics about them.
+	pub queries: bool,
+}
+
+/// The document bytes the emitters read, in the two variants a run can need: whole, for an
+/// emitter that opts in to `queries`, and without `queries` and the diagnostics about them for
+/// every other. A variant no emitter reads is not rendered.
+#[derive(Debug, Default)]
+pub(crate) struct Inputs {
+	pub with_queries: Option<Vec<u8>>,
+	pub without_queries: Option<Vec<u8>>,
+}
+
+impl Inputs {
+	fn of(&self, emitter: &Emitter) -> &[u8] {
+		let bytes = if emitter.queries {
+			&self.with_queries
+		} else {
+			&self.without_queries
+		};
+		bytes.as_deref().unwrap_or_default()
+	}
 }
 
 /// What an emitter writes on stdout.
@@ -71,7 +93,7 @@ struct Manifest {
 #[derive(Debug)]
 pub(crate) struct EmitPlan {
 	emitter: String,
-	out: PathBuf,
+	pub(super) out: PathBuf,
 	/// `(path relative to out, bytes)`, sorted by path.
 	files: Vec<(String, Vec<u8>)>,
 	manifest: Vec<u8>,
@@ -88,10 +110,10 @@ fn valid_path(path: &str) -> bool {
 		&& path.split('/').all(|s| !s.is_empty() && s != "." && s != "..")
 }
 
-/// Run `emitter` with `input` (schema document v2) on stdin and parse its reply.
 /// An emitter's files (path relative to its `out`, bytes) and its diagnostics.
 type EmitterOutput = (Vec<(String, Vec<u8>)>, Vec<Diagnostic>);
 
+/// Run `emitter` with `input` (schema document v2) on stdin and parse its reply.
 fn run(
 	emitter: &Emitter,
 	input: &[u8],
@@ -175,46 +197,56 @@ pub(crate) struct Rendered {
 	pub failed: Vec<String>,
 }
 
-/// Run every emitter over `input` and plan its output. A failing emitter is an error when
-/// `policy` says so, otherwise it is logged and recorded in [`Rendered::failed`], leaving its
-/// files as they were.
-pub(crate) fn render(emitters: &[Emitter], input: &[u8], policy: Policy<'_>) -> Result<Rendered> {
+/// Run every emitter over its variant of `inputs` and plan its output. A failing emitter is an
+/// error when `policy` says so, otherwise it is logged and recorded in [`Rendered::failed`],
+/// leaving its files as they were.
+pub(crate) fn render(
+	emitters: &[Emitter],
+	inputs: &Inputs,
+	policy: Policy<'_>,
+) -> Result<Rendered> {
 	let mut rendered = Rendered::default();
 	for emitter in emitters {
-		let result = run(emitter, input, policy.acknowledge).and_then(|(files, diagnostics)| {
-			let errors: Vec<String> = diagnostics
-				.iter()
-				.filter(|d| d.is_error() && !policy.acknowledge.contains_key(&d.code))
-				.map(|d| format!("  {d}"))
-				.collect();
-			for d in &diagnostics {
-				match (d.severity, policy.acknowledge.get(&d.code)) {
-					(Severity::Error, Some(reason)) => {
-						log::debug!("emit.{}: {d} (acknowledged: {reason})", emitter.name);
+		let result = run(emitter, inputs.of(emitter), policy.acknowledge).and_then(
+			|(files, diagnostics)| {
+				let errors: Vec<String> = diagnostics
+					.iter()
+					.filter(|d| d.is_error() && !policy.acknowledge.contains_key(&d.code))
+					.map(|d| format!("  {d}"))
+					.collect();
+				for d in &diagnostics {
+					match (d.severity, policy.acknowledge.get(&d.code)) {
+						(Severity::Error, Some(reason)) => {
+							log::debug!("emit.{}: {d} (acknowledged: {reason})", emitter.name);
+						}
+						(Severity::Error | Severity::Warning, _) => {
+							log::warn!("emit.{}: {d}", emitter.name);
+						}
+						(Severity::Info, _) => log::debug!("emit.{}: {d}", emitter.name),
 					}
-					(Severity::Error | Severity::Warning, _) => {
-						log::warn!("emit.{}: {d}", emitter.name);
-					}
-					(Severity::Info, _) => log::debug!("emit.{}: {d}", emitter.name),
 				}
-			}
-			if policy.strict && !errors.is_empty() {
-				bail!("it reported {} error diagnostic(s):\n{}", errors.len(), errors.join("\n"));
-			}
-			let manifest = Manifest {
-				emitter: emitter.name.clone(),
-				protocol: PROTOCOL,
-				files: files.iter().map(|(p, _)| p.clone()).collect(),
-			};
-			let mut manifest = serde_json::to_string_pretty(&manifest)?;
-			manifest.push('\n');
-			Ok(EmitPlan {
-				emitter: emitter.name.clone(),
-				out: emitter.out.clone(),
-				files,
-				manifest: manifest.into_bytes(),
-			})
-		});
+				if policy.strict && !errors.is_empty() {
+					bail!(
+						"it reported {} error diagnostic(s):\n{}",
+						errors.len(),
+						errors.join("\n")
+					);
+				}
+				let manifest = Manifest {
+					emitter: emitter.name.clone(),
+					protocol: PROTOCOL,
+					files: files.iter().map(|(p, _)| p.clone()).collect(),
+				};
+				let mut manifest = serde_json::to_string_pretty(&manifest)?;
+				manifest.push('\n');
+				Ok(EmitPlan {
+					emitter: emitter.name.clone(),
+					out: emitter.out.clone(),
+					files,
+					manifest: manifest.into_bytes(),
+				})
+			},
+		);
 		match result {
 			Ok(plan) => rendered.plans.push(plan),
 			Err(err) if policy.strict || policy.fatal_failures => {
@@ -348,7 +380,8 @@ pub(crate) fn preflight(plan: &EmitPlan, strict: bool) -> Result<()> {
 
 /// Write `plan`'s files, remove the ones the previous publish wrote that are no longer
 /// produced, then write the manifest.
-pub(crate) fn publish(plan: &EmitPlan, level: log::Level) -> Result<()> {
+/// Returns whether any file in the emitter's directory was written or removed.
+pub(crate) fn publish(plan: &EmitPlan, level: log::Level) -> Result<bool> {
 	let previous = previous(plan)?.unwrap_or_default();
 	let mut written = 0usize;
 	for (path, bytes) in &plan.files {
@@ -371,7 +404,8 @@ pub(crate) fn publish(plan: &EmitPlan, level: log::Level) -> Result<()> {
 			Err(err) => return Err(err).with_context(|| format!("removing {}", path.display())),
 		}
 	}
-	output::write_atomic(&plan.out.join(MANIFEST), &plan.manifest)?;
+	let manifest = output::write_atomic(&plan.out.join(MANIFEST), &plan.manifest)?;
+	let changed = written > 0 || manifest == WriteOutcome::Written;
 	if written == 0 {
 		log::log!(
 			level,
@@ -389,7 +423,7 @@ pub(crate) fn publish(plan: &EmitPlan, level: log::Level) -> Result<()> {
 			plan.files.len()
 		);
 	}
-	Ok(())
+	Ok(changed)
 }
 
 /// Remove the directories between `file` and `root` that are now empty.

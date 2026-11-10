@@ -937,3 +937,34 @@ code, and report a `${…}` interpolated into a query string as `K9201`. The `--
 summary gains `host_read`, `host_files`, `host_queries`, `targets_checked` and `drift`.
 `[analyze.lints]` keys also accept the five-digit codes and families of the 4.1 checker
 (`C10001`, `10xxx`). See the README's "Checking SurrealQL".
+
+### 25. Typed queries (unreleased)
+
+Nothing to change. New, and opt-in: `[typegen.queries]` types the queries a project sends,
+named queries in `.surql` query files (`-- name: ListPeople`) and `db.query("…")` calls found
+in host code, into a `queries` section of schema document v2
+([section 19](docs/typegen/schema-document-v2.md#19-queries)) and, with
+`[typegen.queries] typescript`, a TypeScript module that types a client's `query()` by query
+text. The engine types the queries; SurrealDB before 4.1 cannot, so `compile` reports the
+warning `queries-unsupported-engine` and the document has no `queries`.
+
+A document without `[typegen.queries]` is unchanged, byte for byte, and `queries` is outside
+`semanticDigest`. An external emitter receives `queries` only with
+`[typegen.emit.<name>] queries = true`; every other emitter, `effect-surrealkit` included,
+receives the document it received before. `surrealkit generate` is another name for
+`surrealkit compile`.
+
+`surrealkit compile --watch` keeps compiling as the schema, the query files or the host code
+change, and types only the queries whose text changed; `compile --watch-paths` prints the files
+it reads and writes as JSON, for tools that watch the project themselves.
+
+`surrealkit types` and the `query_types` MCP tool type one query on demand, without running it, and
+return its TypeScript type; they need SurrealDB 4.1 as well.
+
+For library users: `TypegenOpts` and `CompileOpts` gain a `queries` field (`None` keeps the
+current behaviour), `SchemaDocument` gains `queries`, and `Diagnostic` gains `query`.
+
+With `[typegen.queries] register = "<package>"` the module also augments that package's
+`Register` interface with `queries` and `liveQueries`, so a bindings package such as
+`surrealkit-query` is typed by the generated registry. The module now exports a runtime value,
+`liveQueries` (each SELECT's live subscription facts), so it is no longer types-only.

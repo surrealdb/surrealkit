@@ -1,0 +1,785 @@
+[
+  {
+    "key": "scalars",
+    "name": "scalars",
+    "text": "RETURN scalars",
+    "statements": [
+      {
+        "kind": {
+          "kind": "any"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "none"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "null"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "bool"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "int"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "float"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "decimal"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "number"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "string"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "datetime"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "duration"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "uuid"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "bytes"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "regex"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "range"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "function"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "object"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      }
+    ]
+  },
+  {
+    "key": "refs",
+    "name": "refs",
+    "text": "RETURN refs",
+    "statements": [
+      {
+        "kind": {
+          "kind": "record",
+          "tables": []
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "record",
+          "tables": [
+            "a",
+            "b"
+          ]
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "table",
+          "tables": []
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "table",
+          "tables": [
+            "a",
+            "b"
+          ]
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "file",
+          "buckets": [
+            "avatars"
+          ]
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "file",
+          "buckets": []
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      }
+    ]
+  },
+  {
+    "key": "geometry",
+    "name": "geometry",
+    "text": "RETURN geometry",
+    "statements": [
+      {
+        "kind": {
+          "kind": "geometry",
+          "types": []
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "geometry",
+          "types": [
+            "point"
+          ]
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "geometry",
+          "types": [
+            "collection",
+            "line",
+            "multiline",
+            "multipoint",
+            "multipolygon",
+            "point",
+            "polygon"
+          ]
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      }
+    ]
+  },
+  {
+    "key": "collections",
+    "name": "collections",
+    "text": "RETURN collections",
+    "statements": [
+      {
+        "kind": {
+          "kind": "array",
+          "item": {
+            "kind": "string"
+          }
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "array",
+          "item": {
+            "kind": "int"
+          },
+          "length": 2
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "set",
+          "item": {
+            "kind": "uuid"
+          }
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "tuple",
+          "items": [
+            {
+              "kind": "int"
+            },
+            {
+              "kind": "string"
+            },
+            {
+              "kind": "option",
+              "item": {
+                "kind": "bool"
+              }
+            }
+          ]
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "tuple",
+          "items": []
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "array",
+          "item": {
+            "kind": "option",
+            "item": {
+              "kind": "string"
+            }
+          }
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      }
+    ]
+  },
+  {
+    "key": "literals",
+    "name": "literals",
+    "text": "RETURN literals",
+    "statements": [
+      {
+        "kind": {
+          "kind": "literal",
+          "type": "string",
+          "value": "draft"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "literal",
+          "type": "string",
+          "value": "say \"hi\""
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "literal",
+          "type": "int",
+          "value": "42"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "literal",
+          "type": "float",
+          "value": "1.5"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "literal",
+          "type": "decimal",
+          "value": "1.25"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "literal",
+          "type": "duration",
+          "value": "1m30s"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "literal",
+          "type": "bool",
+          "value": true
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "literal",
+          "type": "bool",
+          "value": false
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      }
+    ]
+  },
+  {
+    "key": "objects",
+    "name": "objects",
+    "text": "RETURN objects",
+    "statements": [
+      {
+        "kind": {
+          "kind": "objectLiteral",
+          "fields": [
+            {
+              "name": "name",
+              "kind": {
+                "kind": "string"
+              },
+              "optional": false
+            },
+            {
+              "name": "nick",
+              "kind": {
+                "kind": "string"
+              },
+              "optional": true
+            },
+            {
+              "name": "weird key",
+              "kind": {
+                "kind": "int"
+              },
+              "optional": false
+            },
+            {
+              "name": "nested",
+              "kind": {
+                "kind": "objectLiteral",
+                "fields": [
+                  {
+                    "name": "deep",
+                    "kind": {
+                      "kind": "null"
+                    },
+                    "optional": true
+                  }
+                ]
+              },
+              "optional": false
+            }
+          ]
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "objectLiteral",
+          "fields": []
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      }
+    ]
+  },
+  {
+    "key": "options_and_unions",
+    "name": "options_and_unions",
+    "text": "RETURN options and unions",
+    "statements": [
+      {
+        "kind": {
+          "kind": "option",
+          "item": {
+            "kind": "string"
+          }
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "union",
+          "variants": [
+            {
+              "kind": "int"
+            },
+            {
+              "kind": "string"
+            }
+          ]
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "union",
+          "variants": [
+            {
+              "kind": "float"
+            },
+            {
+              "kind": "int"
+            },
+            {
+              "kind": "number"
+            }
+          ]
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "union",
+          "variants": [
+            {
+              "kind": "literal",
+              "type": "string",
+              "value": "draft"
+            },
+            {
+              "kind": "literal",
+              "type": "string",
+              "value": "live"
+            }
+          ]
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "string"
+        },
+        "optional": true,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "union",
+          "variants": [
+            {
+              "kind": "null"
+            },
+            {
+              "kind": "uuid"
+            }
+          ]
+        },
+        "optional": true,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "none"
+        },
+        "optional": true,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "unknown",
+          "source": "money"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      }
+    ]
+  },
+  {
+    "key": "sized",
+    "name": "sized",
+    "text": "RETURN sized",
+    "statements": [
+      {
+        "kind": {
+          "kind": "int",
+          "width": 8
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "int",
+          "width": 64,
+          "signed": false
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "float",
+          "width": 32
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "date"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "time"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "timestamp"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "interval"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "bigdecimal"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "enum",
+          "labels": [
+            "low",
+            "high",
+            "low"
+          ]
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "named",
+          "name": "money"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "named",
+          "name": "tree"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      },
+      {
+        "kind": {
+          "kind": "named",
+          "name": "undefined_here"
+        },
+        "optional": false,
+        "certainty": "fact",
+        "exact": true,
+        "open": []
+      }
+    ]
+  }
+]

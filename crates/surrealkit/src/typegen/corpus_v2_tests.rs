@@ -559,7 +559,12 @@ async fn types_and_the_four_oh_kinds_are_read_from_the_engine() {
 	.expect("defined");
 	let doc =
 		super::introspect_v2::introspect(&db, EngineMode::Embedded).await.expect("introspect");
-	assert_eq!(doc.provenance.adapter, "structure-4.0");
+	// 4.1 reads as 4.0 does, under its own adapter name.
+	assert!(
+		["structure-4.0", "structure-4.1"].contains(&doc.provenance.adapter.as_str()),
+		"{}",
+		doc.provenance.adapter
+	);
 	let errors: Vec<String> =
 		doc.diagnostics.iter().filter(|d| d.is_error()).map(|d| d.to_string()).collect();
 	assert!(errors.is_empty(), "{errors:?}");

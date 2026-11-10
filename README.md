@@ -490,7 +490,7 @@ the property still decode with their existing digest; regenerate them to
 include any authentication expressions their schema declares.
 
 The document is read through `INFO … STRUCTURE`, by an adapter for each
-supported engine minor (SurrealDB 3.2.x, 3.3.x and 4.0.x). Any other minor is read from
+supported engine minor (SurrealDB 3.2.x, 3.3.x, 4.0.x and 4.1.x). Any other minor is read from
 plain `INFO` instead, with the error diagnostic `structure-unsupported-engine`,
 so a `strict` run refuses it.
 
@@ -503,6 +503,7 @@ a throwaway embedded in-memory engine, then reads that engine back:
 ```bash
 surrealkit compile                       # writes [typegen] json (schema_version = 2), else database/types/schema.json
 surrealkit compile --check               # CI: fail when the committed outputs are stale
+surrealkit compile --watch               # regenerate on every change, until Ctrl-C
 surrealkit --schema billing compile      # billing and the modules it depends on
 surrealkit compile --allow-experimental surrealism
 ```
@@ -592,6 +593,192 @@ off; the diagnostic stays in the document, and emitters receive the list too
 [typegen]
 acknowledge = { "param-value-nondeterministic" = "$started is informational only" }
 ```
+
+### Typed queries
+
+`[typegen.queries]` types the queries the project sends, against the compiled schema:
+named queries in query files, and the queries host code passes to a client's `query()`.
+
+```toml
+[typegen.queries]
+files = ["database/queries"]   # directories of .surql query files
+sources = ["src"]              # host code scanned for db.query("…") (.ts, .js, .svelte, .vue, .astro)
+methods = ["query"]            # the client methods to look for (default)
+typescript = "src/generated/queries.ts"   # optional: the per-query TypeScript module
+dates = "class"                # `datetime` as the SDK's DateTime (default), or "native" for Date
+hints = "trust"                # kinds the engine only hints at: as declared (default), or "unknown"
+register = "surrealkit-query"  # optional: the bindings package whose `Register` the module augments
+```
+
+A query file holds named queries, each behind a marker line:
+
+```surql
+-- name: ListPeople
+SELECT name, age FROM person WHERE age >= $min ORDER BY name;
+```
+
+Each query becomes an entry of the document's `queries` section
+([section 19](docs/typegen/schema-document-v2.md#19-queries)): its text, where it comes
+from, the kind of each statement's result and its parameters, in the language-neutral kind
+tree any emitter can render. The TypeScript module gives `Typed<Surreal>` a `query()` that
+returns the registry's result type for known query text. External emitters receive the
+section only when they opt in with `queries = true` in their `[typegen.emit.<name>]`.
+
+The module is not only types. It also exports `liveQueries`, a runtime value: for each
+single-statement `SELECT` the engine can describe a live subscription for, the facts a client
+needs to subscribe, keyed by the same text as `Queries`.
+
+```ts
+export const liveQueries = {
+  "SELECT * FROM user ORDER BY name LIMIT $lim": {
+    query: "LIVE SELECT * FROM user",   // the text to subscribe with
+    refusal: { clauses: ["ORDER BY", "LIMIT"], windowable: true },
+  },
+  "SELECT * FROM user WHERE team = $team": {
+    query: "LIVE SELECT * FROM user WHERE team = $team",
+    exit: "silent",                     // a record leaving the WHERE is not reported
+    watch: "LIVE SELECT id FROM user",  // the same targets without the WHERE
+  },
+  "SELECT * FROM ONLY user:ada": { refusal: { clauses: ["ONLY"], windowable: false } },
+} as const;
+```
+
+`LiveQueries` types it and adds `notification`, the union of the messages a subscription
+delivers as the SDK's `LiveMessage` carries them; `LiveQueryText` is the texts a subscription can
+serve (every entry but a refusal that cannot be windowed), and `LiveNotification<K>` is one text's
+notification. `liveQueries` is always exported, `{}` when there is none. A query the engine could
+not type is left out of both registries and reported as `query-invalid`; its text keeps the SDK's
+untyped `query()`.
+
+`register` names the bindings package to augment, so its components and functions are typed by
+the generated registry: the module ends with `declare module "<register>" { interface Register {
+queries: Queries; liveQueries: LiveQueries } }`. It must name the package that declares
+`Register`, not one that re-exports it.
+
+The engine types the queries without running them, which needs SurrealDB 4.1. On an older
+engine `compile` and `typegen` report the warning `queries-unsupported-engine` and write no
+`queries`.
+
+#### `compile --watch`
+
+`surrealkit compile --watch` (also `generate --watch`) compiles, then regenerates the outputs
+whenever a file a compile reads changes, until Ctrl-C. It writes exactly what `surrealkit compile`
+writes, atomically, and leaves a file whose bytes did not change alone. It does not combine with
+`--check` or `--stdout`, and needs the `watch` cargo feature (on in the default build).
+
+```bash
+surrealkit compile --watch
+```
+
+```
+compile: schema changed (database/schema/person.surql): 7 queries typed, wrote generated/schema.json, src/generated/queries.ts
+compile: queries changed (src/routes/+page.svelte): 1 of 7 re-typed, wrote src/generated/queries.ts
+compile: queries changed (src/a.ts and 2 more): 0 of 7 re-typed, nothing changed on disk
+```
+
+It watches the selected modules' schema directories (`.surql`), `surrealkit.toml`, `.env` and
+`.env.local`, the `[typegen.queries] files` directories (`.surql`), and the `[typegen.queries]
+sources` roots (host code, by the rule `check` and `compile` read it with). It does not watch what a
+run writes: the JSON, the TypeScript files and every emitter's `out` directory, so writing them
+starts nothing.
+
+- A change to a schema file, `surrealkit.toml` or `.env*` reads the configuration again, compiles
+  from a fresh engine and types every query again. A `surrealkit.toml` that no longer parses is
+  reported, the previous one is kept, and the watch goes on.
+- A change to a query file or host code collects the queries again and types only those whose text
+  is new, against the engine of the last schema that compiled. A query that was edited is a new
+  text, so it is typed again; one that was not is not. The result is what a one-shot `compile` of
+  the same files gives.
+- The first compile runs exactly as `compile` does, and when it fails the error is reported and
+  the watch starts anyway, so the file can be fixed. Every later run that fails logs one `error`
+  line with the cause and leaves the previous outputs in place. A query change before any schema
+  has compiled says the schema has to compile first.
+- The exit code is 0 after Ctrl-C, and an error only when the file watcher itself fails.
+
+`surrealkit compile --watch-paths` prints the files a compile reads and writes as one JSON object on
+stdout and exits 0, without compiling and in a build without the `watch` feature. It reads the
+configuration and honours `--schema`, `--all`, `--folder` and `--out`, so a tool that watches the
+project itself (the Vite plugin) asks the same question `--watch` answers:
+
+```json
+{
+  "version": 1,
+  "schema": ["database/schema", "database/modules/auth/schema"],
+  "config": ["surrealkit.toml", ".env", ".env.local"],
+  "queryFiles": ["database/queries"],
+  "querySources": ["src"],
+  "queryExtensions": ["ts", "mts", "cts", "tsx", "js", "mjs", "cjs", "jsx", "svelte", "vue", "astro"],
+  "queryIgnoredDirectories": ["node_modules", "dist", "build", "target", ".svelte-kit", ".next", ".nuxt", ".astro", ".output"],
+  "outputs": ["generated/schema.json", "src/generated/queries.ts", "src/generated/surreal"]
+}
+```
+
+Paths are relative to the current directory and `/`-separated, as configured; each array is present
+and is empty when nothing is configured. `schema` holds directories (watch the `.surql` files in
+them), `config` holds files, `queryFiles` directories of `.surql` files, `querySources` files and
+directories of host code, and `outputs` files and directories that must not start a rebuild. A
+host file counts when its extension is in `queryExtensions`, it is not a `.d.ts` declaration, and
+no directory between the source root and the file is hidden (starts with `.`) or in
+`queryIgnoredDirectories`. `version` changes only when a field changes meaning.
+
+#### Typing one query
+
+`surrealkit types` types a single query on demand, with no query file, no host-code scan and no
+generated module. The query is never executed: the engine types it against a schema, and the
+answer is its TypeScript type.
+
+```bash
+surrealkit types "SELECT name, age FROM person WHERE age > \$min" --name ListPeople
+echo "SELECT * FROM person" | surrealkit types -        # the query from stdin
+surrealkit types --param min=int "RETURN \$min + 1"    # declare a kind the engine cannot infer
+surrealkit types --json "SELECT 1"                      # the whole report
+surrealkit types -t staging "SELECT * FROM person"      # against a live target's schema
+```
+
+Without `--target` it compiles the project's schema on an embedded engine, as `compile` does
+(same module selection, `--var` and `[typegen] experimental`), and reads no connection setting;
+with `--target NAME` it asks that database. By default it prints the TypeScript snippet on stdout
+and any notes on stderr. `[typegen.queries]` `dates` and `hints` apply when configured.
+
+The `query_types` MCP tool does the same: its input is `query`, an optional `name` and `params`
+(by name, `{ "kind": "int" }` to declare a SurrealQL kind or `{ "example": 3 }` to derive one),
+and the usual `schema`, `target`, `folder` and `vars`. Its structured result is the report that
+`--json` prints:
+
+```json
+{
+  "name": "ListPeople",
+  "text": "SELECT name, age FROM person WHERE age > $min",
+  "statements": [
+    {
+      "index": 0,
+      "typescript": "Array<{ age: number; name: string }>",
+      "kind": "array<{ age: int, name: string }>",
+      "certainty": "hint",
+      "exact": false,
+      "support": { "exact": false, "reason": "param" },
+      "open": [],
+      "span": { "column": 1, "end": 45, "end_column": 46, "end_line": 1, "line": 1, "start": 0 }
+    }
+  ],
+  "params": [
+    { "name": "min", "typescript": "number", "kind": "int", "required": true, "source": "engine" }
+  ],
+  "snippet": "export type ListPeople = [Array<{ age: number; name: string }>];\nexport type ListPeopleParams = { min: number };\n"
+}
+```
+
+`statements` has one entry per statement (`BEGIN` and `COMMIT` included), in the order of the
+response; a statement the engine did not type is `unknown` and has no `kind`. `certainty` is
+`fact` when an engine invariant guarantees the kind and `hint` when it is declared but unproven
+(`hints = "unknown"` types a hint as `unknown`). A parameter's `source` says where its type
+came from: the `engine`'s inference, a `declared` kind or an `example`. A hint only fills in a
+parameter the engine left without a kind; where the engine disagrees, it wins and `notes` says
+so, as it does for a hint the query does not use. Optional members are left out, never `null`.
+`name` must be an identifier, and the snippet's types are `<Name>` and `<Name>Params`.
+
+Like the queries section, this needs SurrealDB 4.1 or later; on an older engine the command
+fails with `the engine cannot type queries (SurrealDB 4.1 or later is needed)`.
 
 ### Effect schemas
 
@@ -1087,9 +1274,9 @@ surrealkit --ns my_ns --db my_db mcp
 
 ### What it exposes
 
-23 tools, one per capability: `project_info`, `setup`, `sync`, `seed`, `apply`,
-`typegen`, `test`, `init`, `compat_status`, `compat_raise`, `check`, `check_query`, and the
-rollout family (`rollout_baseline`, `rollout_plan`, `rollout_lint`, `rollout_start`,
+24 tools, one per capability: `project_info`, `setup`, `sync`, `seed`, `apply`,
+`typegen`, `query_types`, `test`, `init`, `compat_status`, `compat_raise`, `check`,
+`check_query`, and the rollout family (`rollout_baseline`, `rollout_plan`, `rollout_lint`, `rollout_start`,
 `rollout_complete`, `rollout_rollback`, `rollout_repair`, `rollout_status`,
 `rollout_up`, `rollout_freeze`, `rollout_discard`). `rollout_up` is the deploy path for a
 database that is several rollouts behind, as `surrealkit rollout up` is.

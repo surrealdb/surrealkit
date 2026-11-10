@@ -1,0 +1,1078 @@
+{
+  "format": "surrealdb.types",
+  "version": 1,
+  "engine": "4.1.0-nightly",
+  "namespace": "live",
+  "database": "live",
+  "tables": [
+    {
+      "name": "team",
+      "schemafull": true,
+      "drop": false,
+      "view": false,
+      "relation": null,
+      "fields": []
+    },
+    {
+      "name": "user",
+      "schemafull": true,
+      "drop": false,
+      "view": false,
+      "relation": null,
+      "fields": [
+        {
+          "path": [
+            "name"
+          ],
+          "steps": [
+            {
+              "field": "name"
+            }
+          ],
+          "kind": "string",
+          "kind_value": "String",
+          "certainty": "hint",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        },
+        {
+          "path": [
+            "team"
+          ],
+          "steps": [
+            {
+              "field": "team"
+            }
+          ],
+          "kind": "record<team>",
+          "kind_value": {
+            "Record": [
+              "team"
+            ]
+          },
+          "certainty": "hint",
+          "optional": false,
+          "computed": false,
+          "readonly": false,
+          "has_default": false,
+          "reference": false,
+          "flexible": false
+        }
+      ]
+    }
+  ],
+  "functions": [],
+  "types": [],
+  "params": [],
+  "queries": [
+    {
+      "name": null,
+      "text": "SELECT * FROM user",
+      "statements": [
+        {
+          "kind": "array<{ id: record<user>, name: string, team: record<team> }>",
+          "kind_value": {
+            "Array": [
+              {
+                "Literal": {
+                  "Object": {
+                    "id": {
+                      "Record": [
+                        "user"
+                      ]
+                    },
+                    "name": "String",
+                    "team": {
+                      "Record": [
+                        "team"
+                      ]
+                    }
+                  }
+                }
+              },
+              null
+            ]
+          },
+          "certainty": "hint",
+          "support": {
+            "exact": true
+          },
+          "open": [],
+          "span": {
+            "column": 1,
+            "end": 18,
+            "end_column": 19,
+            "end_line": 1,
+            "line": 1,
+            "start": 0
+          },
+          "live": {
+            "diff": false,
+            "query": "LIVE SELECT * FROM user",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "{ id: record<user>, name: string, team: record<team> }",
+                "result_value": {
+                  "Literal": {
+                    "Object": {
+                      "id": {
+                        "Record": [
+                          "user"
+                        ]
+                      },
+                      "name": "String",
+                      "team": {
+                        "Record": [
+                          "team"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "{ id: record<user>, name: string, team: record<team> }",
+                "result_value": {
+                  "Literal": {
+                    "Object": {
+                      "id": {
+                        "Record": [
+                          "user"
+                        ]
+                      },
+                      "name": "String",
+                      "team": {
+                        "Record": [
+                          "team"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "{ id: record<user>, name: string, team: record<team> }",
+                "result_value": {
+                  "Literal": {
+                    "Object": {
+                      "id": {
+                        "Record": [
+                          "user"
+                        ]
+                      },
+                      "name": "String",
+                      "team": {
+                        "Record": [
+                          "team"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": "none",
+                "record_value": "None",
+                "result": "none",
+                "result_value": "None",
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          }
+        }
+      ],
+      "params": []
+    },
+    {
+      "name": null,
+      "text": "SELECT * FROM user ORDER BY name LIMIT $lim",
+      "statements": [
+        {
+          "kind": "array<{ id: record<user>, name: string, team: record<team> }>",
+          "kind_value": {
+            "Array": [
+              {
+                "Literal": {
+                  "Object": {
+                    "id": {
+                      "Record": [
+                        "user"
+                      ]
+                    },
+                    "name": "String",
+                    "team": {
+                      "Record": [
+                        "team"
+                      ]
+                    }
+                  }
+                }
+              },
+              null
+            ]
+          },
+          "certainty": "hint",
+          "support": {
+            "exact": true
+          },
+          "open": [],
+          "span": {
+            "column": 1,
+            "end": 43,
+            "end_column": 44,
+            "end_line": 1,
+            "line": 1,
+            "start": 0
+          },
+          "live": {
+            "diff": false,
+            "query": "LIVE SELECT * FROM user",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "{ id: record<user>, name: string, team: record<team> }",
+                "result_value": {
+                  "Literal": {
+                    "Object": {
+                      "id": {
+                        "Record": [
+                          "user"
+                        ]
+                      },
+                      "name": "String",
+                      "team": {
+                        "Record": [
+                          "team"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "{ id: record<user>, name: string, team: record<team> }",
+                "result_value": {
+                  "Literal": {
+                    "Object": {
+                      "id": {
+                        "Record": [
+                          "user"
+                        ]
+                      },
+                      "name": "String",
+                      "team": {
+                        "Record": [
+                          "team"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "{ id: record<user>, name: string, team: record<team> }",
+                "result_value": {
+                  "Literal": {
+                    "Object": {
+                      "id": {
+                        "Record": [
+                          "user"
+                        ]
+                      },
+                      "name": "String",
+                      "team": {
+                        "Record": [
+                          "team"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": "none",
+                "record_value": "None",
+                "result": "none",
+                "result_value": "None",
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          },
+          "live_refusal": {
+            "code": "E4009",
+            "message": "a live query does not take ORDER BY, LIMIT: it notifies the changes of one table; serve ORDER BY, LIMIT by running the SELECT over the snapshot again",
+            "clauses": [
+              "ORDER BY",
+              "LIMIT"
+            ],
+            "windowable": true
+          }
+        }
+      ],
+      "params": [
+        {
+          "name": "lim",
+          "kind": "int",
+          "kind_value": "Int",
+          "certainty": "hint",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": null,
+      "text": "SELECT * FROM user WHERE team = $team",
+      "statements": [
+        {
+          "kind": "array<{ id: record<user>, name: string, team: record<team> }>",
+          "kind_value": {
+            "Array": [
+              {
+                "Literal": {
+                  "Object": {
+                    "id": {
+                      "Record": [
+                        "user"
+                      ]
+                    },
+                    "name": "String",
+                    "team": {
+                      "Record": [
+                        "team"
+                      ]
+                    }
+                  }
+                }
+              },
+              null
+            ]
+          },
+          "certainty": "hint",
+          "support": {
+            "exact": true
+          },
+          "open": [],
+          "span": {
+            "column": 1,
+            "end": 37,
+            "end_column": 38,
+            "end_line": 1,
+            "line": 1,
+            "start": 0
+          },
+          "live": {
+            "diff": false,
+            "query": "LIVE SELECT * FROM user WHERE team = $team",
+            "exit": "silent",
+            "watch": "LIVE SELECT id FROM user",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "{ id: record<user>, name: string, team: record<team> }",
+                "result_value": {
+                  "Literal": {
+                    "Object": {
+                      "id": {
+                        "Record": [
+                          "user"
+                        ]
+                      },
+                      "name": "String",
+                      "team": {
+                        "Record": [
+                          "team"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "{ id: record<user>, name: string, team: record<team> }",
+                "result_value": {
+                  "Literal": {
+                    "Object": {
+                      "id": {
+                        "Record": [
+                          "user"
+                        ]
+                      },
+                      "name": "String",
+                      "team": {
+                        "Record": [
+                          "team"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "{ id: record<user>, name: string, team: record<team> }",
+                "result_value": {
+                  "Literal": {
+                    "Object": {
+                      "id": {
+                        "Record": [
+                          "user"
+                        ]
+                      },
+                      "name": "String",
+                      "team": {
+                        "Record": [
+                          "team"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": "none",
+                "record_value": "None",
+                "result": "none",
+                "result_value": "None",
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          }
+        }
+      ],
+      "params": [
+        {
+          "name": "team",
+          "kind": "record<team>",
+          "kind_value": {
+            "Record": [
+              "team"
+            ]
+          },
+          "certainty": "hint",
+          "required": true
+        }
+      ]
+    },
+    {
+      "name": null,
+      "text": "SELECT * FROM ONLY user:ada",
+      "statements": [
+        {
+          "kind": "option<{ id: record<user>, name: string, team: record<team> }>",
+          "kind_value": {
+            "Either": [
+              "None",
+              {
+                "Literal": {
+                  "Object": {
+                    "id": {
+                      "Record": [
+                        "user"
+                      ]
+                    },
+                    "name": "String",
+                    "team": {
+                      "Record": [
+                        "team"
+                      ]
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "certainty": "hint",
+          "support": {
+            "exact": true
+          },
+          "open": [],
+          "span": {
+            "column": 1,
+            "end": 27,
+            "end_column": 28,
+            "end_line": 1,
+            "line": 1,
+            "start": 0
+          },
+          "live_refusal": {
+            "code": "E4009",
+            "message": "a live query follows the changes of one table, and ONLY, FROM leaves no single table to follow",
+            "clauses": [
+              "ONLY",
+              "FROM"
+            ],
+            "windowable": false
+          }
+        }
+      ],
+      "params": []
+    },
+    {
+      "name": null,
+      "text": "LIVE SELECT DIFF FROM user",
+      "statements": [
+        {
+          "kind": "uuid",
+          "kind_value": "Uuid",
+          "certainty": "fact",
+          "support": {
+            "exact": true
+          },
+          "open": [],
+          "span": {
+            "column": 1,
+            "end": 26,
+            "end_column": 27,
+            "end_line": 1,
+            "line": 1,
+            "start": 0
+          },
+          "live": {
+            "diff": true,
+            "query": "LIVE SELECT DIFF FROM user",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "array<{ op: 'add' | 'change' | 'remove' | 'replace', path: string, value: any }>",
+                "result_value": {
+                  "Array": [
+                    {
+                      "Literal": {
+                        "Object": {
+                          "op": {
+                            "Either": [
+                              {
+                                "Literal": {
+                                  "String": "add"
+                                }
+                              },
+                              {
+                                "Literal": {
+                                  "String": "change"
+                                }
+                              },
+                              {
+                                "Literal": {
+                                  "String": "remove"
+                                }
+                              },
+                              {
+                                "Literal": {
+                                  "String": "replace"
+                                }
+                              }
+                            ]
+                          },
+                          "path": "String",
+                          "value": "Any"
+                        }
+                      }
+                    },
+                    null
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "array<{ op: 'add' | 'change' | 'remove' | 'replace', path: string, value: any }>",
+                "result_value": {
+                  "Array": [
+                    {
+                      "Literal": {
+                        "Object": {
+                          "op": {
+                            "Either": [
+                              {
+                                "Literal": {
+                                  "String": "add"
+                                }
+                              },
+                              {
+                                "Literal": {
+                                  "String": "change"
+                                }
+                              },
+                              {
+                                "Literal": {
+                                  "String": "remove"
+                                }
+                              },
+                              {
+                                "Literal": {
+                                  "String": "replace"
+                                }
+                              }
+                            ]
+                          },
+                          "path": "String",
+                          "value": "Any"
+                        }
+                      }
+                    },
+                    null
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "array<{ op: 'add' | 'change' | 'remove' | 'replace', path: string, value: any }>",
+                "result_value": {
+                  "Array": [
+                    {
+                      "Literal": {
+                        "Object": {
+                          "op": {
+                            "Either": [
+                              {
+                                "Literal": {
+                                  "String": "add"
+                                }
+                              },
+                              {
+                                "Literal": {
+                                  "String": "change"
+                                }
+                              },
+                              {
+                                "Literal": {
+                                  "String": "remove"
+                                }
+                              },
+                              {
+                                "Literal": {
+                                  "String": "replace"
+                                }
+                              }
+                            ]
+                          },
+                          "path": "String",
+                          "value": "Any"
+                        }
+                      }
+                    },
+                    null
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": "none",
+                "record_value": "None",
+                "result": "none",
+                "result_value": "None",
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          }
+        }
+      ],
+      "params": []
+    },
+    {
+      "name": null,
+      "text": "LET $n = 1; LIVE SELECT * FROM user;",
+      "statements": [
+        {
+          "kind": "none",
+          "kind_value": "None",
+          "certainty": "fact",
+          "support": {
+            "exact": true
+          },
+          "open": [],
+          "span": {
+            "column": 1,
+            "end": 10,
+            "end_column": 11,
+            "end_line": 1,
+            "line": 1,
+            "start": 0
+          }
+        },
+        {
+          "kind": "uuid",
+          "kind_value": "Uuid",
+          "certainty": "fact",
+          "support": {
+            "exact": true
+          },
+          "open": [],
+          "span": {
+            "column": 13,
+            "end": 35,
+            "end_column": 36,
+            "end_line": 1,
+            "line": 1,
+            "start": 12
+          },
+          "live": {
+            "diff": false,
+            "query": "LIVE SELECT * FROM user",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "{ id: record<user>, name: string, team: record<team> }",
+                "result_value": {
+                  "Literal": {
+                    "Object": {
+                      "id": {
+                        "Record": [
+                          "user"
+                        ]
+                      },
+                      "name": "String",
+                      "team": {
+                        "Record": [
+                          "team"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "{ id: record<user>, name: string, team: record<team> }",
+                "result_value": {
+                  "Literal": {
+                    "Object": {
+                      "id": {
+                        "Record": [
+                          "user"
+                        ]
+                      },
+                      "name": "String",
+                      "team": {
+                        "Record": [
+                          "team"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "{ id: record<user>, name: string, team: record<team> }",
+                "result_value": {
+                  "Literal": {
+                    "Object": {
+                      "id": {
+                        "Record": [
+                          "user"
+                        ]
+                      },
+                      "name": "String",
+                      "team": {
+                        "Record": [
+                          "team"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": "none",
+                "record_value": "None",
+                "result": "none",
+                "result_value": "None",
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          }
+        }
+      ],
+      "params": []
+    },
+    {
+      "name": null,
+      "text": "SELEC * FROM user",
+      "statements": [],
+      "params": [],
+      "error": {
+        "code": "S0001",
+        "message": "Unexpected token `USER`, expected Eof",
+        "span": {
+          "column": 1,
+          "end": 17,
+          "end_column": 18,
+          "end_line": 1,
+          "line": 1,
+          "start": 0
+        }
+      }
+    },
+    {
+      "name": null,
+      "text": "SELECT team, count() AS n FROM user GROUP BY team",
+      "statements": [
+        {
+          "kind": "array<{ n: int, team: record<team> }>",
+          "kind_value": {
+            "Array": [
+              {
+                "Literal": {
+                  "Object": {
+                    "n": "Int",
+                    "team": {
+                      "Record": [
+                        "team"
+                      ]
+                    }
+                  }
+                }
+              },
+              null
+            ]
+          },
+          "certainty": "hint",
+          "support": {
+            "exact": true
+          },
+          "open": [],
+          "span": {
+            "column": 1,
+            "end": 49,
+            "end_column": 50,
+            "end_line": 1,
+            "line": 1,
+            "start": 0
+          },
+          "live": {
+            "diff": false,
+            "query": "LIVE SELECT id FROM user",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "{ id: record<user> }",
+                "result_value": {
+                  "Literal": {
+                    "Object": {
+                      "id": {
+                        "Record": [
+                          "user"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "{ id: record<user> }",
+                "result_value": {
+                  "Literal": {
+                    "Object": {
+                      "id": {
+                        "Record": [
+                          "user"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": "record<user>",
+                "record_value": {
+                  "Record": [
+                    "user"
+                  ]
+                },
+                "result": "{ id: record<user> }",
+                "result_value": {
+                  "Literal": {
+                    "Object": {
+                      "id": {
+                        "Record": [
+                          "user"
+                        ]
+                      }
+                    }
+                  }
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": "none",
+                "record_value": "None",
+                "result": "none",
+                "result_value": "None",
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          },
+          "live_refusal": {
+            "code": "E4009",
+            "message": "a live query does not take GROUP BY: it notifies the changes of one table; serve GROUP BY by running the SELECT over the snapshot again",
+            "clauses": [
+              "GROUP BY"
+            ],
+            "windowable": true
+          }
+        }
+      ],
+      "params": []
+    }
+  ]
+}

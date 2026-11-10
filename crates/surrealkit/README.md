@@ -67,6 +67,9 @@ The `analyze` feature builds the `check` and `watch` commands and `surrealkit::c
 [Checking SurrealQL](#checking-surrealql)). It needs
 `kv-mem`, does not imply `cli`, and `[analyze]` in `surrealkit.toml` parses without it.
 
+The `watch` feature (`analyze` enables it) is file-change watching: `surrealkit::watch`, and
+`surrealkit compile --watch`. `compile --watch-paths` answers without it.
+
 ## Checking SurrealQL
 
 `surrealkit::check` (the `analyze` feature) is the lint behind `surrealkit check`, with no

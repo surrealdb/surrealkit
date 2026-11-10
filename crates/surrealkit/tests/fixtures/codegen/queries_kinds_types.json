@@ -1,0 +1,34 @@
+[
+  {
+    "name": "money",
+    "kind": {
+      "kind": "decimal"
+    }
+  },
+  {
+    "name": "tree",
+    "kind": {
+      "kind": "objectLiteral",
+      "fields": [
+        {
+          "name": "children",
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "named",
+              "name": "tree"
+            }
+          },
+          "optional": false
+        },
+        {
+          "name": "label",
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false
+        }
+      ]
+    }
+  }
+]

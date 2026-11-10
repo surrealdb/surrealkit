@@ -16,6 +16,14 @@ export interface Fixture {
 	failWith(code: number): void;
 	/** Make the next invocations succeed again. */
 	succeed(): void;
+	/** What the next `compile --watch-paths` prints; defaults to empty lists. */
+	watchPaths(paths: Partial<WatchPathsDocument>): void;
+	/** Make the next `compile --watch-paths` print `text` verbatim. */
+	watchPathsRaw(text: string): void;
+	/** Make the next `compile --watch-paths` exit non-zero. */
+	failWatchPaths(code: number): void;
+	/** One entry per `compile --watch-paths` call, each the joined argv. */
+	watchPathsCalls(): string[];
 	/** Make the next invocations sleep this many seconds first. */
 	sleepFor(seconds: number): void;
 	/** What the next successful invocation publishes to the generated file. */
@@ -29,12 +37,48 @@ export interface Fixture {
 	cleanup(): void;
 }
 
-// Logs its argv, then optionally sleeps (interruptibly, so SIGTERM lands at
+/** The `compile --watch-paths` document. Paths are relative to the cwd. */
+export interface WatchPathsDocument {
+	version: number;
+	schema: string[];
+	config: string[];
+	queryFiles: string[];
+	querySources: string[];
+	queryExtensions: string[];
+	queryIgnoredDirectories: string[];
+	outputs: string[];
+}
+
+const EMPTY_WATCH_PATHS: WatchPathsDocument = {
+	version: 1,
+	schema: [],
+	config: [],
+	queryFiles: [],
+	querySources: [],
+	queryExtensions: [],
+	queryIgnoredDirectories: [],
+	outputs: [],
+};
+
+// `compile --watch-paths` prints a configured document (or exits non-zero)
+// and is logged apart from the generations, so invocation counts stay simple.
+// Otherwise it logs its argv, then optionally sleeps (interruptibly, so SIGTERM lands at
 // once), fails, or "publishes" a generated file; lifecycle events go to a
 // separate log so invocation counts stay simple. The trap comes first: tests
 // signal the process as soon as its invocation is logged.
 const FAKE_BINARY = `#!/bin/sh
 trap 'printf "terminated\\n" >> "$SURREALKIT_TEST_EVENTS"; exit 143' TERM
+case " $* " in
+*" --watch-paths "*)
+	printf '%s\\n' "$*" >> "$SURREALKIT_TEST_WATCH_LOG"
+	if [ -f "$SURREALKIT_TEST_WATCH_EXIT_FILE" ]; then
+		echo "fake surrealkit: watch-paths failing on purpose" >&2
+		exit "$(cat "$SURREALKIT_TEST_WATCH_EXIT_FILE")"
+	fi
+	cat "$SURREALKIT_TEST_WATCH_FILE"
+	exit 0
+	;;
+esac
 echo "fake surrealkit: $*"
 printf '%s\\n' "$*" >> "$SURREALKIT_TEST_LOG"
 if [ -f "$SURREALKIT_TEST_SLEEP_FILE" ]; then
@@ -72,11 +116,16 @@ export function createFixture(): Fixture {
 	const exitFile = path.join(base, 'exit-code');
 	const sleepFile = path.join(base, 'sleep-seconds');
 	const outputSource = path.join(base, 'next-output');
+	const watchLog = path.join(base, 'watch-paths.log');
+	const watchFile = path.join(base, 'watch-paths.json');
+	const watchExitFile = path.join(base, 'watch-paths-exit-code');
 	const generatedFile = 'src/generated/schema.ts';
 
 	fs.writeFileSync(binary, FAKE_BINARY, { mode: 0o755 });
 	fs.writeFileSync(log, '');
 	fs.writeFileSync(events, '');
+	fs.writeFileSync(watchLog, '');
+	fs.writeFileSync(watchFile, JSON.stringify(EMPTY_WATCH_PATHS));
 
 	const lines = (file: string) =>
 		fs
@@ -108,9 +157,25 @@ export function createFixture(): Fixture {
 			SURREALKIT_TEST_SLEEP_FILE: sleepFile,
 			SURREALKIT_TEST_OUTPUT_SOURCE: outputSource,
 			SURREALKIT_TEST_OUTPUT: path.join(root, generatedFile),
+			SURREALKIT_TEST_WATCH_LOG: watchLog,
+			SURREALKIT_TEST_WATCH_FILE: watchFile,
+			SURREALKIT_TEST_WATCH_EXIT_FILE: watchExitFile,
 		},
 		invocations: () => lines(log),
 		events: () => lines(events),
+		watchPaths: (paths) => {
+			fs.writeFileSync(
+				watchFile,
+				JSON.stringify({ ...EMPTY_WATCH_PATHS, ...paths }),
+			);
+		},
+		watchPathsRaw: (text: string) => {
+			fs.writeFileSync(watchFile, text);
+		},
+		failWatchPaths: (code: number) => {
+			fs.writeFileSync(watchExitFile, String(code));
+		},
+		watchPathsCalls: () => lines(watchLog),
 		failWith: (code: number) => {
 			fs.writeFileSync(exitFile, String(code));
 		},

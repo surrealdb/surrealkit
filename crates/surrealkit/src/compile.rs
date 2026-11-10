@@ -73,6 +73,9 @@ pub struct CompileOpts {
 	/// from the embedded engine's minor the document carries the error
 	/// `compile-engine-mismatch`, because it then describes the embedded engine's behaviour.
 	pub expected_engine: Option<String>,
+	/// The project's queries (`[typegen.queries]`), typed against the compiled schema into the
+	/// document's `queries` section. `None` leaves the section out.
+	pub queries: Option<crate::codegen::section::Collected>,
 }
 
 /// What one compile produced.
@@ -368,8 +371,31 @@ fn engine_mismatch(expected: Option<&str>, version: &str) -> Result<Option<Diagn
 	)))
 }
 
-/// Compile `modules` (already in dependency order) into schema document v2.
+/// A compiled schema and the engine that holds it.
+pub(crate) struct Built {
+	/// The engine the modules were applied to. It stays usable, so queries can be typed against
+	/// the schema without compiling it again.
+	pub(crate) db: Surreal<Any>,
+	/// The compile result, with no `queries` section.
+	pub(crate) compiled: Compiled,
+}
+
+/// Compile `modules` (already in dependency order) into schema document v2, and type
+/// `opts.queries` into its `queries` section.
 pub async fn compile(modules: &[CompileModule], opts: &CompileOpts) -> Result<Compiled> {
+	let Built {
+		db,
+		mut compiled,
+	} = build(modules, opts).await?;
+	if let Some(collected) = &opts.queries {
+		crate::codegen::section::attach(&db, collected, &mut compiled.document).await?;
+	}
+	Ok(compiled)
+}
+
+/// Apply `modules` (already in dependency order) to a fresh engine and read the schema back.
+/// `opts.queries` is not used: the document has no `queries` section.
+pub(crate) async fn build(modules: &[CompileModule], opts: &CompileOpts) -> Result<Built> {
 	let (features, experimental) = experimental_features(&opts.experimental)?;
 	let db = engine(&features, "compile").await?;
 
@@ -433,10 +459,13 @@ pub async fn compile(modules: &[CompileModule], opts: &CompileOpts) -> Result<Co
 			diagnostics,
 		},
 	)?;
-	Ok(Compiled {
-		document,
-		v1,
-		v1_diagnostics,
+	Ok(Built {
+		db,
+		compiled: Compiled {
+			document,
+			v1,
+			v1_diagnostics,
+		},
 	})
 }
 
@@ -457,6 +486,18 @@ pub async fn run_compile(
 		.map(|module| collect_module(project, folder, module))
 		.collect::<Result<Vec<_>>>()?;
 	let compiled = compile(&collected, opts).await?;
+	emit(&compiled, folder, outputs, None)?;
+	Ok(compiled)
+}
+
+/// Report `compiled`'s diagnostics under `outputs`' strictness, then write (or check) the
+/// outputs. Returns the outputs written, as [`crate::typegen::produce_with`] does.
+pub(crate) fn emit(
+	compiled: &Compiled,
+	folder: &str,
+	outputs: &crate::typegen::TypegenOpts,
+	level: Option<log::Level>,
+) -> Result<Vec<std::path::PathBuf>> {
 	crate::typegen::report_diagnostics(
 		&compiled.document.diagnostics,
 		outputs.strict,
@@ -471,8 +512,7 @@ pub async fn run_compile(
 			&outputs.acknowledge,
 		)?;
 	}
-	crate::typegen::produce(&compiled.v1, Some(&compiled.document), folder, outputs)?;
-	Ok(compiled)
+	crate::typegen::produce_with(&compiled.v1, Some(&compiled.document), folder, outputs, level)
 }
 
 /// Collect the schema files of `module` in `folder` the way `sync` does.
@@ -583,12 +623,18 @@ mod corpus {
 		let compiled =
 			compile(&embedded_corpus(true), &experimental()).await.expect("compile the corpus");
 		let doc = compiled.document;
-		assert!(doc.provenance.engine.version.starts_with(EMBEDDED_MINOR));
-		let snapshot = fixture_document(EMBEDDED_VERSION);
-		assert_eq!(doc.semantic_digest, snapshot.semantic_digest);
-		// `define` evidence is identical too: both read plain INFO from the same engine.
-		assert_eq!(doc.tables, snapshot.tables);
-		assert_eq!(doc.provenance.adapter, "structure-4.0");
+		let minor = engine_minor(&doc.provenance.engine.version);
+		assert_eq!(doc.provenance.adapter, format!("structure-{minor}"));
+		if minor == EMBEDDED_MINOR {
+			let snapshot = fixture_document(EMBEDDED_VERSION);
+			assert_eq!(doc.semantic_digest, snapshot.semantic_digest);
+			// `define` evidence is identical too: both read plain INFO from the same engine.
+			assert_eq!(doc.tables, snapshot.tables);
+		} else {
+			// The `introspection/` snapshot is the 4.0 engine's. Another minor compares with
+			// the compile output pinned for it, and fails until one is blessed.
+			assert_pinned("corpus.v2.json", &doc);
+		}
 		assert_eq!(doc.provenance.engine.mode, EngineMode::Embedded);
 		let caps = doc.provenance.capabilities.as_ref().expect("capabilities");
 		assert_eq!(caps.experimental, vec!["files", "surrealism"]);
@@ -626,8 +672,17 @@ mod corpus {
 		assert!(compiled.v1.tables.iter().any(|t| t.name == "person"));
 	}
 
+	/// The `major.minor` of an engine version such as `4.0.0`.
+	fn engine_minor(version: &str) -> String {
+		version.split('.').take(2).collect::<Vec<_>>().join(".")
+	}
+
 	/// Compare `doc`, rendered exactly as `surrealkit compile` writes it, with the pinned file
 	/// `tests/fixtures/typegen_corpus/compiled/<name>`. `SURREALKIT_BLESS=1` rewrites the pin.
+	///
+	/// A pin holds what one engine minor produces. The `name` is the 4.0 engine's pin
+	/// (`corpus.v2.json`); on another minor the pin is `corpus.<minor>.v2.json`, which does
+	/// not exist until it is blessed on an engine of that minor, and the test fails saying so.
 	///
 	/// The pins are real compile output for generators to test against (the Effect emitter in
 	/// `packages/effect-surrealkit` reads them), so a change in what compile produces shows up
@@ -637,7 +692,13 @@ mod corpus {
 	/// [`without_versions`]), so a release or a `surrealdb` bump does not need a re-bless; the
 	/// pinned files keep the versions they were blessed with.
 	fn assert_pinned(name: &str, doc: &SchemaDocument) {
-		let path = corpus_dir().join("compiled").join(name);
+		let minor = engine_minor(&doc.provenance.engine.version);
+		let name = if minor == EMBEDDED_MINOR {
+			name.to_string()
+		} else {
+			name.replacen(".v2.json", &format!(".{minor}.v2.json"), 1)
+		};
+		let path = corpus_dir().join("compiled").join(&name);
 		let mut text = crate::typegen::v2_json(doc, true).expect("render");
 		text.push('\n');
 		if std::env::var_os("SURREALKIT_BLESS").is_some() {
@@ -646,7 +707,11 @@ mod corpus {
 			return;
 		}
 		let pinned = std::fs::read_to_string(&path).unwrap_or_else(|err| {
-			panic!("{}: {err}; SURREALKIT_BLESS=1 writes it", path.display())
+			panic!(
+				"{}: {err}; the embedded engine is SurrealDB {minor} and the pins are per engine \
+				 minor: SURREALKIT_BLESS=1 writes this one",
+				path.display()
+			)
 		});
 		assert!(
 			without_versions(&pinned) == without_versions(&text),

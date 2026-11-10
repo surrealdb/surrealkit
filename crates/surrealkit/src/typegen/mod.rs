@@ -32,7 +32,7 @@ mod introspect;
 pub mod introspect_v2;
 #[cfg(test)]
 mod json_schema_tests;
-mod kind_v2;
+pub(crate) mod kind_v2;
 mod output;
 mod refine;
 mod scan;
@@ -45,6 +45,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
+pub(crate) use build_v2::sort_diagnostics;
 pub use diagnostics::{Diagnostic, Severity, Span, codes};
 pub use document::{SCHEMA_DOCUMENT_V2_JSON_SCHEMA, SCHEMA_DOCUMENT_VERSION, SchemaDocument};
 pub use emitters::{Emitter, MANIFEST as EMITTER_MANIFEST, PROTOCOL as EMITTER_PROTOCOL};
@@ -111,6 +112,34 @@ pub struct TypegenOpts {
 	/// reply, even without `strict`. `compile` sets it, so `--lenient` tolerates diagnostics
 	/// but not a broken emitter.
 	pub emitter_failures_fatal: bool,
+	/// `[typegen.queries]`: the queries to type into the document's `queries` section, and the
+	/// per-query TypeScript module.
+	pub queries: Option<QueriesOpts>,
+}
+
+/// What `[typegen.queries]` asks of a run.
+#[derive(Debug, Clone, Default)]
+pub struct QueriesOpts {
+	/// The queries found in query files and host code.
+	pub collected: crate::codegen::section::Collected,
+	/// The per-query TypeScript module to write, from the document's `queries`.
+	pub typescript: Option<PathBuf>,
+	/// How that module is rendered.
+	pub render: crate::codegen::typescript::RenderOptions,
+}
+
+/// The `[typegen.queries]` options for a run, with the project's queries collected from disk.
+/// Their paths are relative to the current directory, which the configured paths resolve
+/// against. `None` when the section is not configured.
+pub fn queries_opts(config: &crate::variables::TypegenConfig) -> Result<Option<QueriesOpts>> {
+	let Some(queries) = config.queries_config()? else {
+		return Ok(None);
+	};
+	Ok(Some(QueriesOpts {
+		collected: crate::codegen::section::collect(".", &queries)?,
+		typescript: config.queries_typescript()?,
+		render: queries.render_options(),
+	}))
 }
 
 /// Render a [`SchemaTypes`] document as TypeScript. Re-exported so callers
@@ -297,11 +326,13 @@ pub async fn run_typegen(db: &Surreal<Any>, folder: &str, opts: TypegenOpts) -> 
 		};
 	}
 
-	// External emitters read v2 whatever version the JSON is.
-	let v2 = if opts.emitters.is_empty() {
+	// External emitters and the per-query TypeScript read v2 whatever version the JSON is.
+	let queries_module = opts.queries.as_ref().is_some_and(|q| q.typescript.is_some());
+	let v2 = if opts.emitters.is_empty() && !queries_module {
 		None
 	} else {
-		let v2 = generate_v2(db).await?;
+		let mut v2 = generate_v2(db).await?;
+		attach_queries(db, &opts, &mut v2).await?;
 		report_diagnostics(&v2.diagnostics, opts.strict, &opts.acknowledge)?;
 		Some(v2)
 	};
@@ -312,13 +343,26 @@ pub async fn run_typegen(db: &Surreal<Any>, folder: &str, opts: TypegenOpts) -> 
 /// v2, and strictness applies to its diagnostics. Configured TypeScript is still the v1
 /// interface emitter's output, unchanged.
 async fn run_typegen_v2(db: &Surreal<Any>, folder: &str, opts: TypegenOpts) -> Result<()> {
-	let v2 = introspect_v2::introspect(db, document::EngineMode::Remote).await?;
+	let mut v2 = introspect_v2::introspect(db, document::EngineMode::Remote).await?;
+	attach_queries(db, &opts, &mut v2).await?;
 	report_diagnostics(&v2.diagnostics, opts.strict, &opts.acknowledge)?;
 	let v1 = match opts.ts_out {
 		Some(_) => v1_for_typescript(db, opts.strict, &opts.acknowledge).await?,
 		None => empty_v1(),
 	};
 	produce(&v1, Some(&v2), folder, &opts)
+}
+
+/// Types the configured queries against `db` into `v2`'s `queries` section.
+async fn attach_queries(
+	db: &Surreal<Any>,
+	opts: &TypegenOpts,
+	v2: &mut SchemaDocument,
+) -> Result<()> {
+	match &opts.queries {
+		Some(queries) => crate::codegen::section::attach(db, &queries.collected, v2).await,
+		None => Ok(()),
+	}
 }
 
 /// Write (or, with `check`, compare) the configured outputs of documents already generated:
@@ -330,6 +374,21 @@ pub fn produce(
 	folder: &str,
 	opts: &TypegenOpts,
 ) -> Result<()> {
+	produce_with(v1, v2, folder, opts, None).map(|_| ())
+}
+
+/// [`produce`], returning the outputs it changed: each file written, and each emitter's
+/// directory when it wrote or removed a file there. Nothing is returned for a `check`.
+/// `level` is the log level of the per-file progress lines; `None` is `info`, or `debug` when
+/// the JSON goes to stdout.
+#[doc(hidden)]
+pub fn produce_with(
+	v1: &SchemaTypes,
+	v2: Option<&SchemaDocument>,
+	folder: &str,
+	opts: &TypegenOpts,
+	level: Option<log::Level>,
+) -> Result<Vec<PathBuf>> {
 	// The JSON is v2 when that is the configured version and there is one to write.
 	let json_v2 = v2.filter(|_| opts.schema_version == SchemaVersion::V2);
 	let json_path = if opts.stdout {
@@ -344,14 +403,15 @@ pub fn produce(
 		}
 		log::Level::Debug
 	} else {
-		log::Level::Info
+		level.unwrap_or(log::Level::Info)
 	};
 	let ts_path = opts.ts_out.as_deref().map(typescript_file);
 	let outputs = Outputs {
 		json: json_path.as_deref().map(|path| (path, opts.pretty)),
 		typescript: ts_path.as_deref().map(|path| (path, opts.ts_format.as_deref())),
 	};
-	let artifacts = render(v1, json_v2, &outputs, opts.strict, opts.check)?;
+	let mut artifacts = render(v1, json_v2, &outputs, opts.strict, opts.check)?;
+	artifacts.extend(queries_module(v2, opts)?);
 	let rendered = render_emitters(
 		v2,
 		&opts.emitters,
@@ -362,17 +422,42 @@ pub fn produce(
 		},
 	)?;
 	if opts.check {
-		return check_with(&artifacts, &rendered.plans, &rendered.failed);
+		check_with(&artifacts, &rendered.plans, &rendered.failed)?;
+		return Ok(Vec::new());
 	}
 	// Refuse before writing anything, so a strict failure leaves every output as it was.
 	for plan in &rendered.plans {
 		emitters::preflight(plan, opts.strict)?;
 	}
-	publish(&artifacts, progress, OnWriteError::Propagate)?;
+	let mut changed = publish(&artifacts, progress, OnWriteError::Propagate)?;
 	for plan in &rendered.plans {
-		emitters::publish(plan, progress)?;
+		if emitters::publish(plan, progress)? {
+			changed.push(plan.out.clone());
+		}
 	}
-	Ok(())
+	Ok(changed)
+}
+
+/// The per-query TypeScript module `[typegen.queries] typescript` asks for, rendered from the
+/// document's `queries`.
+fn queries_module(v2: Option<&SchemaDocument>, opts: &TypegenOpts) -> Result<Option<Artifact>> {
+	let Some(queries) = &opts.queries else {
+		return Ok(None);
+	};
+	let Some(path) = &queries.typescript else {
+		return Ok(None);
+	};
+	let v2 = v2.ok_or_else(|| {
+		anyhow::anyhow!(
+			"[typegen.queries] typescript is generated from schema document v2, and this run has \
+			 only a v1 document"
+		)
+	})?;
+	Ok(Some(Artifact {
+		path: path.clone(),
+		bytes: crate::codegen::typescript::render(&v2.queries, &v2.types, &queries.render)
+			.into_bytes(),
+	}))
 }
 
 /// Run the configured external emitters over `v2`.
@@ -389,7 +474,21 @@ fn render_emitters(
 			"external emitters read schema document v2, and this run has only a v1 document"
 		)
 	})?;
-	emitters::render(configured, &v2_bytes(v2, true)?, policy)
+	// An emitter that has not opted in to `queries` reads the document as it would be without
+	// them. Each variant is rendered once, and only when an emitter reads it.
+	let inputs = emitters::Inputs {
+		with_queries: configured
+			.iter()
+			.any(|e| e.queries)
+			.then(|| v2_bytes(v2, true))
+			.transpose()?,
+		without_queries: configured
+			.iter()
+			.any(|e| !e.queries)
+			.then(|| v2_bytes(&v2.without_queries(), true))
+			.transpose()?,
+	};
+	emitters::render(configured, &inputs, policy)
 }
 
 /// The v1 document the TypeScript interface emitter reads when the JSON is v2. Its own
@@ -616,7 +715,7 @@ pub async fn regenerate_after_sync(
 		publish(&artifacts, log::Level::Info, on_error)?;
 		for plan in &ready {
 			match emitters::publish(plan, log::Level::Info) {
-				Ok(()) => {}
+				Ok(_) => {}
 				Err(err) if strict => return Err(err),
 				Err(err) => log::error!("typegen: {err:#}"),
 			}
@@ -742,11 +841,18 @@ fn format_typescript(
 	}
 }
 
-fn publish(artifacts: &[Artifact], level: log::Level, on_error: OnWriteError) -> Result<()> {
+/// Publishes every artifact and returns the paths it wrote.
+fn publish(
+	artifacts: &[Artifact],
+	level: log::Level,
+	on_error: OnWriteError,
+) -> Result<Vec<PathBuf>> {
+	let mut written = Vec::new();
 	for artifact in artifacts {
 		match output::write_atomic(&artifact.path, &artifact.bytes) {
 			Ok(WriteOutcome::Written) => {
 				log::log!(level, "typegen: wrote {}", artifact.path.display());
+				written.push(artifact.path.clone());
 			}
 			Ok(WriteOutcome::Unchanged) => {
 				log::log!(level, "typegen: {} is up to date", artifact.path.display());
@@ -757,7 +863,7 @@ fn publish(artifacts: &[Artifact], level: log::Level, on_error: OnWriteError) ->
 			},
 		}
 	}
-	Ok(())
+	Ok(written)
 }
 
 /// Compare every output with the file on disk; fail listing each one that is

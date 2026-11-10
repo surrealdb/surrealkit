@@ -1,0 +1,8 @@
+---
+source: crates/surrealkit/tests/codegen_render.rs
+expression: report.snippet
+---
+import type { DateTime, RecordId } from "surrealdb";
+
+export type Posts = [Array<{ [key: string]: unknown }>];
+export type PostsParams = { author: RecordId<"user">; published: boolean; since: DateTime; limit?: number | undefined };

@@ -191,6 +191,40 @@ pub struct TypegenInput {
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
+pub struct QueryTypesInput {
+	#[serde(flatten)]
+	pub work: WorkRequest,
+	/// The SurrealQL to type, as a client would send it. It is never executed.
+	pub query: String,
+	/// A name for the query: an identifier (`[A-Za-z_][A-Za-z0-9_]*`) that the TypeScript
+	/// types in the snippet are named after. Default: `Query`.
+	#[serde(default)]
+	pub name: Option<String>,
+	/// What you know about the query's parameters, by name without the `$`: a SurrealQL
+	/// `kind`, or an `example` value to derive one from (exactly one of the two). A hint
+	/// fills in a parameter whose kind the engine cannot infer; it never overrides the
+	/// engine.
+	#[serde(default)]
+	pub params: BTreeMap<String, ParamHintInput>,
+}
+
+/// One entry of `query_types`' `params`.
+///
+/// Mirrors `codegen::query_types::ParamHint` rather than deriving a schema on it, so a
+/// library type does not change shape for the sake of one front end.
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ParamHintInput {
+	/// A declared SurrealQL kind: `int`, `option<string>`, `record<person>`, `array<int>`.
+	#[serde(default)]
+	pub kind: Option<String>,
+	/// An example value; its kind is derived from it: an integer is `int`, any other number
+	/// `float`, an array `array<K>` of its elements' common kind, an object `object`.
+	#[serde(default, deserialize_with = "crate::codegen::query_types::present")]
+	pub example: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
 pub struct RolloutSelectorInput {
 	#[serde(flatten)]
 	pub work: WorkRequest,
@@ -926,11 +960,113 @@ impl SurrealKitMcp {
 							emitters: ctx.typegen.emitters()?,
 							acknowledge: ctx.typegen.acknowledgements()?,
 							emitter_failures_fatal: false,
+							queries: crate::typegen::queries_opts(&ctx.typegen)?,
 						},
 					)
 					.await?;
 				}
 				Ok(doc)
+			},
+		)
+		.await
+	}
+
+	/// Type one query without running it.
+	#[tool(
+		name = "query_types",
+		description = "Type one SurrealQL query without running it: returns each statement's \
+		               TypeScript type and SurrealQL kind, the parameters' kinds, and a \
+		               ready-to-paste TypeScript snippet. Uses the project's schema files on an \
+		               embedded engine, or a live target if you name one. Never executes the \
+		               query. certainty `hint` means declared but unproven. Needs SurrealDB \
+		               4.1 or later.",
+		annotations(
+			title = "Type a query",
+			read_only_hint = true,
+			destructive_hint = false,
+			idempotent_hint = true,
+			open_world_hint = true
+		)
+	)]
+	pub async fn query_types(
+		&self,
+		Parameters(input): Parameters<QueryTypesInput>,
+	) -> CallToolResult {
+		let server = self.clone();
+		run_captured(
+			|report: &crate::codegen::query_types::Report| report.snippet.clone(),
+			|| async move {
+				use crate::codegen::query_types::{ParamHint, Request, Source, types};
+
+				let mut request = Request::new(input.query.clone());
+				request.name = input.name.clone();
+				for (name, hint) in &input.params {
+					let hint = ParamHint::from_parts(hint.kind.clone(), hint.example.clone())
+						.map_err(|err| anyhow::anyhow!("param `{name}`: {err}"))?;
+					request.params.insert(name.clone(), hint);
+				}
+				let ctx = server.context(&input.work)?;
+				let opts = ctx
+					.typegen
+					.queries_config()?
+					.map(|config| config.render_options())
+					.unwrap_or_default();
+				#[cfg_attr(not(feature = "analyze"), expect(unused_mut))]
+				let mut report = if input.work.target.is_empty() {
+					// The project's own schema on the embedded engine: no target is
+					// resolved and nothing connects. Compile's own plan, rooted at this
+					// call's project.
+					let mut vars: Vec<(String, String)> = server.config().vars.clone();
+					vars.extend(input.work.vars.iter().map(|(k, v)| (k.clone(), v.clone())));
+					let args = crate::compile_cmd::CompileArgs {
+						folder: ctx.folder.clone(),
+						schemas: input.work.schema.clone(),
+						all: input.work.all,
+						no_deps: input.work.no_deps,
+						vars,
+						..Default::default()
+					};
+					// Nothing is written, so no output setting may refuse the call.
+					let plan = crate::compile_cmd::Plan::from_config(
+						ctx.project.clone(),
+						ctx.typegen.clone(),
+						ctx.config_path.as_deref(),
+						&args,
+						true,
+						false,
+					)?;
+					types(
+						&request,
+						Source::Project {
+							plan: &plan,
+							folder: &ctx.folder,
+						},
+						&opts,
+					)
+					.await?
+				} else {
+					let selection = ctx.selection(&input.work)?;
+					let target = selection.typegen_target(!input.work.schema.is_empty())?;
+					let db = connect(target.cfg())
+						.await
+						.with_context(|| format!("connecting to target {:?}", target.name()))?;
+					types(&request, Source::Live(&db), &opts).await?
+				};
+				#[cfg(feature = "analyze")]
+				crate::codegen::query_types::check(
+					&mut report,
+					&request,
+					crate::codegen::query_types::CheckScope {
+						project: &ctx.project,
+						root: &ctx.root,
+						folder: &ctx.folder,
+						vars: &ctx.vars,
+						target: input.work.target.first().cloned(),
+						schema: input.work.schema.clone(),
+					},
+				)
+				.await;
+				Ok(report)
 			},
 		)
 		.await
