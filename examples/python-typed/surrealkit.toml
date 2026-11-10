@@ -1,0 +1,15 @@
+# `surrealkit compile` applies database/schema to a throwaway in-memory engine, types the queries
+# against it, and writes app/surreal_queries.py. Typing queries needs SurrealDB 4.1.
+
+[typegen]
+schema_version = 2
+json = "schema.json"
+generated_at = false
+
+[typegen.queries]
+files = ["database/queries"]            # named queries
+
+[typegen.python]
+out = "app/surreal_queries.py"
+# bad.py is the file of deliberate mistakes; reading it would type them.
+files = ["app/main.py", "app/runtime_check.py"]

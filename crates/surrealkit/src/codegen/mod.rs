@@ -4,7 +4,7 @@
 //! kinds to v2 [`Kind`](crate::typegen::document::Kind)s, and [`queries`] builds the section's
 //! entries, which hold each query's typed result in v2's vocabulary. [`typescript`] renders those entries
 //! as a module of types for the surrealdb JS SDK: a registry keyed by exact query text, and a
-//! typed client over it. [`query_files`] reads named queries from `.surql` files, and [`section`]
+//! typed client over it. [`python`] renders the same entries as a module for the surrealdb Python SDK. [`query_files`] reads named queries from `.surql` files, and [`section`]
 //! collects them and the queries host code sends ([`crate::host_queries`]) and assembles the
 //! section.
 //! [`query_types`] types one query on its own, for `surrealkit types` and the `query_types` MCP
@@ -16,6 +16,7 @@
 pub mod document;
 pub mod engine;
 mod kind;
+pub mod python;
 pub mod queries;
 pub mod query_files;
 pub mod query_types;

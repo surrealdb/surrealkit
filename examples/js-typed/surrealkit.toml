@@ -1,0 +1,13 @@
+# `surrealkit compile` applies database/schema to a throwaway in-memory engine, types the queries
+# in src/app.js against it, and writes src/queries.d.ts (the types) and src/queries.js (the
+# `liveQueries` value). A `.d.ts` path is what asks for the pair. Needs SurrealDB 4.1.
+
+[typegen]
+schema_version = 2
+json = "schema.json"
+generated_at = false
+
+[typegen.queries]
+# bad.js is the file of deliberate mistakes; reading it would type them.
+sources = ["src/app.js"]
+typescript = "src/queries.d.ts"

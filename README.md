@@ -650,6 +650,13 @@ notification. `liveQueries` is always exported, `{}` when there is none. A query
 not type is left out of both registries and reported as `query-invalid`; its text keeps the SDK's
 untyped `query()`.
 
+For plain JavaScript, name a declarations file: `typescript = "src/queries.d.ts"`. SurrealKit
+then writes the module as declarations only (`liveQueries` becomes `export declare const`) and
+`liveQueries` as a value in `src/queries.js` beside it, typed by the declarations. Both files are
+outputs of the compile, so `--check`, `--watch` and `--watch-paths` know them. With
+`// @ts-check` (or `checkJs`), `/** @type {import("./queries").Typed<Surreal>} */` types
+`db.query()` in a `.js` file. See [examples/js-typed](examples/js-typed).
+
 `register` names the bindings package to augment, so its components and functions are typed by
 the generated registry: the module ends with `declare module "<register>" { interface Register {
 queries: Queries; liveQueries: LiveQueries } }`. It must name the package that declares
@@ -658,6 +665,35 @@ queries: Queries; liveQueries: LiveQueries } }`. It must name the package that d
 The engine types the queries without running them, which needs SurrealDB 4.1. On an older
 engine `compile` and `typegen` report the warning `queries-unsupported-engine` and write no
 `queries`.
+
+#### Python
+
+`[typegen.python]` writes the same per-query types as a Python module for the `surrealdb`
+Python SDK. It reads the `.py` files its `files` globs name, so a project that only wants Python
+needs no `[typegen.queries] sources`; named queries still come from `[typegen.queries] files`.
+
+```toml
+[typegen.python]
+out = "app/surreal_queries.py"   # required: a .py file
+files = ["**/*.py"]              # globs, relative to the project root (default)
+methods = ["query", "query_raw", "live_query"]   # the client methods to look for (default)
+hints = "trust"                  # kinds the engine only hints at: as declared (default), or "unknown"
+models = "typeddict"             # rows as TypedDicts (default), or "pydantic" models
+```
+
+A query is a call `receiver.method("…")` (or `query="…"`) whose argument is one plain or
+triple-quoted string literal. An f-string, a `bytes` literal, a concatenation, a name or an
+escape the reader does not decode is skipped and counted in the compile summary
+(`python: 12 queries in 4 files; skipped 3 (f-string 2, concatenation 1)`), not reported as a
+diagnostic.
+
+The module gives `TypedAsyncSurreal(connection)` and `TypedSurreal(connection)` a `query()` with
+one overload per query text, so `(rows,) = await db.query("SELECT …")` is a typed
+`list[…Row]`. Text the module does not know has no overload; send it through `db.raw`. See
+[docs/typegen/python.md](docs/typegen/python.md) for the type mapping, live queries and the
+limits. A live notification carries `action`, `id`, `record`, `result` and `session`. A runnable
+example, with schema, named queries, a deliberately wrong file and a runtime check against a
+server, is in [examples/python-typed](examples/python-typed).
 
 #### `compile --watch`
 

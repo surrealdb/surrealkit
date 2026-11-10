@@ -126,19 +126,40 @@ pub struct QueriesOpts {
 	pub typescript: Option<PathBuf>,
 	/// How that module is rendered.
 	pub render: crate::codegen::typescript::RenderOptions,
+	/// The per-query Python module, `[typegen.python]`.
+	pub python: Option<PythonOut>,
+}
+
+/// The Python module `[typegen.python]` asks for.
+#[derive(Debug, Clone)]
+pub struct PythonOut {
+	pub out: PathBuf,
+	pub render: crate::codegen::python::RenderOptions,
+}
+
+impl PythonOut {
+	/// The module `config` describes.
+	pub fn new(config: &crate::variables::PythonConfig) -> Self {
+		Self {
+			out: config.out.clone(),
+			render: config.render_options(),
+		}
+	}
 }
 
 /// The `[typegen.queries]` options for a run, with the project's queries collected from disk.
 /// Their paths are relative to the current directory, which the configured paths resolve
 /// against. `None` when the section is not configured.
 pub fn queries_opts(config: &crate::variables::TypegenConfig) -> Result<Option<QueriesOpts>> {
-	let Some(queries) = config.queries_config()? else {
+	let (queries, python) = (config.queries_config()?, config.python_config()?);
+	if queries.is_none() && python.is_none() {
 		return Ok(None);
-	};
+	}
 	Ok(Some(QueriesOpts {
-		collected: crate::codegen::section::collect(".", &queries)?,
+		collected: crate::codegen::section::collect_all(".", queries.as_ref(), python.as_ref())?,
 		typescript: config.queries_typescript()?,
-		render: queries.render_options(),
+		render: queries.as_ref().map(|q| q.render_options()).unwrap_or_default(),
+		python: python.as_ref().map(PythonOut::new),
 	}))
 }
 
@@ -327,7 +348,8 @@ pub async fn run_typegen(db: &Surreal<Any>, folder: &str, opts: TypegenOpts) -> 
 	}
 
 	// External emitters and the per-query TypeScript read v2 whatever version the JSON is.
-	let queries_module = opts.queries.as_ref().is_some_and(|q| q.typescript.is_some());
+	let queries_module =
+		opts.queries.as_ref().is_some_and(|q| q.typescript.is_some() || q.python.is_some());
 	let v2 = if opts.emitters.is_empty() && !queries_module {
 		None
 	} else {
@@ -411,7 +433,7 @@ pub fn produce_with(
 		typescript: ts_path.as_deref().map(|path| (path, opts.ts_format.as_deref())),
 	};
 	let mut artifacts = render(v1, json_v2, &outputs, opts.strict, opts.check)?;
-	artifacts.extend(queries_module(v2, opts)?);
+	artifacts.extend(queries_modules(v2, opts)?);
 	let rendered = render_emitters(
 		v2,
 		&opts.emitters,
@@ -438,26 +460,59 @@ pub fn produce_with(
 	Ok(changed)
 }
 
-/// The per-query TypeScript module `[typegen.queries] typescript` asks for, rendered from the
-/// document's `queries`.
-fn queries_module(v2: Option<&SchemaDocument>, opts: &TypegenOpts) -> Result<Option<Artifact>> {
+/// The per-query modules `[typegen.queries] typescript` and `[typegen.python]` ask for, rendered
+/// from the document's `queries`. Each takes the queries written in its own language.
+fn queries_modules(v2: Option<&SchemaDocument>, opts: &TypegenOpts) -> Result<Vec<Artifact>> {
 	let Some(queries) = &opts.queries else {
-		return Ok(None);
+		return Ok(Vec::new());
 	};
-	let Some(path) = &queries.typescript else {
-		return Ok(None);
-	};
+	if queries.typescript.is_none() && queries.python.is_none() {
+		return Ok(Vec::new());
+	}
 	let v2 = v2.ok_or_else(|| {
 		anyhow::anyhow!(
-			"[typegen.queries] typescript is generated from schema document v2, and this run has \
-			 only a v1 document"
+			"[typegen.queries] typescript and [typegen.python] are generated from schema document \
+			 v2, and this run has only a v1 document"
 		)
 	})?;
-	Ok(Some(Artifact {
-		path: path.clone(),
-		bytes: crate::codegen::typescript::render(&v2.queries, &v2.types, &queries.render)
-			.into_bytes(),
-	}))
+	let mut modules = Vec::new();
+	if let Some(path) = &queries.typescript {
+		let entries = crate::codegen::queries::typescript_entries(&v2.queries);
+		match crate::variables::declaration_runtime_file(path) {
+			// `x.d.ts` holds the types and `x.js` the runtime value, for plain JavaScript.
+			Some(runtime) => {
+				let name = path.file_name().and_then(|name| name.to_str()).unwrap_or_default();
+				let stem = &name[..name.len() - ".d.ts".len()];
+				let split = crate::codegen::typescript::render_declarations(
+					&entries,
+					&v2.types,
+					&queries.render,
+					stem,
+				);
+				modules.push(Artifact {
+					path: path.clone(),
+					bytes: split.declarations.into_bytes(),
+				});
+				modules.push(Artifact {
+					path: runtime,
+					bytes: split.runtime.into_bytes(),
+				});
+			}
+			None => modules.push(Artifact {
+				path: path.clone(),
+				bytes: crate::codegen::typescript::render(&entries, &v2.types, &queries.render)
+					.into_bytes(),
+			}),
+		}
+	}
+	if let Some(python) = &queries.python {
+		let entries = crate::codegen::queries::python_entries(&v2.queries);
+		modules.push(Artifact {
+			path: python.out.clone(),
+			bytes: crate::codegen::python::render(&v2.types, &entries, &python.render).into_bytes(),
+		});
+	}
+	Ok(modules)
 }
 
 /// Run the configured external emitters over `v2`.

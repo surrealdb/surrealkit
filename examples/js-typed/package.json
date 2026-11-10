@@ -1,0 +1,14 @@
+{
+  "name": "surrealkit-js-typed-example",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "generate": "surrealkit compile",
+    "check": "surrealkit compile --check",
+    "typecheck": "tsc -p jsconfig.json --noEmit"
+  },
+  "devDependencies": {
+    "surrealdb": "^2.1.1",
+    "typescript": "^5.9.0"
+  }
+}

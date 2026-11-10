@@ -33,6 +33,8 @@ surrealdb-types = { workspace = true }
 time = { version = '0.3', features = ['macros', 'formatting'] }
 tokio = { version = '1.47', features = ['macros', 'rt-multi-thread', 'signal', 'sync', 'time'] }
 walkdir = { workspace = true }
+# `[typegen.python] files`: the globs that choose the Python files searched for queries.
+glob = '0.3'
 reqwest = { version = '0.12', default-features = false, features = ['json', 'rustls-tls'] }
 regex = '1'
 rustls = { version = '0.23', default-features = false, features = ['aws-lc-rs'], optional = true }
@@ -40,8 +42,10 @@ inquire = { version = '0.7', optional = true }
 tempfile = { version = '3', optional = true }
 indoc = "2"
 # Host-code query extraction (`host_queries`): finds `db.query("…")` calls in
-# TypeScript, Svelte, Vue and Astro sources with the TypeScript grammar.
+# TypeScript, Svelte, Vue and Astro sources with the TypeScript grammar, and in
+# Python sources with the Python grammar.
 tree-sitter = { version = '0.26', optional = true }
+tree-sitter-python = { version = '0.25', optional = true }
 tree-sitter-typescript = { version = '0.23', optional = true }
 # Model Context Protocol server. `server` brings ServerHandler and schemars (which
 # rmcp re-exports, so we take no direct schemars dependency and cannot skew
@@ -71,7 +75,7 @@ cli = ['templates', 'host-queries', 'dep:clap', 'dep:inquire', 'dep:rustls']
 # Extraction of the queries host-language sources send (`host_queries`), which
 # `check` lints and `compile` types. The CLI enables it; a library consumer that
 # reads no host code does not need the grammars.
-host-queries = ['dep:tree-sitter', 'dep:tree-sitter-typescript']
+host-queries = ['dep:tree-sitter', 'dep:tree-sitter-python', 'dep:tree-sitter-typescript']
 # `surrealkit init`'s template engine. Shared by the CLI and the MCP server, so it
 # lives in the library rather than the binary. Interactive feature selection needs
 # `inquire` and is compiled only under `cli`; every other consumer is

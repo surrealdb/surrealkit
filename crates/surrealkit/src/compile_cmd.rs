@@ -18,7 +18,8 @@ use crate::project::ProjectConfig;
 use crate::selection::select_modules;
 use crate::typegen::{SchemaVersion, TypegenOpts};
 use crate::variables::{
-	QueriesConfig, TemplateVars, TypegenConfig, build_project_vars, load_typegen_config,
+	PythonConfig, QueriesConfig, TemplateVars, TypegenConfig, build_project_vars,
+	load_typegen_config,
 };
 
 /// What the command line says a compile reads and writes.
@@ -52,6 +53,8 @@ pub struct Plan {
 	pub typegen: TypegenConfig,
 	/// `[typegen.queries]`, when it is set.
 	pub queries: Option<QueriesConfig>,
+	/// `[typegen.python]`, when it is set.
+	pub python: Option<PythonConfig>,
 	pub compile: CompileOpts,
 	pub outputs: TypegenOpts,
 }
@@ -102,6 +105,7 @@ impl Plan {
 			);
 		}
 		let queries = typegen.queries_config()?;
+		let python = typegen.python_config()?;
 		let mut experimental = typegen.experimental.clone();
 		experimental.extend(args.allow_experimental.iter().cloned());
 		let compile = CompileOpts {
@@ -127,13 +131,15 @@ impl Plan {
 			acknowledge: typegen.acknowledgements()?,
 			// --lenient tolerates diagnostics, never an emitter that cannot run.
 			emitter_failures_fatal: true,
-			queries: match &queries {
-				Some(config) => Some(crate::typegen::QueriesOpts {
+			queries: if queries.is_some() || python.is_some() {
+				Some(crate::typegen::QueriesOpts {
 					collected: Default::default(),
 					typescript: typegen.queries_typescript()?,
-					render: config.render_options(),
-				}),
-				None => None,
+					render: queries.as_ref().map(QueriesConfig::render_options).unwrap_or_default(),
+					python: python.as_ref().map(crate::typegen::PythonOut::new),
+				})
+			} else {
+				None
 			},
 		};
 		Ok(Self {
@@ -141,6 +147,7 @@ impl Plan {
 			modules,
 			typegen,
 			queries,
+			python,
 			compile,
 			outputs,
 		})
@@ -153,14 +160,25 @@ impl Plan {
 	///
 	/// Fails as [`crate::codegen::section::collect`] does.
 	pub fn collect(mut self) -> Result<Self> {
-		if let Some(config) = &self.queries {
-			let collected = crate::codegen::section::collect(".", config)?;
+		if self.queries.is_some() || self.python.is_some() {
+			let collected = crate::codegen::section::collect_all(
+				".",
+				self.queries.as_ref(),
+				self.python.as_ref(),
+			)?;
 			if let Some(outputs) = &mut self.outputs.queries {
 				outputs.collected = collected.clone();
 			}
 			self.compile.queries = Some(collected);
 		}
 		Ok(self)
+	}
+
+	/// What reading the Python sources found, `python: 12 queries in 4 files; skipped 3
+	/// (f-string 2, concatenation 1)`, once [`Plan::collect`] has run. `None` without
+	/// `[typegen.python]`.
+	pub fn python_summary(&self) -> Option<&str> {
+		self.compile.queries.as_ref()?.python_summary.as_deref()
 	}
 
 	/// The files this compile reads and writes.
@@ -176,10 +194,15 @@ use crate::host_queries::is_source;
 #[cfg(feature = "host-queries")]
 use crate::host_queries::{SKIPPED_DIRECTORIES, SOURCE_EXTENSIONS};
 
+#[cfg(feature = "host-queries")]
+use crate::host_queries::python::SKIPPED_DIRECTORIES as PYTHON_SKIPPED_DIRECTORIES;
+
 #[cfg(not(feature = "host-queries"))]
 const SOURCE_EXTENSIONS: &[&str] = &[];
 #[cfg(not(feature = "host-queries"))]
 const SKIPPED_DIRECTORIES: &[&str] = &[];
+#[cfg(not(feature = "host-queries"))]
+const PYTHON_SKIPPED_DIRECTORIES: &[&str] = &[];
 
 #[cfg(all(feature = "watch", not(feature = "host-queries")))]
 fn is_source(_relative: &Path) -> bool {
@@ -198,8 +221,10 @@ pub struct WatchSet {
 	pub query_files: Vec<PathBuf>,
 	/// `[typegen.queries] sources`: files and directories of host code.
 	pub query_sources: Vec<PathBuf>,
-	/// Everything a run writes: the JSON, the TypeScript, the queries module and each emitter's
-	/// directory.
+	/// `[typegen.python] files`: globs, relative to the working directory, of Python files.
+	pub python_files: Vec<String>,
+	/// Everything a run writes: the JSON, the TypeScript, the queries and Python modules and
+	/// each emitter's directory.
 	pub outputs: Vec<PathBuf>,
 }
 
@@ -230,19 +255,23 @@ pub fn watch_set(
 		Some(queries) => (queries.files.clone(), queries.sources.clone()),
 		None => (Vec::new(), Vec::new()),
 	};
+	let python = typegen.python_config()?;
+	let python_files = python.as_ref().map(|python| python.files.clone()).unwrap_or_default();
 	let mut outputs = vec![
 		out.map(Path::to_path_buf)
 			.or(typegen.json_path()?)
 			.unwrap_or_else(|| crate::constants::typegen_output_path(folder)),
 	];
 	outputs.extend(typegen.typescript_path()?.map(|path| crate::typegen::typescript_file(&path)));
-	outputs.extend(typegen.queries_typescript()?);
+	outputs.extend(typegen.queries_outputs()?);
+	outputs.extend(typegen.python_out()?);
 	outputs.extend(typegen.emitters()?.into_iter().map(|emitter| emitter.out));
 	Ok(WatchSet {
 		schema,
 		config,
 		query_files,
 		query_sources,
+		python_files,
 		outputs,
 	})
 }
@@ -286,6 +315,8 @@ struct WatchPaths<'a> {
 	query_sources: Vec<String>,
 	query_extensions: &'a [&'a str],
 	query_ignored_directories: &'a [&'a str],
+	python_files: &'a [String],
+	python_ignored_directories: &'a [&'a str],
 	outputs: Vec<String>,
 }
 
@@ -293,7 +324,8 @@ impl WatchSet {
 	/// The JSON document `compile --watch-paths` prints: version 1, the five sets of paths
 	/// relative to the working directory and `/`-separated, and the rule host code is read by
 	/// (`queryExtensions`, `queryIgnoredDirectories`; hidden directories are always skipped
-	/// too, and `.d.ts` files are not read).
+	/// too, and `.d.ts` files are not read). `pythonFiles` are the globs of the Python files read
+	/// and `pythonIgnoredDirectories` the directories they are not read in (hidden ones too).
 	pub fn to_json(&self) -> String {
 		let paths = |paths: &[PathBuf]| paths.iter().map(|path| slashed(path)).collect();
 		let document = WatchPaths {
@@ -304,6 +336,8 @@ impl WatchSet {
 			query_sources: paths(&self.query_sources),
 			query_extensions: SOURCE_EXTENSIONS,
 			query_ignored_directories: SKIPPED_DIRECTORIES,
+			python_files: &self.python_files,
+			python_ignored_directories: PYTHON_SKIPPED_DIRECTORIES,
 			outputs: paths(&self.outputs),
 		};
 		serde_json::to_string_pretty(&document).expect("a document of strings serializes")
@@ -320,7 +354,7 @@ mod watching {
 
 	use anyhow::{Result, anyhow};
 
-	use super::{CompileArgs, Plan, WatchSet, is_source, slashed};
+	use super::{CompileArgs, PYTHON_SKIPPED_DIRECTORIES, Plan, WatchSet, is_source, slashed};
 	use crate::codegen::engine;
 	use crate::codegen::section::{self, Collected};
 	use crate::codegen::watch_cache::QueryCache;
@@ -344,7 +378,33 @@ mod watching {
 		config: Vec<PathBuf>,
 		query_files: Vec<PathBuf>,
 		query_sources: Vec<PathBuf>,
+		/// Each Python glob as the directory it starts in (resolved) and what follows it, which
+		/// is matched against the path below that directory; no pattern for a glob that names
+		/// one file.
+		python: Vec<(PathBuf, Option<glob::Pattern>)>,
 		outputs: Vec<PathBuf>,
+	}
+
+	/// The directory `glob` starts in, its path up to the first component with a wildcard, and
+	/// the rest of the glob. A glob with no wildcard names one file, which is its own root and
+	/// has no rest.
+	fn split_glob(glob: &str) -> (PathBuf, String) {
+		let glob = glob.strip_prefix("./").unwrap_or(glob);
+		let mut root = if glob.starts_with('/') {
+			PathBuf::from("/")
+		} else {
+			PathBuf::new()
+		};
+		let parts: Vec<&str> = glob.split('/').filter(|part| !part.is_empty()).collect();
+		let mut at = 0;
+		while at < parts.len() && !parts[at].contains(['*', '?', '[']) {
+			root.push(parts[at]);
+			at += 1;
+		}
+		if root.as_os_str().is_empty() {
+			root.push(".");
+		}
+		(root, parts[at..].join("/"))
 	}
 
 	impl Matcher {
@@ -356,6 +416,18 @@ mod watching {
 				config: all(&set.config),
 				query_files: all(&set.query_files),
 				query_sources: all(&set.query_sources),
+				python: set
+					.python_files
+					.iter()
+					.filter_map(|glob| {
+						let (root, rest) = split_glob(glob);
+						let pattern = match rest.is_empty() {
+							true => None,
+							false => Some(glob::Pattern::new(&rest).ok()?),
+						};
+						Some((watch::resolve(&root), pattern))
+					})
+					.collect(),
 				outputs: all(&set.outputs),
 			}
 		}
@@ -366,6 +438,14 @@ mod watching {
 			let mut roots: Vec<Root> = set.config.iter().cloned().map(Root::File).collect();
 			for path in set.schema.iter().chain(&set.query_files).chain(&set.query_sources) {
 				roots.push(Root::Tree(path.clone()));
+			}
+			for glob in &set.python_files {
+				let (root, rest) = split_glob(glob);
+				roots.push(if rest.is_empty() {
+					Root::File(root)
+				} else {
+					Root::Tree(root)
+				});
 			}
 			roots
 		}
@@ -397,7 +477,32 @@ mod watching {
 				Ok(below) => is_source(below),
 				Err(_) => false,
 			});
-			host.then_some(Change::Query)
+			if host || self.is_python(path) {
+				return Some(Change::Query);
+			}
+			None
+		}
+
+		/// Whether `path` is a Python file the globs name, outside the directories a scan skips.
+		fn is_python(&self, path: &Path) -> bool {
+			if path.extension().is_none_or(|extension| extension != "py") {
+				return false;
+			}
+			self.python.iter().any(|(root, pattern)| {
+				let Ok(below) = path.strip_prefix(root) else {
+					return false;
+				};
+				let Some(pattern) = pattern else {
+					return below.as_os_str().is_empty();
+				};
+				let skipped = below.parent().is_some_and(|parent| {
+					parent.components().any(|component| {
+						let name = component.as_os_str().to_string_lossy();
+						name.starts_with('.') || PYTHON_SKIPPED_DIRECTORIES.contains(&name.as_ref())
+					})
+				});
+				!skipped && pattern.matches(&slashed(below))
+			})
 		}
 
 		/// `path` as the log spells it: relative to the working directory.
@@ -443,6 +548,8 @@ mod watching {
 		/// How many queries the engine was asked about, and how many are typed in all, when
 		/// `[typegen.queries]` is configured.
 		typed: Option<(usize, usize)>,
+		/// What reading the Python sources found, when `[typegen.python]` is configured.
+		python: Option<String>,
 		written: Vec<PathBuf>,
 	}
 
@@ -479,6 +586,7 @@ mod watching {
 					],
 					query_files: Vec::new(),
 					query_sources: Vec::new(),
+					python_files: Vec::new(),
 					outputs: Vec::new(),
 				})
 		}
@@ -515,7 +623,8 @@ mod watching {
 						let names: Vec<String> = done.written.iter().map(|p| slashed(p)).collect();
 						format!("wrote {}", names.join(", "))
 					};
-					log::info!("compile: {label}: {typed}{wrote}");
+					let python = done.python.map(|line| format!("{line}, ")).unwrap_or_default();
+					log::info!("compile: {label}: {python}{typed}{wrote}");
 				}
 				Err(err) => log::error!("compile: {label}: {err:#}"),
 			}
@@ -557,8 +666,10 @@ mod watching {
 			let built = self.built.as_ref().ok_or_else(|| anyhow!("no compiled schema"))?;
 			let mut document = built.compiled.document.clone();
 			let mut typed = None;
-			if let Some(config) = &plan.queries {
-				let collected: Collected = section::collect(".", config)?;
+			let mut python = None;
+			if plan.queries.is_some() || plan.python.is_some() {
+				let collected: Collected =
+					section::collect_all(".", plan.queries.as_ref(), plan.python.as_ref())?;
 				self.cache.retain(&collected);
 				let untyped = self.cache.untyped(&collected);
 				let before = self.cache.len();
@@ -574,6 +685,7 @@ mod watching {
 					self.cache.document(&collected)
 				};
 				typed = Some((asked, types.as_ref().map_or(0, |types| types.queries.len())));
+				python = collected.python_summary.clone();
 				section::apply(&mut document, &collected, types.as_ref());
 			}
 			let compiled = Compiled {
@@ -589,6 +701,7 @@ mod watching {
 			)?;
 			Ok(Done {
 				typed,
+				python,
 				written,
 			})
 		}
@@ -723,6 +836,10 @@ mod tests {
 			config: vec![at("surrealkit.toml"), at(".env"), at(".env.local")],
 			query_files: vec![at("database/queries")],
 			query_sources: vec![at("src"), at("app/page.ts")],
+			python_files: vec![
+				format!("{}/app/**/*.py", root.display()),
+				format!("{}/tools/run.py", root.display()),
+			],
 			outputs: vec![
 				at("generated/schema.json"),
 				at("src/generated/queries.ts"),
@@ -752,6 +869,14 @@ mod tests {
 			("src/generated/queries.surrealkit-tmp-1-0.ts", None),
 			("database/schema/person.surrealkit-tmp-1-0.surql", None),
 			("unrelated/a.ts", None),
+			("app/api/db.py", Some(Change::Query)),
+			("app/db.py", Some(Change::Query)),
+			("app/db.pyi", None),
+			("app/.venv/lib/db.py", None),
+			("app/__pycache__/db.py", None),
+			("tools/run.py", Some(Change::Query)),
+			("tools/other.py", None),
+			("other/db.py", None),
 		];
 		for (path, expected) in cases {
 			assert_eq!(matcher.classify(&at(path)), expected, "{path}");

@@ -743,6 +743,15 @@ async fn run_offline(args: &Cli) -> Result<Option<i32>> {
 				return Ok(Some(surrealkit::compile_cmd::watch(&compile_args).await?));
 			}
 			let plan = Plan::load(&compile_args, *stdout, *check)?.collect()?;
+			if let Some(summary) = plan.python_summary() {
+				// The JSON may be on stdout, which a log line there would corrupt.
+				let level = if *stdout {
+					log::Level::Debug
+				} else {
+					log::Level::Info
+				};
+				log::log!(level, "{summary}");
+			}
 			surrealkit::compile::run_compile(
 				&plan.project,
 				&folder,

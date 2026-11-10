@@ -215,6 +215,8 @@ pub struct TypegenConfig {
 	/// The `queries` section of schema document v2, `[typegen.queries]`
 	/// (`docs/typegen/schema-document-v2.md`, section 19).
 	pub queries: Option<QueriesConfig>,
+	/// The per-query Python module, `[typegen.python]` (`docs/typegen/python.md`).
+	pub python: Option<PythonConfig>,
 	/// Error diagnostic codes that do not fail generation, each with the reason it is
 	/// acceptable: `acknowledge = { "kind-unrecognized" = "…" }`. The diagnostics stay in the
 	/// document, and external emitters receive the list.
@@ -279,6 +281,48 @@ pub struct QueriesConfig {
 	/// `liveQueries`. It must name the package that declares `Register`, not one that re-exports
 	/// it. No augmentation when absent.
 	pub register: Option<String>,
+}
+
+/// The `[typegen.python]` section: the Python files searched for queries, and the typed module
+/// written from them.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PythonConfig {
+	/// The module to write: a `.py` file.
+	pub out: PathBuf,
+	/// Globs, relative to the project root, of the `.py` files searched for queries (default
+	/// `["**/*.py"]`). The module itself, `.venv`, `venv`, `__pycache__`, `site-packages`,
+	/// `node_modules` and hidden directories are never read.
+	#[serde(default = "default_python_files")]
+	pub files: Vec<String>,
+	/// The client methods whose first argument, or `query=`, is a query (default `["query",
+	/// "query_raw", "live_query"]`).
+	#[serde(default = "default_python_methods")]
+	pub methods: Vec<String>,
+	/// How a kind the engine only hints at is typed: `trust` (as declared, default) or
+	/// `unknown`.
+	pub hints: Option<crate::codegen::typescript::HintStyle>,
+	/// What a row is: a `typeddict` (default) or a `pydantic` model.
+	pub models: Option<crate::codegen::python::ModelStyle>,
+}
+
+fn default_python_files() -> Vec<String> {
+	vec!["**/*.py".to_string()]
+}
+
+fn default_python_methods() -> Vec<String> {
+	["query", "query_raw", "live_query"].map(str::to_string).to_vec()
+}
+
+impl PythonConfig {
+	/// The renderer's options for the Python module.
+	pub fn render_options(&self) -> crate::codegen::python::RenderOptions {
+		let defaults = crate::codegen::python::RenderOptions::default();
+		crate::codegen::python::RenderOptions {
+			hints: self.hints.unwrap_or(defaults.hints),
+			models: self.models.unwrap_or(defaults.models),
+		}
+	}
 }
 
 fn default_query_methods() -> Vec<String> {
@@ -453,12 +497,13 @@ impl TypegenConfig {
 		let lexical = |p: &Path| -> PathBuf {
 			p.components().filter(|c| !matches!(c, std::path::Component::CurDir)).collect()
 		};
-		let own: Vec<PathBuf> =
-			[self.json_path()?, self.typescript_path()?, self.queries_typescript()?]
-				.into_iter()
-				.flatten()
-				.map(|p| lexical(&p))
-				.collect();
+		let mut own: Vec<PathBuf> = [self.json_path()?, self.typescript_path()?]
+			.into_iter()
+			.flatten()
+			.chain(self.queries_outputs()?)
+			.map(|p| lexical(&p))
+			.collect();
+		own.extend(self.python_out()?.map(|p| lexical(&p)));
 		for emitter in &out {
 			let dir = lexical(&emitter.out);
 			if let Some(inside) = own.iter().find(|p| p.starts_with(&dir)) {
@@ -544,6 +589,66 @@ impl TypegenConfig {
 		Ok(Some(queries.clone()))
 	}
 
+	/// `[typegen.python]`, validated: no method or glob is empty, and `out` names a `.py` file
+	/// that is none of the other outputs.
+	pub fn python_config(&self) -> Result<Option<PythonConfig>> {
+		let Some(python) = &self.python else {
+			return Ok(None);
+		};
+		if python.methods.iter().any(|method| method.trim().is_empty()) {
+			bail!("[typegen.python] methods: a method name is empty");
+		}
+		for glob in &python.files {
+			if glob.trim().is_empty() {
+				bail!("[typegen.python] files: a glob is empty");
+			}
+			if let Err(err) = glob::Pattern::new(glob) {
+				bail!("[typegen.python] files: {glob:?} is not a glob: {err}");
+			}
+		}
+		let out = self.python_out()?.expect("python is set");
+		let lexical = |p: &Path| -> PathBuf {
+			p.components().filter(|c| !matches!(c, std::path::Component::CurDir)).collect()
+		};
+		for (key, other) in [
+			("[typegen] json", self.json_path()?),
+			("[typegen] typescript", self.typescript_path()?),
+			("[typegen.queries] typescript", self.queries_typescript()?),
+		] {
+			if other.is_some_and(|other| lexical(&other) == lexical(&out)) {
+				bail!(
+					"[typegen.python] out = {:?} is also {key}; each output needs its own file",
+					out.display().to_string()
+				);
+			}
+		}
+		Ok(Some(python.clone()))
+	}
+
+	/// The Python module, if `[typegen.python]` is set. It names a `.py` file.
+	pub fn python_out(&self) -> Result<Option<PathBuf>> {
+		let Some(python) = &self.python else {
+			return Ok(None);
+		};
+		if python.out.extension().is_none_or(|ext| ext != "py") {
+			bail!(
+				"[typegen.python] out = {:?} must name a .py file",
+				python.out.display().to_string()
+			);
+		}
+		Ok(Some(python.out.clone()))
+	}
+
+	/// Every file the per-query TypeScript output writes: the module, and for a `.d.ts` the
+	/// `.js` file of the runtime value beside it. Empty without `[typegen.queries] typescript`.
+	pub fn queries_outputs(&self) -> Result<Vec<PathBuf>> {
+		let Some(typescript) = self.queries_typescript()? else {
+			return Ok(Vec::new());
+		};
+		let runtime = declaration_runtime_file(&typescript);
+		Ok(std::iter::once(typescript).chain(runtime).collect())
+	}
+
 	/// The per-query TypeScript file, if `[typegen.queries] typescript` is set. It names a file.
 	pub fn queries_typescript(&self) -> Result<Option<PathBuf>> {
 		let Some(typescript) = self.queries.as_ref().and_then(|q| q.typescript.as_ref()) else {
@@ -624,6 +729,25 @@ pub const DEFAULT_JSON_FILE: &str = "schema.json";
 /// Whether `path` names a JSON file rather than a directory.
 pub fn is_json_file(path: &Path) -> bool {
 	path.extension().is_some_and(|ext| ext == "json")
+}
+
+/// Whether `path` names a declarations file, `x.d.ts`: a per-query module with that name holds
+/// only types, and its runtime value is written to a `.js` file beside it.
+pub fn is_declaration_file(path: &Path) -> bool {
+	path.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
+		name.len() > ".d.ts".len()
+			&& name[name.len() - ".d.ts".len()..].eq_ignore_ascii_case(".d.ts")
+	})
+}
+
+/// The `.js` file beside the declarations file `path` (`x.d.ts` has `x.js`); `None` when `path`
+/// is not a declarations file.
+pub fn declaration_runtime_file(path: &Path) -> Option<PathBuf> {
+	if !is_declaration_file(path) {
+		return None;
+	}
+	let name = path.file_name()?.to_str()?;
+	Some(path.with_file_name(format!("{}.js", &name[..name.len() - ".d.ts".len()])))
 }
 
 /// Whether `path` names a TypeScript file rather than a directory.
@@ -987,6 +1111,98 @@ mod tests {
 		)
 		.unwrap();
 		assert_eq!(ok.emitters().unwrap().len(), 1);
+	}
+
+	#[test]
+	fn a_declarations_file_has_a_runtime_file_beside_it() {
+		let parse = |raw: &str| toml::from_str::<ProjectConfig>(raw).unwrap().typegen;
+		assert!(is_declaration_file(Path::new("src/queries.d.ts")));
+		assert!(!is_declaration_file(Path::new("src/queries.ts")));
+		assert!(!is_declaration_file(Path::new(".d.ts")));
+		assert_eq!(
+			declaration_runtime_file(Path::new("src/queries.d.ts")),
+			Some(PathBuf::from("src/queries.js"))
+		);
+		assert_eq!(declaration_runtime_file(Path::new("src/queries.ts")), None);
+
+		let plain = parse("[typegen.queries]\ntypescript = \"src/queries.ts\"\n");
+		assert_eq!(plain.queries_outputs().unwrap(), [PathBuf::from("src/queries.ts")]);
+		let plain_js = parse("[typegen.queries]\ntypescript = \"src/queries.d.ts\"\n");
+		assert_eq!(
+			plain_js.queries_outputs().unwrap(),
+			[PathBuf::from("src/queries.d.ts"), PathBuf::from("src/queries.js")]
+		);
+		assert!(parse("[typegen.queries]\n").queries_outputs().unwrap().is_empty());
+
+		// Both files are the project's own: neither may be inside an emitter's directory.
+		let inside = parse(
+			"[typegen.queries]\ntypescript = \"gen/queries.d.ts\"\n[typegen.emit.e]\ncommand = \
+			 \"x\"\nout = \"gen\"\n",
+		);
+		let err = inside.emitters().unwrap_err().to_string();
+		assert!(err.contains("which SurrealKit writes itself"), "{err}");
+	}
+
+	#[test]
+	fn the_python_section_parses_and_validates() {
+		use crate::codegen::python::ModelStyle;
+		use crate::codegen::typescript::HintStyle;
+		let parse = |raw: &str| toml::from_str::<ProjectConfig>(raw).map(|c| c.typegen);
+		assert!(TypegenConfig::default().python_config().unwrap().is_none());
+
+		let cfg = parse("[typegen.python]\nout = \"app/surreal_queries.py\"\n")
+			.unwrap()
+			.python_config()
+			.unwrap()
+			.unwrap();
+		assert_eq!(cfg.out, PathBuf::from("app/surreal_queries.py"));
+		assert_eq!(cfg.files, ["**/*.py"]);
+		assert_eq!(cfg.methods, ["query", "query_raw", "live_query"]);
+		assert_eq!(cfg.render_options(), Default::default());
+
+		let cfg = parse(
+			"[typegen.python]\nout = \"q.py\"\nfiles = [\"app/**/*.py\"]\nmethods = [\"run\"]\nhints = \
+			 \"unknown\"\nmodels = \"pydantic\"\n",
+		)
+		.unwrap()
+		.python_config()
+		.unwrap()
+		.unwrap();
+		assert_eq!(cfg.files, ["app/**/*.py"]);
+		assert_eq!(cfg.render_options().hints, HintStyle::Unknown);
+		assert_eq!(cfg.render_options().models, ModelStyle::Pydantic);
+
+		assert!(parse("[typegen.python]\n").is_err(), "`out` is required");
+		assert!(parse("[typegen.python]\nout = \"q.py\"\nwat = 1\n").is_err());
+		assert!(parse("[typegen.python]\nout = \"q.py\"\nmodels = \"dataclass\"\n").is_err());
+		assert!(parse("[typegen.python]\nout = \"q.py\"\nhints = \"guess\"\n").is_err());
+
+		let err = |raw: &str| parse(raw).unwrap().python_config().unwrap_err().to_string();
+		assert!(err("[typegen.python]\nout = \"q.pyi\"\n").contains("must name a .py file"));
+		assert!(err("[typegen.python]\nout = \"q\"\n").contains("must name a .py file"));
+		assert!(
+			err("[typegen.python]\nout = \"q.py\"\nmethods = [\" \"]\n").contains("method name")
+		);
+		assert!(
+			err("[typegen.python]\nout = \"q.py\"\nfiles = [\"\"]\n").contains("glob is empty")
+		);
+		assert!(err("[typegen.python]\nout = \"q.py\"\nfiles = [\"[\"]\n").contains("not a glob"));
+		assert!(
+			err("[typegen]\ntypescript = \"g\"\nfilename = \"q.py\"\n[typegen.python]\nout = \
+			     \"./g/q.py\"\n")
+			.contains("is also [typegen] typescript")
+		);
+
+		// An emitter owns its `out` directory, so the module cannot be inside one.
+		let inside = parse(
+			"[typegen.python]\nout = \"gen/q.py\"\n[typegen.emit.e]\ncommand = \"x\"\nout = \"gen\"\n",
+		)
+		.unwrap();
+		let err = inside.emitters().unwrap_err().to_string();
+		assert!(
+			err.contains("gen/q.py") && err.contains("which SurrealKit writes itself"),
+			"{err}"
+		);
 	}
 
 	#[test]
