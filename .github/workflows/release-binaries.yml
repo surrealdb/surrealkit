@@ -288,8 +288,10 @@ jobs:
               if: runner.os == 'Windows'
               id: package_windows
               shell: pwsh
+              env:
+                  REF_NAME: ${{ github.ref_name }}
               run: |
-                  $tag = if ("${{ github.ref_name }}") { "${{ github.ref_name }}" } else { "dev" }
+                  $tag = if ($env:REF_NAME) { $env:REF_NAME } else { "dev" }
                   $archive = "${env:BINARY_NAME}-$tag-${{ matrix.target }}.zip"
                   Compress-Archive -Path "target/${{ matrix.target }}/release/${env:BINARY_NAME}.exe" -DestinationPath $archive
                   $hash = (Get-FileHash -Algorithm SHA256 -Path $archive).Hash.ToLower()
@@ -342,17 +344,24 @@ jobs:
                   generate_release_notes: true
                   fail_on_unmatched_files: true
 
-    # The only job that names the bucket's credentials, the organisation's
-    # AMAZON_ACCESS_KEY and AMAZON_SECRET_KEY, and it runs no compiler; see
+    # The only job that can reach the bucket, and it runs no compiler: it
+    # assumes the publish role through GitHub OIDC, which trusts only this
+    # workflow on a `v*` tag in the `release` environment; see
     # doc/publishing.md.
     kit-publish:
         name: Publish surreal-kit to download.surrealdb.com
         if: startsWith(github.ref, 'refs/tags/')
         needs: [kit-prepare, build]
         runs-on: ubuntu-22.04
+        environment: release
+        permissions:
+            contents: read
+            id-token: write
         steps:
             - name: Checkout
               uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+              with:
+                  persist-credentials: false
 
             # Republish protection: refuse if any of the version's five SHA-256
             # sidecars already answers. The publish uploads every asset before
@@ -400,13 +409,11 @@ jobs:
                   latest: ${{ needs.kit-prepare.outputs.latest }}
                   major: ${{ needs.kit-prepare.outputs.major }}
                   publish: "true"
-                  aws-access-key-id: ${{ secrets.AMAZON_ACCESS_KEY }}
-                  aws-secret-access-key: ${{ secrets.AMAZON_SECRET_KEY }}
+                  role-to-assume: arn:aws:iam::857808225976:role/gh-publish-surrealdb-surrealkit
 
             - uses: ./.github/actions/propagate-kit
               with:
-                  aws-access-key-id: ${{ secrets.AMAZON_ACCESS_KEY }}
-                  aws-secret-access-key: ${{ secrets.AMAZON_SECRET_KEY }}
+                  role-to-assume: arn:aws:iam::857808225976:role/gh-publish-surrealdb-surrealkit
 
     # Split from `kit-publish` rather than gated inside it, so a rehearsal runs
     # every validation with no credential passed at all.
@@ -418,6 +425,8 @@ jobs:
         steps:
             - name: Checkout
               uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+              with:
+                  persist-credentials: false
 
             - uses: ./.github/actions/publish-kit
               with:

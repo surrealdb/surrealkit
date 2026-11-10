@@ -31,12 +31,8 @@ inputs:
     publish:
         description: "'true' to upload; 'false' stages, verifies and prints the keys a publish would write"
         required: true
-    aws-access-key-id:
-        description: 'AWS access key ID; unused in a rehearsal'
-        required: false
-        default: ''
-    aws-secret-access-key:
-        description: 'AWS secret access key; unused in a rehearsal'
+    role-to-assume:
+        description: 'ARN of the publish role, assumed through GitHub OIDC; unused in a rehearsal'
         required: false
         default: ''
 
@@ -150,9 +146,12 @@ runs:
           if: ${{ inputs.publish == 'true' }}
           uses: aws-actions/configure-aws-credentials@ec61189d14ec14c8efccab744f656cffd0e33f37 # v6.1.0
           with:
-              aws-region: us-east-2
-              aws-access-key-id: ${{ inputs.aws-access-key-id }}
-              aws-secret-access-key: ${{ inputs.aws-secret-access-key }}
+              # download.surrealdb.com's region, so no request depends on S3's
+              # region redirect.
+              aws-region: eu-west-2
+              role-to-assume: ${{ inputs.role-to-assume }}
+              role-session-name: surrealkit-publish-${{ github.run_id }}
+              role-duration-seconds: 3600
 
         # Assets, then sidecars, then the pointers. A client that reads a
         # pointer must find the files it names already in place, so nothing is
