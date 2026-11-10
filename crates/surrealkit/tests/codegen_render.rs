@@ -401,6 +401,9 @@ fn typecheck_golden_with_register_with_tsc() {
 	write(&root.join("use.ts"), REGISTER_TS);
 	write_tsconfig(root, &["use.ts".to_string(), "queries.ts".to_string()]);
 	run_tsc(&tsc, root);
+	// The module alone, in a program where nothing else imports the package it augments.
+	write_tsconfig(root, &["queries.ts".to_string()]);
+	run_tsc(&tsc, root);
 }
 
 fn write_tsconfig(root: &Path, files: &[String]) {

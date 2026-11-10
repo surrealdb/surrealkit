@@ -124,10 +124,16 @@ pub fn render(queries: &[QueryEntry], types: &[TypeDef], opts: &RenderOptions) -
 	let mut out = String::from(HEADER);
 	out.push('\n');
 	out.push_str(&format!(
-		"import type {{ {} }} from {};\n\n",
+		"import type {{ {} }} from {};\n",
 		imports.join(", "),
 		ts_string(&opts.sdk_package)
 	));
+	// The augmentation below needs the package in the program: without an import of it, a
+	// program that includes this module but nothing that imports the package fails with TS2664.
+	if let Some(package) = &opts.register {
+		out.push_str(&format!("import type {{}} from {};\n", ts_string(package)));
+	}
+	out.push('\n');
 	let mut parts = vec![registry, names, live, TYPED_CLIENT.to_string()];
 	if let Some(package) = &opts.register {
 		parts.push(register_block(package));
@@ -1417,5 +1423,20 @@ mod tests {
 		));
 		assert!(register("a\"b").contains("declare module \"a\\\"b\" {"));
 		assert!(!render_default(json!([])).contains("declare module"));
+	}
+
+	#[test]
+	fn register_imports_the_package_it_augments() {
+		let text = render(
+			&[],
+			&[],
+			&RenderOptions {
+				register: Some("surrealkit-query".to_string()),
+				..RenderOptions::default()
+			},
+		);
+		let import = text.find("\nimport type {} from \"surrealkit-query\";\n").expect("import");
+		assert!(import < text.find("declare module").expect("augmentation"));
+		assert!(!render_default(json!([])).contains("import type {} from"));
 	}
 }
