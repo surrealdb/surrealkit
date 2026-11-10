@@ -1,0 +1,499 @@
+{
+  "version": 2,
+  "semanticDigest": "sha256:1112c3cd2c8d3dd7521eefb1b7f6fd752fb33ffbbf46cebc75b110ce358dd34f",
+  "provenance": {
+    "generator": {
+      "name": "surrealkit",
+      "version": "1.0.0-rc.1"
+    },
+    "engine": {
+      "version": "4.1.0",
+      "build": "surrealdb-4.1.0-nightly",
+      "mode": "embedded"
+    },
+    "adapter": "structure-4.1",
+    "source": {
+      "kind": "compile",
+      "modules": [
+        "default"
+      ],
+      "files": [
+        {
+          "path": "schema/001_people.surql",
+          "sha256": "6e62c2c3a100c124855aa5aed25645b7e3a026e40e003d088ef335eb05958665"
+        }
+      ]
+    },
+    "capabilities": {
+      "experimental": [],
+      "network": false
+    }
+  },
+  "tables": [
+    {
+      "name": "person",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "age"
+          ],
+          "kind": {
+            "kind": "int"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD age ON person TYPE none | int PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "email"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD email ON person TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "name"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD name ON person TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "role"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "admin"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "member"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD role ON person TYPE 'member' | 'admin' PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE person TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    }
+  ],
+  "functions": [],
+  "params": [],
+  "accesses": [],
+  "analyzers": [],
+  "sequences": [],
+  "buckets": [],
+  "apis": [],
+  "modules": [],
+  "configs": [],
+  "users": [],
+  "queries": [
+    {
+      "key": "SELECT count() AS n FROM person GROUP ALL",
+      "text": "SELECT count() AS n FROM person GROUP ALL",
+      "sources": [
+        {
+          "origin": "host",
+          "path": "src/app.js",
+          "span": {
+            "start": 618,
+            "end": 659
+          },
+          "line": 18,
+          "column": 35,
+          "method": "query"
+        }
+      ],
+      "statements": [
+        {
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "n",
+                  "kind": {
+                    "kind": "int"
+                  },
+                  "optional": false
+                }
+              ]
+            }
+          },
+          "optional": false,
+          "certainty": "fact",
+          "exact": true,
+          "open": [],
+          "live": {
+            "diff": false,
+            "query": "LIVE SELECT id FROM person",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "person"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "person"
+                        ]
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "person"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "person"
+                        ]
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "person"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "person"
+                        ]
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": {
+                  "kind": "none"
+                },
+                "result": {
+                  "kind": "none"
+                },
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          },
+          "liveRefusal": {
+            "code": "E4009",
+            "message": "a live query does not take GROUP BY: it notifies the changes of one table; serve GROUP BY by running the SELECT over the snapshot again",
+            "clauses": [
+              "GROUP BY"
+            ],
+            "windowable": true
+          }
+        }
+      ]
+    },
+    {
+      "key": "SELECT name, email, age FROM person WHERE role = $role",
+      "text": "SELECT name, email, age FROM person WHERE role = $role",
+      "sources": [
+        {
+          "origin": "host",
+          "path": "src/app.js",
+          "span": {
+            "start": 382,
+            "end": 436
+          },
+          "line": 11,
+          "column": 35,
+          "method": "query"
+        }
+      ],
+      "statements": [
+        {
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "age",
+                  "kind": {
+                    "kind": "int"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "email",
+                  "kind": {
+                    "kind": "string"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "name",
+                  "kind": {
+                    "kind": "string"
+                  },
+                  "optional": false
+                }
+              ]
+            }
+          },
+          "optional": false,
+          "certainty": "hint",
+          "exact": true,
+          "open": [],
+          "live": {
+            "diff": false,
+            "query": "LIVE SELECT name, email, age FROM person WHERE role = $role",
+            "exit": "silent",
+            "watch": "LIVE SELECT id FROM person",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "person"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "age",
+                      "kind": {
+                        "kind": "int"
+                      },
+                      "optional": true
+                    },
+                    {
+                      "name": "email",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "name",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "person"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "age",
+                      "kind": {
+                        "kind": "int"
+                      },
+                      "optional": true
+                    },
+                    {
+                      "name": "email",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "name",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "person"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "age",
+                      "kind": {
+                        "kind": "int"
+                      },
+                      "optional": true
+                    },
+                    {
+                      "name": "email",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "name",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": {
+                  "kind": "none"
+                },
+                "result": {
+                  "kind": "none"
+                },
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          }
+        }
+      ],
+      "params": [
+        {
+          "name": "role",
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "admin"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "member"
+              }
+            ]
+          },
+          "optional": false,
+          "required": true
+        }
+      ]
+    }
+  ],
+  "diagnostics": []
+}

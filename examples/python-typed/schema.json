@@ -1,0 +1,2159 @@
+{
+  "version": 2,
+  "semanticDigest": "sha256:2d4a091fb8f246376d0b32f4d2fdadd9c4bf075e483eb1abc87b37703dddc95b",
+  "provenance": {
+    "generator": {
+      "name": "surrealkit",
+      "version": "1.0.0-rc.1"
+    },
+    "engine": {
+      "version": "4.1.0",
+      "build": "surrealdb-4.1.0-nightly",
+      "mode": "embedded"
+    },
+    "adapter": "structure-4.1",
+    "source": {
+      "kind": "compile",
+      "modules": [
+        "default"
+      ],
+      "files": [
+        {
+          "path": "schema/001_cards.surql",
+          "sha256": "bccdff944c05775eb229bdbe3a3790e42fcc391c74ba33d461d057b4ceb676f1"
+        }
+      ]
+    },
+    "capabilities": {
+      "experimental": [],
+      "network": false
+    }
+  },
+  "tables": [
+    {
+      "name": "card",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "due"
+          ],
+          "kind": {
+            "kind": "datetime"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD due ON card TYPE none | datetime PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "owner"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD owner ON card TYPE record<person> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "status"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "done"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "todo"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD status ON card TYPE 'todo' | 'done' PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "tags"
+          ],
+          "kind": {
+            "kind": "set",
+            "item": {
+              "kind": "string"
+            }
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD tags ON card TYPE set<string> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "tags",
+            "*"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD tags.* ON card TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "title"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD title ON card TYPE string PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE card TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "person",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "name"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD name ON person TYPE string PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE person TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    }
+  ],
+  "functions": [],
+  "params": [],
+  "accesses": [],
+  "analyzers": [],
+  "sequences": [],
+  "buckets": [],
+  "apis": [],
+  "modules": [],
+  "configs": [],
+  "users": [],
+  "queries": [
+    {
+      "key": "CardsByOwner",
+      "name": "CardsByOwner",
+      "text": "SELECT * FROM card WHERE owner = $owner;",
+      "sources": [
+        {
+          "origin": "file",
+          "path": "database/queries/cards.surql",
+          "span": {
+            "start": 224,
+            "end": 264
+          },
+          "line": 7,
+          "column": 1
+        }
+      ],
+      "statements": [
+        {
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "due",
+                  "kind": {
+                    "kind": "datetime"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "id",
+                  "kind": {
+                    "kind": "record",
+                    "tables": [
+                      "card"
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "owner",
+                  "kind": {
+                    "kind": "record",
+                    "tables": [
+                      "person"
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "status",
+                  "kind": {
+                    "kind": "union",
+                    "variants": [
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "done"
+                      },
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "todo"
+                      }
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "tags",
+                  "kind": {
+                    "kind": "set",
+                    "item": {
+                      "kind": "string"
+                    }
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "title",
+                  "kind": {
+                    "kind": "string"
+                  },
+                  "optional": false
+                }
+              ]
+            }
+          },
+          "optional": false,
+          "certainty": "hint",
+          "exact": true,
+          "open": [],
+          "live": {
+            "diff": false,
+            "query": "LIVE SELECT * FROM card WHERE owner = $owner",
+            "exit": "silent",
+            "watch": "LIVE SELECT id FROM card",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "due",
+                      "kind": {
+                        "kind": "datetime"
+                      },
+                      "optional": true
+                    },
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "card"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "owner",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "person"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "status",
+                      "kind": {
+                        "kind": "union",
+                        "variants": [
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "done"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "todo"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "tags",
+                      "kind": {
+                        "kind": "set",
+                        "item": {
+                          "kind": "string"
+                        }
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "due",
+                      "kind": {
+                        "kind": "datetime"
+                      },
+                      "optional": true
+                    },
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "card"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "owner",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "person"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "status",
+                      "kind": {
+                        "kind": "union",
+                        "variants": [
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "done"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "todo"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "tags",
+                      "kind": {
+                        "kind": "set",
+                        "item": {
+                          "kind": "string"
+                        }
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "due",
+                      "kind": {
+                        "kind": "datetime"
+                      },
+                      "optional": true
+                    },
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "card"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "owner",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "person"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "status",
+                      "kind": {
+                        "kind": "union",
+                        "variants": [
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "done"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "todo"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "tags",
+                      "kind": {
+                        "kind": "set",
+                        "item": {
+                          "kind": "string"
+                        }
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": {
+                  "kind": "none"
+                },
+                "result": {
+                  "kind": "none"
+                },
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          }
+        }
+      ],
+      "params": [
+        {
+          "name": "owner",
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": false,
+          "required": true
+        }
+      ]
+    },
+    {
+      "key": "CountByStatus",
+      "name": "CountByStatus",
+      "text": "SELECT status, count() AS n FROM card GROUP BY status;",
+      "sources": [
+        {
+          "origin": "file",
+          "path": "database/queries/cards.surql",
+          "span": {
+            "start": 289,
+            "end": 343
+          },
+          "line": 10,
+          "column": 1
+        }
+      ],
+      "statements": [
+        {
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "n",
+                  "kind": {
+                    "kind": "int"
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "status",
+                  "kind": {
+                    "kind": "union",
+                    "variants": [
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "done"
+                      },
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "todo"
+                      }
+                    ]
+                  },
+                  "optional": false
+                }
+              ]
+            }
+          },
+          "optional": false,
+          "certainty": "hint",
+          "exact": true,
+          "open": [],
+          "live": {
+            "diff": false,
+            "query": "LIVE SELECT id FROM card",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "card"
+                        ]
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "card"
+                        ]
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "card"
+                        ]
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": {
+                  "kind": "none"
+                },
+                "result": {
+                  "kind": "none"
+                },
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          },
+          "liveRefusal": {
+            "code": "E4009",
+            "message": "a live query does not take GROUP BY: it notifies the changes of one table; serve GROUP BY by running the SELECT over the snapshot again",
+            "clauses": [
+              "GROUP BY"
+            ],
+            "windowable": true
+          }
+        }
+      ]
+    },
+    {
+      "key": "ListCards",
+      "name": "ListCards",
+      "text": "SELECT title, status, due, owner, tags FROM card WHERE status = $status ORDER BY title;",
+      "sources": [
+        {
+          "origin": "file",
+          "path": "database/queries/cards.surql",
+          "span": {
+            "start": 113,
+            "end": 200
+          },
+          "line": 4,
+          "column": 1
+        }
+      ],
+      "statements": [
+        {
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "due",
+                  "kind": {
+                    "kind": "datetime"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "owner",
+                  "kind": {
+                    "kind": "record",
+                    "tables": [
+                      "person"
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "status",
+                  "kind": {
+                    "kind": "union",
+                    "variants": [
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "done"
+                      },
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "todo"
+                      }
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "tags",
+                  "kind": {
+                    "kind": "set",
+                    "item": {
+                      "kind": "string"
+                    }
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "title",
+                  "kind": {
+                    "kind": "string"
+                  },
+                  "optional": false
+                }
+              ]
+            }
+          },
+          "optional": false,
+          "certainty": "hint",
+          "exact": true,
+          "open": [],
+          "live": {
+            "diff": false,
+            "query": "LIVE SELECT title, status, due, owner, tags FROM card WHERE status = $status",
+            "exit": "silent",
+            "watch": "LIVE SELECT id FROM card",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "due",
+                      "kind": {
+                        "kind": "datetime"
+                      },
+                      "optional": true
+                    },
+                    {
+                      "name": "owner",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "person"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "status",
+                      "kind": {
+                        "kind": "union",
+                        "variants": [
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "done"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "todo"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "tags",
+                      "kind": {
+                        "kind": "set",
+                        "item": {
+                          "kind": "string"
+                        }
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "due",
+                      "kind": {
+                        "kind": "datetime"
+                      },
+                      "optional": true
+                    },
+                    {
+                      "name": "owner",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "person"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "status",
+                      "kind": {
+                        "kind": "union",
+                        "variants": [
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "done"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "todo"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "tags",
+                      "kind": {
+                        "kind": "set",
+                        "item": {
+                          "kind": "string"
+                        }
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "due",
+                      "kind": {
+                        "kind": "datetime"
+                      },
+                      "optional": true
+                    },
+                    {
+                      "name": "owner",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "person"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "status",
+                      "kind": {
+                        "kind": "union",
+                        "variants": [
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "done"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "todo"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "tags",
+                      "kind": {
+                        "kind": "set",
+                        "item": {
+                          "kind": "string"
+                        }
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": {
+                  "kind": "none"
+                },
+                "result": {
+                  "kind": "none"
+                },
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          },
+          "liveRefusal": {
+            "code": "E4009",
+            "message": "a live query does not take ORDER BY: it notifies the changes of one table; serve ORDER BY by running the SELECT over the snapshot again",
+            "clauses": [
+              "ORDER BY"
+            ],
+            "windowable": true
+          }
+        }
+      ],
+      "params": [
+        {
+          "name": "status",
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "done"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "todo"
+              }
+            ]
+          },
+          "optional": false,
+          "required": true
+        }
+      ]
+    },
+    {
+      "key": "SELECT * FROM card WHERE owner = $owner",
+      "text": "SELECT * FROM card WHERE owner = $owner",
+      "sources": [
+        {
+          "origin": "host",
+          "path": "app/main.py",
+          "span": {
+            "start": 1904,
+            "end": 1943
+          },
+          "line": 48,
+          "column": 10,
+          "method": "live_query"
+        },
+        {
+          "origin": "host",
+          "path": "app/runtime_check.py",
+          "span": {
+            "start": 3484,
+            "end": 3523
+          },
+          "line": 84,
+          "column": 10,
+          "method": "query"
+        },
+        {
+          "origin": "host",
+          "path": "app/runtime_check.py",
+          "span": {
+            "start": 4763,
+            "end": 4802
+          },
+          "line": 113,
+          "column": 10,
+          "method": "live_query"
+        }
+      ],
+      "statements": [
+        {
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "due",
+                  "kind": {
+                    "kind": "datetime"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "id",
+                  "kind": {
+                    "kind": "record",
+                    "tables": [
+                      "card"
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "owner",
+                  "kind": {
+                    "kind": "record",
+                    "tables": [
+                      "person"
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "status",
+                  "kind": {
+                    "kind": "union",
+                    "variants": [
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "done"
+                      },
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "todo"
+                      }
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "tags",
+                  "kind": {
+                    "kind": "set",
+                    "item": {
+                      "kind": "string"
+                    }
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "title",
+                  "kind": {
+                    "kind": "string"
+                  },
+                  "optional": false
+                }
+              ]
+            }
+          },
+          "optional": false,
+          "certainty": "hint",
+          "exact": true,
+          "open": [],
+          "live": {
+            "diff": false,
+            "query": "LIVE SELECT * FROM card WHERE owner = $owner",
+            "exit": "silent",
+            "watch": "LIVE SELECT id FROM card",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "due",
+                      "kind": {
+                        "kind": "datetime"
+                      },
+                      "optional": true
+                    },
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "card"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "owner",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "person"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "status",
+                      "kind": {
+                        "kind": "union",
+                        "variants": [
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "done"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "todo"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "tags",
+                      "kind": {
+                        "kind": "set",
+                        "item": {
+                          "kind": "string"
+                        }
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "due",
+                      "kind": {
+                        "kind": "datetime"
+                      },
+                      "optional": true
+                    },
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "card"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "owner",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "person"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "status",
+                      "kind": {
+                        "kind": "union",
+                        "variants": [
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "done"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "todo"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "tags",
+                      "kind": {
+                        "kind": "set",
+                        "item": {
+                          "kind": "string"
+                        }
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "due",
+                      "kind": {
+                        "kind": "datetime"
+                      },
+                      "optional": true
+                    },
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "card"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "owner",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "person"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "status",
+                      "kind": {
+                        "kind": "union",
+                        "variants": [
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "done"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "todo"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "tags",
+                      "kind": {
+                        "kind": "set",
+                        "item": {
+                          "kind": "string"
+                        }
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": {
+                  "kind": "none"
+                },
+                "result": {
+                  "kind": "none"
+                },
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          }
+        }
+      ],
+      "params": [
+        {
+          "name": "owner",
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": false,
+          "required": true
+        }
+      ]
+    },
+    {
+      "key": "SELECT count() AS n FROM card GROUP ALL",
+      "text": "SELECT count() AS n FROM card GROUP ALL",
+      "sources": [
+        {
+          "origin": "host",
+          "path": "app/main.py",
+          "span": {
+            "start": 1333,
+            "end": 1372
+          },
+          "line": 35,
+          "column": 33,
+          "method": "query"
+        },
+        {
+          "origin": "host",
+          "path": "app/runtime_check.py",
+          "span": {
+            "start": 2912,
+            "end": 2951
+          },
+          "line": 70,
+          "column": 33,
+          "method": "query"
+        }
+      ],
+      "statements": [
+        {
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "n",
+                  "kind": {
+                    "kind": "int"
+                  },
+                  "optional": false
+                }
+              ]
+            }
+          },
+          "optional": false,
+          "certainty": "fact",
+          "exact": true,
+          "open": [],
+          "live": {
+            "diff": false,
+            "query": "LIVE SELECT id FROM card",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "card"
+                        ]
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "card"
+                        ]
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "id",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "card"
+                        ]
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": {
+                  "kind": "none"
+                },
+                "result": {
+                  "kind": "none"
+                },
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          },
+          "liveRefusal": {
+            "code": "E4009",
+            "message": "a live query does not take GROUP BY: it notifies the changes of one table; serve GROUP BY by running the SELECT over the snapshot again",
+            "clauses": [
+              "GROUP BY"
+            ],
+            "windowable": true
+          }
+        }
+      ]
+    },
+    {
+      "key": "SELECT title, status, due, owner FROM card WHERE status = $status",
+      "text": "SELECT title, status, due, owner FROM card WHERE status = $status",
+      "sources": [
+        {
+          "origin": "host",
+          "path": "app/main.py",
+          "span": {
+            "start": 658,
+            "end": 723
+          },
+          "line": 20,
+          "column": 10,
+          "method": "query"
+        },
+        {
+          "origin": "host",
+          "path": "app/runtime_check.py",
+          "span": {
+            "start": 2044,
+            "end": 2109
+          },
+          "line": 57,
+          "column": 10,
+          "method": "query"
+        },
+        {
+          "origin": "host",
+          "path": "app/runtime_check.py",
+          "span": {
+            "start": 4183,
+            "end": 4248
+          },
+          "line": 98,
+          "column": 10,
+          "method": "query"
+        }
+      ],
+      "statements": [
+        {
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "due",
+                  "kind": {
+                    "kind": "datetime"
+                  },
+                  "optional": true
+                },
+                {
+                  "name": "owner",
+                  "kind": {
+                    "kind": "record",
+                    "tables": [
+                      "person"
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "status",
+                  "kind": {
+                    "kind": "union",
+                    "variants": [
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "done"
+                      },
+                      {
+                        "kind": "literal",
+                        "type": "string",
+                        "value": "todo"
+                      }
+                    ]
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "title",
+                  "kind": {
+                    "kind": "string"
+                  },
+                  "optional": false
+                }
+              ]
+            }
+          },
+          "optional": false,
+          "certainty": "hint",
+          "exact": true,
+          "open": [],
+          "live": {
+            "diff": false,
+            "query": "LIVE SELECT title, status, due, owner FROM card WHERE status = $status",
+            "exit": "silent",
+            "watch": "LIVE SELECT id FROM card",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "due",
+                      "kind": {
+                        "kind": "datetime"
+                      },
+                      "optional": true
+                    },
+                    {
+                      "name": "owner",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "person"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "status",
+                      "kind": {
+                        "kind": "union",
+                        "variants": [
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "done"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "todo"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "due",
+                      "kind": {
+                        "kind": "datetime"
+                      },
+                      "optional": true
+                    },
+                    {
+                      "name": "owner",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "person"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "status",
+                      "kind": {
+                        "kind": "union",
+                        "variants": [
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "done"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "todo"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "due",
+                      "kind": {
+                        "kind": "datetime"
+                      },
+                      "optional": true
+                    },
+                    {
+                      "name": "owner",
+                      "kind": {
+                        "kind": "record",
+                        "tables": [
+                          "person"
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "status",
+                      "kind": {
+                        "kind": "union",
+                        "variants": [
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "done"
+                          },
+                          {
+                            "kind": "literal",
+                            "type": "string",
+                            "value": "todo"
+                          }
+                        ]
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": {
+                  "kind": "none"
+                },
+                "result": {
+                  "kind": "none"
+                },
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          }
+        }
+      ],
+      "params": [
+        {
+          "name": "status",
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "done"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "todo"
+              }
+            ]
+          },
+          "optional": false,
+          "required": true
+        }
+      ]
+    },
+    {
+      "key": "SELECT title, tags FROM card WHERE owner = $owner",
+      "text": "SELECT title, tags FROM card WHERE owner = $owner",
+      "sources": [
+        {
+          "origin": "host",
+          "path": "app/main.py",
+          "span": {
+            "start": 1561,
+            "end": 1610
+          },
+          "line": 41,
+          "column": 26,
+          "method": "query"
+        },
+        {
+          "origin": "host",
+          "path": "app/runtime_check.py",
+          "span": {
+            "start": 3090,
+            "end": 3139
+          },
+          "line": 74,
+          "column": 10,
+          "method": "query"
+        },
+        {
+          "origin": "host",
+          "path": "app/runtime_check.py",
+          "span": {
+            "start": 4474,
+            "end": 4523
+          },
+          "line": 106,
+          "column": 10,
+          "method": "query"
+        }
+      ],
+      "statements": [
+        {
+          "kind": {
+            "kind": "array",
+            "item": {
+              "kind": "objectLiteral",
+              "fields": [
+                {
+                  "name": "tags",
+                  "kind": {
+                    "kind": "set",
+                    "item": {
+                      "kind": "string"
+                    }
+                  },
+                  "optional": false
+                },
+                {
+                  "name": "title",
+                  "kind": {
+                    "kind": "string"
+                  },
+                  "optional": false
+                }
+              ]
+            }
+          },
+          "optional": false,
+          "certainty": "hint",
+          "exact": true,
+          "open": [],
+          "live": {
+            "diff": false,
+            "query": "LIVE SELECT title, tags FROM card WHERE owner = $owner",
+            "exit": "silent",
+            "watch": "LIVE SELECT id FROM card",
+            "notifications": [
+              {
+                "action": "CREATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "tags",
+                      "kind": {
+                        "kind": "set",
+                        "item": {
+                          "kind": "string"
+                        }
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "UPDATE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "tags",
+                      "kind": {
+                        "kind": "set",
+                        "item": {
+                          "kind": "string"
+                        }
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "DELETE",
+                "record": {
+                  "kind": "record",
+                  "tables": [
+                    "card"
+                  ]
+                },
+                "result": {
+                  "kind": "objectLiteral",
+                  "fields": [
+                    {
+                      "name": "tags",
+                      "kind": {
+                        "kind": "set",
+                        "item": {
+                          "kind": "string"
+                        }
+                      },
+                      "optional": false
+                    },
+                    {
+                      "name": "title",
+                      "kind": {
+                        "kind": "string"
+                      },
+                      "optional": false
+                    }
+                  ]
+                },
+                "certainty": "hint",
+                "open": []
+              },
+              {
+                "action": "KILLED",
+                "record": {
+                  "kind": "none"
+                },
+                "result": {
+                  "kind": "none"
+                },
+                "certainty": "fact",
+                "open": []
+              }
+            ]
+          }
+        }
+      ],
+      "params": [
+        {
+          "name": "owner",
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "person"
+            ]
+          },
+          "optional": false,
+          "required": true
+        }
+      ]
+    }
+  ],
+  "diagnostics": []
+}
