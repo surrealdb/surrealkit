@@ -158,6 +158,8 @@ jobs:
 
     # No job here holds a credential or write access: the builds run `build.rs`
     # for the whole dependency graph, which is arbitrary code from crates.io.
+    # The published binaries are compiled from scratch, never from a restored
+    # cache.
     build:
         name: Build ${{ matrix.target }}
         needs: kit-prepare
@@ -207,9 +209,6 @@ jobs:
             - name: Install musl toolchain
               if: endsWith(matrix.target, '-musl')
               run: sudo apt-get update && sudo apt-get install -y musl-tools
-
-            - name: Cache Rust artifacts
-              uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4
 
             - name: Build release binary
               env:
