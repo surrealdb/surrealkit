@@ -1,10 +1,15 @@
 #![doc = include_str!("../README.md")]
 
+pub mod check;
 pub mod compat;
 pub mod compile;
 pub mod config;
 pub mod constants;
 pub mod core;
+// The SurrealQL host code sends to the engine, found with tree-sitter. `check` lints it and
+// `generate` types it.
+#[cfg(feature = "host-queries")]
+pub mod host_queries;
 // The MCP server. stdio transport; see the module docs for the statelessness
 // contract and why stdout is off-limits.
 #[cfg(feature = "mcp")]
@@ -34,6 +39,8 @@ pub mod variables;
 
 // Re-exported dependencies used in the public API surface.
 pub use anyhow;
+// The `[analyze]` section of surrealkit.toml.
+pub use check::AnalyzeConfig;
 // Connecting.
 pub use config::{AuthLevel, DbCfg, DbOverrides, connect};
 // Rollouts (the staged, reversible path).

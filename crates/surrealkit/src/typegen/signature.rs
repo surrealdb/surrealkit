@@ -116,7 +116,7 @@ fn extract_arrow_return(
 			text.to_string(),
 			KindProblem {
 				span,
-				reason: problem.reason,
+				..problem
 			},
 		));
 	}
@@ -260,14 +260,15 @@ mod tests {
 
 	#[test]
 	fn unparseable_kinds_are_reported() {
-		let sig =
-			parse_function("DEFINE FUNCTION fn::f($a: frob, $b: int) -> range<int> { RETURN 1 }");
+		let sig = parse_function(
+			"DEFINE FUNCTION fn::f($a: frob<int>, $b: int) -> range<int> { RETURN 1 }",
+		);
 		assert_eq!(sig.args.len(), 2);
 		assert!(matches!(sig.args[0].r#type, FieldType::Unknown { .. }));
 		assert!(matches!(sig.returns, Some(FieldType::Unknown { .. })));
 		let texts: Vec<&str> = sig.problems.iter().map(|(text, _)| text.as_str()).collect();
 		assert_eq!(texts.len(), 2, "{texts:?}");
-		assert_eq!(texts, vec!["frob", "range<int>"]);
+		assert_eq!(texts, vec!["frob<int>", "range<int>"]);
 		for (text, problem) in &sig.problems {
 			assert_eq!(&text[problem.span.clone()], *text, "the whole name is at fault");
 		}

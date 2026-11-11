@@ -278,6 +278,9 @@ fn legacy_access_documents_without_authenticate_round_trip_unchanged() {
 fn contract_violations_are_rejected() {
 	let base = serde_json::to_value(fixture_document("3.3.0")).unwrap();
 	type Mutation = (&'static str, Box<dyn Fn(&mut Value)>);
+	let returns = |kind: Value| -> Box<dyn Fn(&mut Value)> {
+		Box::new(move |d| d["functions"][0]["returns"] = kind.clone())
+	};
 	let mutations: Vec<Mutation> = vec![
 		("unknown top-level key", Box::new(|d| d["generatedAt"] = Value::from("now"))),
 		("bad digest", Box::new(|d| d["semanticDigest"] = Value::from("sha256:xyz"))),
@@ -324,6 +327,22 @@ fn contract_violations_are_rejected() {
 			Box::new(|d| d["provenance"]["adapter"] = Value::from("structure-9.9")),
 		),
 		("bad function name", Box::new(|d| d["functions"][0]["name"] = Value::from("greet"))),
+		("int width 7", returns(serde_json::json!({"kind": "int", "width": 7}))),
+		("unsigned: true", returns(serde_json::json!({"kind": "int", "signed": true}))),
+		("float width 8", returns(serde_json::json!({"kind": "float", "width": 8}))),
+		("float signed", returns(serde_json::json!({"kind": "float", "signed": false}))),
+		("width on a string", returns(serde_json::json!({"kind": "string", "width": 8}))),
+		("enum without labels", returns(serde_json::json!({"kind": "enum", "labels": []}))),
+		("enum label not a string", returns(serde_json::json!({"kind": "enum", "labels": [1]}))),
+		("named without a name", returns(serde_json::json!({"kind": "named"}))),
+		("a type without a kind", Box::new(|d| d["types"] = serde_json::json!([{"name": "t"}]))),
+		(
+			"a type with an extra key",
+			Box::new(|d| {
+				d["types"] = serde_json::json!([{"name": "t", "kind": {"kind": "int"}, "x": 1}])
+			}),
+		),
+		("types null", Box::new(|d| d["types"] = Value::Null)),
 	];
 	assert_valid("the base document", &base);
 	for (label, mutate) in mutations {
@@ -331,6 +350,35 @@ fn contract_violations_are_rejected() {
 		mutate(&mut doc);
 		assert!(!validation_errors(&doc).is_empty(), "{label} was accepted");
 	}
+}
+
+/// The 4.x nodes, and a `types` collection, are what the schema accepts.
+#[test]
+fn the_four_oh_nodes_validate() {
+	let base = serde_json::to_value(fixture_document("3.3.0")).unwrap();
+	for kind in [
+		serde_json::json!({"kind": "int", "width": 8}),
+		serde_json::json!({"kind": "int", "width": 64, "signed": false}),
+		serde_json::json!({"kind": "float", "width": 16}),
+		serde_json::json!({"kind": "date"}),
+		serde_json::json!({"kind": "time"}),
+		serde_json::json!({"kind": "timestamp"}),
+		serde_json::json!({"kind": "interval"}),
+		serde_json::json!({"kind": "bigdecimal"}),
+		serde_json::json!({"kind": "enum", "labels": ["z", "a", "a", ""]}),
+		serde_json::json!({"kind": "named", "name": "mood"}),
+		serde_json::json!({"kind": "array", "item": {"kind": "option", "item": {"kind": "named", "name": "m"}}}),
+	] {
+		let mut doc = base.clone();
+		doc["functions"][0]["returns"] = kind.clone();
+		assert_valid(&kind.to_string(), &doc);
+	}
+	let mut doc = base;
+	doc["types"] = serde_json::json!([
+		{"name": "mood", "kind": {"kind": "enum", "labels": ["sad", "ok"]}, "comment": "c"},
+		{"name": "pos", "kind": {"kind": "int", "width": 32}},
+	]);
+	assert_valid("a document with types", &doc);
 }
 
 #[test]

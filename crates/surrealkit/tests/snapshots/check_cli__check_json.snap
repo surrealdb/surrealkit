@@ -1,0 +1,60 @@
+---
+source: crates/surrealkit/tests/check_cli.rs
+expression: stdout(&as_json)
+---
+{
+  "summary": {
+    "passed": false,
+    "schema_files": 3,
+    "query_files": 0,
+    "queries_analyzed": false,
+    "errors": 2,
+    "warnings": 0,
+    "hints": 0,
+    "suppressed": 0,
+    "allowed": 0,
+    "host_read": false,
+    "host_files": 0,
+    "host_queries": 0,
+    "targets_checked": 0,
+    "drift": {}
+  },
+  "diagnostics": [
+    {
+      "code": "K9003",
+      "severity": "error",
+      "message": "Cannot define field `x.y`: the field `x` it is nested in is not defined. Define `x` first",
+      "path": "database/schema/002_bad.surql",
+      "span": {
+        "start": 30,
+        "end": 63,
+        "line": 2,
+        "column": 1,
+        "end_line": 2,
+        "end_column": 34
+      },
+      "statement": 1,
+      "notes": [],
+      "tags": [],
+      "source": "kit"
+    },
+    {
+      "code": "K9001",
+      "severity": "error",
+      "message": "string is never closed. If this statement has a regex literal, SurrealKit may have read its opening `/` as division; write it as <regex> \"...\" instead",
+      "path": "database/schema/003_open.surql",
+      "span": {
+        "start": 28,
+        "end": 29,
+        "line": 1,
+        "column": 29,
+        "end_line": 1,
+        "end_column": 30
+      },
+      "statement": null,
+      "notes": [],
+      "tags": [],
+      "source": "kit"
+    }
+  ]
+}

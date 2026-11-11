@@ -178,17 +178,7 @@ fn build_field(
 		Some(src) => {
 			let (kind, problems) = parse_type_checked(src);
 			for problem in problems {
-				diagnostics.push(
-					Diagnostic::new(
-						Severity::Error,
-						codes::KIND_UNRECOGNIZED,
-						src.as_str(),
-						problem.reason,
-					)
-					.on_table(table)
-					.on_field(path.clone())
-					.with_span(problem.span),
-				);
+				diagnostics.push(problem.diagnostic(src).on_table(table).on_field(path.clone()));
 			}
 			kind
 		}
@@ -233,11 +223,7 @@ fn build_function(define: String, diagnostics: &mut Vec<Diagnostic>) -> Function
 	let sig = parse_function(&define);
 	let name = sig.name.unwrap_or_else(|| function_name_from_key(&define));
 	for (text, problem) in sig.problems {
-		diagnostics.push(
-			Diagnostic::new(Severity::Error, codes::KIND_UNRECOGNIZED, text, problem.reason)
-				.on_function(&name)
-				.with_span(problem.span),
-		);
+		diagnostics.push(problem.diagnostic(&text).on_function(&name));
 	}
 	FunctionDef {
 		name,
@@ -436,10 +422,10 @@ mod tests {
 	fn unrecognised_kinds_are_errors_with_their_location() {
 		let db = info(serde_json::json!({
 			"tables": { "p": "DEFINE TABLE p TYPE NORMAL SCHEMAFULL" },
-			"functions": { "f": "DEFINE FUNCTION fn::f($a: frob) { RETURN $a } PERMISSIONS FULL" },
+			"functions": { "f": "DEFINE FUNCTION fn::f($a: frob<int>) { RETURN $a } PERMISSIONS FULL" },
 		}));
 		let table = info(serde_json::json!({
-			"fields": { "`odd.x`": "DEFINE FIELD `odd.x` ON p TYPE array<zzz> PERMISSIONS FULL" },
+			"fields": { "`odd.x`": "DEFINE FIELD `odd.x` ON p TYPE array<zzz<int>> PERMISSIONS FULL" },
 		}));
 		let (_, diagnostics) = assemble(&db, &[("p".into(), table)], None, None);
 		assert_eq!(diagnostics.len(), 2, "{diagnostics:?}");
@@ -447,11 +433,11 @@ mod tests {
 		assert_eq!(field.code, codes::KIND_UNRECOGNIZED);
 		assert_eq!(field.severity, Severity::Error);
 		assert_eq!(field.field.as_deref(), Some(&["odd.x".to_string()][..]));
-		assert_eq!(field.source, "array<zzz>");
+		assert_eq!(field.source, "array<zzz<int>>");
 		let span = field.span.unwrap();
-		assert_eq!(&field.source[span.start..span.end], "zzz");
+		assert_eq!(&field.source[span.start..span.end], "zzz<int>");
 		let function = diagnostics.iter().find(|d| d.function.is_some()).unwrap();
 		assert_eq!(function.function.as_deref(), Some("fn::f"));
-		assert_eq!(function.source, "frob");
+		assert_eq!(function.source, "frob<int>");
 	}
 }

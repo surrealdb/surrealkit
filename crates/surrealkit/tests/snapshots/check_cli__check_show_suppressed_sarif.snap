@@ -1,0 +1,63 @@
+---
+source: crates/surrealkit/tests/check_cli.rs
+expression: "stdout(&sarif).replace(VERSION, \"<version>\")"
+---
+{
+  "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+  "version": "2.1.0",
+  "runs": [
+    {
+      "tool": {
+        "driver": {
+          "name": "surreal kit check",
+          "informationUri": "https://github.com/surrealdb/surrealkit",
+          "version": "<version>",
+          "rules": [
+            {
+              "id": "K9003",
+              "shortDescription": {
+                "text": "The engine rejected a schema statement"
+              }
+            }
+          ]
+        }
+      },
+      "columnKind": "unicodeCodePoints",
+      "results": [
+        {
+          "ruleId": "K9003",
+          "ruleIndex": 0,
+          "level": "error",
+          "message": {
+            "text": "Cannot define field `x.y`: the field `x` it is nested in is not defined. Define `x` first"
+          },
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "database/schema/002_bad.surql"
+                },
+                "region": {
+                  "startLine": 3,
+                  "startColumn": 1,
+                  "endLine": 3,
+                  "endColumn": 34,
+                  "byteOffset": 100,
+                  "byteLength": 33
+                }
+              }
+            }
+          ],
+          "suppressions": [
+            {
+              "kind": "inSource"
+            }
+          ],
+          "properties": {
+            "source": "kit"
+          }
+        }
+      ]
+    }
+  ]
+}

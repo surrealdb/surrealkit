@@ -4,10 +4,14 @@
 //! - [`parse_type_checked`] turns a kind (the body of a `TYPE` clause, a function argument or
 //!   return type) into a structured [`FieldType`] and reports every part it could not understand.
 //! - `parse_type` (tests only) is the same without the report.
+//! - [`parse_type_v2`] is [`parse_type_checked`] for schema document v2: the SurrealDB 4.0 kinds
+//!   it has nodes for (sized numbers, and the kinds of [`v2_extension`]) are left as
+//!   [`FieldType::Unknown`] for [`super::kind_v2`] to read, which [`parse_type_checked`] reports
+//!   as a warning instead.
 //! - [`parse_type_prefix`] parses one kind at the start of a longer text.
 //! - `extract_type_clause` (tests only) pulls the `TYPE …` body out of a `DEFINE FIELD` statement.
 //!
-//! It accepts what SurrealDB 3.x renders (see `docs/typegen/schema-document-v2.md`, section
+//! It accepts what SurrealDB 3.x and 4.0 render (see `docs/typegen/schema-document-v2.md`, section
 //! 4): every primitive, `option<T>` and its `none | T` normal form, `array` and `set` with an
 //! optional exact length, `record`, `table`, `file` and `geometry` with their name lists
 //! (backtick-quoted names included), tuples `[A, B]`, object literals `{ a: int, "b c": T }`,
@@ -15,21 +19,43 @@
 //! durations (`1h30m`) and booleans. Spacing is free, which matters because the engine writes
 //! stray double spaces before float and decimal literals.
 //!
+//! It also reads the SurrealDB 4.0 kinds it has no node for: `date`, `time`, `timestamp`,
+//! `interval`, `bigdecimal`, `enum<'a', 'b'>` (its label list is parsed, so the kind ends where
+//! the engine ends it) and a `DEFINE TYPE` name, bare or backtick-quoted. Each is a
+//! [`FieldType::Unknown`] with a warning-level [`KindProblem`], not an error: the parser
+//! understood the kind, the document does not represent it.
+//!
 //! The parser is *total*: anything it does not understand becomes [`FieldType::Unknown`],
 //! never a panic, and every `Unknown` is matched by a [`KindProblem`] saying why. An
-//! unrecognised name stays local (`array<frob>` is an array of unknown); a syntax error makes
-//! the whole kind unknown.
+//! unrecognised name stays local (`array<frob<int>>` is an array of unknown); a syntax error
+//! makes the whole kind unknown.
 
 use std::ops::Range;
 
+use super::diagnostics::{Diagnostic, Severity, codes};
 use super::types::{FieldType, LiteralType, ObjectField, PrimitiveType};
 
-/// Why part of a kind could not be parsed.
+/// Why part of a kind became [`FieldType::Unknown`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct KindProblem {
 	/// The byte range, within the parsed text, of the part at fault.
 	pub span: Range<usize>,
 	pub reason: String,
+	/// `false`: the text could not be parsed (an error). `true`: it parsed, and names a kind
+	/// the document does not represent (a warning).
+	pub understood: bool,
+}
+
+impl KindProblem {
+	/// The diagnostic for this problem in the kind text `source`, without a location.
+	pub(super) fn diagnostic(&self, source: &str) -> Diagnostic {
+		let (severity, code) = if self.understood {
+			(Severity::Warning, codes::KIND_NOT_REPRESENTED)
+		} else {
+			(Severity::Error, codes::KIND_UNRECOGNIZED)
+		};
+		Diagnostic::new(severity, code, source, self.reason.clone()).with_span(self.span.clone())
+	}
 }
 
 /// Extract the `TYPE` body from a `DEFINE FIELD` statement: the text between
@@ -50,7 +76,21 @@ pub fn parse_type(src: &str) -> FieldType {
 /// Parse a kind, with a [`KindProblem`] for every [`FieldType::Unknown`] in the
 /// result. Spans are byte ranges within `src`.
 pub(super) fn parse_type_checked(src: &str) -> (FieldType, Vec<KindProblem>) {
-	let mut p = KindParser::new(src);
+	parse_checked(src, false)
+}
+
+/// [`parse_type_checked`] for schema document v2. The kinds the v2 document has a node for
+/// but [`FieldType`] does not (`i8`…`u64` and `f16`…`f64` with their widths, `date`, `time`,
+/// `timestamp`, `interval`, `bigdecimal`, `enum<…>` and a `DEFINE TYPE` name) come back as
+/// [`FieldType::Unknown`] holding their exact text, each with a problem whose `understood` is
+/// `true`, so [`super::kind_v2`] can lower them to their nodes. v1 never sees them this way:
+/// the public [`FieldType`] has no place for a width, a label list or a type name.
+pub(super) fn parse_type_v2(src: &str) -> (FieldType, Vec<KindProblem>) {
+	parse_checked(src, true)
+}
+
+fn parse_checked(src: &str, v2: bool) -> (FieldType, Vec<KindProblem>) {
+	let mut p = KindParser::new(src, v2);
 	p.skip_ws();
 	match p.union() {
 		Ok(kind) => {
@@ -65,6 +105,7 @@ pub(super) fn parse_type_checked(src: &str) -> (FieldType, Vec<KindProblem>) {
 					vec![KindProblem {
 						span,
 						reason,
+						understood: false,
 					}],
 				)
 			}
@@ -78,7 +119,7 @@ pub(super) fn parse_type_checked(src: &str) -> (FieldType, Vec<KindProblem>) {
 /// followed by its body). On a syntax error the kind is unknown and nothing is
 /// consumed.
 pub(super) fn parse_type_prefix(src: &str) -> (FieldType, usize, Vec<KindProblem>) {
-	let mut p = KindParser::new(src);
+	let mut p = KindParser::new(src, false);
 	p.skip_ws();
 	match p.union() {
 		Ok(kind) => (kind, p.pos, p.problems),
@@ -173,16 +214,19 @@ struct KindParser<'a> {
 	src: &'a str,
 	pos: usize,
 	problems: Vec<KindProblem>,
+	/// Parsing for schema document v2: see [`parse_type_v2`].
+	v2: bool,
 }
 
 type Parsed = Result<FieldType, KindProblem>;
 
 impl<'a> KindParser<'a> {
-	fn new(src: &'a str) -> Self {
+	fn new(src: &'a str, v2: bool) -> Self {
 		Self {
 			src,
 			pos: 0,
 			problems: Vec::new(),
+			v2,
 		}
 	}
 
@@ -229,6 +273,7 @@ impl<'a> KindParser<'a> {
 		KindProblem {
 			span: from..to,
 			reason: reason.into(),
+			understood: false,
 		}
 	}
 
@@ -275,6 +320,8 @@ impl<'a> KindParser<'a> {
 			Some(b'{') => self.object_literal(),
 			Some(b'[') => self.tuple(),
 			Some(b) if b.is_ascii_alphabetic() || b == b'_' => self.named_kind(),
+			Some(b'`') => self.type_name(),
+			Some(_) if self.rest().starts_with('\u{27E8}') => self.type_name(),
 			Some(_) => {
 				self.pos += 1;
 				Err(self.error(start, "unexpected character where a kind was expected"))
@@ -366,6 +413,33 @@ impl<'a> KindParser<'a> {
 					},
 				})
 			}
+			_ if self.v2 && sized_number(&lower).is_some() && !self.next_is_generic() => {
+				let reason =
+					format!("`{name}` is a sized number, which schema document v2 carries");
+				Ok(self.not_represented(start, reason))
+			}
+			"date" | "time" | "timestamp" | "interval" | "bigdecimal"
+				if !self.next_is_generic() =>
+			{
+				let reason = format!(
+					"`{name}` is a SurrealDB 4.x kind that schema document v2 does not represent; it \
+					 is read as `unknown`"
+				);
+				Ok(self.not_represented(start, reason))
+			}
+			"date" | "time" | "timestamp" | "interval" | "bigdecimal" => {
+				self.local_unknown(start, format!("`{name}` takes no type parameter"))
+			}
+			"enum" => {
+				if !self.open_generic() {
+					return Err(self.error(start, "`enum` needs labels: `enum<'a', 'b'>`"));
+				}
+				self.enum_labels(start)?;
+				let reason = "`enum<…>` is a SurrealDB 4.x kind that schema document v2 does not \
+				              represent; it is read as `unknown`"
+					.to_string();
+				Ok(self.not_represented(start, reason))
+			}
 			"true" | "false" if !self.next_is_generic() => Ok(FieldType::Literal {
 				value: serde_json::Value::Bool(lower == "true"),
 				literal_type: None,
@@ -378,8 +452,63 @@ impl<'a> KindParser<'a> {
 					name: prim,
 				}),
 				Some(_) => self.local_unknown(start, format!("`{name}` takes no type parameter")),
-				None => self.local_unknown(start, unknown_name_reason(name)),
+				None if is_known_wrong(&lower) || self.next_is_generic() => {
+					self.local_unknown(start, unknown_name_reason(name))
+				}
+				// Anything else bare is a name the engine accepted because a `DEFINE TYPE`
+				// defines it (it rejects an undefined one when the field is defined).
+				None => {
+					self.pos = start;
+					self.type_name()
+				}
 			},
+		}
+	}
+
+	/// A `DEFINE TYPE` name: bare, backtick-quoted or `⟨⟩`-quoted, never with `<…>`.
+	fn type_name(&mut self) -> Parsed {
+		let start = self.pos;
+		let name = self.name()?;
+		if self.next_is_generic() {
+			return self.local_unknown(start, format!("unrecognised kind `{name}`"));
+		}
+		let reason = format!(
+			"`{name}` names a DEFINE TYPE (SurrealDB 4.x), which schema document v2 does not \
+			 represent; it is read as `unknown`"
+		);
+		Ok(self.not_represented(start, reason))
+	}
+
+	/// With the `<` of `enum<` consumed, read its labels and the closing `>`: one or more
+	/// quoted strings, comma-separated, in declaration order.
+	fn enum_labels(&mut self, start: usize) -> Result<Vec<String>, KindProblem> {
+		let mut labels = Vec::new();
+		loop {
+			self.skip_ws();
+			match self.peek() {
+				Some(q @ (b'\'' | b'"')) => {
+					let body = self.string_body(q)?;
+					labels.push(super::scan::unescape(body));
+				}
+				_ => {
+					let at = self.pos;
+					self.pos = (self.pos + 1).min(self.src.len());
+					return Err(self.error(at, "expected a quoted label in `enum<…>`"));
+				}
+			}
+			self.skip_ws();
+			match self.peek() {
+				Some(b',') => self.pos += 1,
+				Some(b'>') => {
+					self.pos += 1;
+					return Ok(labels);
+				}
+				_ => {
+					let at = self.pos.max(start);
+					self.pos = (self.pos + 1).min(self.src.len());
+					return Err(self.error(at, "expected `,` or `>` in `enum<…>`"));
+				}
+			}
 		}
 	}
 
@@ -397,10 +526,26 @@ impl<'a> KindParser<'a> {
 		self.problems.push(KindProblem {
 			span: start..self.pos,
 			reason,
+			understood: false,
 		});
 		Ok(FieldType::Unknown {
 			source,
 		})
+	}
+
+	/// A kind of SurrealDB 4.x that parsed but has no node in the document, from `start` to the
+	/// current position. The `unknown` it becomes is sound: every value fits `unknown`, so no
+	/// value the engine accepts is rejected by the type it stands for.
+	fn not_represented(&mut self, start: usize, reason: String) -> FieldType {
+		let source = self.src[start..self.pos].trim().to_string();
+		self.problems.push(KindProblem {
+			span: start..self.pos,
+			reason,
+			understood: true,
+		});
+		FieldType::Unknown {
+			source,
+		}
 	}
 
 	/// With the opening `<` consumed, skip to just past its matching `>`.
@@ -453,30 +598,7 @@ impl<'a> KindParser<'a> {
 		let mut names = Vec::new();
 		loop {
 			self.skip_ws();
-			let start = self.pos;
-			let name = match self.peek() {
-				Some(b'`') => {
-					self.string_body(b'`')?;
-					super::scan::unquote(&self.src[start..self.pos])
-				}
-				_ if self.rest().starts_with('\u{27E8}') => {
-					let end = self
-						.rest()
-						.find('\u{27E9}')
-						.ok_or_else(|| self.error(start, "unterminated `⟨` name"))?;
-					self.pos += end + '\u{27E9}'.len_utf8();
-					super::scan::unquote(&self.src[start..self.pos])
-				}
-				_ => {
-					let word = self.read_word();
-					if word.is_empty() {
-						self.pos = (self.pos + 1).min(self.src.len());
-						return Err(self.error(start, "expected a name"));
-					}
-					word.to_string()
-				}
-			};
-			names.push(name);
+			names.push(self.name()?);
 			self.skip_ws();
 			match self.peek() {
 				Some(b'|') => self.pos += 1,
@@ -491,6 +613,33 @@ impl<'a> KindParser<'a> {
 				}
 			}
 		}
+	}
+
+	/// One name: bare, backtick-quoted or `⟨⟩`-quoted, unquoted.
+	fn name(&mut self) -> Result<String, KindProblem> {
+		let start = self.pos;
+		Ok(match self.peek() {
+			Some(b'`') => {
+				self.string_body(b'`')?;
+				super::scan::unquote(&self.src[start..self.pos])
+			}
+			_ if self.rest().starts_with('\u{27E8}') => {
+				let end = self
+					.rest()
+					.find('\u{27E9}')
+					.ok_or_else(|| self.error(start, "unterminated `⟨` name"))?;
+				self.pos += end + '\u{27E9}'.len_utf8();
+				super::scan::unquote(&self.src[start..self.pos])
+			}
+			_ => {
+				let word = self.read_word();
+				if word.is_empty() {
+					self.pos = (self.pos + 1).min(self.src.len());
+					return Err(self.error(start, "expected a name"));
+				}
+				word.to_string()
+			}
+		})
 	}
 
 	/// Skip a quoted run starting at the opening `quote`, honouring backslash
@@ -721,6 +870,13 @@ fn is_duration_unit(unit: &str) -> bool {
 	matches!(unit, "ns" | "us" | "µs" | "ms" | "s" | "m" | "h" | "d" | "w" | "y")
 }
 
+/// Names that look like a kind but are not one in any SurrealDB version, with a reason of their
+/// own in [`unknown_name_reason`]. They stay errors rather than being read as `DEFINE TYPE`
+/// names.
+fn is_known_wrong(lower: &str) -> bool {
+	matches!(lower, "references" | "either" | "literal")
+}
+
 fn unknown_name_reason(name: &str) -> String {
 	match name.to_ascii_lowercase().as_str() {
 		"references" => "`references` is not a SurrealDB 3.x kind; a reverse reference is a \
@@ -735,7 +891,110 @@ fn unknown_name_reason(name: &str) -> String {
 	}
 }
 
+/// A SurrealDB 4.0 sized number, as the engine spells it (any case).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct SizedNumber {
+	/// `fN` rather than `iN`/`uN`.
+	pub float: bool,
+	/// Bits: 8, 16, 32 or 64.
+	pub width: u8,
+	/// `false` for `uN`.
+	pub signed: bool,
+}
+
+/// The sized number `name` spells, if it spells one.
+pub(super) fn sized_number(name: &str) -> Option<SizedNumber> {
+	let lower = name.to_ascii_lowercase();
+	let (float, signed, bits) = match lower.as_bytes().first()? {
+		b'i' => (false, true, &lower[1..]),
+		b'u' => (false, false, &lower[1..]),
+		b'f' => (true, true, &lower[1..]),
+		_ => return None,
+	};
+	let width: u8 = match (float, bits) {
+		(false, "8") => 8,
+		(false, "16") | (true, "16") => 16,
+		(false, "32") | (true, "32") => 32,
+		(false, "64") | (true, "64") => 64,
+		_ => return None,
+	};
+	Some(SizedNumber {
+		float,
+		width,
+		signed,
+	})
+}
+
+/// What the text [`parse_type_v2`] leaves as [`FieldType::Unknown`] for v2 to read is: a sized
+/// number, one of the kinds without a [`FieldType`], an `enum<…>` or a type name. `None` for
+/// anything else, which is a kind the document cannot structure.
+pub(super) fn v2_extension(source: &str) -> Option<V2Extension> {
+	let source = source.trim();
+	if let Some(number) = sized_number(source) {
+		return Some(V2Extension::Sized(number));
+	}
+	let mut p = KindParser::new(source, true);
+	if source.starts_with('`') || source.starts_with('\u{27E8}') {
+		let name = p.name().ok()?;
+		return p.at_end().then_some(V2Extension::Named(name));
+	}
+	let word = p.read_word();
+	let lower = word.to_ascii_lowercase();
+	match lower.as_str() {
+		"" => None,
+		"date" | "time" | "timestamp" | "interval" | "bigdecimal" => {
+			p.at_end().then_some(V2Extension::Plain(lower))
+		}
+		"enum" => {
+			if !p.open_generic() {
+				return None;
+			}
+			let labels = p.enum_labels(0).ok()?;
+			p.at_end().then_some(V2Extension::Enum(labels))
+		}
+		_ if p.at_end() && !is_reserved(&lower) => Some(V2Extension::Named(word.to_string())),
+		_ => None,
+	}
+}
+
+/// Words that name a kind or a literal, which a `DEFINE TYPE` name cannot be.
+fn is_reserved(lower: &str) -> bool {
+	primitive(lower).is_some()
+		|| is_known_wrong(lower)
+		|| matches!(
+			lower,
+			"option"
+				| "array" | "set"
+				| "record" | "table"
+				| "file" | "geometry"
+				| "true" | "false"
+				| "nan" | "infinity"
+				| "enum"
+		)
+}
+
+/// What [`v2_extension`] found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum V2Extension {
+	Sized(SizedNumber),
+	/// `date`, `time`, `timestamp`, `interval` or `bigdecimal`, lowercased.
+	Plain(String),
+	/// The labels of `enum<…>`, unescaped, in declaration order.
+	Enum(Vec<String>),
+	/// A `DEFINE TYPE` name, unquoted.
+	Named(String),
+}
+
 fn primitive(name: &str) -> Option<PrimitiveType> {
+	// SurrealDB 4.0 sized numbers. v1 does not represent the width: every `iN`/`uN` value is an
+	// `int` and every `fN` value a `float`. (Schema document v2 does; see [`parse_type_v2`].)
+	if let Some(number) = sized_number(name) {
+		return Some(if number.float {
+			PrimitiveType::Float
+		} else {
+			PrimitiveType::Int
+		});
+	}
 	Some(match name {
 		"string" => PrimitiveType::String,
 		"int" => PrimitiveType::Int,
@@ -809,8 +1068,74 @@ mod tests {
 	#[test_case("function", PrimitiveType::Function)]
 	#[test_case("regex", PrimitiveType::Regex)]
 	#[test_case("range", PrimitiveType::Range)]
+	#[test_case("i8", PrimitiveType::Int)]
+	#[test_case("i16", PrimitiveType::Int)]
+	#[test_case("i32", PrimitiveType::Int)]
+	#[test_case("i64", PrimitiveType::Int)]
+	#[test_case("u8", PrimitiveType::Int)]
+	#[test_case("u16", PrimitiveType::Int)]
+	#[test_case("u32", PrimitiveType::Int)]
+	#[test_case("u64", PrimitiveType::Int)]
+	#[test_case("f16", PrimitiveType::Float)]
+	#[test_case("f32", PrimitiveType::Float)]
+	#[test_case("f64", PrimitiveType::Float)]
 	fn primitives(src: &str, expected: PrimitiveType) {
 		assert_eq!(clean(src), prim(expected));
+	}
+
+	/// A sized number is the plain number wherever a kind may appear.
+	#[test]
+	fn sized_numbers_nest_like_int_and_float() {
+		let int = prim(PrimitiveType::Int);
+		let float = prim(PrimitiveType::Float);
+		assert_eq!(
+			clean("array<i32, 3>"),
+			FieldType::Array {
+				inner: Box::new(int.clone()),
+				max: Some(3)
+			}
+		);
+		assert_eq!(
+			clean("option<u8>"),
+			FieldType::Option {
+				inner: Box::new(int.clone())
+			}
+		);
+		assert_eq!(
+			clean("{ a: i16, b: none | f32 }"),
+			FieldType::Object {
+				fields: vec![
+					ObjectField {
+						name: "a".into(),
+						r#type: int.clone()
+					},
+					ObjectField {
+						name: "b".into(),
+						r#type: FieldType::Union {
+							variants: vec![prim(PrimitiveType::None), float.clone()]
+						}
+					},
+				]
+			}
+		);
+		assert_eq!(
+			clean("[u64, f16]"),
+			FieldType::Tuple {
+				items: vec![int.clone(), float.clone()]
+			}
+		);
+		assert_eq!(
+			clean("i8 | f64 | string"),
+			FieldType::Union {
+				variants: vec![int, float, prim(PrimitiveType::String)]
+			}
+		);
+		// Names are case-insensitive, as the engine's are.
+		assert_eq!(clean("U32"), prim(PrimitiveType::Int));
+		assert_eq!(clean("F16"), prim(PrimitiveType::Float));
+		// A width is not a type parameter.
+		let (_, problems) = parse_type_checked("i32<int>");
+		assert_eq!(problems.len(), 1, "{problems:?}");
 	}
 
 	#[test]
@@ -1162,20 +1487,223 @@ mod tests {
 
 	#[test]
 	fn an_unknown_name_stays_local_and_is_reported() {
-		let src = "array<frob>";
+		let src = "array<frob<int>>";
 		let (kind, problems) = parse_type_checked(src);
 		assert_eq!(
 			kind,
 			FieldType::Array {
 				inner: Box::new(FieldType::Unknown {
-					source: "frob".into()
+					source: "frob<int>".into()
 				}),
 				max: None
 			}
 		);
 		assert_eq!(problems.len(), 1);
-		assert_eq!(&src[problems[0].span.clone()], "frob");
+		assert_eq!(&src[problems[0].span.clone()], "frob<int>");
 		assert!(problems[0].reason.contains("unrecognised kind `frob`"), "{problems:?}");
+		assert!(!problems[0].understood);
+	}
+
+	fn unknown(source: &str) -> FieldType {
+		FieldType::Unknown {
+			source: source.into(),
+		}
+	}
+
+	/// The SurrealDB 4.0 kinds without a node read as `unknown`, with a warning (a problem that
+	/// was `understood`) covering exactly the kind.
+	#[test_case("date")]
+	#[test_case("time")]
+	#[test_case("timestamp")]
+	#[test_case("interval")]
+	#[test_case("bigdecimal")]
+	#[test_case("enum<'a', 'b c', \"it's\", 'q\"x', 'back\\\\slash', 'é ☃', ''>")]
+	#[test_case("enum<'x'>")]
+	#[test_case("enum < 'x' , 'y' >")]
+	#[test_case("mood")]
+	#[test_case("Mood2")]
+	#[test_case("`my type`")]
+	#[test_case("⟨odd name⟩")]
+	fn four_oh_kinds_are_unknown_with_a_warning(src: &str) {
+		let (kind, problems) = parse_type_checked(src);
+		assert_eq!(kind, unknown(src), "{src}");
+		assert_eq!(problems.len(), 1, "{problems:?}");
+		assert!(problems[0].understood, "{problems:?}");
+		assert_eq!(&src[problems[0].span.clone()], src);
+		let diagnostic = problems[0].diagnostic(src);
+		assert_eq!(diagnostic.code, "kind-not-represented");
+		assert_eq!(diagnostic.severity, Severity::Warning);
+		assert!(!diagnostic.is_error());
+	}
+
+	/// Each is local to its place: the kinds around it still parse, and the warning's span
+	/// is the 4.x kind alone.
+	#[test]
+	fn four_oh_kinds_nest_and_stay_local() {
+		let src = "none | array<enum<'x', 'y'>, 2> | mood | int";
+		let (kind, problems) = parse_type_checked(src);
+		assert_eq!(
+			kind,
+			FieldType::Union {
+				variants: vec![
+					prim(PrimitiveType::None),
+					FieldType::Array {
+						inner: Box::new(unknown("enum<'x', 'y'>")),
+						max: Some(2)
+					},
+					unknown("mood"),
+					prim(PrimitiveType::Int),
+				]
+			}
+		);
+		let spans: Vec<&str> = problems.iter().map(|p| &src[p.span.clone()]).collect();
+		assert_eq!(spans, ["enum<'x', 'y'>", "mood"]);
+		assert!(problems.iter().all(|p| p.understood));
+
+		let src = "{ a: date, b: [time, i8], c: set<bigdecimal> }";
+		let (kind, problems) = parse_type_checked(src);
+		let FieldType::Object {
+			fields,
+		} = kind
+		else {
+			panic!("{kind:?}");
+		};
+		assert_eq!(fields[0].r#type, unknown("date"));
+		assert_eq!(
+			fields[1].r#type,
+			FieldType::Tuple {
+				items: vec![unknown("time"), prim(PrimitiveType::Int)]
+			}
+		);
+		assert_eq!(problems.len(), 3);
+	}
+
+	/// The v2 parse leaves a sized number, and every 4.x kind, as `unknown` text for v2 to lower;
+	/// the v1 parse reads the sized numbers as plain `int` and `float`.
+	#[test]
+	fn the_v2_parse_leaves_widths_and_4x_kinds_for_lowering() {
+		for src in ["i8", "u64", "f16", "date", "enum<'a', 'b'>", "mood", "`my type`"] {
+			let (kind, problems) = parse_type_v2(src);
+			assert_eq!(kind, unknown(src), "{src}");
+			assert_eq!(problems.len(), 1, "{src}: {problems:?}");
+			assert!(problems[0].understood, "{src}");
+			assert_eq!(&src[problems[0].span.clone()], src);
+		}
+		assert_eq!(parse_type_checked("i8").0, prim(PrimitiveType::Int));
+		let src = "array<u8, 2> | f32";
+		let (kind, problems) = parse_type_v2(src);
+		assert_eq!(
+			kind,
+			FieldType::Union {
+				variants: vec![
+					FieldType::Array {
+						inner: Box::new(unknown("u8")),
+						max: Some(2)
+					},
+					unknown("f32"),
+				]
+			}
+		);
+		assert_eq!(problems.len(), 2);
+		// A width is not a type parameter, in either parse.
+		assert!(!parse_type_v2("i32<int>").1.iter().any(|p| p.understood));
+	}
+
+	#[test]
+	fn the_text_v2_reads_is_recognised() {
+		use V2Extension::*;
+		let number = |float, width, signed| {
+			Sized(SizedNumber {
+				float,
+				width,
+				signed,
+			})
+		};
+		assert_eq!(v2_extension("i8"), Some(number(false, 8, true)));
+		assert_eq!(v2_extension("U64"), Some(number(false, 64, false)));
+		assert_eq!(v2_extension("f16"), Some(number(true, 16, true)));
+		// Not a sized number, so a name.
+		assert_eq!(v2_extension("f8"), Some(Named("f8".into())));
+		assert_eq!(v2_extension("date"), Some(Plain("date".into())));
+		assert_eq!(v2_extension(" BigDecimal "), Some(Plain("bigdecimal".into())));
+		assert_eq!(v2_extension("enum<'z', \"a'b\">"), Some(Enum(vec!["z".into(), "a'b".into()])));
+		assert_eq!(v2_extension("enum<'a'> | int"), None);
+		assert_eq!(v2_extension("mood"), Some(Named("mood".into())));
+		assert_eq!(v2_extension("`my type`"), Some(Named("my type".into())));
+		// Not 4.x kinds, and never a type name.
+		for src in [
+			"",
+			"int",
+			"array",
+			"record",
+			"option",
+			"true",
+			"NaN",
+			"either",
+			"references",
+			"literal",
+			"mood<int>",
+			"mood int",
+			"date<int>",
+			"enum",
+			"enum<>",
+			"i8<int>",
+		] {
+			assert_eq!(v2_extension(src), None, "{src:?}");
+		}
+	}
+
+	/// An enum's label list is parsed, so a `>` or a comma inside a label does not end it, and
+	/// whatever follows the kind still parses.
+	#[test]
+	fn an_enum_ends_where_the_engine_ends_it() {
+		let src = "enum<'a>b', \"c, d\"> | int";
+		let (kind, problems) = parse_type_checked(src);
+		assert_eq!(
+			kind,
+			FieldType::Union {
+				variants: vec![unknown("enum<'a>b', \"c, d\">"), prim(PrimitiveType::Int)]
+			}
+		);
+		assert_eq!(problems.len(), 1);
+		assert_eq!(&src[problems[0].span.clone()], "enum<'a>b', \"c, d\">");
+	}
+
+	/// A malformed enum is a syntax error: the whole kind is unknown, with an error.
+	#[test_case("enum" ; "no labels at all")]
+	#[test_case("enum<>" ; "empty")]
+	#[test_case("enum<1, 2>" ; "numbers")]
+	#[test_case("enum<'a' 'b'>" ; "missing comma")]
+	#[test_case("enum<'a'," ; "unclosed")]
+	#[test_case("enum<'a" ; "unterminated label")]
+	fn a_malformed_enum_is_an_error(src: &str) {
+		let (kind, problems) = parse_type_checked(src);
+		assert_eq!(kind, unknown(src), "{src}");
+		assert_eq!(problems.len(), 1, "{problems:?}");
+		assert!(!problems[0].understood, "{problems:?}");
+		assert_eq!(problems[0].diagnostic(src).code, "kind-unrecognized");
+	}
+
+	/// What was never a SurrealDB kind stays an error, and so does a name given parameters.
+	#[test_case("either<int, string>")]
+	#[test_case("either")]
+	#[test_case("references<person>")]
+	#[test_case("literal")]
+	#[test_case("mood<int>")]
+	#[test_case("date<int>")]
+	fn names_that_are_not_kinds_stay_errors(src: &str) {
+		let (_, problems) = parse_type_checked(src);
+		assert!(!problems.is_empty(), "{src}");
+		assert!(problems.iter().all(|p| !p.understood), "{src}: {problems:?}");
+	}
+
+	/// The sized numbers and the 4.x kinds need no `option<>` or union treatment of their own.
+	#[test]
+	fn four_oh_kinds_unwrap_like_any_other() {
+		let (kind, _) = parse_type_checked("none | date");
+		let (inner, optional) = unwrap_optional(kind);
+		assert!(optional);
+		assert_eq!(inner, unknown("date"));
 	}
 
 	#[test_case("range<int>", "takes no type parameter" ; "range takes no parameter")]

@@ -1,0 +1,13 @@
+---
+source: crates/surrealkit/tests/check_cli.rs
+expression: stderr(&human)
+---
+error[K9201]: `${…}` interpolated into a query string: the value is spliced into the SurrealQL text
+ --> src/app.ts:4:44
+  |
+4 |     await db.query(`SELECT * FROM t WHERE a = ${id}`);
+  |                                               ^^^^^
+  = help: pass it as a parameter (`$name` with a bindings object) or build the query with the SDK's `surql` tag
+
+checked 1 schema file and 0 query files: 1 error, 0 warnings, 1 suppressed
+read 1 host file holding 3 queries

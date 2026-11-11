@@ -1,0 +1,9 @@
+---
+const comments = await db.query("SELECT * FROM comment");
+---
+
+<ul></ul>
+
+<script>
+	const live = db.query("SELECT * FROM comment WHERE flagged");
+</script>
