@@ -81,6 +81,9 @@ pub fn format_bytes(command: &str, target: &Path, bytes: &[u8]) -> Result<Vec<u8
 	let status = std::process::Command::new(program)
 		.args(&args)
 		.arg(tmp.path())
+		// Under `surrealkit mcp`, stdout is the JSON-RPC channel: a formatter's own
+		// output must never reach it.
+		.stdout(std::io::stderr())
 		.status()
 		.with_context(|| format!("failed to run formatter `{command}`"))?;
 	if !status.success() {
