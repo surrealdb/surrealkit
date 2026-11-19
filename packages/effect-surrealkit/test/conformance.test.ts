@@ -799,6 +799,38 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 			expect(a?.last).toBeInstanceOf(DateTime);
 		});
 
+		it('over a decimal field, stddev and variance are decimals but the int 0 for one record, median the middle decimal or a float of two, mean a float', async () => {
+			const [rows, all] = (await query(
+				[
+					'SELECT role AS role, math::stddev(d) AS sd, math::variance(d) AS var, math::median(d) AS med, math::mean(d) AS mean FROM gr GROUP BY role ORDER BY role;',
+					'SELECT math::stddev(d) AS sd, math::variance(d) AS var, math::median(d) AS med, math::mean(d) AS mean FROM gr GROUP ALL;',
+				].join('\n'),
+			)) as [
+				Array<Record<string, unknown>>,
+				Array<Record<string, unknown>>,
+			];
+			const [a, b] = rows;
+			expect(a?.sd).toBeInstanceOf(Decimal);
+			expect(String(a?.sd)).toBe('0.7071067811865475244008443621');
+			expect(a?.var).toBeInstanceOf(Decimal);
+			expect(String(a?.var)).toBe('0.5');
+			expect(a?.med).toBe(2);
+			expect(a?.mean).toBe(2);
+			expect(b?.sd).toBe(0);
+			expect(b?.var).toBe(0);
+			expect(b?.med).toBeInstanceOf(Decimal);
+			expect(String(b?.med)).toBe('4');
+			expect(b?.mean).toBe(4);
+			// Three records: the middle one, and a mean that is not whole.
+			const [three] = all;
+			expect(three?.sd).toBeInstanceOf(Decimal);
+			expect(three?.var).toBeInstanceOf(Decimal);
+			expect(three?.med).toBeInstanceOf(Decimal);
+			expect(String(three?.med)).toBe('2.5');
+			expect(three?.mean).toBeCloseTo(8 / 3, 12);
+			expect(typeof three?.mean).toBe('number');
+		});
+
 		it('GROUP ALL is one row, even over no record, where min and max are ±Infinity, mean NaN, sum the int 0 and median and time::min NONE', async () => {
 			expect(
 				await query(

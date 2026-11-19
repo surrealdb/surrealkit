@@ -397,8 +397,18 @@ decoded by the package's codec of that name (`any`, and an element of
 `array`, may be NONE).
 A result `same:N` is argument `N`'s own codec, used where the result is a
 reordering or subset of an array (`array.sort`, `array.distinct`); `item:N`
-is an element of it or NONE (`array.first`, `time.max`). After changing the
-table, run:
+is an element of it or NONE (`array.first`, `time.max`). A result
+`float|decimal:N,…` is a float, or `number | Decimal` when one of the
+arguments it names may hold a decimal (an element of it, for an array): the
+functions SurrealDB computes in the kind of their input (`math.sqrt`,
+`math.mean`, `math.stddev`, `math.variance`, `math.lerp`,
+`math.lerpangle`, `vector.similarityCosine`, `vector.distanceCosine`).
+`math.sqrt(row.amount)` over a decimal field is `number | Decimal`, over an
+int field `number`; even a decimal input can give a float (the spread of one
+value is the int 0, the root of a negative decimal NaN). A function that
+answers NONE for some input is `option<K>` (`parse.emailHost` of a string
+that is not an address, `math.median([])`, `vector.sum([])`). After changing
+the table, run:
 
 ```sh
 npm run generate:functions   # node scripts/generate-functions.mjs
@@ -426,10 +436,15 @@ namespace and the rest of the path in camelCase: `string::is_email` is
 | | | `value` | 2 |
 | | | `vector` | 23 |
 
-`test/functions-engine.test.ts` calls every entry with its sample arguments
-on the suite's engine. On a major the entry lists, the result must decode
-with the declared codec; on one it does not, the engine must reject the call
-as an unknown function. 32 functions exist only on SurrealDB 4.0:
+`test/functions-engine.test.ts` calls every entry with its sample arguments,
+and with each of its `variants`, on the suite's engine. The variants give a
+numeric argument an int, a float and a decimal, a list argument an empty
+list, a parsing function a string that does not parse and a string argument
+the empty string (only those every listed engine accepts are kept), and a
+numeric literal argument carries the codec of its own kind, so a result
+derived from an argument is checked for each kind. On a major the entry
+lists, every result must decode with the codec the function derives; on one
+it does not, the engine must reject the sample call as an unknown function. 32 functions exist only on SurrealDB 4.0:
 `time::age`, `time::make_date`, `time::make_time`, `time::make_timestamp`,
 `time::trunc`, `vector::distance::cosine`, and `type::date`, `type::time`,
 `type::timestamp`, `type::interval`, `type::i8`, `type::i16`, `type::i32`,
@@ -610,8 +625,9 @@ const cities = select(PersonTable)
 | --- | --- | --- |
 | `count()`, `count(boolField)` | `count()` | int |
 | `sum(field)` | `math::sum` | the field's number kind without its checks; the int 0 for no value, so a decimal sum that may be empty is `Decimal \| number` |
-| `mean`, `stddev`, `variance` | `math::mean` … | float, NaN for no value |
-| `median` | `math::median` | float, NONE for no value |
+| `mean` | `math::mean` | float whatever the field, NaN for no value |
+| `stddev`, `variance` | `math::stddev`, `math::variance` | float; over a field that may hold a decimal, `Decimal \| number` (one record spreads by the int 0); NaN for no value |
+| `median` | `math::median` | the middle value or a float of the two middle ones: float, or `Decimal \| number` over a field that may hold a decimal; NONE for no value |
 | `min`, `max` | `math::min`, `math::max` | the field's value, or ±Infinity for no value |
 | `timeMin`, `timeMax` | `time::min`, `time::max` | the datetime, NONE for no value |
 | `arrayGroup`, `arrayDistinct` | `array::group`, `array::distinct` | the distinct values, NONE among them for an optional field |

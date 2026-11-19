@@ -153,6 +153,51 @@ const kindOfAst = (ast: SchemaAST.AST): Kind | 'none' | undefined => {
 	return undefined;
 };
 
+/**
+ * Whether a value `ast` describes may be a decimal, or an array holding one
+ * at any depth. Only ints, floats, NONE and NULL (and unions and arrays of
+ * them) are known not to; any other codec may.
+ */
+const holdsDecimalAst = (ast: SchemaAST.AST): boolean => {
+	if (SchemaAST.isUndefined(ast) || SchemaAST.isNull(ast)) return false;
+	if (SchemaAST.isUnion(ast)) return ast.types.some(holdsDecimalAst);
+	if (SchemaAST.isArrays(ast)) {
+		return [...ast.elements, ...ast.rest].some(holdsDecimalAst);
+	}
+	const kind = kindOfAst(ast);
+	return kind !== 'int' && kind !== 'int64' && kind !== 'float';
+};
+
+/** Whether a value of `codec` may be a decimal, or an array holding one. */
+export const holdsDecimal = (codec: Codec): boolean =>
+	holdsDecimalAst(codec.ast);
+
+/**
+ * `true` when a value of stored type `E` may be a decimal, or an array
+ * holding one; `false` when it is certainly an int, a float, NONE or NULL
+ * (or an array of them). The compiler's answer is never narrower than
+ * {@link holdsDecimal}'s.
+ */
+export type HoldsDecimal<E> = unknown extends E
+	? true
+	: [E] extends [number | bigint | undefined | null]
+		? false
+		: [E] extends [ReadonlyArray<infer I> | undefined | null]
+			? HoldsDecimal<I>
+			: true;
+
+/**
+ * A float, or a decimal: what a function SurrealDB computes in the kind of
+ * its input returns when that input may hold a decimal (`math::sqrt`,
+ * `math::stddev`); some inputs still give a float (the spread of one value
+ * is the int 0, the square root of a negative decimal NaN).
+ */
+export const FloatOrDecimal = /*#__PURE__*/ Schema.Union([Float, Decimal]);
+
+/** {@link FloatOrDecimal} when `E` may hold a decimal, otherwise a float. */
+export type FloatOrDecimalOf<E> =
+	HoldsDecimal<E> extends false ? typeof Float : typeof FloatOrDecimal;
+
 /** The kind of number `expr` yields, or a refusal saying why it is none. */
 const kindOf = (expr: Expr): Kind => {
 	const kind = kindOfAst(codecOf(expr).ast);

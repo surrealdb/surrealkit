@@ -1,14 +1,19 @@
 /**
  * Every entry of the built-in function table (`src/functions/signatures.json`),
  * called through its generated function with the entry's sample arguments
- * on whichever engine the run uses (see `engine.ts`).
+ * and with each of its variants on whichever engine the run uses (see
+ * `engine.ts`).
  *
- * On an engine major the entry lists, the call must succeed and its result
- * must decode with the declared codec. On a major it does not list, the
- * engine must refuse the call as an unknown function, so a function one
- * version lacks is recorded and verified rather than dropped silently.
+ * On an engine major the entry lists, every call must succeed and its result
+ * must decode with the codec the generated function derives. A numeric
+ * literal argument (`3`, `2.5f`, `2.5dec`, or an array of them) is given the
+ * codec of its own kind, so a result that depends on whether an argument
+ * holds a decimal is checked for each kind. On a major the entry does not
+ * list, the engine must refuse the sample call as an unknown function, so a
+ * function one version lacks is recorded and verified rather than dropped
+ * silently.
  */
-import { Cause, Effect, Exit } from 'effect';
+import { Cause, Effect, Exit, Schema } from 'effect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -23,6 +28,7 @@ import {
 import { type Client, make as makeClient } from '../src/client/index.js';
 import * as codecs from '../src/functions/generated/codecs.js';
 import * as functions from '../src/functions/index.js';
+import { Decimal, Float, Int } from '../src/index.js';
 import {
 	codecOf,
 	type Expr,
@@ -59,17 +65,77 @@ const codecFor = (kind: string): Codec => {
 	return codec;
 };
 
-/** The generated function's expression over the entry's sample arguments. */
-const build = (entry: Entry): Expr => {
+/** The elements of a SurrealQL array literal's text, split at the top level. */
+const elementsOf = (text: string): ReadonlyArray<string> => {
+	const inner = text.slice(1, -1).trim();
+	if (inner === '') return [];
+	const parts: Array<string> = [];
+	let depth = 0;
+	let start = 0;
+	for (let index = 0; index < inner.length; index++) {
+		const char = inner[index];
+		if (char === '[' || char === '{' || char === '(') depth++;
+		else if (char === ']' || char === '}' || char === ')') depth--;
+		else if (char === ',' && depth === 0) {
+			parts.push(inner.slice(start, index).trim());
+			start = index + 1;
+		}
+	}
+	parts.push(inner.slice(start).trim());
+	return parts;
+};
+
+/**
+ * The codec of a numeric literal of its own kind (`3` an int, `2.5f` or
+ * `0.5` a float, `2.5dec` a decimal), or of a non-empty array of them;
+ * `undefined` for any other text.
+ */
+const literalCodec = (
+	text: string,
+): { readonly key: string; readonly codec: Codec } | undefined => {
+	if (/^-?\d+$/u.test(text)) return { key: 'int', codec: Int };
+	if (/^-?\d+(\.\d+)?f$/u.test(text) || /^-?\d+\.\d+$/u.test(text)) {
+		return { key: 'float', codec: Float };
+	}
+	if (/^-?\d+(\.\d+)?dec$/u.test(text)) {
+		return { key: 'decimal', codec: Decimal };
+	}
+	if (!text.startsWith('[') || !text.endsWith(']')) return undefined;
+	const items = elementsOf(text).map(literalCodec);
+	if (items.length === 0) return undefined;
+	const known: Array<{ readonly key: string; readonly codec: Codec }> = [];
+	for (const item of items) {
+		if (item === undefined) return undefined;
+		if (!known.some((other) => other.key === item.key)) known.push(item);
+	}
+	const [only] = known;
+	const element =
+		known.length === 1 && only !== undefined
+			? only.codec
+			: (Schema.Union(
+					known.map((item) => item.codec),
+				) as unknown as Codec);
+	return {
+		key: `array<${known.map((item) => item.key).join('|')}>`,
+		codec: Schema.Array(element) as unknown as Codec,
+	};
+};
+
+/** The generated function's expression over the given arguments. */
+const build = (entry: Entry, sample = entry.sample): Expr => {
 	const family = (functions as unknown as Record<string, unknown>)[
 		familyOf(entry.name)
 	] as Record<string, unknown>;
 	const fn = family[exportName(entry.name)];
 	if (entry.constant === true) return fn as Expr;
-	const args = entry.sample.map((sql, index) => {
+	const args = sample.map((sql, index) => {
 		const arg = entry.args[Math.min(index, entry.args.length - 1)];
 		if (arg === undefined) throw new Error(`${entry.name}: no argument`);
-		return unsafeExpr({ sql, codec: codecFor(arg.kind), atomic: true });
+		return unsafeExpr({
+			sql,
+			codec: literalCodec(sql)?.codec ?? codecFor(arg.kind),
+			atomic: true,
+		});
 	});
 	return (fn as (...values: ReadonlyArray<Expr>) => Expr)(...args);
 };
@@ -96,40 +162,58 @@ describe.skipIf(!engineConfigured)('built-in functions on the engine', () => {
 		await engine?.stop();
 	});
 
+	const call = (expr: Expr, name: string) =>
+		within(
+			Effect.runPromiseExit(
+				client.run(
+					make({
+						name,
+						sql: `RETURN ${sqlOf(expr)};`,
+						params: paramsOf(expr),
+						result: codecOf(expr),
+					}),
+					{},
+				),
+			),
+			20_000,
+		);
+
 	/** Why the entry does not behave as recorded, or `undefined`. */
-	const check = async (entry: Entry): Promise<string | undefined> => {
+	const check = async (entry: Entry): Promise<ReadonlyArray<string>> => {
 		const expr = build(entry);
 		const expected =
 			entry.constant === true
 				? entry.name
 				: `${entry.name}(${entry.sample.join(', ')})`;
 		if (sqlOf(expr) !== expected) {
-			return `rendered \`${sqlOf(expr)}\`, not \`${expected}\``;
+			return [`rendered \`${sqlOf(expr)}\`, not \`${expected}\``];
 		}
 		if (entry.setup !== undefined) await engine.db.query(entry.setup);
-		const statement = make({
-			name: entry.name,
-			sql: `RETURN ${sqlOf(expr)};`,
-			params: paramsOf(expr),
-			result: codecOf(expr),
-		});
-		const exit = await within(
-			Effect.runPromiseExit(client.run(statement, {})),
-			20_000,
-		);
+		const exit = await call(expr, entry.name);
 		const listed = entry.engines.includes(major);
-		if (listed) {
-			return Exit.isSuccess(exit)
-				? undefined
-				: `failed on SurrealDB ${major}: ${messageOf(exit.cause)}`;
+		if (!listed) {
+			if (Exit.isSuccess(exit)) {
+				return [
+					`exists on SurrealDB ${major}, which the table does not list`,
+				];
+			}
+			const message = messageOf(exit.cause);
+			return unknownFunction.test(message)
+				? []
+				: [`not an unknown function on SurrealDB ${major}: ${message}`];
 		}
-		if (Exit.isSuccess(exit)) {
-			return `exists on SurrealDB ${major}, which the table does not list`;
+		const failures = Exit.isSuccess(exit)
+			? []
+			: [`failed on SurrealDB ${major}: ${messageOf(exit.cause)}`];
+		for (const variant of entry.variants ?? []) {
+			const varied = await call(build(entry, variant), entry.name);
+			if (Exit.isFailure(varied)) {
+				failures.push(
+					`(${variant.join(', ')}) failed on SurrealDB ${major}: ${messageOf(varied.cause)}`,
+				);
+			}
 		}
-		const message = messageOf(exit.cause);
-		return unknownFunction.test(message)
-			? undefined
-			: `not an unknown function on SurrealDB ${major}: ${message}`;
+		return failures;
 	};
 
 	it('runs on an engine major the table knows', () => {
@@ -140,9 +224,9 @@ describe.skipIf(!engineConfigured)('built-in functions on the engine', () => {
 		const failures: Array<string> = [];
 		for (const entry of table.functions) {
 			if (familyOf(entry.name) !== family) continue;
-			const failure = await check(entry);
-			if (failure !== undefined)
+			for (const failure of await check(entry)) {
 				failures.push(`${entry.name}: ${failure}`);
+			}
 		}
 		expect(failures).toEqual([]);
 	});

@@ -79,6 +79,10 @@ export const ArrayOfStringCodec = /*#__PURE__*/ Schema.Array(StringCodec);
 /** `option<int>` */
 export const OptionOfIntCodec = /*#__PURE__*/ Schema.UndefinedOr(IntCodec);
 
+/** `option<number>` */
+export const OptionOfNumberCodec =
+	/*#__PURE__*/ Schema.UndefinedOr(NumberCodec);
+
 /** `option<string>` */
 export const OptionOfStringCodec =
 	/*#__PURE__*/ Schema.UndefinedOr(StringCodec);
@@ -86,3 +90,7 @@ export const OptionOfStringCodec =
 /** `array<array<number>>` */
 export const ArrayOfArrayOfNumberCodec =
 	/*#__PURE__*/ Schema.Array(ArrayOfNumberCodec);
+
+/** `option<array<number>>` */
+export const OptionOfArrayOfNumberCodec =
+	/*#__PURE__*/ Schema.UndefinedOr(ArrayOfNumberCodec);

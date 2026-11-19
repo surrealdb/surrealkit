@@ -49,6 +49,7 @@ import {
 	isNone,
 	literal,
 	max,
+	mean,
 	median,
 	min,
 	mul,
@@ -71,6 +72,7 @@ import {
 	timeMin,
 	update,
 	upsert,
+	variance,
 } from '../../src/statement/index.js';
 import * as Corpus from '../golden/corpus/index.js';
 import {
@@ -754,6 +756,28 @@ same<
 	]
 >(true);
 same<Input<(typeof totals)['params']>, { readonly floor: number }>(true);
+// A decimal field's spread and median are a decimal or a number (a group
+// of one record spreads by the int 0); its mean is always a number.
+export const ledgerSpread = select(Corpus.LedgerTable)
+	.groupAll()
+	.aggregate((row) => ({
+		mean: mean(row.amount),
+		median: median(row.amount),
+		spread: stddev(row.amount),
+		variance: variance(row.amount),
+	}))
+	.build();
+same<
+	Result<typeof ledgerSpread>,
+	readonly [
+		{
+			readonly mean: number;
+			readonly median: number | Decimal | undefined;
+			readonly spread: number | Decimal;
+			readonly variance: number | Decimal;
+		},
+	]
+>(true);
 
 // ---- SPLIT and OMIT: the row follows.
 

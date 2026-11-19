@@ -3,7 +3,14 @@
 
 import type { Expr, ParamsOfAll } from '../../statement/expr.js';
 import type { NoParams } from '../../statement/statement.js';
-import { type Arg, apply, constant, type In } from '../internal.js';
+import {
+	type Arg,
+	apply,
+	constant,
+	type FloatOrDecimalCodec,
+	floatOrDecimal,
+	type In,
+} from '../internal.js';
 import * as C from './codecs.js';
 
 /**
@@ -255,7 +262,9 @@ export const interquartile = <
 	apply('math::interquartile', C.FloatCodec, 1, [values]);
 
 /**
- * `math::lerp(from: number, to: number, factor: number) -> float`
+ * `math::lerp(from: number, to: number, factor: number) -> float|decimal:0,1,2`
+ *
+ * A float; a float or a decimal when `from`, `to` or `factor` may hold a decimal.
  *
  * SurrealDB 3 and 4.
  */
@@ -267,11 +276,13 @@ export const lerp = <
 	from: A0,
 	to: A1,
 	factor: A2,
-): Expr<typeof C.FloatCodec, ParamsOfAll<A0 | A1 | A2>> =>
-	apply('math::lerp', C.FloatCodec, 3, [from, to, factor]);
+): Expr<FloatOrDecimalCodec<A0 | A1 | A2>, ParamsOfAll<A0 | A1 | A2>> =>
+	apply('math::lerp', floatOrDecimal([0, 1, 2]), 3, [from, to, factor]);
 
 /**
- * `math::lerpangle(from: number, to: number, factor: number) -> float`
+ * `math::lerpangle(from: number, to: number, factor: number) -> float|decimal:0,1,2`
+ *
+ * A float; a float or a decimal when `from`, `to` or `factor` may hold a decimal.
  *
  * SurrealDB 3 and 4.
  */
@@ -283,8 +294,8 @@ export const lerpangle = <
 	from: A0,
 	to: A1,
 	factor: A2,
-): Expr<typeof C.FloatCodec, ParamsOfAll<A0 | A1 | A2>> =>
-	apply('math::lerpangle', C.FloatCodec, 3, [from, to, factor]);
+): Expr<FloatOrDecimalCodec<A0 | A1 | A2>, ParamsOfAll<A0 | A1 | A2>> =>
+	apply('math::lerpangle', floatOrDecimal([0, 1, 2]), 3, [from, to, factor]);
 
 /**
  * `math::ln(value: number) -> float`
@@ -393,24 +404,26 @@ export const max = <const A0 extends Arg<ReadonlyArray<In['number']>>>(
 	apply('math::max', C.NumberCodec, 1, [values]);
 
 /**
- * `math::mean(values: array<number>) -> float`
+ * `math::mean(values: array<number>) -> float|decimal:0`
+ *
+ * A float; a float or a decimal when `values` may hold a decimal.
  *
  * SurrealDB 3 and 4.
  */
 export const mean = <const A0 extends Arg<ReadonlyArray<In['number']>>>(
 	values: A0,
-): Expr<typeof C.FloatCodec, ParamsOfAll<A0>> =>
-	apply('math::mean', C.FloatCodec, 1, [values]);
+): Expr<FloatOrDecimalCodec<A0>, ParamsOfAll<A0>> =>
+	apply('math::mean', floatOrDecimal([0]), 1, [values]);
 
 /**
- * `math::median(values: array<number>) -> number`
+ * `math::median(values: array<number>) -> option<number>`
  *
  * SurrealDB 3 and 4.
  */
 export const median = <const A0 extends Arg<ReadonlyArray<In['number']>>>(
 	values: A0,
-): Expr<typeof C.NumberCodec, ParamsOfAll<A0>> =>
-	apply('math::median', C.NumberCodec, 1, [values]);
+): Expr<typeof C.OptionOfNumberCodec, ParamsOfAll<A0>> =>
+	apply('math::median', C.OptionOfNumberCodec, 1, [values]);
 
 /**
  * `math::midhinge(values: array<number>) -> float`
@@ -563,14 +576,16 @@ export const spread = <const A0 extends Arg<ReadonlyArray<In['number']>>>(
 	apply('math::spread', C.NumberCodec, 1, [values]);
 
 /**
- * `math::sqrt(value: number) -> float`
+ * `math::sqrt(value: number) -> float|decimal:0`
+ *
+ * A float; a float or a decimal when `value` may hold a decimal.
  *
  * SurrealDB 3 and 4.
  */
 export const sqrt = <const A0 extends Arg<In['number']>>(
 	value: A0,
-): Expr<typeof C.FloatCodec, ParamsOfAll<A0>> =>
-	apply('math::sqrt', C.FloatCodec, 1, [value]);
+): Expr<FloatOrDecimalCodec<A0>, ParamsOfAll<A0>> =>
+	apply('math::sqrt', floatOrDecimal([0]), 1, [value]);
 
 /**
  * `math::sqrt_2 -> float`
@@ -581,14 +596,16 @@ export const sqrt2: Expr<typeof C.FloatCodec, NoParams> =
 	/*#__PURE__*/ constant('math::sqrt_2', C.FloatCodec);
 
 /**
- * `math::stddev(values: array<number>) -> float`
+ * `math::stddev(values: array<number>) -> float|decimal:0`
+ *
+ * A float; a float or a decimal when `values` may hold a decimal.
  *
  * SurrealDB 3 and 4.
  */
 export const stddev = <const A0 extends Arg<ReadonlyArray<In['number']>>>(
 	values: A0,
-): Expr<typeof C.FloatCodec, ParamsOfAll<A0>> =>
-	apply('math::stddev', C.FloatCodec, 1, [values]);
+): Expr<FloatOrDecimalCodec<A0>, ParamsOfAll<A0>> =>
+	apply('math::stddev', floatOrDecimal([0]), 1, [values]);
 
 /**
  * `math::sum(values: array<number>) -> number`
@@ -645,11 +662,13 @@ export const trimean = <const A0 extends Arg<ReadonlyArray<In['number']>>>(
 	apply('math::trimean', C.FloatCodec, 1, [values]);
 
 /**
- * `math::variance(values: array<number>) -> float`
+ * `math::variance(values: array<number>) -> float|decimal:0`
+ *
+ * A float; a float or a decimal when `values` may hold a decimal.
  *
  * SurrealDB 3 and 4.
  */
 export const variance = <const A0 extends Arg<ReadonlyArray<In['number']>>>(
 	values: A0,
-): Expr<typeof C.FloatCodec, ParamsOfAll<A0>> =>
-	apply('math::variance', C.FloatCodec, 1, [values]);
+): Expr<FloatOrDecimalCodec<A0>, ParamsOfAll<A0>> =>
+	apply('math::variance', floatOrDecimal([0]), 1, [values]);

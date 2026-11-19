@@ -101,6 +101,7 @@ const reserved = new Set(
 const taken = new Set([
 	'apply',
 	'constant',
+	'floatOrDecimal',
 	'item',
 	'same',
 	'C',
@@ -110,6 +111,7 @@ const taken = new Set([
 	'NoParams',
 	'ParamsOfAll',
 	'CodecOfArg',
+	'FloatOrDecimalCodec',
 	'ItemCodec',
 ]);
 
@@ -119,13 +121,26 @@ const fail = (message) => {
 
 /**
  * A kind as a tree: `{ base }`, `{ array: kind }` or `{ option: kind }`.
- * Results may also be `{ same: n }` or `{ item: n }`.
+ * Results may also be `{ same: n }`, `{ item: n }` or
+ * `{ floatOrDecimal: [n, …] }` (`float|decimal:n,…`).
  */
 export const parseKind = (text, where, result = false) => {
 	const derived = /^(same|item):(\d+)$/u.exec(text);
 	if (derived !== null) {
 		if (!result) fail(`${where}: \`${text}\` is a result kind only`);
 		return { [derived[1]]: Number(derived[2]) };
+	}
+	const widened = /^float\|decimal:(\d+(?:,\d+)*)$/u.exec(text);
+	if (widened !== null) {
+		if (!result) fail(`${where}: \`${text}\` is a result kind only`);
+		const indices = widened[1].split(',').map(Number);
+		if (
+			indices.join() !==
+			[...new Set(indices)].sort((a, b) => a - b).join()
+		) {
+			fail(`${where}: \`${text}\` lists arguments once each, in order`);
+		}
+		return { floatOrDecimal: indices };
 	}
 	const wrapped = /^(array|option)<(.+)>$/u.exec(text);
 	if (wrapped !== null) {
@@ -226,6 +241,15 @@ const validate = (table) => {
 		if (index !== undefined && entry.args[index] === undefined) {
 			fail(`${where}: result \`${entry.result}\` names no argument`);
 		}
+		for (const named of result.floatOrDecimal ?? []) {
+			const arg = entry.args[named];
+			if (arg === undefined) {
+				fail(`${where}: result \`${entry.result}\` names no argument`);
+			}
+			if (entry.variadic === true && named === entry.args.length - 1) {
+				fail(`${where}: \`float|decimal\` names the variadic argument`);
+			}
+		}
 		if (
 			!Array.isArray(entry.engines) ||
 			entry.engines.length === 0 ||
@@ -247,11 +271,30 @@ const validate = (table) => {
 		).length;
 		const fixed =
 			entry.variadic === true ? entry.args.length - 1 : required;
-		if (
-			entry.sample.length < fixed ||
-			(entry.variadic !== true && entry.sample.length > entry.args.length)
-		) {
+		const fits = (sample) =>
+			sample.length >= fixed &&
+			(entry.variadic === true || sample.length <= entry.args.length);
+		if (!fits(entry.sample)) {
 			fail(`${where}: the sample has ${entry.sample.length} arguments`);
+		}
+		if (entry.variants !== undefined) {
+			if (
+				!Array.isArray(entry.variants) ||
+				entry.variants.some(
+					(variant) =>
+						!Array.isArray(variant) ||
+						variant.some((text) => typeof text !== 'string'),
+				)
+			) {
+				fail(`${where}: \`variants\` must be a list of samples`);
+			}
+			if (entry.constant === true)
+				fail(`${where}: a constant has no variants`);
+			for (const variant of entry.variants) {
+				if (!fits(variant)) {
+					fail(`${where}: a variant has ${variant.length} arguments`);
+				}
+			}
 		}
 	}
 	const names = table.functions.map((entry) => entry.name);
@@ -298,10 +341,23 @@ const collectKinds = (kind, into) => {
 	}
 };
 
+/** What a derived result kind means, for the doc comment; empty for a plain kind. */
+const resultNote = (entry, result) => {
+	if (!('floatOrDecimal' in result)) return '';
+	const names = result.floatOrDecimal.map(
+		(index) => `\`${entry.args[index].name}\``,
+	);
+	const list =
+		names.length === 1
+			? names[0]
+			: `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`;
+	return ` * A float; a float or a decimal when ${list} may hold a decimal.\n *\n`;
+};
+
 const renderFunction = (entry) => {
-	const doc = `/**\n * \`${signatureText(entry)}\`\n *\n * ${engineNote(entry)}\n */\n`;
-	const name = exportName(entry.name);
 	const result = parseKind(entry.result, entry.name, true);
+	const doc = `/**\n * \`${signatureText(entry)}\`\n *\n${resultNote(entry, result)} * ${engineNote(entry)}\n */\n`;
+	const name = exportName(entry.name);
 	if (entry.constant === true) {
 		const codec = `C.${codecName(result)}`;
 		return `${doc}export const ${name}: Expr<typeof ${codec}, NoParams> = /*#__PURE__*/ constant('${entry.name}', ${codec});\n`;
@@ -337,7 +393,11 @@ const renderFunction = (entry) => {
 		read.length === 0 ? 'NoParams' : `ParamsOfAll<${read.join(' | ')}>`;
 	let codecType;
 	let codecValue;
-	if ('same' in result || 'item' in result) {
+	if ('floatOrDecimal' in result) {
+		const named = result.floatOrDecimal.map((index) => params[index].type);
+		codecType = `FloatOrDecimalCodec<${named.join(' | ')}>`;
+		codecValue = `floatOrDecimal([${result.floatOrDecimal.join(', ')}])`;
+	} else if ('same' in result || 'item' in result) {
 		const index = result.same ?? result.item;
 		const source = params[index];
 		const fallback = `C.${codecName(source.kind)}`;
@@ -374,6 +434,8 @@ const renderFamily = (family, entries) => {
 		...(uses(/apply\(/u) ? ['apply'] : []),
 		...(uses(/CodecOfArg</u) ? ['type CodecOfArg'] : []),
 		...(uses(/constant\(/u) ? ['constant'] : []),
+		...(uses(/FloatOrDecimalCodec</u) ? ['type FloatOrDecimalCodec'] : []),
+		...(uses(/floatOrDecimal\(/u) ? ['floatOrDecimal'] : []),
 		...(uses(/In\['/u) ? ['type In'] : []),
 		...(uses(/ItemCodec</u) ? ['type ItemCodec'] : []),
 		...(uses(/\bitem\(/u) ? ['item'] : []),

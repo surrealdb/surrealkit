@@ -17,7 +17,12 @@ import type {
 	Range as SdkRange,
 	Uuid as SdkUuid,
 } from 'surrealdb';
-
+import { Float as FloatCodec } from '../scalars.js';
+import {
+	FloatOrDecimal,
+	type FloatOrDecimalOf,
+	holdsDecimal,
+} from '../statement/arithmetic.js';
 import {
 	codecOf,
 	derive,
@@ -131,6 +136,33 @@ export const item = (index: number, fallback: Codec): ResultOf =>
 			? orNone(codec.value as Codec)
 			: AnyCodec;
 	});
+
+/** The stored type argument `A` holds: its codec's, or the constant's own. */
+type EncodedOfArg<A> = A extends Expr<infer S, Params> ? S['Encoded'] : A;
+
+/**
+ * The codec of a `float|decimal:N` result over the arguments it names, `A`
+ * (a union of their types): a float, or a float or a decimal when one of
+ * them may hold a decimal.
+ */
+export type FloatOrDecimalCodec<A> = FloatOrDecimalOf<EncodedOfArg<A>>;
+
+const mayHoldDecimal = (arg: unknown): boolean =>
+	isExpr(arg)
+		? holdsDecimal(codecOf(arg))
+		: Array.isArray(arg) && arg.some(mayHoldDecimal);
+
+/**
+ * A float, or a float or a decimal when one of the arguments at `indices`
+ * may hold a decimal (`math::sqrt`, `math::mean`): SurrealDB computes those
+ * in the kind of their input.
+ */
+export const floatOrDecimal = (indices: ReadonlyArray<number>): ResultOf =>
+	new Derived((args) =>
+		indices.some((index) => mayHoldDecimal(args[index]))
+			? (FloatOrDecimal as unknown as Codec)
+			: FloatCodec,
+	);
 
 const lift = (value: unknown): Expr => {
 	if (isExpr(value)) return value;

@@ -157,6 +157,7 @@ export {
 	min,
 	type RowValue,
 	RowValueTypeId,
+	type SpreadCodec,
 	type SumCodec,
 	stddev,
 	sum,

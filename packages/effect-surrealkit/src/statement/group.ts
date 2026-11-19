@@ -13,8 +13,12 @@
  * including for a group with no value (every value NONE, or `GROUP ALL`
  * over no record): `math::min` and `math::max` are then ±Infinity,
  * `math::mean`, `math::stddev` and `math::variance` NaN, `math::sum` the
- * int 0, and `math::median`, `time::min` and `time::max` NONE
- * (`test/conformance.test.ts` pins every case).
+ * int 0, and `math::median`, `time::min` and `time::max` NONE. Over a field
+ * that may hold a decimal, `math::stddev` and `math::variance` are a decimal
+ * or a number (one record spreads by the int 0) and `math::median` the
+ * middle decimal or a float of the two middle values; `math::mean` is a
+ * float whatever the field (`test/conformance.test.ts` and
+ * `test/aggregates-engine.test.ts` pin every case).
  */
 import { Schema } from 'effect';
 import {
@@ -26,6 +30,11 @@ import {
 import { Decimal, SurrealNumber } from '../decimal.js';
 import { Int, Int64 } from '../int.js';
 import { Float } from '../scalars.js';
+import {
+	FloatOrDecimal,
+	type FloatOrDecimalOf,
+	holdsDecimal,
+} from './arithmetic.js';
 import {
 	admit,
 	assertReader,
@@ -237,39 +246,71 @@ export const sum = <V extends RowValue>(
 	) as Aggregate<SumCodec<CodecOfValue<V>, MayBeEmpty<V>>>;
 };
 
-const floatAggregate =
+/** `math::mean(field)`: a float whatever the field, NaN for a group with no value. */
+export const mean = <V extends RowValue>(
+	value: Taking<V, NumberField, '`math::mean` takes a number field'>,
+): Aggregate<typeof Float> => {
+	dataOf(value);
+	return aggregate('math::mean', value as RowValue, Float) as Aggregate<
+		typeof Float
+	>;
+};
+
+/**
+ * What `math::stddev` and `math::variance` return over values of codec `S`:
+ * a float, or a float or a decimal when `S` may hold a decimal.
+ */
+export type SpreadCodec<S extends Codec> = FloatOrDecimalOf<S['Encoded']>;
+
+const spreadCodec = (value: RowValue): Codec =>
+	holdsDecimal(value[RowValueTypeId].codec)
+		? (FloatOrDecimal as unknown as Codec)
+		: Float;
+
+const spread =
 	<const Fn extends string>(fn: Fn) =>
 	<V extends RowValue>(
 		value: Taking<V, NumberField, `\`${Fn}\` takes a number field`>,
-	): Aggregate<typeof Float> => {
+	): Aggregate<SpreadCodec<CodecOfValue<V>>> => {
 		dataOf(value);
-		return aggregate(fn, value as RowValue, Float) as Aggregate<
-			typeof Float
-		>;
+		return aggregate(
+			fn,
+			value as RowValue,
+			spreadCodec(value as RowValue),
+		) as Aggregate<SpreadCodec<CodecOfValue<V>>>;
 	};
 
-/** `math::mean(field)`: a float, NaN for a group with no value. */
-export const mean = floatAggregate('math::mean');
-/** `math::stddev(field)`: a float, NaN for a group with no value. */
-export const stddev = floatAggregate('math::stddev');
-/** `math::variance(field)`: a float, NaN for a group with no value. */
-export const variance = floatAggregate('math::variance');
+/**
+ * `math::stddev(field)`: a float, or for a field that may hold a decimal a
+ * decimal or a number; NaN for a group with no value.
+ */
+export const stddev = spread('math::stddev');
+/** `math::variance(field)`: as {@link stddev}. */
+export const variance = spread('math::variance');
 
-/** What `math::median` returns: a float, or NONE for a group with no value. */
-export type MedianCodec<E> = E extends true
-	? Schema.UndefinedOr<typeof Float>
-	: typeof Float;
+/**
+ * What `math::median` returns over values of codec `S`: as
+ * {@link SpreadCodec}, or NONE for a group with no value when `E`.
+ */
+export type MedianCodec<S extends Codec, E> = E extends true
+	? Schema.UndefinedOr<SpreadCodec<S>>
+	: SpreadCodec<S>;
 
-/** `math::median(field)`: a float, NONE for a group with no value. */
+/**
+ * `math::median(field)`: the middle value, or the mean of the two middle
+ * ones (a float); for a field that may hold a decimal a decimal or a
+ * number. NONE for a group with no value.
+ */
 export const median = <V extends RowValue>(
 	value: Taking<V, NumberField, '`math::median` takes a number field'>,
-): Aggregate<MedianCodec<MayBeEmpty<V>>> => {
+): Aggregate<MedianCodec<CodecOfValue<V>, MayBeEmpty<V>>> => {
 	dataOf(value);
+	const codec = spreadCodec(value as RowValue);
 	return aggregate(
 		'math::median',
 		value as RowValue,
-		empty(value as RowValue) ? Schema.UndefinedOr(Float) : Float,
-	) as Aggregate<MedianCodec<MayBeEmpty<V>>>;
+		empty(value as RowValue) ? Schema.UndefinedOr(codec) : codec,
+	) as Aggregate<MedianCodec<CodecOfValue<V>, MayBeEmpty<V>>>;
 };
 
 /** What `math::min` and `math::max` return: the field's value, or ±Infinity for none. */

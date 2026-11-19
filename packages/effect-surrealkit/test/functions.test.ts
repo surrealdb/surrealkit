@@ -8,6 +8,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 import { Schema } from 'effect';
+import { Decimal } from 'surrealdb';
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -21,6 +22,7 @@ import {
 	array,
 	math,
 	object,
+	parse,
 	rand,
 	string,
 	time,
@@ -133,6 +135,84 @@ describe('built-in functions', () => {
 		expect(sqlOf(distance)).toBe(
 			'vector::distance::euclidean([ 1, 2 ], [ 3, 4 ])',
 		);
+	});
+
+	it('type a float|decimal result as a float unless an argument it names may hold a decimal', () => {
+		const decimal = param('d', SurrealSchema.Decimal);
+		const int = param('i', SurrealSchema.Int);
+		const number = param('n', SurrealSchema.SurrealNumber);
+		const decimals = param('ds', Schema.Array(SurrealSchema.Decimal));
+		const floats = param('fs', Schema.Array(SurrealSchema.Float));
+		const rootOfDecimal = math.sqrt(decimal);
+		const rootOfNumber = math.sqrt(number);
+		const rootOfInt = math.sqrt(int);
+		const rootOfConstant = math.sqrt(2);
+		const meanOfDecimals = math.mean(decimals);
+		const meanOfFloats = math.mean(floats);
+		const lerpByDecimal = math.lerp(0, 10, decimal);
+		const cosine = vector.similarityCosine(floats, decimals);
+		const types: ReadonlyArray<true> = [
+			true satisfies Exact<
+				CodecOf<typeof rootOfDecimal>['Type'],
+				number | Decimal
+			>,
+			true satisfies Exact<
+				CodecOf<typeof rootOfNumber>['Type'],
+				number | Decimal
+			>,
+			true satisfies Exact<CodecOf<typeof rootOfInt>['Type'], number>,
+			true satisfies Exact<
+				CodecOf<typeof rootOfConstant>['Type'],
+				number
+			>,
+			true satisfies Exact<
+				CodecOf<typeof meanOfDecimals>['Type'],
+				number | Decimal
+			>,
+			true satisfies Exact<CodecOf<typeof meanOfFloats>['Type'], number>,
+			true satisfies Exact<
+				CodecOf<typeof lerpByDecimal>['Type'],
+				number | Decimal
+			>,
+			true satisfies Exact<
+				CodecOf<typeof cosine>['Type'],
+				number | Decimal
+			>,
+		];
+		expect(types).toHaveLength(8);
+		const decodes = (expr: Parameters<typeof codecOf>[0], value: unknown) =>
+			Schema.is(codecOf(expr))(value);
+		const half = new Decimal('0.5');
+		expect(decodes(rootOfDecimal, half)).toBe(true);
+		expect(decodes(rootOfNumber, half)).toBe(true);
+		expect(decodes(meanOfDecimals, half)).toBe(true);
+		expect(decodes(lerpByDecimal, half)).toBe(true);
+		expect(decodes(cosine, half)).toBe(true);
+		expect(decodes(rootOfDecimal, 0)).toBe(true);
+		expect(decodes(rootOfInt, half)).toBe(false);
+		expect(decodes(rootOfConstant, half)).toBe(false);
+		expect(decodes(meanOfFloats, half)).toBe(false);
+		expect(decodes(math.lerp(int, 10, 0.5), half)).toBe(false);
+	});
+
+	it('type a function that may answer NONE as optional', () => {
+		const host = parse.emailHost(param('e', SurrealSchema.String));
+		const median = math.median([]);
+		const total = vector.sum([]);
+		const types: ReadonlyArray<true> = [
+			true satisfies Exact<
+				CodecOf<typeof host>['Type'],
+				string | undefined
+			>,
+			true satisfies Exact<
+				CodecOf<typeof median>['Type'],
+				number | bigint | Decimal | undefined
+			>,
+		];
+		expect(types).toHaveLength(2);
+		expect(Schema.is(codecOf(host))(undefined)).toBe(true);
+		expect(Schema.is(codecOf(median))(undefined)).toBe(true);
+		expect(Schema.is(codecOf(total))(undefined)).toBe(true);
 	});
 
 	it('refuse arguments of the wrong kind at compile time', () => {

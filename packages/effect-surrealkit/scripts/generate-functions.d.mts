@@ -13,6 +13,8 @@ export interface Entry {
 	readonly result: string;
 	readonly engines: ReadonlyArray<string>;
 	readonly sample: ReadonlyArray<string>;
+	/** More argument sets the engine test calls, beside `sample`. */
+	readonly variants?: ReadonlyArray<ReadonlyArray<string>>;
 	readonly setup?: string;
 }
 
@@ -28,7 +30,8 @@ export type Kind =
 export type ResultKind =
 	| Kind
 	| { readonly same: number }
-	| { readonly item: number };
+	| { readonly item: number }
+	| { readonly floatOrDecimal: ReadonlyArray<number> };
 
 export const packageRoot: string;
 export const tablePath: string;

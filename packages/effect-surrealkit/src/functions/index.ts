@@ -8,4 +8,11 @@
  * Generated from `signatures.json` by `scripts/generate-functions.mjs`.
  */
 export * from './generated/index.js';
-export type { Arg, CodecOfArg, In, Inline, ItemCodec } from './internal.js';
+export type {
+	Arg,
+	CodecOfArg,
+	FloatOrDecimalCodec,
+	In,
+	Inline,
+	ItemCodec,
+} from './internal.js';

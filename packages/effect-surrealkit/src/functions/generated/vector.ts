@@ -2,7 +2,13 @@
 // Do not edit: change the table and run `npm run generate:functions`.
 
 import type { Expr, ParamsOfAll } from '../../statement/expr.js';
-import { type Arg, apply, type In } from '../internal.js';
+import {
+	type Arg,
+	apply,
+	type FloatOrDecimalCodec,
+	floatOrDecimal,
+	type In,
+} from '../internal.js';
 import * as C from './codecs.js';
 
 /**
@@ -62,7 +68,9 @@ export const distanceChebyshev = <
 	apply('vector::distance::chebyshev', C.NumberCodec, 2, [left, right]);
 
 /**
- * `vector::distance::cosine(left: array<number>, right: array<number>) -> float`
+ * `vector::distance::cosine(left: array<number>, right: array<number>) -> float|decimal:0,1`
+ *
+ * A float; a float or a decimal when `left` or `right` may hold a decimal.
  *
  * Only on SurrealDB 4.
  */
@@ -72,8 +80,8 @@ export const distanceCosine = <
 >(
 	left: A0,
 	right: A1,
-): Expr<typeof C.FloatCodec, ParamsOfAll<A0 | A1>> =>
-	apply('vector::distance::cosine', C.FloatCodec, 2, [left, right]);
+): Expr<FloatOrDecimalCodec<A0 | A1>, ParamsOfAll<A0 | A1>> =>
+	apply('vector::distance::cosine', floatOrDecimal([0, 1]), 2, [left, right]);
 
 /**
  * `vector::distance::euclidean(left: array<number>, right: array<number>) -> float`
@@ -244,7 +252,9 @@ export const scale = <
 	apply('vector::scale', C.ArrayOfNumberCodec, 2, [vector, factor]);
 
 /**
- * `vector::similarity::cosine(left: array<number>, right: array<number>) -> float`
+ * `vector::similarity::cosine(left: array<number>, right: array<number>) -> float|decimal:0,1`
+ *
+ * A float; a float or a decimal when `left` or `right` may hold a decimal.
  *
  * SurrealDB 3 and 4.
  */
@@ -254,8 +264,11 @@ export const similarityCosine = <
 >(
 	left: A0,
 	right: A1,
-): Expr<typeof C.FloatCodec, ParamsOfAll<A0 | A1>> =>
-	apply('vector::similarity::cosine', C.FloatCodec, 2, [left, right]);
+): Expr<FloatOrDecimalCodec<A0 | A1>, ParamsOfAll<A0 | A1>> =>
+	apply('vector::similarity::cosine', floatOrDecimal([0, 1]), 2, [
+		left,
+		right,
+	]);
 
 /**
  * `vector::similarity::jaccard(left: array<number>, right: array<number>) -> float`
@@ -314,7 +327,7 @@ export const subtract = <
 	apply('vector::subtract', C.ArrayOfNumberCodec, 2, [left, right]);
 
 /**
- * `vector::sum(vectors: array<array<number>>) -> array<number>`
+ * `vector::sum(vectors: array<array<number>>) -> option<array<number>>`
  *
  * SurrealDB 3 and 4.
  */
@@ -322,5 +335,5 @@ export const sum = <
 	const A0 extends Arg<ReadonlyArray<ReadonlyArray<In['number']>>>,
 >(
 	vectors: A0,
-): Expr<typeof C.ArrayOfNumberCodec, ParamsOfAll<A0>> =>
-	apply('vector::sum', C.ArrayOfNumberCodec, 1, [vectors]);
+): Expr<typeof C.OptionOfArrayOfNumberCodec, ParamsOfAll<A0>> =>
+	apply('vector::sum', C.OptionOfArrayOfNumberCodec, 1, [vectors]);

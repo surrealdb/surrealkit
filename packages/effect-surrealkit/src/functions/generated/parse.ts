@@ -6,24 +6,24 @@ import { type Arg, apply, type In } from '../internal.js';
 import * as C from './codecs.js';
 
 /**
- * `parse::email::host(email: string) -> string`
+ * `parse::email::host(email: string) -> option<string>`
  *
  * SurrealDB 3 and 4.
  */
 export const emailHost = <const A0 extends Arg<In['string']>>(
 	email: A0,
-): Expr<typeof C.StringCodec, ParamsOfAll<A0>> =>
-	apply('parse::email::host', C.StringCodec, 1, [email]);
+): Expr<typeof C.OptionOfStringCodec, ParamsOfAll<A0>> =>
+	apply('parse::email::host', C.OptionOfStringCodec, 1, [email]);
 
 /**
- * `parse::email::user(email: string) -> string`
+ * `parse::email::user(email: string) -> option<string>`
  *
  * SurrealDB 3 and 4.
  */
 export const emailUser = <const A0 extends Arg<In['string']>>(
 	email: A0,
-): Expr<typeof C.StringCodec, ParamsOfAll<A0>> =>
-	apply('parse::email::user', C.StringCodec, 1, [email]);
+): Expr<typeof C.OptionOfStringCodec, ParamsOfAll<A0>> =>
+	apply('parse::email::user', C.OptionOfStringCodec, 1, [email]);
 
 /**
  * `parse::url::domain(url: string) -> option<string>`
@@ -56,14 +56,14 @@ export const urlHost = <const A0 extends Arg<In['string']>>(
 	apply('parse::url::host', C.OptionOfStringCodec, 1, [url]);
 
 /**
- * `parse::url::path(url: string) -> string`
+ * `parse::url::path(url: string) -> option<string>`
  *
  * SurrealDB 3 and 4.
  */
 export const urlPath = <const A0 extends Arg<In['string']>>(
 	url: A0,
-): Expr<typeof C.StringCodec, ParamsOfAll<A0>> =>
-	apply('parse::url::path', C.StringCodec, 1, [url]);
+): Expr<typeof C.OptionOfStringCodec, ParamsOfAll<A0>> =>
+	apply('parse::url::path', C.OptionOfStringCodec, 1, [url]);
 
 /**
  * `parse::url::port(url: string) -> option<int>`
@@ -86,11 +86,11 @@ export const urlQuery = <const A0 extends Arg<In['string']>>(
 	apply('parse::url::query', C.OptionOfStringCodec, 1, [url]);
 
 /**
- * `parse::url::scheme(url: string) -> string`
+ * `parse::url::scheme(url: string) -> option<string>`
  *
  * SurrealDB 3 and 4.
  */
 export const urlScheme = <const A0 extends Arg<In['string']>>(
 	url: A0,
-): Expr<typeof C.StringCodec, ParamsOfAll<A0>> =>
-	apply('parse::url::scheme', C.StringCodec, 1, [url]);
+): Expr<typeof C.OptionOfStringCodec, ParamsOfAll<A0>> =>
+	apply('parse::url::scheme', C.OptionOfStringCodec, 1, [url]);
