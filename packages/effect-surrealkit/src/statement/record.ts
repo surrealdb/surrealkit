@@ -234,14 +234,27 @@ export const recordId = <T extends PureTable, const V extends KeyParts>(
 	key: CheckedKey<T, V>,
 ): Expr<T['id'], KeyParams<V>> => {
 	const built = keyOf(key as KeyParts);
-	return derive(
+	const id = derive(
 		table.id,
 		typeRecord(table, built.sql),
 		Level.atom,
 		built.parts,
 		built.params,
 	) as Expr<T['id'], KeyParams<V>>;
+	builtIds.add(id);
+	return id;
 };
+
+const builtIds = new WeakSet<object>();
+
+/**
+ * Whether `expr` is a record id {@link recordId} built, the
+ * `type::record(…)` call SurrealDB takes as a `FOR UPDATE` target.
+ *
+ * @internal
+ */
+export const isBuiltRecordId = (expr: unknown): boolean =>
+	typeof expr === 'object' && expr !== null && builtIds.has(expr);
 
 export const IdRangeTypeId = '~effect-surrealkit/IdRange';
 

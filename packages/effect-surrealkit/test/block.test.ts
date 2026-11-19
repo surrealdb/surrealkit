@@ -380,15 +380,35 @@ describe('FOR UPDATE', () => {
 		).toBe('SELECT * FROM ONLY $invite_id FOR UPDATE;');
 	});
 
-	it('refuses any other target expression, which SurrealDB refuses too', () => {
-		expect(() =>
+	it('reads one record by a literal record id', () => {
+		expect(
 			select(
 				InviteTable,
 				literal(new RecordId('invite', 'a') as InviteId, InviteId),
-			).forUpdate(),
-		).toThrow(
-			'FOR UPDATE reads one record from a binding or a local (`$name`), and SurrealDB refuses `r"invite:a"` as its target; LET the id in a block first',
-		);
+			)
+				.forUpdate()
+				.only()
+				.build().sql,
+		).toBe('SELECT * FROM ONLY r"invite:a" FOR UPDATE;');
+	});
+
+	it('reads one record by a record id built from its key', () => {
+		expect(
+			select(
+				InviteTable,
+				recordId(InviteTable, param('key', SurrealSchema.String)),
+			)
+				.forUpdate()
+				.only()
+				.build().sql,
+		).toBe('SELECT * FROM ONLY type::record(s"invite", $key) FOR UPDATE;');
+		expect(
+			select(InviteTable, recordId(InviteTable, 'a')).forUpdate().build()
+				.sql,
+		).toBe('SELECT * FROM type::record(s"invite", s"a") FOR UPDATE;');
+	});
+
+	it('refuses any other target expression, which SurrealDB refuses too', () => {
 		block()
 			.let('invite', () =>
 				select(InviteTable, param('invite_id', InviteId))
@@ -404,10 +424,7 @@ describe('FOR UPDATE', () => {
 			});
 	});
 
-	it('refuses a record id built from its key and an id range, which are no binding', () => {
-		expect(() =>
-			select(InviteTable, recordId(InviteTable, 'a')).forUpdate(),
-		).toThrow('FOR UPDATE reads one record from a binding or a local');
+	it('refuses an id range, which reads many records', () => {
 		expect(() =>
 			select(
 				InviteTable,

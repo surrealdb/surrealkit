@@ -64,7 +64,12 @@ import {
 	groupAll,
 	groupBy,
 } from './group.js';
-import { type IdRange, IdRangeTypeId, isIdRange } from './record.js';
+import {
+	type IdRange,
+	IdRangeTypeId,
+	isBuiltRecordId,
+	isIdRange,
+} from './record.js';
 import {
 	type CheckedProjection,
 	type FieldsOf,
@@ -860,14 +865,28 @@ export interface RecordSelect<T extends PureTable, P extends Params>
 	 * `FOR UPDATE`: a transaction that reads the record this way fails with
 	 * a conflict (`StatementConflict`) when a concurrent write changes the
 	 * record before it commits; no lock is held (SurrealDB 3.3 and 4.0). The
-	 * id must be a binding or a block's local (`$name`): SurrealDB refuses a
-	 * table, a field path or any other expression as the target, so a
-	 * {@link recordId} expression and an {@link idRange} are refused here.
+	 * id must be a binding or a block's local (`$name`), a literal record id
+	 * or a {@link recordId} expression (`type::record(…)`): SurrealDB refuses
+	 * a table, a field path, a subquery or any other expression as the
+	 * target, so those and an {@link idRange} are refused here.
 	 */
 	readonly forUpdate: () => Select<T, P, StoredRow<T>, false>;
 }
 
 const parameter = /^\$[A-Za-z_][A-Za-z0-9_]*$/u;
+
+/** A record id literal, as {@link literal} renders one (`r"invite:a"`). */
+const recordLiteral = /^r"(?:[^"\\]|\\.)*"$/u;
+
+/**
+ * Whether SurrealDB 3.3 and 4.0 take `id` as a `FOR UPDATE` target: a
+ * binding or a local, a literal record id, or a {@link recordId} call. They
+ * refuse a field path, a subquery, a table and a range.
+ */
+const lockable = (id: Expr): boolean =>
+	parameter.test(sqlOf(id)) ||
+	recordLiteral.test(sqlOf(id)) ||
+	isBuiltRecordId(id);
 
 const builder = <
 	T extends PureTable,
@@ -1234,9 +1253,9 @@ export const select: {
 	return {
 		...builder<T, Params, StoredRow<T>, false>(record),
 		forUpdate: () => {
-			if (!parameter.test(sqlOf(id))) {
+			if (!lockable(id)) {
 				throw new RangeError(
-					`FOR UPDATE reads one record from a binding or a local (\`$name\`), and SurrealDB refuses \`${sqlOf(id)}\` as its target; LET the id in a block first`,
+					`FOR UPDATE reads one record from a binding or a local (\`$name\`), a literal record id or a \`recordId(…)\`, and SurrealDB refuses \`${sqlOf(id)}\` as its target; LET the id in a block first`,
 				);
 			}
 			return builder<T, Params, StoredRow<T>, false>({

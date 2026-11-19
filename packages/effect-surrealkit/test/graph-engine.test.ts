@@ -26,6 +26,7 @@ import {
 	outgoing,
 	param,
 	parent,
+	recordId,
 	recurse,
 	rows,
 	select,
@@ -527,6 +528,24 @@ describe.skipIf(!engineConfigured)(
 					]),
 				);
 				expect(read[0]?.manager?.name).toBe('Bob');
+			});
+
+			it('reads a record FOR UPDATE by a record id built from its key', async () => {
+				const locked = select(
+					PersonTable,
+					recordId(PersonTable, param('key', SurrealSchema.String)),
+				)
+					.forUpdate()
+					.only()
+					.build();
+				expect(locked.sql).toBe(
+					'SELECT * FROM ONLY type::record(s"person", $key) FOR UPDATE;',
+				);
+				const [read] = await ok(
+					client.transaction([bind(locked, { key: 'bob' })]),
+				);
+				expect(read?.id).toEqual(bob);
+				expect(read?.name).toBe('Bob');
 			});
 
 			it('fetches through a fetched record, and a link to several tables', async () => {
