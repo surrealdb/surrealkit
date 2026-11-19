@@ -351,6 +351,12 @@ exports[`type diagnostics > module/template-missing-fill 1`] = `
 ]
 `;
 
+exports[`type diagnostics > omit/unknown-field 1`] = `
+[
+  "TS2345: Argument of type '"nope"' is not assignable to parameter of type '"\`nope\` is not a field of \`person\`"'.",
+]
+`;
+
 exports[`type diagnostics > order/bound-array-element 1`] = `
 [
   "TS2322: Type 'Expr<UndefinedOr<declareConstructor<number, number, readonly [], number>>, { readonly xs: $Array<declareConstructor<number, number, readonly [], number>>; }>' is not assignable to type '"ORDER BY takes a field path of the row, like \`row.name\` or \`at(row.pins, 0)\`"'.",
@@ -849,6 +855,32 @@ exports[`type diagnostics > sequence/extra-binding 1`] = `
 exports[`type diagnostics > sequence/missing-binding 1`] = `
 [
   "TS2322: Type '{}' is not assignable to type '"binding \`$boundProducer\` is read by this sequence and has no codec"'.",
+]
+`;
+
+exports[`type diagnostics > split/not-an-array 1`] = `
+[
+  "TS2345: Argument of type '"name"' is not assignable to parameter of type '"\`name\` is not an array field of \`person\`: SPLIT takes one"'.",
+]
+`;
+
+exports[`type diagnostics > split/projection-without-field 1`] = `
+[
+  "TS2322: Type '{ readonly name: Path<Schema.declareConstructor<string, string, readonly [], string> & Codec>; readonly pin: Path<SplitCodec<Schema.$Array<Schema.declareConstructor<string, string, readonly [], string>>> & Codec>; }' is not assignable to type 'CheckedProjection<{ name: Path<declareConstructor<string, string, readonly [], string> & Codec>; pin: Path<SplitCodec<$Array<declareConstructor<string, string, readonly [], string>>> & Codec>; }> & { ...; }'.
+  Property 'pins' is missing in type '{ readonly name: Path<Schema.declareConstructor<string, string, readonly [], string> & Codec>; readonly pin: Path<SplitCodec<Schema.$Array<Schema.declareConstructor<string, string, readonly [], string>>> & Codec>; }' but required in type '{ readonly pins: "the SPLIT field \`pins\` must be projected under its own name"; }'.",
+]
+`;
+
+exports[`type diagnostics > split/set-field 1`] = `
+[
+  "TS2345: Argument of type '"tags"' is not assignable to parameter of type '"\`tags\` is not an array field of \`person\`: SPLIT takes one"'.",
+]
+`;
+
+exports[`type diagnostics > split/where-after 1`] = `
+[
+  "TS2339: Property 'where' does not exist on type 'Split<Omit<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, "select"> & { ...; }, NoPa...'.",
+  "TS7006: Parameter 'row' implicitly has an 'any' type.",
 ]
 `;
 

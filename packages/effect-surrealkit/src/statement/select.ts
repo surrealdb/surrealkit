@@ -14,6 +14,7 @@ import {
 	codecOf,
 	type Expr,
 	eq,
+	type ItemOf,
 	isExpr,
 	isPath,
 	Level,
@@ -40,10 +41,17 @@ import {
 import { type IdRange, IdRangeTypeId, isIdRange } from './record.js';
 import {
 	type CheckedProjection,
+	type FieldsOf,
+	fieldsOf,
+	type IsOptional,
+	isOptional,
 	type ProjectedCodec,
 	type Projection,
 	type RowCodec,
+	type RowCodecIn,
 	rowCodec,
+	type Unwrapped,
+	unwrap,
 } from './row.js';
 import {
 	type Codec,
@@ -164,6 +172,125 @@ export type UniqueValues<
 		: `the unique index \`${N & string}\` also needs \`${Exclude<keyof ColumnsOf<IndexesOf<T>[N]>, keyof V> & string}\``
 	: V;
 
+/** The fields of the stored row of `T`. */
+type SelectFields<T extends PureTable> = FieldsOf<T['select']>;
+
+type AsFields<F> = F extends Schema.Struct.Fields ? F : never;
+
+/** A row schema like `S` (closed or open) over the fields `F`. */
+type RebuiltRow<S, F> =
+	S extends Schema.StructWithRest<
+		Schema.Struct<Schema.Struct.Fields>,
+		infer R
+	>
+		? Schema.StructWithRest<Schema.Struct<AsFields<F>>, R>
+		: Schema.Struct<AsFields<F>>;
+
+/** Field names as the caller wrote them, `K`, each a field of `T`, or a message. */
+export type CheckedOmit<
+	T extends PureTable,
+	K extends ReadonlyArray<string>,
+> = {
+	readonly [I in keyof K]: K[I] extends keyof SelectFields<T>
+		? K[I]
+		: `\`${K[I] & string}\` is not a field of \`${T['name']}\``;
+};
+
+/** The row schema `S` without the top-level fields `K`. */
+export type OmittedRow<
+	S extends RowCodecIn,
+	K extends PropertyKey,
+> = RebuiltRow<S, Omit<FieldsOf<S>, K>>;
+
+/** The array fields of the stored row of `T`: what SPLIT takes. */
+export type ArrayFields<T extends PureTable> = {
+	[K in keyof SelectFields<T>]: [
+		ItemOf<Unwrapped<SelectFields<T>[K]> & Codec>,
+	] extends [never]
+		? never
+		: K;
+}[keyof SelectFields<T>] &
+	string;
+
+/** `K` when it is an array field of `T`; otherwise a message. */
+export type SplitField<T extends PureTable, K> =
+	K extends ArrayFields<T>
+		? K
+		: `\`${K & string}\` is not an array field of \`${T['name']}\`: SPLIT takes one`;
+
+/**
+ * A split field: one element per row, or the array itself when it is empty
+ * (SurrealDB 3.3 and 4.0 keep a record whose array is empty, unsplit).
+ */
+export type SplitCodec<F> = Schema.Union<
+	readonly [ItemOf<Unwrapped<F> & Codec>, Unwrapped<F> & Codec]
+>;
+
+/** The row schema `S` with the array field `K` split. */
+export type SplitRow<S extends RowCodecIn, K extends string> = RebuiltRow<
+	S,
+	{
+		readonly [F in keyof FieldsOf<S>]: F extends K
+			? IsOptional<FieldsOf<S>[F]> extends true
+				? Schema.optionalKey<SplitCodec<FieldsOf<S>[F]>>
+				: SplitCodec<FieldsOf<S>[F]>
+			: FieldsOf<S>[F];
+	}
+>;
+
+/** `T` read with its array field `K` split. */
+export type SplitTable<T extends PureTable, K extends string> = AsTable<
+	Omit<T, 'select'> & { readonly select: SplitRow<T['select'], K> }
+>;
+
+/** `X` as a table descriptor, which it is once `T` is known. */
+type AsTable<X> = X extends PureTable ? X : never;
+
+/** A projection after SPLIT must hold the split field under its own name. */
+type KeepsSplit<F, K extends string> = K extends keyof F
+	? unknown
+	: {
+			readonly [P in K]: `the SPLIT field \`${K}\` must be projected under its own name`;
+		};
+
+/**
+ * A `SELECT … SPLIT field` under construction: one row per element of the
+ * array field `K`. Conditions come before SPLIT, so there is no `where`.
+ */
+export interface Split<
+	T extends PureTable,
+	P extends Params,
+	Row extends Codec,
+	K extends string,
+> {
+	/** `OMIT`: top-level fields `SELECT *` leaves out. */
+	readonly omit: <const O extends ReadonlyArray<string>>(
+		...fields: CheckedOmit<T, O>
+	) => Split<T, P, RowCodec<OmittedRow<T['select'], O[number]>>, K>;
+	/** Adds a sort key, a field path of the split row. */
+	readonly orderBy: <O>(
+		key: (row: RowExprs<T>) => OrderKey<O>,
+		direction?: 'ASC' | 'DESC',
+	) => Split<T, P, Row, K>;
+	/** `LIMIT`: at most this many rows. */
+	readonly limit: <const L extends Count>(
+		rows: L,
+	) => Split<T, P & OperandParams<L>, Row, K>;
+	/** `START`: skip this many rows. */
+	readonly start: <const L extends Count>(
+		rows: L,
+	) => Split<T, P & OperandParams<L>, Row, K>;
+	/** Selects named expressions; the split field among them, under its name. */
+	readonly project: <const F>(
+		fields: (row: RowExprs<T>) => CheckedProjection<F> & KeepsSplit<F, K>,
+	) => Split<T, P & ParamsOfAll<F[keyof F]>, ProjectedCodec<F>, K>;
+	/** The finished statement. */
+	readonly build: (
+		name?: string,
+		options?: { readonly writes?: boolean },
+	) => Statement<Simplify<P>, Schema.$Array<Row>>;
+}
+
 /** What a `SELECT` returns: every row, or with `ONLY` one row or NONE. */
 export type SelectResult<
 	Row extends Codec,
@@ -187,6 +314,10 @@ interface State {
 	 * does not write; an expression can call a function that writes.
 	 */
 	readonly pure: boolean;
+	/** `OMIT`: top-level fields `SELECT *` leaves out. */
+	readonly omit?: ReadonlyArray<string>;
+	/** `SPLIT`: the array field each element of which is a row. */
+	readonly split?: string;
 	readonly limit: string | undefined;
 	readonly start: string | undefined;
 	readonly only: boolean;
@@ -231,7 +362,11 @@ const render = (state: State): string => {
 	assertOrder(state);
 	const limit = state.only && readsMany(state) ? '1' : state.limit;
 	return [
-		`SELECT ${state.fields} FROM ${state.only ? 'ONLY ' : ''}${
+		`SELECT ${state.fields}${
+			state.omit === undefined || state.omit.length === 0
+				? ''
+				: ` OMIT ${state.omit.map((field) => escapeIdent(field)).join(', ')}`
+		} FROM ${state.only ? 'ONLY ' : ''}${
 			state.source === undefined
 				? tableName(state.table)
 				: sqlOf(state.source)
@@ -240,6 +375,9 @@ const render = (state: State): string => {
 			? []
 			: [`WITH INDEX ${escapeIdent(state.index)}`]),
 		...(state.where.length > 0 ? [`WHERE ${andAll(state.where)}`] : []),
+		...(state.split === undefined
+			? []
+			: [`SPLIT ${splitTarget(state, state.split)}`]),
 		...(state.order.length > 0
 			? [
 					`ORDER BY ${state.order
@@ -252,9 +390,27 @@ const render = (state: State): string => {
 	].join(' ');
 };
 
+/**
+ * The `SPLIT` target: the field, which a projection must hold under its own
+ * name. SurrealDB 4 resolves the target as a projection alias and 3.3 as the
+ * stored field, and both refuse a target the projection leaves out, so only
+ * the field under its own name means the same on both.
+ */
+const splitTarget = (state: State, field: string): string => {
+	const sql = escapeIdent(field);
+	if (state.fields !== '*' && state.aliases.get(field) !== sql) {
+		throw new RangeError(
+			`the SPLIT field \`${field}\` must be projected under its own name (\`${field}: row.${field}\`)`,
+		);
+	}
+	return sql;
+};
+
 /** What a grouped SELECT keeps of a select: its subject and conditions. */
 const baseOf = (state: State): Base => {
 	if (
+		state.split !== undefined ||
+		state.omit !== undefined ||
 		state.fields !== '*' ||
 		state.only ||
 		state.order.length > 0 ||
@@ -277,6 +433,18 @@ const baseOf = (state: State): Base => {
 		pure: state.pure,
 	};
 };
+
+/** A row schema like `row` (closed or open) over other fields. */
+const rebuild = (
+	row: RowCodecIn,
+	fields: { readonly [field: string]: Codec },
+): RowCodecIn =>
+	'records' in row && 'schema' in row
+		? (Schema.StructWithRest(
+				Schema.Struct(fields),
+				row.records as Schema.StructWithRest.Records,
+			) as unknown as RowCodecIn)
+		: (Schema.Struct(fields) as unknown as RowCodecIn);
 
 /** A table or an id range: what `FROM ONLY` reads one row of with `LIMIT 1`. */
 const readsMany = (state: State): boolean =>
@@ -344,6 +512,23 @@ export interface Select<
 	readonly only: () => Select<T, P, Row, true>;
 
 	/**
+	 * `OMIT`: top-level fields `SELECT *` leaves out of each row (conditions
+	 * and sort keys still read them).
+	 */
+	readonly omit: <const K extends ReadonlyArray<string>>(
+		...fields: CheckedOmit<T, K>
+	) => Select<T, P, RowCodec<OmittedRow<T['select'], K[number]>>, Only>;
+
+	/**
+	 * `SPLIT`: one row per element of an array field, which holds that
+	 * element in the row (the array itself when it is empty). Add conditions
+	 * before it.
+	 */
+	readonly split: <const K extends string>(
+		field: SplitField<T, K>,
+	) => Split<SplitTable<T, K>, P, StoredRow<SplitTable<T, K>>, K>;
+
+	/**
 	 * `GROUP BY`: one row per distinct combination of the keys, named field
 	 * paths of the row (`{ role: row.role, city: row.address.city }`), which
 	 * every row of the result holds. Add aggregates with `.aggregate(…)`.
@@ -383,6 +568,11 @@ const builder = <
 		isExpr(rows) ? mergeParams(state.params, paramsOf(rows)) : state.params;
 	return {
 		where: (predicate) => {
+			if (state.split !== undefined) {
+				throw new RangeError(
+					'WHERE reads the stored row, before SPLIT; add conditions before `.split(…)`',
+				);
+			}
 			const condition = predicate(row);
 			return builder({
 				...state,
@@ -428,6 +618,11 @@ const builder = <
 				pure: state.pure && !isExpr(rows),
 			}),
 		project: (fields) => {
+			if (state.omit !== undefined) {
+				throw new RangeError(
+					'OMIT leaves fields out of `SELECT *`; a projection names the fields it keeps instead',
+				);
+			}
 			const projection = fields(row) as Projection;
 			const projected = project(projection);
 			return builder({
@@ -440,6 +635,11 @@ const builder = <
 			});
 		},
 		value: (pick) => {
+			if (state.omit !== undefined || state.split !== undefined) {
+				throw new RangeError(
+					'`SELECT VALUE` takes no OMIT or SPLIT here; project the field instead',
+				);
+			}
 			const picked = pick(row);
 			return builder({
 				...state,
@@ -457,6 +657,87 @@ const builder = <
 				);
 			}
 			return builder({ ...state, only: true });
+		},
+		omit: (...names) => {
+			if (state.fields !== '*') {
+				throw new RangeError(
+					'OMIT leaves fields out of `SELECT *`; a projection names the fields it keeps instead',
+				);
+			}
+			const stored = fieldsOf(state.table.select);
+			if (stored === undefined) {
+				throw new TypeError('OMIT takes a generated row schema');
+			}
+			const omitted = [
+				...(state.omit ?? []),
+				...(names as ReadonlyArray<string>),
+			];
+			for (const name of omitted) {
+				if (!Object.hasOwn(stored, name)) {
+					throw new RangeError(
+						`\`${name}\` is not a field of \`${state.table.name}\``,
+					);
+				}
+				if (name === state.split) {
+					throw new RangeError(
+						`\`${name}\` is the SPLIT field, which the row must hold`,
+					);
+				}
+			}
+			const kept = Object.fromEntries(
+				Object.entries(stored).filter(
+					([name]) => !omitted.includes(name),
+				),
+			);
+			return builder({
+				...state,
+				omit: omitted,
+				out: rowCodec(rebuild(state.table.select, kept)),
+			}) as never;
+		},
+		split: (field) => {
+			const name = field as string;
+			if (
+				state.fields !== '*' ||
+				state.only ||
+				state.omit !== undefined
+			) {
+				throw new RangeError(
+					'split a SELECT before projecting it, omitting fields or reading ONLY one row',
+				);
+			}
+			if (state.split !== undefined) {
+				throw new RangeError('this SELECT splits one field');
+			}
+			const stored = fieldsOf(state.table.select);
+			const declared = stored?.[name];
+			const codec = declared === undefined ? undefined : unwrap(declared);
+			if (
+				stored === undefined ||
+				declared === undefined ||
+				codec === undefined ||
+				!('value' in codec) ||
+				!Schema.isSchema(codec.value)
+			) {
+				throw new RangeError(
+					`\`${name}\` is not an array field of \`${state.table.name}\`: SPLIT takes one`,
+				);
+			}
+			const element = Schema.Union([codec.value as Codec, codec]);
+			const select = rebuild(state.table.select, {
+				...stored,
+				[name]: isOptional(declared)
+					? Schema.optionalKey(element)
+					: element,
+			});
+			const table = { ...state.table, select };
+			return builder({
+				...state,
+				table,
+				row: rowExprs(table),
+				out: storedRow(table),
+				split: name,
+			}) as never;
 		},
 		groupBy: (keys) =>
 			groupBy(

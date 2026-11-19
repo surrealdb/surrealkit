@@ -529,3 +529,18 @@ export const rejectedGrouping = () => {
 	// @ts-expect-error [group/order-by-unknown] ORDER BY takes an alias of the output
 	grouped.orderBy('name');
 };
+
+// SPLIT takes an array field; OMIT a field of the row.
+export const rejectedSplitAndOmit = () => {
+	// @ts-expect-error [split/not-an-array] `name` is a string
+	select(Corpus.PersonTable).split('name');
+	// @ts-expect-error [split/set-field] `tags` is a set, not an array
+	select(Corpus.PersonTable).split('tags');
+	const split = select(Corpus.PersonTable).split('pins');
+	// @ts-expect-error [split/where-after] conditions come before SPLIT
+	split.where((row) => eq(row.name, 'a'));
+	// @ts-expect-error [split/projection-without-field] the split field must be projected under its own name
+	split.project((row) => ({ name: row.name, pin: row.pins }));
+	// @ts-expect-error [omit/unknown-field] the table has no such field
+	select(Corpus.PersonTable).omit('nope');
+};

@@ -117,9 +117,17 @@ export {
 	type StructCodec,
 } from './row.js';
 export {
+	type ArrayFields,
+	type CheckedOmit,
 	type Count,
+	type OmittedRow,
 	type Select,
 	type SelectResult,
+	type Split,
+	type SplitCodec,
+	type SplitField,
+	type SplitRow,
+	type SplitTable,
 	select,
 	type UniqueIndex,
 	type UniqueValues,

@@ -1440,3 +1440,95 @@ describe('GROUP BY and GROUP ALL', () => {
 		).toThrow(/group a SELECT before projecting/);
 	});
 });
+
+describe('SPLIT and OMIT', () => {
+	const { PersonTable: CorpusPerson } = Corpus;
+
+	it('SPLIT an array field, after the conditions', () => {
+		const statement = select(CorpusPerson)
+			.where((row) => eq(row.role, 'admin'))
+			.split('pins')
+			.orderBy((row) => row.pins)
+			.limit(10)
+			.build();
+		expect(statement.sql).toBe(
+			'SELECT * FROM ⟨person⟩ WHERE role = s"admin" SPLIT pins ORDER BY pins ASC LIMIT 10;',
+		);
+		const projected = select(CorpusPerson)
+			.split('pins')
+			.project((row) => ({ name: row.name, pins: row.pins }))
+			.build();
+		expect(projected.sql).toBe(
+			'SELECT name AS name, pins AS pins FROM ⟨person⟩ SPLIT pins;',
+		);
+		const decode = Schema.decodeUnknownSync(projected.result);
+		// One element per row, or the array itself when it is empty.
+		expect(
+			decode([
+				{ name: 'a', pins: 'x' },
+				{ name: 'b', pins: [] },
+			]),
+		).toEqual([
+			{ name: 'a', pins: 'x' },
+			{ name: 'b', pins: [] },
+		]);
+	});
+
+	it('OMIT top-level fields of SELECT *, before or after SPLIT', () => {
+		const statement = select(CorpusPerson)
+			.omit('ssn', 'notes')
+			.orderBy((row) => row.ssn)
+			.build();
+		expect(statement.sql).toBe(
+			'SELECT * OMIT ssn, notes FROM ⟨person⟩ ORDER BY ssn ASC;',
+		);
+		expect(select(CorpusPerson).split('pins').omit('id').build().sql).toBe(
+			'SELECT * OMIT id FROM ⟨person⟩ SPLIT pins;',
+		);
+	});
+
+	it('refuses at runtime what the types refuse', () => {
+		const untyped = select(CorpusPerson) as unknown as {
+			split: (field: string) => {
+				where: (predicate: () => unknown) => unknown;
+				project: (
+					fields: (row: { name: unknown; pins: unknown }) => unknown,
+				) => {
+					build: () => unknown;
+				};
+				omit: (...fields: ReadonlyArray<string>) => unknown;
+			};
+			omit: (...fields: ReadonlyArray<string>) => {
+				split: (field: string) => unknown;
+				project: (fields: () => unknown) => unknown;
+			};
+		};
+		expect(() => untyped.split('name')).toThrow(
+			'`name` is not an array field of `person`: SPLIT takes one',
+		);
+		expect(() => untyped.split('tags')).toThrow(/is not an array field/);
+		expect(() =>
+			untyped.split('pins').where(() => eq(literal(1), 1)),
+		).toThrow(/add conditions before `.split/);
+		expect(() =>
+			untyped
+				.split('pins')
+				.project((row) => ({ name: row.name, pin: row.pins }))
+				.build(),
+		).toThrow(
+			/the SPLIT field `pins` must be projected under its own name/,
+		);
+		expect(() => untyped.split('pins').omit('pins')).toThrow(
+			/is the SPLIT field/,
+		);
+		expect(() => untyped.omit('nope')).toThrow(
+			'`nope` is not a field of `person`',
+		);
+		expect(() => untyped.omit('ssn').split('pins')).toThrow(
+			/split a SELECT before/,
+		);
+		expect(() => untyped.omit('ssn').project(() => ({}))).toThrow(
+			/a projection names the fields it keeps/,
+		);
+	});
+});

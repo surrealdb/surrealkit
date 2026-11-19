@@ -513,6 +513,22 @@ a group and 3.3 does not. Aggregates take fields of the row, so none can
 nest in another (4.0 refuses that, 3.3 yields 0). `.orderBy(alias)`,
 `.limit` and `.start` follow; the conformance suite pins every result above.
 
+### SPLIT and OMIT
+
+`.split('pins')` makes one row per element of an array field, which holds
+that element in the row; a record whose array is empty stays one row with
+the empty array, so the field reads as `Element | Array` (and NONE stays
+NONE for an optional field). Conditions come before SPLIT, so the builder
+it returns has no `where`. A projection after it must hold the split field
+under its own name: SurrealDB 4 resolves the SPLIT target as a projection
+alias and 3.3 as the stored field, and both refuse a target the projection
+leaves out. Sets are not split.
+
+`.omit('ssn', 'notes')` leaves top-level fields out of `SELECT *`
+(`SELECT * OMIT ssn, notes`), and out of the row type; conditions and sort
+keys still read them. A projection names the fields it keeps instead, so
+the two do not combine. The conformance suite pins both clauses.
+
 ### Authored SurrealQL
 
 A multi-statement script stays SurrealQL. Describe each text as a `part`
@@ -817,7 +833,7 @@ empty results.
 - **Authored text.** The analyzer derives a part's names, result count and
   messages, not its result type: a result codec that does not match the
   script fails when it runs, not when it compiles.
-- **Coverage.** `SPLIT`, `FETCH`, graph traversal, full-text and
+- **Coverage.** `FETCH`, graph traversal, full-text and
   vector operators, live queries and views have no typed builder yet; use
   `unsafeExpr` or authored SurrealQL. `ON DUPLICATE KEY UPDATE` takes plain
   assignments only (no `+=`), and an aggregate takes a field, not an

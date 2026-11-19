@@ -1555,4 +1555,54 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 			});
 		});
 	});
+
+	describe('SPLIT and OMIT', () => {
+		it('SPLIT reads one row per element, and an empty array as itself, decoded strictly', async () => {
+			const rows = await ok(
+				client.run(
+					select(PersonTable)
+						.where((row) => inside(row.name, ['Ann', 'Bob']))
+						.split('pins')
+						.project((row) => ({ name: row.name, pins: row.pins }))
+						.orderBy((row) => row.name)
+						.build(),
+				),
+			);
+			// Ann was created with pins ['a', 'b'], Bob with none.
+			expect(rows.filter((row) => row.name === 'Ann')).toEqual([
+				{ name: 'Ann', pins: 'a' },
+				{ name: 'Ann', pins: 'b' },
+			]);
+			expect(rows.filter((row) => row.name === 'Bob')).toEqual([
+				{ name: 'Bob', pins: [] },
+			]);
+		});
+
+		it('SPLIT of the stored row splits an array of objects', async () => {
+			const rows = await ok(
+				client.run(
+					select(PersonTable)
+						.where((row) => eq(row.name, 'Ann'))
+						.split('phones')
+						.build(),
+				),
+			);
+			expect(rows.map((row) => row.phones)).toEqual([
+				{ kind: 'home', number: '1' },
+			]);
+		});
+
+		it('OMIT leaves fields out of the decoded row', async () => {
+			const [row] = await ok(
+				client.run(
+					select(PersonTable)
+						.where((row) => eq(row.name, 'Ann'))
+						.omit('ssn', 'notes', 'nickname')
+						.build(),
+				),
+			);
+			expect(row).toMatchObject({ name: 'Ann' });
+			expect(row && 'nickname' in row).toBe(false);
+		});
+	});
 });

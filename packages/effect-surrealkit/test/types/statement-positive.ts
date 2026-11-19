@@ -750,3 +750,35 @@ same<
 	]
 >(true);
 same<Input<(typeof totals)['params']>, { readonly floor: number }>(true);
+
+// ---- SPLIT and OMIT: the row follows.
+
+export const splitPins = select(Corpus.PersonTable)
+	.where((row) => isNone(row.nickname))
+	.split('pins')
+	.build();
+export type SplitPins = Result<typeof splitPins>[number];
+same<SplitPins['pins'], string | ReadonlyArray<string>>(true);
+same<SplitPins['name'], Corpus.Person['name']>(true);
+export const splitPhones = select(Corpus.PersonTable)
+	.split('phones')
+	.project((row) => ({ phones: row.phones, name: row.name }))
+	.build();
+same<
+	Result<typeof splitPhones>[number]['phones'],
+	Corpus.Person['phones'][number] | Corpus.Person['phones']
+>(true);
+export const withoutSsn = select(Corpus.PersonTable)
+	.omit('ssn', 'notes')
+	.build();
+export type WithoutSsn = Result<typeof withoutSsn>[number];
+same<'ssn' extends keyof WithoutSsn ? true : false, false>(true);
+same<WithoutSsn['name'], Corpus.Person['name']>(true);
+export const splitWithout = select(Corpus.PersonTable)
+	.split('pins')
+	.omit('id')
+	.build();
+same<
+	'id' extends keyof Result<typeof splitWithout>[number] ? true : false,
+	false
+>(true);

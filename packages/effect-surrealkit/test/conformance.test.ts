@@ -890,6 +890,120 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 		});
 	});
 
+	describe('SPLIT and OMIT', () => {
+		beforeAll(async () => {
+			await query(`
+				DEFINE TABLE sp SCHEMAFULL;
+				DEFINE FIELD name ON sp TYPE string;
+				DEFINE FIELD tags ON sp TYPE array<string>;
+				DEFINE FIELD opt ON sp TYPE option<array<string>>;
+				DEFINE FIELD ssn ON sp TYPE option<string>;
+				DEFINE FIELD addr ON sp TYPE object;
+				DEFINE FIELD addr.city ON sp TYPE string;
+				DEFINE FIELD addr.zip ON sp TYPE string;
+				CREATE sp:1 CONTENT { name: 'a', tags: ['x', 'y'], opt: ['o'], ssn: '1', addr: { city: 'c', zip: 'z' } };
+				CREATE sp:2 CONTENT { name: 'b', tags: [], addr: { city: 'd', zip: 'w' } };
+			`);
+		});
+
+		it('SPLIT makes a row per element, keeps a record whose array is empty unsplit, and leaves NONE as NONE', async () => {
+			expect(
+				await query(
+					'SELECT name, tags FROM sp SPLIT tags ORDER BY name, tags; SELECT name, opt FROM sp SPLIT opt ORDER BY name;',
+				),
+			).toStrictEqual([
+				[
+					{ name: 'a', tags: 'x' },
+					{ name: 'a', tags: 'y' },
+					{ name: 'b', tags: [] },
+				],
+				[
+					{ name: 'a', opt: 'o' },
+					{ name: 'b', opt: undefined },
+				],
+			]);
+		});
+
+		it('the SPLIT target is a projection alias on SurrealDB 4 and the stored field on 3; a target the projection leaves out is refused on both', async () => {
+			const byField = query(
+				'SELECT name, tags AS tag FROM sp SPLIT tags ORDER BY name, tag;',
+			);
+			const byAlias = query(
+				'SELECT name, tags AS tag FROM sp SPLIT tag ORDER BY name;',
+			);
+			if (engine.majorVersion >= 4) {
+				await expect(byField).rejects.toThrow(
+					/Missing split idiom `"tags"`/,
+				);
+				expect(await byAlias).toStrictEqual([
+					[
+						{ name: 'a', tag: 'x' },
+						{ name: 'a', tag: 'y' },
+						{ name: 'b', tag: [] },
+					],
+				]);
+			} else {
+				expect(await byField).toStrictEqual([
+					[
+						{ name: 'a', tag: 'x' },
+						{ name: 'a', tag: 'y' },
+						{ name: 'b', tag: [] },
+					],
+				]);
+				expect(await byAlias).toStrictEqual([
+					[
+						{ name: 'a', tag: ['x', 'y'] },
+						{ name: 'b', tag: [] },
+					],
+				]);
+			}
+			await expect(
+				query('SELECT name FROM sp SPLIT tags;'),
+			).rejects.toThrow(/Missing split idiom `"tags"`/);
+		});
+
+		it('SPLIT with ONLY fails on more than one row', async () => {
+			await expect(
+				query('SELECT * FROM ONLY sp:1 SPLIT tags;'),
+			).rejects.toThrow(
+				/Expected a single result output when using the ONLY keyword/,
+			);
+		});
+
+		it('OMIT leaves top-level and nested fields out, and ORDER BY still reads an omitted field', async () => {
+			expect(
+				await query(
+					'SELECT * OMIT id, ssn, addr.zip FROM sp ORDER BY name; SELECT * OMIT id, name, addr, opt, ssn FROM sp ORDER BY name DESC;',
+				),
+			).toStrictEqual([
+				[
+					{
+						name: 'a',
+						tags: ['x', 'y'],
+						opt: ['o'],
+						addr: { city: 'c' },
+					},
+					{ name: 'b', tags: [], addr: { city: 'd' } },
+				],
+				[{ tags: [] }, { tags: ['x', 'y'] }],
+			]);
+		});
+
+		it('OMIT and SPLIT combine', async () => {
+			expect(
+				await query(
+					'SELECT * OMIT id, ssn, addr, opt FROM sp SPLIT tags ORDER BY name, tags;',
+				),
+			).toStrictEqual([
+				[
+					{ name: 'a', tags: 'x' },
+					{ name: 'a', tags: 'y' },
+					{ name: 'b', tags: [] },
+				],
+			]);
+		});
+	});
+
 	describe('permissions, as a record user', () => {
 		let user: SurrealSession;
 		const asUser = (sql: string) => query(sql, undefined, user);
