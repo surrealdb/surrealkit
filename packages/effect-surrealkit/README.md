@@ -359,11 +359,13 @@ and 4.0), so a misspelt binding would quietly change what a script does;
 that is what the contract is for. `make({ sql, params, result })` declares a
 statement with no such check, except that text which `LET`s a name at the
 top level must declare `defines`, so a transaction can refuse a binding the
-`LET` would shadow. `make` also takes `writes` (the text changes data, so
-an undecodable result is reported as committed) and `nonEmpty` (the last
-result is a row whenever the statement applies, so an empty one is
-reported as `StatementEmptyResult`), both false unless declared; builders
-set both themselves. Only `part` and `sequence` import the
+`LET` would shadow. `make` also takes `writes` (`true`: the text certainly
+changes data or schema; `false`: it certainly does not; left out: unknown;
+see [Running statements](#running-statements) for what each means when a
+result does not decode) and `nonEmpty` (the last result is a row whenever
+the statement applies, so an empty one is reported as
+`StatementEmptyResult`, false unless declared); builders set both
+themselves. Only `part` and `sequence` import the
 analyzer, so code that uses only the builders does not bundle it.
 
 ### Statements from `.surql` files
@@ -449,8 +451,10 @@ with an `AnalyzeError` carrying a line and column.
 - **Writes.** `writes` is true when `CREATE`, `INSERT`, `UPDATE`, `UPSERT`,
   `DELETE`, `RELATE`, `DEFINE`, `REMOVE` or `ALTER` starts a statement or a
   subquery anywhere in the text, outside strings and comments. `part` and
-  `sequence` carry it to the statement, so a client that cannot decode the
-  result says the writes are committed.
+  `sequence` carry it to the statement as `writes: true`, so a client that
+  cannot decode the result says the writes are committed. No write found
+  does not prove the text read-only (a function it calls may write), so a
+  part is `writes: false` only when declared so.
 - **Fragments.** A single expression or block without a final `;` is a
   `fragment`: no results, generated as a `text(…)` value, usable only to fill
   a hole. Several statements with an unterminated last one are an error.
@@ -503,8 +507,8 @@ value, for an application that names its own services, one per session.
 | `StatementConflict` | a transaction conflict that `retry` did not resolve | no; send it again |
 | `StatementRequestError` | any other failure of the request: transport, authentication, a SurrealQL error, or the SDK refusing to send (a `RETURN` followed by another statement in a transaction), with the SDK's error as `cause` | unknown for a transport failure; otherwise no |
 | `StatementEmptyResult` | a `create` or `relate` that returns rows (`nonEmpty`) returned NONE or an empty list: SurrealDB reports a write the session may not make as an empty result, without an error, so the session may lack permission | not by that statement |
-| `StatementDecodeError` | the answer of a `readOnly` statement or transaction is not what it declares: the number of results, a value where NONE belongs, or a last result its codec refuses | no |
-| `StatementWriteOutcomeError` | the same, for a request that may write; `request` names the statement or transaction and `cause` is the `StatementDecodeError` (naming the statement and result), with `committed: true` and a message saying the request succeeded and its writes are committed | yes, whatever it wrote is committed: read it back before resending |
+| `StatementDecodeError` | the answer of a statement or transaction known not to write (`writes: false`) is not what it declares: the number of results, a value where NONE belongs, or a last result its codec refuses | no |
+| `StatementWriteOutcomeError` | the same, for a request not known to be read-only; `request` names the statement or transaction and `cause` is the `StatementDecodeError` (naming the statement and result), with `committed: true` and a message saying the request succeeded and either its writes are committed (`writes: true`) or it may have written (`writes` unknown) | yes, whatever it wrote is committed: read it back before resending |
 
 An `update` or `delete` by condition may match nothing, so its empty list is
 a result, not an error; so is a denied one (the conformance suite pins
@@ -563,21 +567,30 @@ anything is sent it refuses:
 The SDK refuses a top-level `RETURN` followed by another statement inside a
 transaction, so put such a statement last.
 
-If a write request succeeds but decoding fails, the client returns
-`StatementWriteOutcomeError`. Its `request` names the statement or atomic batch,
-and its `cause` identifies the failing statement and result slot. Read back the
-receipt or record before deciding to replay. This outcome does not prove that
-a row changed: permissions and conditional writes can yield empty results.
-A simple field-only table select is classified as read-only. For SELECTs that
-accept arbitrary expressions (including predicates and stored function calls),
-the builder conservatively assumes they may write. A caller that knows the
-complete query is read-only can use `.build(name, { readOnly: true })`.
-Authored statements and sequences default to potentially writing. Specify
-`readOnly: true` only for known reads to retain `StatementDecodeError`; a
-statement declared `readOnly` that the analyzer or a builder says
-`writes` is refused when it is made. When a statement certainly writes (a
-write builder, or text the analyzer finds a write in), the message says
-its writes are committed; otherwise it says any writes it made are.
+A statement's `writes` is one of three states, and it decides what a
+result that does not decode is reported as:
+
+| `writes` | Set by | A result that does not decode |
+| --- | --- | --- |
+| `true`: certainly writes | write builders; `part` and `sequence` when the analyzer finds a write; `make({ writes: true })` | `StatementWriteOutcomeError`: the request succeeded and its writes are committed |
+| absent: unknown | `select` with a condition, a projected expression or a bound count; authored text with no write found; `make` by default | `StatementWriteOutcomeError`: the request succeeded and may have written, and any writes it made are committed |
+| `false`: certainly does not write | `select` of stored fields only; `part({ writes: false })`; a sequence whose every part is; `make({ writes: false })` | `StatementDecodeError`, and nothing was written |
+
+A transaction certainly writes when any statement does and is read-only
+only when every statement is. A sequence is the same over its parts, and
+`define({ writes })` settles what the parts leave unknown; a declared
+`writes` that contradicts the text (a part declared `false` whose text the
+analyzer finds a write in, a sequence declared `false` with a writing
+part) is refused when it is made. A caller that knows a `select` with
+expressions is read-only says so with `.build(name, { writes: false })`.
+Declare `false` only for known reads: it is what keeps a decode failure a
+plain `StatementDecodeError`.
+
+`StatementWriteOutcomeError`'s `request` names the statement or atomic
+batch, and its `cause` identifies the failing statement and result slot.
+Read back the receipt or record before deciding to replay. This outcome does
+not prove that a row changed: permissions and conditional writes can yield
+empty results.
 
 
 ### What the statements do not know

@@ -69,7 +69,11 @@ interface State {
 	readonly order: ReadonlyArray<Order>;
 	/** The projection's aliases and the text each stands for. */
 	readonly aliases: ReadonlyMap<string, string>;
-	readonly readOnly: boolean;
+	/**
+	 * Only stored fields and constants are read, so the statement certainly
+	 * does not write; an expression can call a function that writes.
+	 */
+	readonly pure: boolean;
 	readonly limit: string | undefined;
 	readonly start: string | undefined;
 	readonly only: boolean;
@@ -194,10 +198,15 @@ export interface Select<
 	/** This query as a parenthesised subquery of another expression. */
 	readonly toExpr: () => Expr<SelectResult<Row, Only>, P>;
 
-	/** The finished statement. */
+	/**
+	 * The finished statement. It is known not to write (`writes: false`)
+	 * when it reads only stored fields and constants; with a condition, a
+	 * projected expression or a bound count it may call a function that
+	 * writes, so what it writes is unknown unless `options.writes` says.
+	 */
 	readonly build: (
 		name?: string,
-		options?: { readonly readOnly?: boolean },
+		options?: { readonly writes?: boolean },
 	) => Statement<P, SelectResult<Row, Only>>;
 }
 
@@ -218,7 +227,7 @@ const builder = <
 			return builder({
 				...state,
 				where: [...state.where, condition],
-				readOnly: false,
+				pure: false,
 				params: mergeParams(state.params, paramsOf(condition)),
 			});
 		},
@@ -248,7 +257,7 @@ const builder = <
 				...state,
 				limit: count(rows, 'LIMIT'),
 				params: bounded(rows),
-				readOnly: state.readOnly && !isExpr(rows),
+				pure: state.pure && !isExpr(rows),
 			});
 		},
 		start: (rows) =>
@@ -256,7 +265,7 @@ const builder = <
 				...state,
 				start: count(rows, 'START'),
 				params: bounded(rows),
-				readOnly: state.readOnly && !isExpr(rows),
+				pure: state.pure && !isExpr(rows),
 			}),
 		project: (fields) => {
 			const projection = fields(row);
@@ -265,8 +274,7 @@ const builder = <
 				...state,
 				fields: projected.sql,
 				aliases: projected.aliases,
-				readOnly:
-					state.readOnly && Object.values(projection).every(isPath),
+				pure: state.pure && Object.values(projection).every(isPath),
 				out: projected.codec,
 				params: mergeParams(state.params, projected.params),
 			});
@@ -277,7 +285,7 @@ const builder = <
 				...state,
 				fields: `VALUE ${sqlOf(picked)}`,
 				aliases: new Map(),
-				readOnly: state.readOnly && isPath(picked),
+				pure: state.pure && isPath(picked),
 				out: rowCodec(codecOf(picked)),
 				params: mergeParams(state.params, paramsOf(picked)),
 			});
@@ -296,14 +304,16 @@ const builder = <
 				render(state),
 				state.params as P,
 			),
-		build: (name, options) =>
-			make({
-				readOnly: options?.readOnly ?? state.readOnly,
+		build: (name, options) => {
+			const writes = options?.writes ?? (state.pure ? false : undefined);
+			return make({
+				...(writes !== undefined && { writes }),
 				name: name ?? `select ${state.table.name}`,
 				sql: `${render(state)};`,
 				params: state.params as P,
 				result: resultOf(state) as SelectResult<Row, Only>,
-			}),
+			});
+		},
 	};
 };
 
@@ -332,7 +342,7 @@ export const select: {
 		out: storedRow(table),
 		fields: '*',
 		where: [],
-		readOnly: id === undefined,
+		pure: id === undefined,
 		order: [],
 		aliases: new Map(),
 		limit: undefined,

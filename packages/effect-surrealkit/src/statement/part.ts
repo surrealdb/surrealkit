@@ -26,8 +26,11 @@ import {
  * - `throws`: the messages it can `THROW`;
  * - optionally `name` and `source` (where the text came from) and `throwsAt`
  *   (the lines each message is thrown on), for messages and tooling;
- * - `writes`: whether the text can change data or schema. {@link part}
- *   sets it from the analyzer; declared by hand, it is checked.
+ * - `writes`: `true` when the text certainly changes data or schema,
+ *   `false` when it certainly does not, absent when that is unknown (text
+ *   can call a function that writes). {@link part} sets `true` when the
+ *   analyzer finds a write; only a declaration makes it `false`, and a
+ *   declared value is checked against the text.
  *
  * `effect-surrealkit statements` derives these from `.surql` files
  * (`effect-surrealkit/analyze`). Written by hand they are checked against
@@ -202,7 +205,13 @@ export const part = <
 	readonly slots?: number;
 	readonly throws?: ReadonlyArray<Throws>;
 	readonly throwsAt?: Readonly<Record<string, ReadonlyArray<number>>>;
-	/** Checked against the text when given; derived from it either way. */
+	/**
+	 * `false` declares that the text certainly does not write, which the
+	 * analyzer cannot prove (a function it calls may write); refused when
+	 * the analyzer finds a write. `true` is refused when it finds none.
+	 * Left out, it is `true` when the analyzer finds a write and unknown
+	 * otherwise.
+	 */
 	readonly writes?: boolean;
 }): Part<Free, Defines, Throws> => {
 	const declared: Part<Free, Defines, Throws> = {
@@ -217,10 +226,9 @@ export const part = <
 		...(options.writes !== undefined && { writes: options.writes }),
 	};
 	const analysis = verify(declared, nameOf(options.name, 'part'));
-	const result: Part<Free, Defines, Throws> = {
-		...declared,
-		writes: analysis.writes,
-	};
+	const result: Part<Free, Defines, Throws> = analysis.writes
+		? { ...declared, writes: true }
+		: declared;
 	checked.set(result, analysis);
 	return result;
 };
@@ -288,6 +296,21 @@ export type Contract<
 		? unknown
 		: Exactly<Unbound<Parts>, P>;
 
+/**
+ * What a sequence writes: `true` when any part certainly writes, `false`
+ * when every part certainly does not, otherwise unknown.
+ */
+const writesOf = (
+	parts: ReadonlyArray<Part>,
+	analyses: ReadonlyArray<Analysis>,
+): boolean | undefined =>
+	// `verify` has refused a declared `writes` the text contradicts.
+	analyses.some((analysis) => analysis.writes)
+		? true
+		: parts.every((item) => item.writes === false)
+			? false
+			: undefined;
+
 const unboundOf = (parts: ReadonlyArray<Part>): ReadonlyArray<string> => {
 	const defined = new Set<string>();
 	const unbound = new Set<string>();
@@ -321,7 +344,13 @@ export const sequence = <const Parts extends ReadonlyArray<Part>>(
 ) => ({
 	define: <const P extends Params, R extends Codec>(contract: {
 		readonly name?: string;
-		readonly readOnly?: boolean;
+		/**
+		 * What the sequence writes, when its parts leave it unknown: `false`
+		 * declares that it certainly does not write, `true` that it does.
+		 * Refused when it contradicts what the parts say. Default derived
+		 * from the parts.
+		 */
+		readonly writes?: boolean;
 		readonly params: P & Contract<Parts, P>;
 		readonly result: R;
 	}): Statement<P, R, ThrownBy<Parts>> => {
@@ -331,6 +360,7 @@ export const sequence = <const Parts extends ReadonlyArray<Part>>(
 				nameOf(item.name, `part ${index + 1} of the sequence`),
 			),
 		);
+		const label = contract.name ?? 'sequence';
 		const throwSites = throwSitesOf(parts);
 		const expected = unboundOf(parts);
 		const declared = Object.keys(contract.params);
@@ -339,7 +369,7 @@ export const sequence = <const Parts extends ReadonlyArray<Part>>(
 		if (missing.length > 0 || extra.length > 0) {
 			throw new RangeError(
 				[
-					`the bindings of sequence \`${contract.name ?? 'sequence'}\` do not match the names it reads`,
+					`the bindings of sequence \`${label}\` do not match the names it reads`,
 					...(missing.length > 0
 						? [`missing: ${names(missing)}`]
 						: []),
@@ -349,9 +379,21 @@ export const sequence = <const Parts extends ReadonlyArray<Part>>(
 				].join('; '),
 			);
 		}
+		const derived = writesOf(parts, analyses);
+		if (
+			contract.writes !== undefined &&
+			derived !== undefined &&
+			contract.writes !== derived
+		) {
+			throw new RangeError(
+				contract.writes
+					? `sequence \`${label}\` is declared to write, but every part is declared not to`
+					: `sequence \`${label}\` is declared not to write, but it writes`,
+			);
+		}
+		const writes = contract.writes ?? derived;
 		return make({
-			name: contract.name ?? 'sequence',
-			readOnly: contract.readOnly ?? false,
+			name: label,
 			sql: parts.map((item) => item.sql.trim()).join('\n'),
 			params: contract.params as P,
 			result: contract.result,
@@ -361,7 +403,7 @@ export const sequence = <const Parts extends ReadonlyArray<Part>>(
 			] as ReadonlyArray<ThrownBy<Parts>>,
 			defines: [...new Set(parts.flatMap((item) => item.defines))].sort(),
 			transactional: analyses.some((analysis) => analysis.transactional),
-			writes: analyses.some((analysis) => analysis.writes),
+			...(writes !== undefined && { writes }),
 			sources: [
 				...new Set(
 					parts.flatMap((item) =>

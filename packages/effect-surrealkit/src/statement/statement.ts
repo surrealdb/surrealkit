@@ -52,12 +52,14 @@ export const StatementTypeId = '~effect-surrealkit/Statement';
  *   another statement of the same transaction defines.
  * - `transactional`: the text writes its own `BEGIN`, `COMMIT` or `CANCEL`,
  *   so it cannot run inside a client's `transaction`.
- * - `writes`: the text certainly changes data or schema, so a client that
- *   cannot decode its result says the writes are committed. Builders set
- *   it; `sequence` takes it from the analyzer; `make` takes it as declared.
- * - `readOnly`: the text is known not to write, so a client reports a
- *   result it cannot decode as a `StatementDecodeError` rather than a
- *   `StatementWriteOutcomeError`. A statement cannot be both.
+ * - `writes`: whether the text changes data or schema, in three states.
+ *   `true`: it certainly does, so a client that cannot decode its result
+ *   says its writes are committed. `false`: it certainly does not, so a
+ *   result that does not decode is a plain `StatementDecodeError`. Absent:
+ *   unknown (authored text can call a function that writes), so a client
+ *   says any writes it made are committed. Write builders set `true`, a
+ *   `select` of stored fields `false`; `sequence` derives it from its
+ *   parts; `make` takes it as declared.
  * - `nonEmpty`: the last result is a row, or a non-empty list, whenever
  *   the statement applies (`create` and `relate` returning rows), so a
  *   client reports NONE or an empty list as an empty result, which
@@ -73,7 +75,6 @@ export interface Statement<
 	Throws extends string = never,
 > {
 	readonly [StatementTypeId]: typeof StatementTypeId;
-	readonly readOnly?: boolean;
 	readonly name: string;
 	readonly sql: string;
 	readonly params: P;
@@ -302,7 +303,6 @@ export const make = <
 	const Throws extends string = never,
 >(options: {
 	readonly name?: string;
-	readonly readOnly?: boolean;
 	readonly sql: string;
 	readonly params: P;
 	readonly result: R;
@@ -326,7 +326,6 @@ export const make = <
 }): Statement<P, R, Throws> => {
 	const statement: Statement<P, R, Throws> = {
 		[StatementTypeId]: StatementTypeId,
-		readOnly: options.readOnly ?? false,
 		name: options.name ?? 'statement',
 		sql: terminated(options.sql),
 		params: options.params,
@@ -335,7 +334,7 @@ export const make = <
 		throws: options.throws ?? [],
 		defines: options.defines ?? [],
 		transactional: options.transactional ?? false,
-		writes: options.writes ?? false,
+		...(options.writes !== undefined && { writes: options.writes }),
 		nonEmpty: options.nonEmpty ?? false,
 		...(options.sources !== undefined &&
 			options.sources.length > 0 && { sources: options.sources }),
@@ -344,11 +343,6 @@ export const make = <
 		}),
 	};
 	assertStatement(statement);
-	if (statement.readOnly === true && statement.writes === true) {
-		throw new RangeError(
-			`statement \`${statement.name}\` is declared readOnly, but it writes`,
-		);
-	}
 	if (options.defines === undefined) {
 		const lets = scanTopLevelLets(statement.sql);
 		if (lets.length > 0) {

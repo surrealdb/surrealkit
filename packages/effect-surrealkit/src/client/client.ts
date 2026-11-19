@@ -269,16 +269,16 @@ const checkValues = (
 };
 
 /**
- * What a request may have changed: statements that certainly write, ones
- * that may (authored text can call a function that writes), or none, when
- * every statement is declared or derived `readOnly`.
+ * What a request changed: it certainly wrote (a statement has `writes:
+ * true`), it may have (one leaves `writes` unknown: authored text can call
+ * a function that writes), or it did not (every one has `writes: false`).
  */
 type Changes = 'writes' | 'maybe' | 'none';
 
 const changesOf = (statements: ReadonlyArray<AnyStatement>): Changes =>
 	statements.some((statement) => statement.writes === true)
 		? 'writes'
-		: statements.every((statement) => statement.readOnly === true)
+		: statements.every((statement) => statement.writes === false)
 			? 'none'
 			: 'maybe';
 
@@ -286,7 +286,7 @@ const committedNote = (changes: Changes): string =>
 	changes === 'writes'
 		? '. The request succeeded and its writes are committed, so do not send it again to retry'
 		: changes === 'maybe'
-			? '. The request succeeded, so any writes it made are committed; read the data back before sending it again'
+			? '. The request succeeded and may have written: it is not known whether it writes, and any writes it made are committed; read the data back before sending it again'
 			: '';
 
 /**

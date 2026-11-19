@@ -636,6 +636,18 @@ describe('writes', () => {
 		const read = select(PersonTable).build();
 		expect(read.writes).toBe(false);
 		expect(read.nonEmpty).toBe(false);
+		// An expression may call a function that writes: unknown, unless
+		// the caller says.
+		const filtered = select(PersonTable).where((row) =>
+			eq(row.role, param('role', SurrealSchema.String)),
+		);
+		expect('writes' in filtered.build()).toBe(false);
+		expect(filtered.build('read', { writes: false }).writes).toBe(false);
+		expect(
+			select(PersonTable)
+				.project((row) => ({ name: row.name }))
+				.build().writes,
+		).toBe(false);
 	});
 });
 
@@ -855,7 +867,9 @@ describe('authored statements', () => {
 
 	it('take what the text writes from the analyzer, and check a declared one', () => {
 		expect(part({ sql: 'CREATE t:one;' }).writes).toBe(true);
-		expect(part({ sql: 'RETURN 1;' }).writes).toBe(false);
+		// Finding no write is not proof of none: a function may write.
+		expect(part({ sql: 'RETURN 1;' }).writes).toBeUndefined();
+		expect(part({ sql: 'RETURN 1;', writes: false }).writes).toBe(false);
 		expect(part({ sql: 'CREATE t:one;', writes: true }).writes).toBe(true);
 		expect(() => part({ sql: 'CREATE t:one;', writes: false })).toThrow(
 			/writes: declared false, the text writes/,
@@ -889,8 +903,16 @@ describe('authored statements', () => {
 		expect(statement.throwSites).toEqual({
 			Negative: { source: 'a/guard.surql', lines: [1] },
 		});
+		const made = make({
+			sql: 'RETURN 1;',
+			params: {},
+			result: Schema.Unknown,
+		});
+		expect(made).toMatchObject({ nonEmpty: false });
+		expect('writes' in made).toBe(false);
 		expect(
-			make({ sql: 'RETURN 1;', params: {}, result: Schema.Unknown }),
-		).toMatchObject({ writes: false, nonEmpty: false });
+			make({ ...made, writes: false, params: {}, result: Schema.Unknown })
+				.writes,
+		).toBe(false);
 	});
 });

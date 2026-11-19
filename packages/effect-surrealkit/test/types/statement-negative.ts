@@ -18,6 +18,7 @@ import {
 	gt,
 	inside,
 	literal,
+	make,
 	not,
 	param,
 	part,
@@ -215,6 +216,25 @@ export const rejectedSequences = () => {
 		params: { boundProducer: SurrealSchema.String },
 		result: SurrealSchema.String,
 	});
+};
+
+// One write flag: `writes: false` is what says a statement does not write.
+export const rejectedFlags = () => {
+	make({
+		sql: 'RETURN 1;',
+		params: {},
+		result: SurrealSchema.Int,
+		// @ts-expect-error there is no `readOnly`; declare `writes: false`
+		readOnly: true,
+	});
+	sequence(part({ sql: 'RETURN 1;' })).define({
+		params: {},
+		result: SurrealSchema.Int,
+		// @ts-expect-error there is no `readOnly`; declare `writes: false`
+		readOnly: true,
+	});
+	// @ts-expect-error there is no `readOnly`; declare `writes: false`
+	select(PersonTable).build('read', { readOnly: true });
 };
 
 // ---- client

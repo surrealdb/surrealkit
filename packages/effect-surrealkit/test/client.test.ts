@@ -36,7 +36,7 @@ import {
 	transaction,
 } from '../src/client/index.js';
 import * as SurrealSchema from '../src/index.js';
-import { make, part, sequence } from '../src/statement/index.js';
+import { make, type Part, part, sequence } from '../src/statement/index.js';
 
 interface Call {
 	readonly sql: string;
@@ -170,7 +170,7 @@ const serverError = (message: string, fields: Record<string, unknown>) =>
 
 const add = make({
 	name: 'add',
-	readOnly: true,
+	writes: false,
 	sql: 'RETURN $a + $b;',
 	params: { a: SurrealSchema.Int, b: SurrealSchema.Int },
 	result: SurrealSchema.Int,
@@ -190,7 +190,7 @@ const guarded = sequence(
 	part({ sql: 'RETURN $owner;', free: ['owner'] }),
 ).define({
 	name: 'guarded',
-	readOnly: true,
+	writes: false,
 	params: { boundOwner: SurrealSchema.String },
 	result: SurrealSchema.String,
 });
@@ -270,7 +270,7 @@ describe('run', () => {
 
 		const strict = make({
 			sql: 'RETURN {};',
-			readOnly: true,
+			writes: false,
 			params: {},
 			result: Schema.Struct({ a: SurrealSchema.Int }),
 		});
@@ -616,7 +616,7 @@ describe('run', () => {
 describe('transaction', () => {
 	const double = make({
 		name: 'double',
-		readOnly: true,
+		writes: false,
 		sql: 'SELECT VALUE $n * 2 FROM ONLY $n;',
 		params: { n: SurrealSchema.Int },
 		result: SurrealSchema.Int,
@@ -1115,26 +1115,32 @@ describe('a result that does not decode', () => {
 			cause: { committed: true },
 		});
 		expect(error.message).toMatch(/any writes it made are committed/);
+		expect(error.message).toMatch(/may have written/);
+		expect(error.message).not.toMatch(/its writes are committed/);
 	});
 
 	it('refuses a statement declared read-only that writes', () => {
-		expect(() =>
-			make({
-				name: 'contradiction',
-				sql: 'UPDATE t SET n = 1;',
-				params: {},
-				result: Schema.Unknown,
-				writes: true,
-				readOnly: true,
-			}),
-		).toThrow(/declared readOnly, but it writes/);
+		// One flag: `make` cannot be told both that a text writes and that
+		// it does not, so the contradiction cannot be declared there.
+		const declared = make({
+			name: 'contradiction',
+			sql: 'UPDATE t SET n = 1;',
+			params: {},
+			result: Schema.Unknown,
+			writes: true,
+		});
+		expect(declared.writes).toBe(true);
+		expect('readOnly' in declared).toBe(false);
 		expect(() =>
 			sequence(part({ sql: 'UPDATE t SET n = 1;' })).define({
-				readOnly: true,
+				writes: false,
 				params: {},
 				result: Schema.Unknown,
 			}),
-		).toThrow(/declared readOnly, but it writes/);
+		).toThrow(/declared not to write, but it writes/);
+		expect(() =>
+			part({ sql: 'UPDATE t SET n = 1;', writes: false }),
+		).toThrow(/writes: declared false, the text writes/);
 	});
 
 	it('does not claim a commit for a statement that does not write', async () => {
@@ -1160,11 +1166,108 @@ describe('a result that does not decode', () => {
 			cause: { committed: true },
 		});
 		expect(error.message).toMatch(/its writes are committed/);
+		// No write found is not proof of none, so this one is unknown.
 		const reading = sequence(part({ sql: "RETURN 'update';" })).define({
 			params: {},
 			result: SurrealSchema.Int,
 		});
-		expect(reading.writes).toBe(false);
+		expect(reading.writes).toBeUndefined();
+		expect(
+			await failure(fake(async () => ['x']).client.run(reading)),
+		).toMatchObject({ _tag: 'StatementWriteOutcomeError' });
+	});
+
+	describe('in each of the three states of `writes`', () => {
+		// Bare expressions: the SDK refuses a top-level RETURN that is not
+		// the last statement of a transaction.
+		const readOnly = part({ sql: '1;', writes: false });
+		const unknown = part({ sql: 'fn::maybe_writes();' });
+		const writing = part({ sql: 'UPDATE t:one SET n = 1 RETURN NONE;' });
+		const define = (...parts: ReadonlyArray<Part>) =>
+			sequence(...parts).define({
+				name: 'parts',
+				params: {},
+				result: SurrealSchema.Int,
+			});
+		const answers = (statement: { readonly slots: number }) =>
+			fake(async () => [
+				...Array.from({ length: statement.slots - 1 }, () => undefined),
+				'x',
+			]).client;
+
+		it('a sequence writes if any part does, is read-only only if every part is, and is unknown otherwise', () => {
+			expect(readOnly.writes).toBe(false);
+			expect(unknown.writes).toBeUndefined();
+			expect(writing.writes).toBe(true);
+			expect(define(readOnly, readOnly).writes).toBe(false);
+			expect(define(readOnly, unknown).writes).toBeUndefined();
+			expect(define(unknown, unknown).writes).toBeUndefined();
+			expect(define(readOnly, writing).writes).toBe(true);
+			expect(define(unknown, writing).writes).toBe(true);
+		});
+
+		it('a declaration settles what the parts leave unknown, and may not contradict them', () => {
+			const declare = (writes: boolean, ...parts: ReadonlyArray<Part>) =>
+				sequence(...parts).define({
+					name: 'declared',
+					writes,
+					params: {},
+					result: SurrealSchema.Int,
+				});
+			expect(declare(false, unknown).writes).toBe(false);
+			expect(declare(true, unknown).writes).toBe(true);
+			expect(declare(false, readOnly).writes).toBe(false);
+			expect(declare(true, writing).writes).toBe(true);
+			expect(() => declare(true, readOnly, readOnly)).toThrow(
+				/`declared` is declared to write, but every part is declared not to/,
+			);
+			expect(() => declare(false, unknown, writing)).toThrow(
+				/`declared` is declared not to write, but it writes/,
+			);
+		});
+
+		it('a result that does not decode says what is known about the writes', async () => {
+			const certain = define(readOnly, writing);
+			const committed = await failure(answers(certain).run(certain));
+			expect(committed).toBeInstanceOf(StatementWriteOutcomeError);
+			expect(committed.message).toMatch(/its writes are committed/);
+
+			const maybe = define(readOnly, unknown);
+			const possible = await failure(answers(maybe).run(maybe));
+			expect(possible).toBeInstanceOf(StatementWriteOutcomeError);
+			expect(possible.message).toMatch(/may have written/);
+			expect(possible.message).not.toMatch(/its writes are committed/);
+
+			const read = define(readOnly, readOnly);
+			const plain = await failure(answers(read).run(read));
+			expect(plain).toBeInstanceOf(StatementDecodeError);
+			expect(plain).toMatchObject({ committed: false });
+			expect(plain.message).not.toMatch(/committed|written/);
+		});
+
+		it('a transaction is read-only only if every statement is', async () => {
+			const read = define(readOnly);
+			const maybe = define(unknown);
+			const plain = await failure(
+				fake(async () => [1, 'x']).client.transaction([
+					bind(read),
+					bind(read),
+				]),
+			);
+			expect(plain).toBeInstanceOf(StatementDecodeError);
+			const possible = await failure(
+				fake(async () => [1, 'x']).client.transaction([
+					bind(read),
+					bind(maybe),
+				]),
+			);
+			expect(possible).toMatchObject({
+				_tag: 'StatementWriteOutcomeError',
+				request: 'transaction(parts, parts)',
+				cause: { committed: true },
+			});
+			expect(possible.message).toMatch(/may have written/);
+		});
 	});
 
 	it('in a transaction, says the writes are committed when any statement writes', async () => {

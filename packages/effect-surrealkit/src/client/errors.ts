@@ -97,9 +97,10 @@ export class StatementConflict extends Data.TaggedError('StatementConflict')<{
 /**
  * The engine answered, and the answer is not what the statement declares:
  * a different number of results, a value where NONE was required, or a
- * final result its codec refuses. The request itself succeeded, so when
- * the statement may write (`committed`), whatever it wrote is committed;
- * the client then reports it inside a {@link StatementWriteOutcomeError}.
+ * final result its codec refuses. The request itself succeeded, so unless
+ * the statement is known not to write (`committed` is false), whatever it
+ * wrote is committed; the client then reports it inside a
+ * {@link StatementWriteOutcomeError}.
  */
 export class StatementDecodeError extends Data.TaggedError(
 	'StatementDecodeError',
@@ -108,9 +109,10 @@ export class StatementDecodeError extends Data.TaggedError(
 	/** The 1-based result that failed, or 0 for the count of results. */
 	readonly slot: number;
 	/**
-	 * The request succeeded and the statement may write, so whatever it
-	 * wrote is committed although the result could not be decoded. The
-	 * message says so too.
+	 * The request succeeded and the statement is not known to be
+	 * read-only, so whatever it wrote is committed although the result
+	 * could not be decoded. The message says whether it certainly wrote or
+	 * may have.
 	 */
 	readonly committed: boolean;
 	readonly message: string;
@@ -134,10 +136,12 @@ export class StatementEmptyResult extends Data.TaggedError(
 
 /**
  * The request succeeded but its result failed validation, and the
- * statement or batch may write: whatever it wrote is committed. `cause` is
- * the {@link StatementDecodeError}, naming the statement and the result.
- * Reconcile (read the data back) before replaying. A statement declared or
- * derived `readOnly` fails with the decode error itself.
+ * statement or batch is not known to be read-only: whatever it wrote is
+ * committed. The message says which: its writes are committed (a statement
+ * with `writes: true`), or it may have written (one with `writes` unknown).
+ * `cause` is the {@link StatementDecodeError}, naming the statement and the
+ * result. Reconcile (read the data back) before replaying. A request whose
+ * every statement has `writes: false` fails with the decode error itself.
  */
 export class StatementWriteOutcomeError extends Data.TaggedError(
 	'StatementWriteOutcomeError',
