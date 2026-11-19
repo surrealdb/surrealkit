@@ -380,15 +380,33 @@ exports[`type diagnostics > family/binding-constant-fill 1`] = `
 ]
 `;
 
+exports[`type diagnostics > family/extra-codec 1`] = `
+[
+  "TS2322: Type 'declareConstructor<string, string, readonly [], string>' is not assignable to type '"binding \`$colour\` is not read by any variant of this family"'.",
+]
+`;
+
 exports[`type diagnostics > family/extra-fill 1`] = `
 [
   "TS2322: Type 'Empty' is not assignable to type '"\`__COLOUR__\` is not a hole of this template"'.",
 ]
 `;
 
+exports[`type diagnostics > family/missing-codec 1`] = `
+[
+  "TS2322: Type '{ tenant: declareConstructor<string, string, readonly [], string>; terms: declareConstructor<string, string, readonly [], string>; region: declareConstructor<string, string, readonly [], string>; vector: $Array<...>; }' is not assignable to type '"binding \`$maxPrice\` is read by a variant of this family and has no codec"'.",
+]
+`;
+
 exports[`type diagnostics > family/missing-fill 1`] = `
 [
   "TS2345: Argument of type '{ __PRICE__: Empty; }' is not assignable to parameter of type '"hole \`__REGION__\` has no fill"'.",
+]
+`;
+
+exports[`type diagnostics > family/option-without-text 1`] = `
+[
+  "TS2345: Argument of type '{ price: string[]; region: readonly [false, true]; vector: readonly [false, true]; }' is not assignable to parameter of type '"choose('price', …) has no text for \`none\`" | "choose('price', …) has no text for \`capped\`" | "choose('price', …) has a text for \`false\`, which is not a value of the axis" | "choose('price', …) has a text for \`true\`, which is not a value of the axis"'.",
 ]
 `;
 
@@ -404,9 +422,64 @@ exports[`type diagnostics > family/raw-string-option 1`] = `
 ]
 `;
 
+exports[`type diagnostics > family/runtime-key-missing-binding 1`] = `
+[
+  "TS2345: Argument of type '{ tenant: string; terms: string; maxPrice: number; }' is not assignable to parameter of type '"binding \`vector\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > family/select-bad-value 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type 'boolean'.",
+]
+`;
+
+exports[`type diagnostics > family/select-extra-binding 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'region' does not exist in type '{ readonly tenant: string; readonly terms: string; readonly maxPrice: number; }'.",
+]
+`;
+
+exports[`type diagnostics > family/select-missing-axis 1`] = `
+[
+  "TS2345: Argument of type '{ price: true; region: false; }' is not assignable to parameter of type 'KeyOf<{ readonly price: readonly [false, true]; readonly region: readonly [false, true]; readonly vector: readonly [false, true]; }>'.
+  Property 'vector' is missing in type '{ price: true; region: false; }' but required in type 'KeyOf<{ readonly price: readonly [false, true]; readonly region: readonly [false, true]; readonly vector: readonly [false, true]; }>'.",
+]
+`;
+
+exports[`type diagnostics > family/select-missing-binding 1`] = `
+[
+  "TS2345: Argument of type '{ tenant: string; terms: string; }' is not assignable to parameter of type '"binding \`maxPrice\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > family/select-misspelt-binding 1`] = `
+[
+  "TS2561: Object literal may only specify known properties, but 'maxprice' does not exist in type '{ readonly tenant: string; readonly terms: string; readonly maxPrice: number; }'. Did you mean to write 'maxPrice'?",
+]
+`;
+
+exports[`type diagnostics > family/select-unknown-axis 1`] = `
+[
+  "TS2322: Type 'number' is not assignable to type '"\`colour\` is not an axis of this family"'.",
+]
+`;
+
+exports[`type diagnostics > family/select-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type 'number'.",
+]
+`;
+
 exports[`type diagnostics > family/template-fill 1`] = `
 [
   "TS2322: Type 'Text<"__NEAR__" | "__READINESS__" | "__WORDS__", never, never, never, { readonly __NEAR__: { readonly bound: readonly ["readiness", "words"]; readonly binds: readonly []; }; readonly __READINESS__: { readonly bound: readonly ["words"]; readonly binds: readonly []; }; readonly __WORDS__: { ...; }; }>' is not assignable to type '"this fill is a template with holes (__NEAR__): compose it first" | "this fill is a template with holes (__READINESS__): compose it first" | "this fill is a template with holes (__WORDS__): compose it first"'.",
+]
+`;
+
+exports[`type diagnostics > family/undeclared-axis 1`] = `
+[
+  "TS2345: Argument of type '{ price: boolean[]; region: boolean[]; }' is not assignable to parameter of type '"choose('vector', …) names an axis this family does not declare"'.",
 ]
 `;
 
@@ -414,6 +487,12 @@ exports[`type diagnostics > family/union-typed-fill 1`] = `
 [
   "TS2322: Type 'Text<never, "maxPrice", never, never, Record<never, never>> | Text<never, "region", never, never, Record<never, never>>' is not assignable to type '"this fill is typed as one of several texts, so the compiler cannot tell which a variant holds: choose between them with \`choose(…)\`"'.
   Type 'Text<never, "maxPrice", never, never, Record<never, never>>' is not assignable to type '"this fill is typed as one of several texts, so the compiler cannot tell which a variant holds: choose between them with \`choose(…)\`"'.",
+]
+`;
+
+exports[`type diagnostics > family/unused-axis 1`] = `
+[
+  "TS2345: Argument of type '{ size: string[]; price: readonly [false, true]; region: readonly [false, true]; vector: readonly [false, true]; }' is not assignable to parameter of type '"axis \`size\` is never chosen on, so every value of it gives the same text"'.",
 ]
 `;
 

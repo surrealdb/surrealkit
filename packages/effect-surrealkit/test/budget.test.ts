@@ -15,6 +15,7 @@ import { describe, expect, it } from 'vitest';
 import { blockBudgetFixture } from './block-budget-fixture.js';
 import { budgetFixture } from './budget-fixture.js';
 import { compile, packageRoot, typesRoot } from './compiler.js';
+import { familyBudgetFixture } from './family-budget-fixture.js';
 
 const statements = 300;
 
@@ -32,6 +33,17 @@ const limits = { instantiations: 275_000, types: 61_000 };
  */
 const blocks = 30;
 const blockLimits = { instantiations: 240_000, types: 34_000 };
+
+/**
+ * Measured the same way: 30 families shaped like `listings` (thirteen
+ * texts, three axes, eight variants), each selected by a literal key and by
+ * a key known only at run time and run, cost 240,063 instantiations (8,002
+ * each) and 22,280 types (743 each), about what one block costs. The cost
+ * does not grow with the number of variants: no type enumerates them. The
+ * limits leave about 25% headroom.
+ */
+const families = 30;
+const familyLimits = { instantiations: 295_000, types: 28_000 };
 
 const measure = (count: number, fixture = budgetFixture, name = 'budget') => {
 	const file = join(typesRoot, `__${name}_${count}.ts`);
@@ -78,5 +90,23 @@ describe('type-check budget', () => {
 			blockLimits.instantiations,
 		);
 		expect(cost.types).toBeLessThanOrEqual(blockLimits.types);
+	}, 300_000);
+
+	it(`checks ${families} families within their budget`, () => {
+		const base = measure(0, familyBudgetFixture, 'family_budget');
+		const full = measure(families, familyBudgetFixture, 'family_budget');
+		expect(base.errors).toEqual([]);
+		expect(full.errors).toEqual([]);
+		const cost = {
+			instantiations: full.instantiations - base.instantiations,
+			types: full.types - base.types,
+		};
+		console.info(
+			`[effect-surrealkit] type-check budget: ${families} families cost ${cost.instantiations} instantiations (${Math.round(cost.instantiations / families)} each) and ${cost.types} types (${Math.round(cost.types / families)} each)`,
+		);
+		expect(cost.instantiations).toBeLessThanOrEqual(
+			familyLimits.instantiations,
+		);
+		expect(cost.types).toBeLessThanOrEqual(familyLimits.types);
 	}, 300_000);
 });

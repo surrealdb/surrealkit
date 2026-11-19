@@ -444,13 +444,14 @@ const { runs, duration: durations, retries } = metrics;
 
 /**
  * The span and metrics of one run. The span carries the static text, the
- * sources, the number of rows when the result is a list and the error tag
- * on failure; never a binding value.
+ * sources, a family variant's key, the number of rows when the result is a
+ * list and the error tag on failure; never a binding value.
  */
 const traced = <A, E extends { readonly _tag: string }>(
 	name: string,
 	sql: string,
 	sources: ReadonlyArray<string> | undefined,
+	variant: string | undefined,
 	rows: boolean,
 	sent: { count: number },
 	effect: Effect.Effect<A, E>,
@@ -499,6 +500,10 @@ const traced = <A, E extends { readonly _tag: string }>(
 						sources.length > 0 && {
 							'code.file.path': sources.join(', '),
 						}),
+					// A family variant's declared key: never a binding value.
+					...(variant !== undefined && {
+						'effect_surrealkit.statement.variant': variant,
+					}),
 				},
 			}),
 			Effect.tap(() => record('success')),
@@ -644,6 +649,7 @@ export const makeWith = (transport: Transport): Client => ({
 			statement.name,
 			statement.sql,
 			statement.sources,
+			statement.variant,
 			true,
 			sent,
 			Effect.gen(function* () {
@@ -696,6 +702,7 @@ export const makeWith = (transport: Transport): Client => ({
 			name,
 			sql,
 			sources,
+			undefined,
 			false,
 			sent,
 			Effect.gen(function* () {

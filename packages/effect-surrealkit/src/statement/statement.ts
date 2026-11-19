@@ -103,6 +103,9 @@ export const StatementTypeId = '~effect-surrealkit/Statement';
  *   permissions cause.
  * - `sources`: where the text came from (the `source` of each part), for
  *   messages and tracing.
+ * - `variant`: for a variant of a statement family, the key that selected
+ *   it (`axis=value, …`). The statement's name is the family's, so its
+ *   metrics are the family's; a run records the key on its span.
  * - `throwSites`: for a `THROW` message, the source and lines of the
  *   first part that declares it with both.
  * - `tables`, `functions` and `openTargets`: the static tables the text
@@ -129,6 +132,7 @@ export interface Statement<
 	readonly writes?: boolean;
 	readonly nonEmpty?: boolean;
 	readonly sources?: ReadonlyArray<string>;
+	readonly variant?: string;
 	readonly throwSites?: Readonly<Record<string, ThrowSite>>;
 	readonly tables?: {
 		readonly read: ReadonlyArray<string>;
