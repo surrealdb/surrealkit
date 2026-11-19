@@ -15,6 +15,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { run, type SurrealClient } from '../src/client/index.js';
 import * as SurrealSchema from '../src/index.js';
 import {
+	and,
 	evaluate,
 	highlight,
 	knn,
@@ -201,6 +202,49 @@ describe.skipIf(!engineConfigured)('search on a disposable engine', () => {
 			Effect.flip(run(byMeaning, { query: [1, 0, 0] })),
 		);
 		expect(error._tag).toBe('StatementEncodeError');
+	});
+
+	it('orders by a score alias and a distance alias, either way, and a hybrid search by its score', async () => {
+		const scored = (direction: 'ASC' | 'DESC') =>
+			select(DocTable)
+				.where(() => words)
+				.project((row) => ({ id: row.id, score: score(words) }))
+				.orderByAlias('score', direction)
+				.build();
+		const down = await runHere(run(scored('DESC'), { terms: 'quick' }));
+		const up = await runHere(run(scored('ASC'), { terms: 'quick' }));
+		const scores = down.map((row) => row.score);
+		expect(scores).toHaveLength(2);
+		expect(scores[0]).toBeGreaterThan(
+			scores[1] ?? Number.POSITIVE_INFINITY,
+		);
+		expect(up.map((row) => row.id.id)).toEqual(
+			down.map((row) => row.id.id).reverse(),
+		);
+		const far = select(DocTable)
+			.where(() => near)
+			.project((row) => ({ id: row.id, distance: knnDistance(near) }))
+			.orderByAlias('distance', 'DESC')
+			.build();
+		const distant = await runHere(run(far, { query: [1, 0, 0, 0] }));
+		expect(distant.map((row) => row.id.id)).toEqual(['dog', 'fox']);
+		const hybrid = select(DocTable)
+			.where(() => and(words, near))
+			.project((row) => ({
+				id: row.id,
+				score: score(words),
+				distance: knnDistance(near),
+			}))
+			.orderByAlias('score', 'DESC')
+			.build();
+		const hits = await runHere(
+			run(hybrid, { terms: 'quick', query: [1, 0, 0, 0] }),
+		);
+		expect(hits.map((row) => row.id.id).sort()).toEqual(['dog', 'fox']);
+		expect(hits.map((row) => row.id.id)).toEqual(
+			down.map((row) => row.id.id),
+		);
+		for (const hit of hits) expect(hit.distance).toBeTypeOf('number');
 	});
 
 	it('rrf and linear fuse the lists, rows merged by id, with their score', async () => {

@@ -87,3 +87,15 @@ export const rejectedFusions = () => {
 		normalisation: 'minmax',
 	});
 };
+
+export const rejectedAliasOrders = () => {
+	const fox = match(DocTable, 'body', 'fox', { ref: 1 });
+	const scored = select(DocTable)
+		.where(() => fox)
+		.project((row) => ({ id: row.id, score: score(fox) }));
+	// @ts-expect-error [search/order-by-unknown-alias] the projection has no `rank`
+	scored.orderByAlias('rank');
+	const titles = select(DocTable).value((row) => row.title);
+	// @ts-expect-error [search/order-by-value-alias] SELECT VALUE has no names
+	titles.orderByAlias('title');
+};

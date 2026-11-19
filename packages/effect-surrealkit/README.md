@@ -515,7 +515,10 @@ after `ORDER BY`; anything else is a compile error. SurrealDB resolves an
 `ORDER BY` path against the projection before the stored row, so a
 projection alias named like the field a path starts from must be that same
 field (`age: row.age`); any other alias of that name is refused when the
-statement is built.
+statement is built. `.orderByAlias(name, direction)` sorts by a name the
+result row holds instead: an alias of the projection (a computed value
+such as a search score) or a field of `SELECT *`; a name the row does not
+hold is a compile error.
 
 A table name is always delimited where it is the subject of a statement
 (`FROM`, `FROM ONLY`, `CREATE`, `UPDATE`, `DELETE`, `RELATE`), as `⟨name⟩`,
@@ -786,6 +789,14 @@ binding of your own; its length is checked against the index dimension
 when it is encoded, and by the compiler when its codec is a tuple. `k` and
 `ef` are positive integer literals, `ref` an integer literal from 0 to 255:
 a binding, a fraction or a value out of range is a compile error.
+
+A search ranks by its score or distance through the alias it projects:
+`.orderByAlias('score', 'DESC')` renders `ORDER BY score DESC`, which
+SurrealDB 3.3 and 4.0 both sort by the projected value (3.3 parses no
+function call after `ORDER BY`). A hybrid search joins a match and a
+nearest-neighbour search with `and`, projects both, and orders by either;
+`test/search-engine.test.ts` runs both orders and the hybrid on both
+engines.
 
 A fused row has the `id` of every list, every other field of any list as an
 optional key (SurrealDB merges rows by `id`, so a field is absent when the
@@ -1218,9 +1229,8 @@ field read through a link, and `FETCH` inside a step.
 - **Coverage.** Live queries and views have no typed builder yet; use
   `unsafeExpr` or authored SurrealQL. `ON DUPLICATE KEY UPDATE` takes plain
   assignments only (no `+=`), and an aggregate takes a field, not an
-  expression over fields. `ORDER BY` a score or distance alias is not
-  expressible yet ([Search](#search)). For graph traversal, see [what is not
-  covered yet](#record-links-and-graph-traversal).
+  expression over fields. For graph traversal, see [what is not covered
+  yet](#record-links-and-graph-traversal).
 
 The engine suite (`test/statement-engine.test.ts`) runs every builder against
 the corpus schema and the modules generated from it, and passes on SurrealDB

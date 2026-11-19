@@ -232,6 +232,7 @@ export {
 	type CheckedOmit,
 	type Count,
 	type OmittedRow,
+	type OrderAlias,
 	type RecordSelect,
 	type Select,
 	type SelectResult,

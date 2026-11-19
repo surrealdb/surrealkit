@@ -7,6 +7,7 @@ import { Schema } from 'effect';
 import * as SurrealSchema from 'effect-surrealkit';
 
 import {
+	and,
 	evaluate,
 	highlight,
 	knn,
@@ -132,3 +133,25 @@ const weightedRow: Exact<
 
 export const shownRow = null as unknown as WordsRow;
 void [wordsInput, wordsRow, meaningInput, fusedRow, fusedInput, weightedRow];
+
+/** A hybrid search ordered by its score, then its distance. */
+export const hybrid = select(DocTable)
+	.where(() => and(words, near))
+	.project((row) => ({
+		id: row.id,
+		score: score(words),
+		distance: knnDistance(near),
+	}))
+	.orderByAlias('score', 'DESC')
+	.orderByAlias('distance')
+	.limit(3)
+	.build('hybrid');
+const hybridRow: Exact<
+	(typeof hybrid.result.Type)[number],
+	{
+		readonly id: typeof DocTable.id.Type;
+		readonly score: number;
+		readonly distance: number;
+	}
+> = true;
+void hybridRow;

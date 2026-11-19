@@ -96,6 +96,17 @@ export type OrderKey<K> = K extends Path
 	? K
 	: 'ORDER BY takes a field path of the row, like `row.name` or `at(row.pins, 0)`';
 
+/** The names a row of `Row` holds, which ORDER BY can name as aliases. */
+export type OrderAlias<Row extends Codec> = Row['Type'] extends
+	| ReadonlyArray<unknown>
+	| RecordIdLike
+	? never
+	: Row['Type'] extends object
+		? keyof Row['Type'] & string
+		: never;
+
+type RecordIdLike = { readonly table: unknown; readonly id: unknown };
+
 /** The indexes a descriptor lists, by name. */
 type IndexesOf<T> = T extends { readonly indexes: infer I }
 	? I
@@ -342,7 +353,8 @@ interface State {
 interface Order {
 	readonly sql: string;
 	readonly direction: 'ASC' | 'DESC';
-	readonly path: PathData;
+	/** The field path sorted by, or none for an alias of the projection. */
+	readonly path?: PathData;
 }
 
 /**
@@ -352,6 +364,7 @@ interface Order {
  */
 const assertOrder = (state: State): void => {
 	for (const { path, sql } of state.order) {
+		if (path === undefined) continue;
 		const source = state.aliases.get(path.root);
 		if (source !== undefined && source !== path.rootSql) {
 			throw new RangeError(
@@ -508,6 +521,20 @@ export interface Select<
 		direction?: 'ASC' | 'DESC',
 	) => Select<T, P, Row, Only>;
 
+	/**
+	 * Adds a sort key that is a name the result row holds: an alias of the
+	 * projection, such as a full-text `score(…)` or a nearest-neighbour
+	 * `knnDistance(…)` (`.orderByAlias('score', 'DESC')`), or a field of
+	 * `SELECT *`. SurrealDB 3.3 parses no function call after ORDER BY, so
+	 * a computed value is sorted by its alias.
+	 */
+	readonly orderByAlias: <const A extends string>(
+		alias: A extends OrderAlias<Row>
+			? A
+			: `\`${A}\` is not a name the result row holds`,
+		direction?: 'ASC' | 'DESC',
+	) => Select<T, P, Row, Only>;
+
 	/** `LIMIT`: at most this many rows. */
 	readonly limit: <const L extends Count>(
 		rows: L,
@@ -658,6 +685,23 @@ const builder = <
 					...state.order,
 					{ sql: sqlOf(by as Path), direction, path },
 				],
+			});
+		},
+		orderByAlias: (alias, direction = 'ASC') => {
+			const name = alias as string;
+			const holds =
+				state.fields === '*'
+					? Object.hasOwn(fieldsOf(state.table.select) ?? {}, name) &&
+						!(state.omit ?? []).includes(name)
+					: state.aliases.has(name);
+			if (!holds) {
+				throw new RangeError(
+					`\`${name}\` is not a name the result row holds`,
+				);
+			}
+			return builder({
+				...state,
+				order: [...state.order, { sql: escapeIdent(name), direction }],
 			});
 		},
 		limit: (rows) => {

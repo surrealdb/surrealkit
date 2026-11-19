@@ -368,3 +368,46 @@ describe('searches in a block', () => {
 		expect(Object.getOwnPropertySymbols(built.params)).toEqual([]);
 	});
 });
+
+describe('ordering by a score or a distance', () => {
+	it('sorts by an alias of the projection, after or before a field path', () => {
+		const statement = select(DocTable)
+			.where(() => and(words, near))
+			.project((row) => ({
+				id: row.id,
+				title: row.title,
+				score: score(words),
+				distance: knnDistance(near),
+			}))
+			.orderByAlias('score', 'DESC')
+			.orderByAlias('distance')
+			.orderBy((row) => row.title)
+			.limit(3)
+			.build('hybrid');
+		expect(statement.sql).toBe(
+			'SELECT id AS id, title AS title, search::score(1) AS score, vector::distance::knn() AS distance FROM ⟨doc⟩ WHERE body @1@ $terms AND embedding <|5,40|> $query ORDER BY score DESC, distance ASC, title ASC LIMIT 3;',
+		);
+		expect(select(DocTable).orderByAlias('title', 'DESC').build().sql).toBe(
+			'SELECT * FROM ⟨doc⟩ ORDER BY title DESC;',
+		);
+	});
+
+	it('refuses a name the result row does not hold', () => {
+		const untyped = (f: unknown) =>
+			f as (...args: ReadonlyArray<unknown>) => unknown;
+		const scored = select(DocTable)
+			.where(() => words)
+			.project((row) => ({ id: row.id, score: score(words) }));
+		expect(() => untyped(scored.orderByAlias)('title')).toThrow(
+			'`title` is not a name the result row holds',
+		);
+		expect(() =>
+			untyped(select(DocTable).omit('body').orderByAlias)('body'),
+		).toThrow('`body` is not a name the result row holds');
+		expect(() =>
+			untyped(select(DocTable).value((row) => row.title).orderByAlias)(
+				'title',
+			),
+		).toThrow('`title` is not a name the result row holds');
+	});
+});
