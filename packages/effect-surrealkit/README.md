@@ -14,7 +14,8 @@ runs in browsers, Workers, Bun and Node. The emitter (`effect-surrealkit/emitter
 is host-neutral too; only the `effect-surrealkit` bin touches the filesystem.
 
 - [Generating modules](#generating-modules) from a schema document
-- [Statements](#statements): typed queries and writes from the generated modules
+- [Statements](#statements): typed queries and writes from the generated modules,
+  and [statements from `.surql` files](#statements-from-surql-files)
 - [Two codec worlds](#two-codec-worlds) and the [value schemas](#values)
 - [What the codecs refuse](#what-the-codecs-refuse-and-why)
 
@@ -333,6 +334,102 @@ and 4.0), so a misspelt binding would quietly change what a script does;
 that is what the contract is for. `make({ sql, params, result })` declares a
 statement with no such check.
 
+### Statements from `.surql` files
+
+`effect-surrealkit statements` writes the parts for you. `--input` holds one
+directory per scope, each with `.surql` files; every scope becomes
+`<out>/<scope>/statements.ts`, and `<out>/index.ts` re-exports each scope as a
+namespace:
+
+```sh
+effect-surrealkit statements --input queries --out src/generated/statements
+```
+
+```text
+queries/accounts/bindOwner.surql     LET $owner = $boundOwner; LET $principal = $auth.id;
+queries/accounts/requireOwner.surql  IF $owner != $principal { THROW 'Not the owner' };
+```
+
+```ts
+// src/generated/statements/accounts/statements.ts (excerpt)
+export const bindOwner = $statement.part({
+	name: "accounts.bindOwner",
+	source: "accounts/bindOwner.surql",
+	sql: `LET $owner = $boundOwner; LET $principal = $auth.id;`,
+	free: ["boundOwner"],
+	defines: ["owner", "principal"],
+	slots: 2,
+	throws: [],
+	throwsAt: {},
+} as const);
+```
+
+```ts
+import { accounts } from './generated/statements/index.js';
+
+const guarded = sequence(accounts.bindOwner, accounts.requireOwner).define({
+  params: { boundOwner: PersonId }, // a missing or extra name is a compile error
+  result: Schema.Undefined,
+});
+```
+
+A file name must be a JavaScript identifier (letters, digits, underscores)
+and not a reserved word; names that differ only in case, and anything in
+`--input` other than scope directories of `.surql` files, are errors
+(dotfiles are ignored). Output follows the emitter's rules: atomic writes,
+unchanged files untouched, stale generated files removed, files without the
+generated header never touched (nor overwritten), and `--check` writes
+nothing and exits 1 when anything is missing, stale or edited. `--watch`
+regenerates on change; `--import-extension .ts` changes the index's imports;
+`--hole-pattern <regex>` changes what a hole looks like. Any error stops
+generation with its file, line and column; warnings are printed.
+
+The analyzer is `effect-surrealkit/analyze`, pure and host-neutral:
+`analyze(sql, { holePattern? })` returns `{ kind, sql, free, defines, slots,
+throws, throwsAt, holes, provisional, transactional, diagnostics }` or fails
+with an `AnalyzeError` carrying a line and column.
+
+- **Lexing.** `--`, `//`, `#` and `/* */` comments; `'…'` and `"…"` strings
+  with SurrealQL's escapes, prefixed (`r` `d` `u` `s` `f` `b`); `` `…` `` and
+  `⟨…⟩` identifiers; regex literals; `$name`. An unterminated string,
+  identifier or comment, an invalid escape, unbalanced brackets, an empty
+  statement or a character it cannot classify is an error, never a guess.
+- **Free and defined names.** `free` is every `$name` read before anything in
+  scope defines it, including a read before the `LET` of the same name.
+  A top-level `LET` is in `defines` and visible to later statements and
+  parts; a `LET` inside `{ }`, a `FOR $x IN …` variable, closure parameters
+  (`|$a: int, $b|`) and `DEFINE FUNCTION` parameters are local to their body.
+  `$auth`, `$access`, `$session` and `$token` are never free and a `LET` of
+  one is an error; `$this`, `$self` and `$parent` are never free. `$value`,
+  `$input`, `$before`, `$after` and `$event` are ordinary script names (free
+  unless defined, with a warning, since `sequence` refuses them as
+  bindings), except inside a `DEFINE` other than `FUNCTION` and `PARAM`,
+  where the engine sets them.
+- **Results.** Each terminated top-level statement is one result (`LET`,
+  `IF`, `FOR`, `BEGIN` and `COMMIT` included). A text with its own `BEGIN`,
+  `COMMIT` or `CANCEL` is `transactional`, which the client's
+  `transaction()` cannot send. A `RETURN` inside `BEGIN … COMMIT` followed by
+  another statement is an error: SurrealDB 3 skips what follows, 4 runs it.
+- **THROW.** `throws` holds every string-literal message, at any depth;
+  any other `THROW` is a `dynamicThrow` warning and reaches the client as a
+  request error.
+- **Fragments.** A single expression or block without a final `;` is a
+  `fragment`: no results, generated as a `text(…)` value, usable only to fill
+  a hole. Several statements with an unterminated last one are an error.
+- **Holes and templates.** A token matching `__[A-Z][A-Z0-9_]*__` outside
+  strings and comments is a hole. A text with holes is a template, generated
+  as `text(…)` with its `holes`; its `free` and `defines` are `provisional`,
+  because a fill can read or define names. `fill(template, fills)` returns
+  the filled text, failing on an unknown hole, a missing fill or a fill
+  with holes of its own (unless `allowHoles`); each fill must lex on its own
+  with balanced brackets. Analyse the result to get a part.
+
+What it does not check: it lexes, it does not parse, so it does not know
+whether a text is valid SurrealQL, what a statement returns (only how many
+results), whether a fragment really is one expression, or what a function
+body reads when it is called; a `DEFINE PARAM` is reported as a warning
+and later reads of it stay free.
+
 ### Running statements
 
 ```ts
@@ -376,9 +473,9 @@ another statement inside a transaction.
   it may not read and leaves out a row it may not see, without an error.
   Declare the row that session really gets and build from
   `readAs(table, schema)`, or project the fields it may read.
-- **Authored text.** The parts of a sequence are declared, not inferred: a
-  result codec that does not match the script fails when it runs, not when
-  it compiles.
+- **Authored text.** The analyzer derives a part's names, result count and
+  messages, not its result type: a result codec that does not match the
+  script fails when it runs, not when it compiles.
 - **Coverage.** `GROUP BY`, `SPLIT`, `FETCH`, graph traversal, full-text and
   vector operators, `UPSERT`, `INSERT`, live queries and views have no typed
   builder yet; use `unsafeExpr` or authored SurrealQL.
