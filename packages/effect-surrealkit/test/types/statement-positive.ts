@@ -12,10 +12,13 @@ import {
 	run,
 	type StatementConflict,
 	type StatementDecodeError,
+	type StatementEmptyResult,
 	type StatementEncodeError,
 	type StatementError,
 	type StatementRequestError,
+	type StatementScopeError,
 	type StatementThrown,
+	type StatementUnexpectedThrow,
 	type SurrealClient,
 	transaction,
 } from '../../src/client/index.js';
@@ -309,9 +312,12 @@ same<
 	Effect.Effect<
 		string,
 		| StatementEncodeError
+		| StatementScopeError
 		| StatementRequestError
+		| StatementUnexpectedThrow
 		| StatementConflict
 		| StatementDecodeError
+		| StatementEmptyResult
 		| StatementThrown<'Not the owner'>,
 		SurrealClient
 	>

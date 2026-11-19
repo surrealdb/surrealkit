@@ -6,14 +6,33 @@
 import { Data } from 'effect';
 
 /**
- * A binding's value failed its codec. Nothing was sent: an out-of-range
- * decimal or datetime, for instance, would otherwise hang the request.
+ * A binding's value failed its codec, or its encoded value is not one the
+ * SDK sends without loss (`path` says where inside it). Nothing was sent:
+ * an out-of-range decimal or datetime, for instance, would otherwise hang
+ * the request, and a lone surrogate or a class instance would be altered.
  */
 export class StatementEncodeError extends Data.TaggedError(
 	'StatementEncodeError',
 )<{
 	readonly statement: string;
 	readonly binding: string;
+	/** Where inside the encoded value the problem is; empty for the value. */
+	readonly path?: ReadonlyArray<string | number>;
+	readonly message: string;
+}> {}
+
+/**
+ * `transaction` refused its statements before sending anything, because
+ * they cannot share one variable scope or one transaction: a binding
+ * another statement `LET`s, one name bound to two different values, or a
+ * statement that writes its own `BEGIN`, `COMMIT` or `CANCEL`.
+ */
+export class StatementScopeError extends Data.TaggedError(
+	'StatementScopeError',
+)<{
+	readonly statement: string;
+	/** The binding at issue; absent for a statement's own transaction. */
+	readonly binding?: string;
 	readonly message: string;
 }> {}
 
@@ -28,18 +47,40 @@ export class StatementRequestError extends Data.TaggedError(
 
 /**
  * The statement raised one of the `THROW` messages it declares. A message
- * it does not declare is a {@link StatementRequestError}.
+ * it does not declare is a {@link StatementUnexpectedThrow}. When the part
+ * that declares the message carries `source` and `throwsAt`, so does this.
  */
 export class StatementThrown<
 	Reason extends string = string,
 > extends Data.TaggedError('StatementThrown')<{
 	readonly statement: string;
 	readonly reason: string;
+	/** Where the declaring part came from, such as its `.surql` file. */
+	readonly source?: string;
+	/** The lines of `source` that throw this message. */
+	readonly lines?: ReadonlyArray<number>;
 }> {
 	declare readonly reason: Reason;
 
 	override get message(): string {
 		return this.reason;
+	}
+}
+
+/**
+ * The statement raised a `THROW` whose message it does not declare: a
+ * dynamic message, or text that changed without its declaration.
+ */
+export class StatementUnexpectedThrow extends Data.TaggedError(
+	'StatementUnexpectedThrow',
+)<{
+	readonly statement: string;
+	/** The thrown text. */
+	readonly reason: string;
+	readonly cause: unknown;
+}> {
+	override get message(): string {
+		return `\`${this.statement}\` threw '${this.reason}', which it does not declare`;
 	}
 }
 
@@ -56,7 +97,8 @@ export class StatementConflict extends Data.TaggedError('StatementConflict')<{
 /**
  * The engine answered, and the answer is not what the statement declares:
  * a different number of results, a value where NONE was required, or a
- * final result its codec refuses. A write may already have been applied.
+ * final result its codec refuses. The request itself succeeded, so when
+ * the statement writes (`committed`), its writes are committed.
  */
 export class StatementDecodeError extends Data.TaggedError(
 	'StatementDecodeError',
@@ -64,13 +106,37 @@ export class StatementDecodeError extends Data.TaggedError(
 	readonly statement: string;
 	/** The 1-based result that failed, or 0 for the count of results. */
 	readonly slot: number;
+	/**
+	 * The statement writes and the request succeeded, so its writes are
+	 * committed although the result could not be decoded.
+	 */
+	readonly committed: boolean;
+	readonly message: string;
+}> {}
+
+/**
+ * A statement that always returns a row when it applies (a `create` or
+ * `relate` that returns rows) returned NONE or an empty list. SurrealDB
+ * reports a write the session's permissions deny as an empty result,
+ * without an error, so the session may lack permission; nothing was
+ * written by that statement.
+ */
+export class StatementEmptyResult extends Data.TaggedError(
+	'StatementEmptyResult',
+)<{
+	readonly statement: string;
+	/** The 1-based result that was empty. */
+	readonly slot: number;
 	readonly message: string;
 }> {}
 
 /** Every error of running a statement that can `THROW` the messages `T`. */
 export type StatementError<Throws extends string = never> =
 	| StatementEncodeError
+	| StatementScopeError
 	| StatementRequestError
+	| StatementUnexpectedThrow
 	| StatementConflict
 	| StatementDecodeError
+	| StatementEmptyResult
 	| ([Throws] extends [never] ? never : StatementThrown<Throws>);

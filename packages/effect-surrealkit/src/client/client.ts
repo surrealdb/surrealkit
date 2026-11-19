@@ -2,12 +2,22 @@
  * Runs statements against SurrealDB through the JavaScript SDK.
  *
  * One request per statement: bindings are encoded through their codecs
- * first, so a value a codec refuses is never sent; the answer must have the
+ * first, and each encoded value is checked to be one the SDK sends without
+ * loss, so a refused value is never sent; the answer must have the
  * declared number of results, NONE in all but the last, and a last result
  * the statement's codec accepts. Interrupting the effect aborts the request.
  */
-import { Context, Effect, Layer, Schema } from 'effect';
-import { BoundQuery, type RetryValue, type SurrealSession } from 'surrealdb';
+import {
+	Clock,
+	Context,
+	Duration,
+	Effect,
+	Layer,
+	Metric,
+	type Schedule,
+	Schema,
+} from 'effect';
+import { BoundQuery, type SurrealSession } from 'surrealdb';
 
 import type {
 	AnyStatement,
@@ -20,11 +30,15 @@ import { sameValue } from './equal.js';
 import {
 	StatementConflict,
 	StatementDecodeError,
+	StatementEmptyResult,
 	StatementEncodeError,
 	type StatementError,
 	StatementRequestError,
+	StatementScopeError,
 	StatementThrown,
+	StatementUnexpectedThrow,
 } from './errors.js';
+import { pathText, valueProblem } from './values.js';
 
 /**
  * What a client needs from the SDK: a connection or a session. Statements
@@ -34,11 +48,23 @@ export type Queryable = Pick<SurrealSession, 'query' | 'transaction'>;
 
 export interface RunOptions {
 	/**
-	 * Send the request again when the engine reports a transaction conflict
-	 * (the SDK's `retry`). Safe for one statement and for `transaction`,
-	 * which are single atomic requests. Off unless the connection sets it.
+	 * Sends the same, already encoded request again while the engine
+	 * reports a transaction conflict ({@link StatementConflict}), as the
+	 * schedule allows; any other failure is never retried. Safe for one
+	 * statement and for `transaction`, which are single atomic requests.
+	 * SurrealDB 4 already retries a single conflicting statement on the
+	 * server. Off by default.
+	 *
+	 * @example
+	 * client.run(bump, {}, { retry: Schedule.recurs(3) })
 	 */
-	readonly retry?: RetryValue;
+	readonly retry?: Schedule.Schedule<unknown, StatementConflict>;
+	/**
+	 * Skips the check that every encoded binding is a value the SDK sends
+	 * without loss (a `SurrealValue`, or `undefined` for NONE, with
+	 * well-formed strings). Codecs still run. Default false.
+	 */
+	readonly unsafeSkipValueCheck?: boolean;
 }
 
 /** The input argument: optional when no binding needs a value. */
@@ -110,10 +136,10 @@ export interface Client {
 	 * The statements share one variable scope, as SurrealQL has it, so
 	 * before anything is sent a binding name is refused when two
 	 * statements bind it to values that are not certainly equal, or when
-	 * one statement binds a name another `LET`s (a `StatementEncodeError`
+	 * one statement binds a name another `LET`s (a `StatementScopeError`
 	 * naming both). A statement whose own text writes `BEGIN`, `COMMIT` or
 	 * `CANCEL` cannot be nested in this one and is refused as a
-	 * `StatementRequestError`. The SDK refuses a top-level `RETURN` that
+	 * `StatementScopeError` too. The SDK refuses a top-level `RETURN` that
 	 * is followed by another statement, because some engines end the
 	 * transaction there. A declared `THROW` names the statement that
 	 * declares it.
@@ -134,16 +160,28 @@ const thrownPrefix = 'An error occurred: ';
 const messageOf = (error: unknown): string =>
 	error instanceof Error ? error.message : String(error);
 
+/** The statement that declares a `THROW` message, and where. */
+interface Declarer {
+	readonly statement: string;
+	readonly source?: string;
+	readonly lines?: ReadonlyArray<number>;
+}
+
 /**
  * The SDK chains server errors through `cause`. They are matched by shape
  * rather than by class, so a second installed copy of the SDK still maps.
  */
 const classify = <Throws extends string>(
 	name: string,
-	/** The statement that declares `reason`, or `undefined` when none does. */
-	declaredBy: (reason: string) => string | undefined,
+	/** What declares `reason`, or `undefined` when nothing does. */
+	declaredBy: (reason: string) => Declarer | undefined,
 	cause: unknown,
-): StatementRequestError | StatementConflict | StatementThrown<Throws> => {
+):
+	| StatementRequestError
+	| StatementConflict
+	| StatementThrown<Throws>
+	| StatementUnexpectedThrow => {
+	let unexpected: string | undefined;
 	for (
 		let error: unknown = cause;
 		error instanceof Error;
@@ -157,10 +195,11 @@ const classify = <Throws extends string>(
 			const reason = error.message.startsWith(thrownPrefix)
 				? error.message.slice(thrownPrefix.length)
 				: error.message;
-			const statement = declaredBy(reason);
-			if (statement !== undefined) {
-				return new StatementThrown<Throws>({ statement, reason });
+			const declarer = declaredBy(reason);
+			if (declarer !== undefined) {
+				return new StatementThrown<Throws>({ ...declarer, reason });
 			}
+			unexpected ??= reason;
 		}
 		if (isTransactionConflict === true) {
 			return new StatementConflict({
@@ -169,6 +208,13 @@ const classify = <Throws extends string>(
 				cause,
 			});
 		}
+	}
+	if (unexpected !== undefined) {
+		return new StatementUnexpectedThrow({
+			statement: name,
+			reason: unexpected,
+			cause,
+		});
 	}
 	return new StatementRequestError({
 		statement: name,
@@ -195,12 +241,44 @@ const encode = (
 		),
 	).pipe(Effect.map((entries) => Object.fromEntries(entries)));
 
+/**
+ * Refuses an encoded binding the SDK would not send as it is. `owner`
+ * names the statement that binds each name.
+ */
+const checkValues = (
+	bindings: Readonly<Record<string, unknown>>,
+	owner: (binding: string) => string,
+	options: RunOptions | undefined,
+): Effect.Effect<void, StatementEncodeError> => {
+	if (options?.unsafeSkipValueCheck === true) return Effect.void;
+	for (const [binding, value] of Object.entries(bindings)) {
+		const found = valueProblem(value);
+		if (found !== undefined) {
+			return Effect.fail(
+				new StatementEncodeError({
+					statement: owner(binding),
+					binding,
+					path: found.path,
+					message: `${pathText(binding, found.path)} is ${found.problem}; nothing was sent`,
+				}),
+			);
+		}
+	}
+	return Effect.void;
+};
+
+const committedNote = (writes: boolean): string =>
+	writes
+		? '. The request succeeded and its writes are committed, so do not send it again to retry'
+		: '';
+
 /** Decodes the results of one statement out of `results`, from `offset`. */
 const decode = (
 	statement: AnyStatement,
 	results: ReadonlyArray<unknown>,
 	offset: number,
-): Effect.Effect<unknown, StatementDecodeError> => {
+	writes: boolean,
+): Effect.Effect<unknown, StatementDecodeError | StatementEmptyResult> => {
 	const last = offset + statement.slots - 1;
 	for (let slot = offset; slot < last; slot++) {
 		if (results[slot] !== undefined) {
@@ -208,12 +286,28 @@ const decode = (
 				new StatementDecodeError({
 					statement: statement.name,
 					slot: slot - offset + 1,
-					message: `result ${slot - offset + 1} of ${statement.slots} must be NONE; only the last result of a statement is decoded`,
+					committed: writes,
+					message: `result ${slot - offset + 1} of ${statement.slots} must be NONE; only the last result of a statement is decoded${committedNote(writes)}`,
 				}),
 			);
 		}
 	}
-	return Schema.decodeUnknownEffect(statement.result)(results[last], {
+	const value = results[last];
+	if (
+		statement.nonEmpty === true &&
+		(value === undefined ||
+			value === null ||
+			(Array.isArray(value) && value.length === 0))
+	) {
+		return Effect.fail(
+			new StatementEmptyResult({
+				statement: statement.name,
+				slot: statement.slots,
+				message: `\`${statement.name}\` returned nothing, although it returns a row whenever it applies: the session may lack permission for it (SurrealDB reports a denied write as an empty result, without an error), and it wrote nothing`,
+			}),
+		);
+	}
+	return Schema.decodeUnknownEffect(statement.result)(value, {
 		onExcessProperty: 'error',
 	}).pipe(
 		Effect.mapError(
@@ -221,7 +315,8 @@ const decode = (
 				new StatementDecodeError({
 					statement: statement.name,
 					slot: statement.slots,
-					message: error.message,
+					committed: writes,
+					message: `${error.message}${committedNote(writes)}`,
 				}),
 		),
 	);
@@ -231,6 +326,7 @@ const countOf = (
 	name: string,
 	results: unknown,
 	expected: number,
+	writes: boolean,
 ): Effect.Effect<ReadonlyArray<unknown>, StatementDecodeError> =>
 	Array.isArray(results) && results.length === expected
 		? Effect.succeed(results)
@@ -238,28 +334,123 @@ const countOf = (
 				new StatementDecodeError({
 					statement: name,
 					slot: 0,
+					committed: writes,
 					message: `expected ${expected} results, one per SurrealQL statement, and received ${
 						Array.isArray(results) ? results.length : 'no list'
-					}`,
+					}${committedNote(writes)}`,
 				}),
 			);
 
-const traced = <A, E>(
+/**
+ * Sends a request, again while it conflicts and `retry` allows. Each send
+ * is the same request; `sent` counts them.
+ */
+const sending = <A, E extends { readonly _tag: string }>(
+	send: Effect.Effect<A, E>,
+	options: RunOptions | undefined,
+): Effect.Effect<A, E> =>
+	options?.retry === undefined
+		? send
+		: send.pipe(
+				Effect.retry({
+					schedule: options.retry as unknown as Schedule.Schedule<
+						unknown,
+						E
+					>,
+					while: (error: E) => error._tag === 'StatementConflict',
+				}),
+			);
+
+/**
+ * The metrics every run updates, through Effect's `Metric`:
+ *
+ * - `runs`: a counter of runs, by `statement` (its name) and `outcome`
+ *   (`success`, the error's tag, or `interrupted`);
+ * - `duration`: a timer of each run, from encoding to decoding, by
+ *   `statement`;
+ * - `retries`: a counter of requests sent again after a transaction
+ *   conflict, by `statement`.
+ */
+export const metrics = {
+	runs: Metric.counter('effect_surrealkit_statement_runs', {
+		description: 'Statements run, by statement name and outcome',
+		incremental: true,
+	}),
+	duration: Metric.timer('effect_surrealkit_statement_duration', {
+		description: 'Time to run a statement, by statement name',
+	}),
+	retries: Metric.counter('effect_surrealkit_statement_retries', {
+		description: 'Requests sent again after a transaction conflict',
+		incremental: true,
+	}),
+} as const;
+
+const { runs, duration: durations, retries } = metrics;
+
+/**
+ * The span and metrics of one run. The span carries the static text, the
+ * sources, the number of rows when the result is a list and the error tag
+ * on failure; never a binding value.
+ */
+const traced = <A, E extends { readonly _tag: string }>(
 	name: string,
 	sql: string,
+	sources: ReadonlyArray<string> | undefined,
+	rows: boolean,
+	sent: { count: number },
 	effect: Effect.Effect<A, E>,
 ): Effect.Effect<A, E> =>
-	effect.pipe(
-		Effect.withSpan(name, {
-			kind: 'client',
-			attributes: {
-				'db.system.name': 'surrealdb',
-				'db.operation.name': name,
-				// Static text: values travel as bindings and are not recorded.
-				'db.query.text': sql,
-			},
-		}),
-	);
+	Effect.gen(function* () {
+		const started = yield* Clock.currentTimeNanos;
+		const record = (outcome: string) =>
+			Effect.gen(function* () {
+				const ended = yield* Clock.currentTimeNanos;
+				const statement = { statement: name };
+				yield* Metric.update(
+					Metric.withAttributes(runs, { ...statement, outcome }),
+					1,
+				);
+				yield* Metric.update(
+					Metric.withAttributes(durations, statement),
+					Duration.nanos(ended - started),
+				);
+				if (sent.count > 1) {
+					yield* Metric.update(
+						Metric.withAttributes(retries, statement),
+						sent.count - 1,
+					);
+				}
+			});
+		return yield* effect.pipe(
+			Effect.tap((result) =>
+				rows && Array.isArray(result)
+					? Effect.annotateCurrentSpan(
+							'db.response.returned_rows',
+							result.length,
+						)
+					: Effect.void,
+			),
+			Effect.tapError((error) =>
+				Effect.annotateCurrentSpan('error.type', error._tag),
+			),
+			Effect.withSpan(name, {
+				kind: 'client',
+				attributes: {
+					'db.system.name': 'surrealdb',
+					'db.operation.name': name,
+					// Static text: values travel as bindings and are not recorded.
+					'db.query.text': sql,
+					...(sources !== undefined &&
+						sources.length > 0 && {
+							'code.file.path': sources.join(', '),
+						}),
+				},
+			}),
+			Effect.tap(() => record('success')),
+			Effect.tapError((error) => record(error._tag)),
+			Effect.onInterrupt(() => record('interrupted')),
+		);
+	});
 
 /**
  * What a transaction refuses before encoding anything: a statement that
@@ -268,13 +459,12 @@ const traced = <A, E>(
  */
 const refuseInTransaction = (
 	statements: ReadonlyArray<Bound>,
-): StatementEncodeError | StatementRequestError | undefined => {
+): StatementScopeError | undefined => {
 	for (const { statement } of statements) {
 		if (statement.transactional) {
-			return new StatementRequestError({
+			return new StatementScopeError({
 				statement: statement.name,
 				message: `\`${statement.name}\` writes its own BEGIN, COMMIT or CANCEL, so it cannot run inside a transaction; run it on its own`,
-				cause: undefined,
 			});
 		}
 	}
@@ -285,7 +475,7 @@ const refuseInTransaction = (
 					at !== index && other.statement.defines.includes(binding),
 			);
 			if (definer !== undefined) {
-				return new StatementEncodeError({
+				return new StatementScopeError({
 					statement: statement.name,
 					binding,
 					message: `\`$${binding}\` is bound by \`${statement.name}\` and defined with LET by \`${definer.statement.name}\`, and statements in one transaction share one variable scope, so one would read the other's value; rename one of them`,
@@ -297,26 +487,29 @@ const refuseInTransaction = (
 };
 
 /**
- * The statement that declares the `THROW` message `reason`: its name, which
- * ones when several do, or `undefined` when none does.
+ * What declares the `THROW` message `reason`: the statement's name (which
+ * ones when several do) and, when one statement does and records where,
+ * the source and lines; `undefined` when none does.
  */
 const declarer = (
 	statements: ReadonlyArray<AnyStatement>,
 	reason: string,
-): string | undefined => {
-	const names = [
-		...new Set(
-			statements
-				.filter((statement) =>
-					(statement.throws as ReadonlyArray<string>).includes(
-						reason,
-					),
-				)
-				.map((statement) => statement.name),
-		),
-	];
-	if (names.length <= 1) return names[0];
-	return `one of ${names.map((name) => `\`${name}\``).join(', ')}`;
+): Declarer | undefined => {
+	const declaring = statements.filter((statement) =>
+		(statement.throws as ReadonlyArray<string>).includes(reason),
+	);
+	const names = [...new Set(declaring.map((statement) => statement.name))];
+	if (names.length > 1) {
+		return {
+			statement: `one of ${names.map((name) => `\`${name}\``).join(', ')}`,
+		};
+	}
+	const [first] = declaring;
+	if (first === undefined) return undefined;
+	const site = first.throwSites?.[reason];
+	return site === undefined
+		? { statement: first.name }
+		: { statement: first.name, source: site.source, lines: site.lines };
 };
 
 /**
@@ -334,33 +527,41 @@ export const make = (db: Queryable): Client => ({
 	) => {
 		const input: Readonly<Record<string, unknown>> = args[0] ?? {};
 		const options = args[1];
+		const writes = statement.writes === true;
+		const sent = { count: 0 };
 		return traced(
 			statement.name,
 			statement.sql,
+			statement.sources,
+			true,
+			sent,
 			Effect.gen(function* () {
 				const bindings = yield* encode(statement, input);
-				const results = yield* Effect.tryPromise({
-					try: (signal) => {
-						const query = db
-							.query(statement.sql, bindings)
-							.signal(signal);
-						return options?.retry === undefined
-							? query
-							: query.retry(options.retry);
-					},
-					catch: (cause) =>
-						classify(
-							statement.name,
-							(reason) => declarer([statement], reason),
-							cause,
-						),
-				});
+				yield* checkValues(bindings, () => statement.name, options);
+				const results = yield* sending(
+					Effect.tryPromise({
+						try: (signal) => {
+							sent.count++;
+							return db
+								.query(statement.sql, bindings)
+								.signal(signal);
+						},
+						catch: (cause) =>
+							classify(
+								statement.name,
+								(reason) => declarer([statement], reason),
+								cause,
+							),
+					}),
+					options,
+				);
 				const slots = yield* countOf(
 					statement.name,
 					results,
 					statement.slots,
+					writes,
 				);
-				return yield* decode(statement, slots, 0);
+				return yield* decode(statement, slots, 0, writes);
 			}),
 		) as Effect.Effect<R['Type'], StatementError<Throws>>;
 	},
@@ -372,9 +573,21 @@ export const make = (db: Queryable): Client => ({
 			.map(({ statement }) => statement.name)
 			.join(', ')})`;
 		const sql = statements.map(({ statement }) => statement.sql).join('\n');
+		const sources = [
+			...new Set(
+				statements.flatMap(({ statement }) => statement.sources ?? []),
+			),
+		];
+		const writes = statements.some(
+			({ statement }) => statement.writes === true,
+		);
+		const sent = { count: 0 };
 		return traced(
 			name,
 			sql,
+			sources,
+			false,
+			sent,
 			Effect.gen(function* () {
 				if (statements.length === 0) return [];
 				const refused = refuseInTransaction(statements);
@@ -389,7 +602,7 @@ export const make = (db: Queryable): Client => ({
 							boundBy.set(key, statement.name);
 						} else if (!sameValue(bindings[key], value)) {
 							return yield* Effect.fail(
-								new StatementEncodeError({
+								new StatementScopeError({
 									statement: statement.name,
 									binding: key,
 									message: `\`$${key}\` is bound by \`${first}\` and by \`${statement.name}\` to values that are not certainly equal, and statements in one transaction share one variable scope; rename the binding in one of them`,
@@ -399,25 +612,34 @@ export const make = (db: Queryable): Client => ({
 						bindings[key] = value;
 					}
 				}
-				const results = yield* Effect.tryPromise({
-					try: (signal) =>
-						db.transaction([new BoundQuery(sql, bindings)], {
-							signal,
-							...(options?.retry === undefined
-								? {}
-								: { retry: options.retry }),
-						}),
-					catch: (cause) =>
-						classify(
-							name,
-							(reason) =>
-								declarer(
-									statements.map((item) => item.statement),
-									reason,
-								),
-							cause,
-						),
-				});
+				yield* checkValues(
+					bindings,
+					(binding) => boundBy.get(binding) ?? name,
+					options,
+				);
+				// One request, encoded once, sent again as it is on a retry.
+				const request = new BoundQuery(sql, bindings);
+				const results = yield* sending(
+					Effect.tryPromise({
+						try: (signal) => {
+							sent.count++;
+							return db.transaction([request], { signal });
+						},
+						catch: (cause) =>
+							classify(
+								name,
+								(reason) =>
+									declarer(
+										statements.map(
+											(item) => item.statement,
+										),
+										reason,
+									),
+								cause,
+							),
+					}),
+					options,
+				);
 				const slots = yield* countOf(
 					name,
 					results,
@@ -425,11 +647,14 @@ export const make = (db: Queryable): Client => ({
 						(total, { statement }) => total + statement.slots,
 						0,
 					),
+					writes,
 				);
 				const decoded: Array<unknown> = [];
 				let offset = 0;
 				for (const { statement } of statements) {
-					decoded.push(yield* decode(statement, slots, offset));
+					decoded.push(
+						yield* decode(statement, slots, offset, writes),
+					);
 					offset += statement.slots;
 				}
 				return decoded;

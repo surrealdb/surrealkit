@@ -9,6 +9,7 @@ export {
 	type InputOf,
 	layer,
 	make,
+	metrics,
 	type Queryable,
 	type Results,
 	type RunArgs,
@@ -21,8 +22,11 @@ export {
 export {
 	StatementConflict,
 	StatementDecodeError,
+	StatementEmptyResult,
 	StatementEncodeError,
 	type StatementError,
 	StatementRequestError,
+	StatementScopeError,
 	StatementThrown,
+	StatementUnexpectedThrow,
 } from './errors.js';

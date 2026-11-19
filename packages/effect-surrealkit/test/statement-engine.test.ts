@@ -6,7 +6,7 @@
  */
 import { readFileSync } from 'node:fs';
 
-import { Arbitrary, Effect, Schema } from 'effect';
+import { Arbitrary, Effect, Schedule, Schema } from 'effect';
 import { DateTime, RecordId } from 'surrealdb';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -16,9 +16,11 @@ import {
 	make as makeClient,
 	StatementConflict,
 	StatementDecodeError,
+	StatementEmptyResult,
 	StatementEncodeError,
-	StatementRequestError,
+	StatementScopeError,
 	StatementThrown,
+	StatementUnexpectedThrow,
 } from '../src/client/index.js';
 import * as SurrealSchema from '../src/index.js';
 import {
@@ -520,9 +522,9 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 			params: {},
 			result: Schema.Undefined,
 		});
-		expect(await failure(client.run(undeclared))).toBeInstanceOf(
-			StatementRequestError,
-		);
+		const unexpected = await failure(client.run(undeclared));
+		expect(unexpected).toBeInstanceOf(StatementUnexpectedThrow);
+		expect(unexpected).toMatchObject({ reason: 'Unexpected' });
 	});
 
 	it('applies a transaction entirely or not at all', async () => {
@@ -584,7 +586,7 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 		const error = await failure(
 			client.transaction([bind(letter), bind(reader, { n: 2 })]),
 		);
-		expect(error).toBeInstanceOf(StatementEncodeError);
+		expect(error).toBeInstanceOf(StatementScopeError);
 		expect(error).toMatchObject({ statement: 'reader', binding: 'n' });
 	});
 
@@ -599,7 +601,7 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 		// It runs on its own (the COMMIT is the last result, NONE).
 		expect(await ok(client.run(own))).toBeUndefined();
 		const error = await failure(client.transaction([bind(own)]));
-		expect(error).toBeInstanceOf(StatementRequestError);
+		expect(error).toBeInstanceOf(StatementScopeError);
 		expect(error).toMatchObject({ statement: 'own' });
 	});
 
@@ -646,6 +648,18 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 			),
 		);
 		expect(await ok(client.run(read))).toBe(before + 4);
+		// The same, with the client's own retry: only conflicts are resent.
+		await ok(
+			Effect.all(
+				Array.from({ length: 4 }, () =>
+					client.transaction([bind(bump)], {
+						retry: Schedule.forever,
+					}),
+				),
+				{ concurrency: 'unbounded' },
+			),
+		);
+		expect(await ok(client.run(read))).toBe(before + 8);
 	});
 
 	it('never sends a value its codec refuses', async () => {
@@ -835,6 +849,101 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 			expect(linked.id.table.name).toBe(name);
 			expect(linked.in.equals(node('a'))).toBe(true);
 		}
+	});
+
+	it('reports a create or relate a record user may not make as an empty result, and leaves an update by condition alone', async () => {
+		// `person` lets a record user create only itself; `member_of`
+		// declares no permissions, so a record user may not write it.
+		await engine.db.query(`
+			DEFINE TABLE account SCHEMAFULL PERMISSIONS FULL;
+			DEFINE FIELD name ON account TYPE string;
+			DEFINE ACCESS member ON DATABASE TYPE RECORD
+				SIGNUP (CREATE account SET name = $name)
+				SIGNIN (SELECT * FROM account WHERE name = $name);
+		`);
+		const session = await within(engine.db.newSession());
+		try {
+			const scope = {
+				namespace: engine.namespace,
+				database: engine.namespace,
+			};
+			await within(session.use(scope));
+			await within(
+				session.signup({
+					...scope,
+					access: 'member',
+					variables: { name: 'dee' },
+				}),
+			);
+			const user = makeClient(session);
+
+			const created = await failure(
+				user.run(createPerson, { person: person('Dee') }),
+			);
+			expect(created).toBeInstanceOf(StatementEmptyResult);
+			expect(created).toMatchObject({ statement: 'create person' });
+			expect(created.message).toMatch(/may lack permission/);
+
+			const team = await ok(
+				client.run(
+					create(TeamTable)
+						.content(param('team', TeamCreate))
+						.build(),
+					{ team: { name: 'guarded' } },
+				),
+			);
+			const join = relate(
+				MemberOfTable,
+				param('person', PersonId),
+				param('team', TeamId),
+			)
+				.content(param('membership', MemberOfCreate))
+				.build();
+			const related = await failure(
+				user.run(join, {
+					person: ann.id,
+					team: team.id,
+					membership: { role: 'lead' },
+				}),
+			);
+			expect(related).toBeInstanceOf(StatementEmptyResult);
+
+			// An update by condition may match nothing: still a success.
+			const rename = update(PersonTable)
+				.merge(param('changes', PersonMerge))
+				.where((row) => eq(row.name, 'Ann'))
+				.build();
+			expect(
+				await ok(user.run(rename, { changes: { nickname: 'x' } })),
+			).toEqual([]);
+
+			// Nothing was written.
+			expect(
+				await ok(client.run(byEmail, { email: 'dee@example.com' })),
+			).toBeUndefined();
+			expect(await ok(client.run(byId, { id: ann.id }))).toMatchObject({
+				nickname: 'an',
+			});
+		} finally {
+			await session.closeSession();
+		}
+	});
+
+	it('says a write that did not decode is committed', async () => {
+		const Wrong = Schema.Struct({ id: PersonId, name: SurrealSchema.Int });
+		const wrong = create(readAs(PersonTable, Wrong))
+			.content(param('person', PersonCreate))
+			.returning((row) => ({ id: row.id, name: row.name }))
+			.build();
+		const error = await failure(
+			client.run(wrong, { person: person('Eve') }),
+		);
+		expect(error).toBeInstanceOf(StatementDecodeError);
+		expect(error).toMatchObject({ committed: true });
+		expect(error.message).toMatch(/writes are committed/);
+		expect(
+			await ok(client.run(byEmail, { email: 'eve@example.com' })),
+		).toMatchObject({ name: 'Eve' });
 	});
 
 	it('reads an unbound parameter as NONE, which is why bindings are checked', async () => {
