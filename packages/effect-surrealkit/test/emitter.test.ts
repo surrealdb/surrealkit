@@ -284,6 +284,38 @@ describe('generation rules', () => {
 		semanticDigest: semanticDigest(document, sha256),
 	});
 
+	it('orders id declarations after their dependencies and otherwise alphabetically', async () => {
+		const document = example();
+		const template = document.tables.find((table) => table.name === 'team');
+		document.tables = [
+			{
+				...template,
+				name: 'binding',
+				fields: [],
+				idKey: {
+					kind: 'tuple',
+					items: [
+						{ kind: 'string' },
+						{ kind: 'record', tables: ['principal'] },
+					],
+				},
+			},
+			{ ...template, name: 'org', fields: [] },
+			{ ...template, name: 'principal', fields: [] },
+			{ ...template, name: 'team', fields: [] },
+		];
+		document.functions = [];
+		const result = await run(generate(withDigest(document), corpusOptions));
+		const ids =
+			result.files.find((file) => file.path === 'ids.ts')?.content ?? '';
+		expect(
+			[...ids.matchAll(/^export const (\w+)/gm)].map((match) => match[1]),
+		).toEqual(['OrgId', 'PrincipalId', 'BindingId', 'TeamId']);
+		expect(ids).toContain(
+			'key: Schema.Tuple([SurrealSchema.String, PrincipalId])',
+		);
+	});
+
 	it('prints open values and declared elements in the native and JSON worlds', async () => {
 		const document = example();
 		const team = document.tables.find((table) => table.name === 'team') as {

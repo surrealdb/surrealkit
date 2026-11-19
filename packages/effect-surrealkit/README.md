@@ -174,7 +174,8 @@ listed and refines like any other field.
   discards it, storing what the `VALUE` produces, so a schema that allowed it
   would let a caller's value be thrown away without an error.
 - The emitter reserves `id` for the table's record ID and `in` and `out` for
-  relation endpoints.
+  relation endpoints. The record ID declarations in `ids.ts` put dependencies
+  before the keys that reference them.
 - A `VALUE` that reads its input but has a fallback gets the conservative
   (required) contract; override it per field (`fields`) if the fallback is
   intended.
