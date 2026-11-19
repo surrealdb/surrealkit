@@ -139,15 +139,18 @@ const useText = (use: BindingUse): string =>
 		? `argument ${use.index} of \`${use.function}\` on line ${use.line}`
 		: use.kind === 'key'
 			? `key of \`${use.table}\` on line ${use.line}`
-			: `field \`${use.table}.${use.field}\` on line ${use.line}`;
+			: `field \`${use.table}.${use.field}\`${use.role === 'assign' ? ' (assigned)' : ''} on line ${use.line}`;
 
-/** One use as a key that does not depend on the order of its fields. */
-const useKey = (use: BindingUse): string =>
+/**
+ * One use as a key that does not depend on the order of its fields; with
+ * `role` false, a field use's key leaves its role out.
+ */
+const useKey = (use: BindingUse, role = true): string =>
 	use.kind === 'argument'
 		? `a\u0000${use.function}\u0000${use.index}\u0000${use.line}`
 		: use.kind === 'key'
 			? `k\u0000${use.table}\u0000${use.line}`
-			: `f\u0000${use.table}\u0000${use.field}\u0000${use.line}`;
+			: `f\u0000${use.table}\u0000${use.field}\u0000${use.line}${role && use.role !== undefined ? `\u0000${use.role}` : ''}`;
 
 /** The differences between declared and derived uses. */
 const usesDifferences = (
@@ -162,9 +165,14 @@ const usesDifferences = (
 	for (const name of names) {
 		const mine = declared[name] ?? [];
 		const theirs = derived[name] ?? [];
-		const own = new Set(mine.map(useKey));
-		const found = new Set(theirs.map(useKey));
-		const missing = theirs.filter((use) => !own.has(useKey(use)));
+		// A declared field use without a role matches either role.
+		const own = new Set(mine.map((use) => useKey(use)));
+		const found = new Set(
+			theirs.flatMap((use) => [useKey(use), useKey(use, false)]),
+		);
+		const missing = theirs.filter(
+			(use) => !own.has(useKey(use)) && !own.has(useKey(use, false)),
+		);
 		const extra = mine.filter((use) => !found.has(useKey(use)));
 		if (missing.length > 0)
 			out.push(
@@ -540,7 +548,9 @@ type UseText<U> = U extends {
 	readonly table: infer T extends string;
 	readonly field: infer F extends string;
 }
-	? `is compared with \`${T}.${F}\``
+	? U extends { readonly role: 'assign' }
+		? `is assigned to \`${T}.${F}\``
+		: `is compared with \`${T}.${F}\``
 	: U extends {
 				readonly kind: 'argument';
 				readonly function: infer F extends string;
@@ -567,14 +577,31 @@ type Misfits<E, C> = E extends BindEntry
 		: never
 	: never;
 
-/** `P`, with each codec its binding's kind cannot be stored as replaced by a message. */
-type Fitted<P, E extends BindEntry> = {
+/** The message of each binding in `P` whose codec cannot hold its kind. */
+type MisfitsIn<P, E extends BindEntry> = {
 	readonly [K in keyof P]: K extends E['name']
-		? [Misfits<Extract<E, { readonly name: K }>, P[K]>] extends [never]
-			? P[K]
-			: Misfits<Extract<E, { readonly name: K }>, P[K]>
-		: P[K];
-};
+		? Misfits<Extract<E, { readonly name: K }>, P[K]>
+		: never;
+}[keyof P];
+
+/** One member of a union, so a message names one binding. */
+type OneOf<U> = (
+	(U extends unknown ? (member: () => U) => void : never) extends (
+		member: infer I,
+	) => void
+		? I
+		: never
+) extends () => infer M
+	? M & string
+	: never;
+
+/**
+ * `P`, when each codec can hold its binding's kind. Otherwise the message
+ * for one binding whose codec cannot, so the compiler's first line names it.
+ */
+type Fitted<P, E extends BindEntry> = [MisfitsIn<P, E>] extends [never]
+	? P
+	: OneOf<MisfitsIn<P, E>>;
 
 /** The messages any part of a sequence can `THROW`. */
 export type ThrownBy<Parts extends ReadonlyArray<Part>> =
@@ -613,7 +640,9 @@ export type Contract<
 		? P
 		: [Extract<Parts[number], { readonly binds: object }>] extends [never]
 			? Exactly<Unbound<Parts>, P>
-			: Exactly<Unbound<Parts>, Fitted<P, BindsOf<Parts>>>;
+			: [Exactly<Unbound<Parts>, P>] extends [P]
+				? Fitted<P, BindsOf<Parts>>
+				: Exactly<Unbound<Parts>, P>;
 
 /**
  * What a sequence writes: `true` when any part certainly writes, `false`

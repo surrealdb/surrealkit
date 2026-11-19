@@ -17,7 +17,7 @@ SELECT VALUE reading FROM gauge
 	throwsAt: {},
 	tables: { read: ["gauge"], written: [] },
 	functions: [],
-	uses: { "floor": [{ kind: "field", table: "gauge", field: "reading", line: 3 }], "station": [{ kind: "field", table: "gauge", field: "station", line: 3 }] },
+	uses: { "floor": [{ kind: "field", table: "gauge", field: "reading", role: "compare", line: 3 }], "station": [{ kind: "field", table: "gauge", field: "station", role: "compare", line: 3 }] },
 	binds: { "floor": "float", "station": "string" },
 } as const);
 
@@ -34,7 +34,7 @@ CREATE gauge SET station = $station, reading = fn::scaled($raw), site = $site, t
 	throwsAt: {},
 	tables: { read: [], written: ["gauge"] },
 	functions: ["fn::scaled"],
-	uses: { "raw": [{ kind: "argument", function: "fn::scaled", index: 0, line: 2 }], "site": [{ kind: "field", table: "gauge", field: "site", line: 2 }], "station": [{ kind: "field", table: "gauge", field: "station", line: 2 }], "tags": [{ kind: "field", table: "gauge", field: "tags", line: 2 }] },
+	uses: { "raw": [{ kind: "argument", function: "fn::scaled", index: 0, line: 2 }], "site": [{ kind: "field", table: "gauge", field: "site", role: "assign", line: 2 }], "station": [{ kind: "field", table: "gauge", field: "station", role: "assign", line: 2 }], "tags": [{ kind: "field", table: "gauge", field: "tags", role: "assign", line: 2 }] },
 	binds: { "raw": "float", "site": "record<site>", "station": "string" },
 } as const);
 

@@ -44,9 +44,9 @@ export const misfit = () => {
 		result: SurrealSchema.String,
 	});
 	sequence(gauges.record).define({
+		// @ts-expect-error [module/binds-wrong-record] `site` holds a record, not a string
 		params: {
 			raw: SurrealSchema.Float,
-			// @ts-expect-error [module/binds-wrong-record] `site` holds a record, not a string
 			site: SurrealSchema.String,
 			station: SurrealSchema.String,
 			tags: Schema.Unknown,

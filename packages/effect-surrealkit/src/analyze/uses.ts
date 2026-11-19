@@ -21,6 +21,11 @@ export type BindingUse =
 			readonly kind: 'field';
 			readonly table: string;
 			readonly field: string;
+			/**
+			 * A `WHERE` comparison or a `SET` assignment; the analyzer always
+			 * says which, and a declared use may leave it out.
+			 */
+			readonly role?: 'compare' | 'assign';
 			readonly line: number;
 	  };
 
@@ -357,6 +362,7 @@ export const analyzeUses = (
 							kind: 'field',
 							table,
 							field,
+							role: inWhere ? 'compare' : 'assign',
 							line: (tokens[op.next] as Token).line,
 						});
 					continue;
@@ -371,6 +377,7 @@ export const analyzeUses = (
 							kind: 'field',
 							table,
 							field: other,
+							role: 'compare',
 							line: token.line,
 						});
 				}

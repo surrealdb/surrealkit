@@ -22,6 +22,23 @@ const readSnapshots = part({
 	binds: { ceiling: 'int', producer: 'string' },
 });
 
+const writeSnapshot = part({
+	sql: 'UPDATE snapshot SET producer = $producer;',
+	free: ['producer'],
+	uses: {
+		producer: [
+			{
+				kind: 'field',
+				table: 'snapshot',
+				field: 'producer',
+				role: 'assign',
+				line: 1,
+			},
+		],
+	},
+	binds: { producer: 'string' },
+});
+
 const score = part({
 	sql: 'RETURN fn::score($weight);',
 	free: ['weight'],
@@ -42,19 +59,24 @@ const readGadget = part({
 
 export const rejected = () => {
 	sequence(readSnapshots).define({
+		// @ts-expect-error [binds/field-wrong-representation] a number codec for a string field
 		params: {
 			ceiling: SurrealSchema.Int,
-			// @ts-expect-error [binds/field-wrong-representation] a number codec for a string field
 			producer: SurrealSchema.Int,
 		},
 		result: Schema.Unknown,
 	});
 	sequence(readSnapshots).define({
+		// @ts-expect-error [binds/branded-wrong-representation] a brand does not change the stored type
 		params: {
-			// @ts-expect-error [binds/branded-wrong-representation] a brand does not change the stored type
 			ceiling: SurrealSchema.String.pipe(Schema.brand('app/Ceiling')),
 			producer: SurrealSchema.String,
 		},
+		result: Schema.Unknown,
+	});
+	sequence(writeSnapshot).define({
+		// @ts-expect-error [binds/assigned-wrong-representation] a number codec assigned to a string field
+		params: { producer: SurrealSchema.Int },
 		result: Schema.Unknown,
 	});
 	sequence(score).define({

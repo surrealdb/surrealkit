@@ -1039,7 +1039,13 @@ patterns are recognised, each on tokens outside strings and comments:
 type BindingUse =
   | { kind: 'argument'; function: string; index: number; line: number }
   | { kind: 'key'; table: string; line: number }
-  | { kind: 'field'; table: string; field: string; line: number };
+  | {
+      kind: 'field';
+      table: string;
+      field: string;
+      role?: 'compare' | 'assign';
+      line: number;
+    };
 ```
 
 - `argument`: an argument of a custom function that is exactly one
@@ -1053,7 +1059,9 @@ type BindingUse =
   comparison (`=`, `==`, `!=`, `<`, `<=`, `>`, `>=`) in its `WHERE` between a
   bare field name and a parameter, or an assignment `field = $name` in the
   `SET` of an `UPDATE`, `UPSERT` or `CREATE`. `SELECT * FROM gauge WHERE
-  station = $station;` uses `$station` as `gauge.station`.
+  station = $station;` uses `$station` as `gauge.station`. The analyzer sets
+  `role` to `compare` for the `WHERE` comparison and `assign` for the `SET`
+  assignment, which messages say; a declared use may leave it out.
 
 `part` exposes the analysed `uses` (and checks declared ones against the
 text); `sequence(...).define` merges them into the statement's `uses` for

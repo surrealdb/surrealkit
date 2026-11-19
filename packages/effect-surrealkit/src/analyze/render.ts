@@ -183,7 +183,7 @@ const useEntry = (use: BindingUse): string =>
 		? `{ kind: "argument", function: ${JSON.stringify(use.function)}, index: ${use.index}, line: ${use.line} }`
 		: use.kind === 'key'
 			? `{ kind: "key", table: ${JSON.stringify(use.table)}, line: ${use.line} }`
-			: `{ kind: "field", table: ${JSON.stringify(use.table)}, field: ${JSON.stringify(use.field)}, line: ${use.line} }`;
+			: `{ kind: "field", table: ${JSON.stringify(use.table)}, field: ${JSON.stringify(use.field)}, ${use.role === undefined ? '' : `role: ${JSON.stringify(use.role)}, `}line: ${use.line} }`;
 
 const usesField = (uses: BindingUses): string =>
 	`{ ${Object.entries(uses)
@@ -250,7 +250,7 @@ const resolve = (use: BindingUse, detail: DeclaredDetail): Resolved => {
 		? { kind: 'kind', text: undefined }
 		: {
 				kind: 'problem',
-				message: `compares \`${use.field}\` of \`${use.table}\`, which declares no such field`,
+				message: `${use.role === 'assign' ? 'assigns' : 'compares'} \`${use.field}\` of \`${use.table}\`, which declares no such field`,
 			};
 };
 

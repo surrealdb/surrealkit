@@ -19,10 +19,16 @@ import { goldenDir, readJson } from './documents.js';
 
 const uses = (sql: string) => analyzeSync(sql).uses;
 
-const field = (table: string, name: string, line = 1) => ({
+const field = (
+	table: string,
+	name: string,
+	line = 1,
+	role: 'compare' | 'assign' = 'compare',
+) => ({
 	kind: 'field',
 	table,
 	field: name,
+	role,
 	line,
 });
 
@@ -128,9 +134,21 @@ describe('analyze: field uses', () => {
 	it('assignments in SET of UPDATE, UPSERT and CREATE', () => {
 		for (const verb of ['UPDATE', 'UPSERT', 'CREATE'])
 			expect(uses(`${verb} gizmo SET a = $a, b = $b;`)).toEqual({
-				a: [field('gizmo', 'a')],
-				b: [field('gizmo', 'b')],
+				a: [field('gizmo', 'a', 1, 'assign')],
+				b: [field('gizmo', 'b', 1, 'assign')],
 			});
+	});
+
+	it('tells a SET assignment from a WHERE comparison', () => {
+		expect(
+			uses(
+				'UPDATE gizmo SET a = $a;\nSELECT * FROM gizmo WHERE b = $b AND $c < c;',
+			),
+		).toEqual({
+			a: [field('gizmo', 'a', 1, 'assign')],
+			b: [field('gizmo', 'b', 2, 'compare')],
+			c: [field('gizmo', 'c', 2, 'compare')],
+		});
 	});
 
 	it('a subquery is a query of its own table', () => {
@@ -212,6 +230,24 @@ describe('part and sequence: uses', () => {
 		).toThrow(
 			'uses: the text uses `$a` as field `gizmo.a` on line 1, which is not declared; uses: declared `$a` as field `gizmo.z` on line 1, which the text does not use it as',
 		);
+		expect(() =>
+			part({
+				sql: 'UPDATE gizmo SET a = $a;',
+				free: ['a'],
+				uses: { a: [field('gizmo', 'a', 1, 'compare')] as never },
+			}),
+		).toThrow(
+			'uses: the text uses `$a` as field `gizmo.a` (assigned) on line 1, which is not declared; uses: declared `$a` as field `gizmo.a` on line 1, which the text does not use it as',
+		);
+		expect(
+			part({
+				sql: 'UPDATE gizmo SET a = $a;',
+				free: ['a'],
+				uses: {
+					a: [{ kind: 'field', table: 'gizmo', field: 'a', line: 1 }],
+				},
+			}).uses,
+		).toEqual({ a: [field('gizmo', 'a', 1, 'assign')] });
 		expect(() =>
 			part({
 				sql: 'RETURN $a;',
