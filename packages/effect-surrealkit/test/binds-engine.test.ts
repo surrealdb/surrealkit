@@ -14,7 +14,7 @@ import { renderStatementModulesSync } from '../src/analyze/index.js';
 import { type Client, make as makeClient } from '../src/client/index.js';
 import { declaredNames, decodeDocument } from '../src/emitter/index.js';
 import * as SurrealSchema from '../src/index.js';
-import { sequence } from '../src/statement/index.js';
+import { part, sequence } from '../src/statement/index.js';
 import { readJson } from './documents.js';
 import {
 	type Engine,
@@ -92,11 +92,11 @@ describe.skipIf(!engineConfigured)('parts with binds on an engine', () => {
 			],
 		});
 		expect(files[0]?.content).toContain(
-			'binds: { "floor": "float", "station": "string" }',
+			'binds: { "floor": "option<float>", "station": "option<string>" }',
 		);
 		expect(gauges.readings.binds).toEqual({
-			floor: 'float',
-			station: 'string',
+			floor: 'option<float>',
+			station: 'option<string>',
 		});
 	});
 
@@ -152,5 +152,52 @@ describe.skipIf(!engineConfigured)('parts with binds on an engine', () => {
 				Effect.runPromise(client.run(site, { siteKey: 'north' })),
 			),
 		).toEqual(['North']);
+	});
+
+	it('compares an optional field with a NONE binding', async () => {
+		// SurrealDB answers `note = NONE` true on a row whose `note` is
+		// absent, and false on one that holds a string, on the embedded
+		// engine and on a `surreal` server alike.
+		const readNotes = part({
+			sql: 'SELECT VALUE station FROM gauge WHERE station = $station AND note = $note ORDER BY station;',
+			free: ['note', 'station'],
+			binds: { note: 'option<string>', station: 'option<string>' },
+		});
+		const notes = sequence(readNotes).define({
+			name: 'gauges.notes',
+			params: {
+				note: Schema.UndefinedOr(Schema.Literal('calibrated')),
+				station: SurrealSchema.String,
+			},
+			result: Schema.Array(SurrealSchema.String),
+		});
+		await within(
+			Promise.resolve(
+				engine.db.query(
+					"CREATE gauge SET station = 'east', reading = 1.0, site = site:north, tags = [], note = 'calibrated';",
+				),
+			),
+		);
+		expect(
+			await within(
+				Effect.runPromise(
+					client.run(notes, { note: undefined, station: 'west' }),
+				),
+			),
+		).toEqual(['west', 'west', 'west']);
+		expect(
+			await within(
+				Effect.runPromise(
+					client.run(notes, { note: undefined, station: 'east' }),
+				),
+			),
+		).toEqual([]);
+		expect(
+			await within(
+				Effect.runPromise(
+					client.run(notes, { note: 'calibrated', station: 'east' }),
+				),
+			),
+		).toEqual(['east']);
 	});
 });

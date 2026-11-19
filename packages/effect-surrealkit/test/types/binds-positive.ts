@@ -82,3 +82,83 @@ export const shadowed = sequence(letProducer, readSnapshots).define({
 	},
 	result: Schema.Unknown,
 });
+
+// A binding every use of which accepts NONE is bound as `option<K>`: its
+// codec fits when what it holds besides `undefined` compares with `K`.
+const readMeter = part({
+	sql: 'SELECT * FROM meter WHERE model = $model;',
+	free: ['model'],
+	uses: {
+		model: [{ kind: 'field', table: 'meter', field: 'model', line: 1 }],
+	},
+	binds: { model: 'option<string>' },
+});
+export const optionalLiteral = sequence(readMeter).define({
+	params: { model: Schema.UndefinedOr(Schema.Literal('a')) },
+	result: Schema.Unknown,
+});
+export const optionalBranded = sequence(readMeter).define({
+	params: {
+		model: Schema.UndefinedOr(
+			SurrealSchema.String.pipe(Schema.brand('app/Model')),
+		),
+	},
+	result: Schema.Unknown,
+});
+export const optionalRefined = sequence(readMeter).define({
+	params: {
+		model: Schema.UndefinedOr(
+			SurrealSchema.String.check(Schema.isMinLength(1)),
+		),
+	},
+	result: Schema.Unknown,
+});
+export const optionalPlain = sequence(readMeter).define({
+	params: { model: SurrealSchema.String },
+	result: Schema.Unknown,
+});
+// `null` is not NONE: `NullOr` fits as it does on a plain kind.
+export const optionalNullOr = sequence(readMeter).define({
+	params: { model: Schema.NullOr(Schema.String) },
+	result: Schema.Unknown,
+});
+
+const passOptional = part({
+	sql: 'RETURN fn::tag($label);',
+	free: ['label'],
+	uses: {
+		label: [{ kind: 'argument', function: 'fn::tag', index: 0, line: 1 }],
+	},
+	binds: { label: 'option<string>' },
+});
+export const optionalArgument = sequence(passOptional).define({
+	params: { label: Schema.UndefinedOr(Schema.Literals(['a', 'b'])) },
+	result: Schema.Unknown,
+});
+
+// A plain kind is checked as before: a codec that can hold NONE and is
+// comparable as a whole still fits.
+const writeMeter = part({
+	sql: 'UPDATE meter SET model = $model;',
+	free: ['model'],
+	uses: {
+		model: [
+			{
+				kind: 'field',
+				table: 'meter',
+				field: 'model',
+				role: 'assign',
+				line: 1,
+			},
+		],
+	},
+	binds: { model: 'string' },
+});
+export const plainUndefinedOr = sequence(writeMeter).define({
+	params: { model: Schema.UndefinedOr(Schema.String) },
+	result: Schema.Unknown,
+});
+export const plainNullOr = sequence(writeMeter).define({
+	params: { model: Schema.NullOr(Schema.String) },
+	result: Schema.Unknown,
+});

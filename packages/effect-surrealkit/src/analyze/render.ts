@@ -60,7 +60,8 @@ export interface DeclaredNames {
 	 * given, every use of a binding the analyzer finds must resolve (a field
 	 * the table declares or accepts, an argument the function takes), and
 	 * each part states, in `binds`, the simple kind of each binding whose
-	 * every use resolves to the same one.
+	 * every use resolves to the same one (`option<K>` when every use accepts
+	 * NONE).
 	 */
 	readonly detail?: DeclaredDetail;
 }
@@ -212,6 +213,18 @@ const simpleKind = (kind: string | undefined): string | undefined => {
 	return SIMPLE.test(inner) ? inner : undefined;
 };
 
+/**
+ * Whether NONE is acceptable to a use whose kind text is `kind`: comparing
+ * a field with NONE always is; assigning to a field, or passing an
+ * argument, only when its kind is `option<…>`; a record key never.
+ */
+const acceptsNone = (use: BindingUse, kind: string | undefined): boolean =>
+	use.kind === 'field' && use.role !== 'assign'
+		? true
+		: use.kind !== 'key' &&
+			kind !== undefined &&
+			/^option<.*>$/u.test(kind);
+
 /** How a problem names a use that does not resolve. */
 type Resolved =
 	| { readonly kind: 'kind'; readonly text: string | undefined }
@@ -272,16 +285,21 @@ const checkUses = (
 	const binds: Record<string, string> = {};
 	for (const [name, list] of Object.entries(uses)) {
 		const kinds = new Set<string | undefined>();
+		let none = true;
 		for (const use of list) {
 			const resolved = resolve(use, detail);
 			if (resolved.kind === 'problem') {
 				problems.push({ line: use.line, message: resolved.message });
 				kinds.add(undefined);
 			} else if (resolved.kind === 'unchecked') kinds.add(undefined);
-			else kinds.add(simpleKind(resolved.text));
+			else {
+				kinds.add(simpleKind(resolved.text));
+				if (!acceptsNone(use, resolved.text)) none = false;
+			}
 		}
 		const [only] = kinds;
-		if (kinds.size === 1 && only !== undefined) binds[name] = only;
+		if (kinds.size === 1 && only !== undefined)
+			binds[name] = none ? `option<${only}>` : only;
 	}
 	return { problems, binds };
 };

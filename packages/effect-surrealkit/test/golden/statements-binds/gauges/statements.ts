@@ -18,7 +18,7 @@ SELECT VALUE reading FROM gauge
 	tables: { read: ["gauge"], written: [] },
 	functions: [],
 	uses: { "floor": [{ kind: "field", table: "gauge", field: "reading", role: "compare", line: 3 }], "station": [{ kind: "field", table: "gauge", field: "station", role: "compare", line: 3 }] },
-	binds: { "floor": "float", "station": "string" },
+	binds: { "floor": "option<float>", "station": "option<string>" },
 } as const);
 
 /** `gauges/record.surql`: a part. */

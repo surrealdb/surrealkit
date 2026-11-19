@@ -15,7 +15,8 @@ type Same<A, B> =
 		: false;
 const same = <A, B>(_: Same<A, B>): void => undefined;
 
-same<(typeof gauges.readings.binds)['station'], 'string'>(true);
+same<(typeof gauges.readings.binds)['station'], 'option<string>'>(true);
+same<(typeof gauges.record.binds)['station'], 'string'>(true);
 same<(typeof gauges.record.binds)['site'], 'record<site>'>(true);
 
 export const readings = sequence(gauges.readings).define({

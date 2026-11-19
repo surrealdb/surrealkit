@@ -57,7 +57,65 @@ const readGadget = part({
 	binds: { key: 'uuid' },
 });
 
+const readMeter = part({
+	sql: 'SELECT * FROM meter WHERE model = $model;',
+	free: ['model'],
+	uses: {
+		model: [{ kind: 'field', table: 'meter', field: 'model', line: 1 }],
+	},
+	binds: { model: 'option<string>' },
+});
+
+const writeMeter = part({
+	sql: 'UPDATE meter SET model = $model;',
+	free: ['model'],
+	uses: {
+		model: [
+			{
+				kind: 'field',
+				table: 'meter',
+				field: 'model',
+				role: 'assign',
+				line: 1,
+			},
+		],
+	},
+	binds: { model: 'string' },
+});
+
+const keyMeter = part({
+	sql: "SELECT * FROM type::record('meter', $key);",
+	free: ['key'],
+	uses: { key: [{ kind: 'key', table: 'meter', line: 1 }] },
+	binds: { key: 'string' },
+});
+
 export const rejected = () => {
+	sequence(readMeter).define({
+		// @ts-expect-error [binds/option-wrong-representation] a number inside `UndefinedOr` for an optional string
+		params: { model: Schema.UndefinedOr(Schema.Number) },
+		result: Schema.Unknown,
+	});
+	sequence(writeMeter).define({
+		// @ts-expect-error [binds/assigned-narrow-undefined-or] a plain kind is checked as before: `'a' | undefined` does not compare with a string
+		params: { model: Schema.UndefinedOr(Schema.Literal('a')) },
+		result: Schema.Unknown,
+	});
+	sequence(keyMeter).define({
+		// @ts-expect-error [binds/key-narrow-undefined-or] a key never accepts NONE
+		params: { key: Schema.UndefinedOr(Schema.Literal('a')) },
+		result: Schema.Unknown,
+	});
+	sequence(score).define({
+		// @ts-expect-error [binds/argument-narrow-undefined-or] a plain argument is checked as before
+		params: { weight: Schema.UndefinedOr(Schema.Literal(1)) },
+		result: Schema.Unknown,
+	});
+	sequence(readMeter).define({
+		// @ts-expect-error [binds/option-null-or-narrow] `null` is not NONE: `NullOr` of a literal still misfits
+		params: { model: Schema.NullOr(Schema.Literal('a')) },
+		result: Schema.Unknown,
+	});
 	sequence(readSnapshots).define({
 		// @ts-expect-error [binds/field-wrong-representation] a number codec for a string field
 		params: {

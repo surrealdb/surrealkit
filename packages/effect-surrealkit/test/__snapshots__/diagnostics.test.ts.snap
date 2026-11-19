@@ -42,9 +42,21 @@ exports[`type diagnostics > bind/wrong-type 1`] = `
 ]
 `;
 
+exports[`type diagnostics > binds/argument-narrow-undefined-or 1`] = `
+[
+  "TS2322: Type '{ weight: Schema.UndefinedOr<Schema.Literal<1>>; }' is not assignable to type '"binding \`weight\` is passed to \`fn::score\` at index 0 (float), which its codec cannot hold"'.",
+]
+`;
+
 exports[`type diagnostics > binds/argument-wrong-representation 1`] = `
 [
   "TS2322: Type '{ weight: Schema.declareConstructor<string, string, readonly [], string>; }' is not assignable to type '"binding \`weight\` is passed to \`fn::score\` at index 0 (float), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > binds/assigned-narrow-undefined-or 1`] = `
+[
+  "TS2322: Type '{ model: Schema.UndefinedOr<Schema.Literal<"a">>; }' is not assignable to type '"binding \`model\` is assigned to \`meter.model\` (string), which its codec cannot hold"'.",
 ]
 `;
 
@@ -66,9 +78,27 @@ exports[`type diagnostics > binds/field-wrong-representation 1`] = `
 ]
 `;
 
+exports[`type diagnostics > binds/key-narrow-undefined-or 1`] = `
+[
+  "TS2322: Type '{ key: Schema.UndefinedOr<Schema.Literal<"a">>; }' is not assignable to type '"binding \`key\` is the key of a \`meter\` record (string), which its codec cannot hold"'.",
+]
+`;
+
 exports[`type diagnostics > binds/key-wrong-representation 1`] = `
 [
   "TS2322: Type '{ key: Schema.declareConstructor<string, string, readonly [], string>; }' is not assignable to type '"binding \`key\` is the key of a \`gadget\` record (uuid), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > binds/option-null-or-narrow 1`] = `
+[
+  "TS2322: Type '{ model: Schema.NullOr<Schema.Literal<"a">>; }' is not assignable to type '"binding \`model\` is compared with \`meter.model\` (option<string>), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > binds/option-wrong-representation 1`] = `
+[
+  "TS2322: Type '{ model: Schema.UndefinedOr<Schema.Number>; }' is not assignable to type '"binding \`model\` is compared with \`meter.model\` (option<string>), which its codec cannot hold"'.",
 ]
 `;
 

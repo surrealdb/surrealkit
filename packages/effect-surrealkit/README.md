@@ -1083,13 +1083,21 @@ the schema does not declare are reported once, by the names check.
 A binding whose every use resolves to the same simple kind (`string`,
 `bool`, `int`, `float`, `number`, `decimal`, `datetime`, `duration`,
 `uuid`, or `record<table>` of one table; `option<K>` counts as `K`) is
-written into the part as `binds: { station: "string" }`. At compile time
+written into the part as `binds: { station: "option<string>" }`. At compile time
 `sequence(...).define` then refuses a codec whose stored type cannot hold
 that kind, by the same rule that decides whether two operands compare: a
 branded or refined codec over the right representation is accepted, and
 anything else is an error such as ``binding `station` is compared with
-`gauge.station` (string), which its codec cannot hold``. Bindings without a
+`gauge.station` (option<string>), which its codec cannot hold``. Bindings without a
 `binds` entry are checked as before.
+
+The entry is `option<K>` when every use of the binding accepts NONE:
+comparing a field with NONE is always valid, and assigning to a field or
+passing an argument accepts it when that field or argument is `option<…>`.
+A key never does. For `option<K>`, a codec fits when its stored type, with
+`undefined` set aside, compares with `K`, so `Schema.UndefinedOr` of a
+literal, branded or refined string fits `option<string>`. For a plain `K`
+the check is unchanged.
 
 The limits are plain: only these three patterns are read, by a lexer, not
 a parser, and nothing is recorded where it is not certain (a parameter in a

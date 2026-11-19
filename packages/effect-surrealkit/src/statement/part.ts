@@ -48,7 +48,8 @@ import {
  *   (see `Analysis.uses` in `effect-surrealkit/analyze`). Checked against
  *   the text when given; {@link part} always sets it.
  * - `binds`: for a binding whose every use resolves, in the schema, to the
- *   same simple kind, that kind's text (`string`, `int`, `record<t>`, …).
+ *   same simple kind, that kind's text (`string`, `int`, `record<t>`, …),
+ *   as `option<K>` when every use accepts NONE.
  *   `effect-surrealkit statements` writes it when given the schema;
  *   `sequence(...).define` then refuses, at compile time, a codec whose
  *   stored type cannot hold it.
@@ -567,11 +568,20 @@ type UseText<U> = U extends {
 /**
  * A message for each entry whose kind the codec `C` cannot hold: their
  * stored types do not overlap, exactly as {@link Comparable} decides for
- * two operands. `never` when every entry fits.
+ * two operands. For `option<K>` the codec's `undefined` (NONE) is set
+ * aside first. `never` when every entry fits.
  */
 type Misfits<E, C> = E extends BindEntry
 	? C extends Codec
-		? Comparable<KindStored<E['kind']>, C['Encoded'], true> extends true
+		? (
+				E['kind'] extends `option<${infer K}>`
+					? Comparable<
+							KindStored<K>,
+							Exclude<C['Encoded'], undefined>,
+							true
+						>
+					: Comparable<KindStored<E['kind']>, C['Encoded'], true>
+			) extends true
 			? never
 			: `binding \`${E['name']}\` ${UseText<E['use']>} (${E['kind']}), which its codec cannot hold`
 		: never

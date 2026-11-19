@@ -340,7 +340,62 @@ describe('statements with schema detail', () => {
 			"SELECT * FROM gauge WHERE station = $s AND note = $n AND tags = $t;\nSELECT * FROM type::record('site', $k) WHERE label = $s;\nRETURN fn::scaled($r);\nSELECT * FROM gauge WHERE id = $i;",
 		);
 		expect(files[0]?.content).toContain(
-			'\tbinds: { "i": "record<gauge>", "k": "string", "n": "string", "r": "float", "s": "string" },\n',
+			'\tbinds: { "i": "option<record<gauge>>", "k": "string", "n": "option<string>", "r": "float", "s": "option<string>" },\n',
+		);
+	});
+
+	it('binds option<K> only when every use accepts NONE', async () => {
+		const binds = async (sql: string) =>
+			/\tbinds: (.*),\n/u.exec(
+				(await render(sql)).files[0]?.content ?? '',
+			)?.[1];
+		// Assigned to a plain field: NONE is refused there.
+		expect(await binds('UPDATE gauge SET station = $s;')).toBe(
+			'{ "s": "string" }',
+		);
+		// Assigned to an option field, or compared with it.
+		expect(await binds('UPDATE gauge SET note = $n;')).toBe(
+			'{ "n": "option<string>" }',
+		);
+		// One use that refuses NONE decides it.
+		expect(
+			await binds(
+				'SELECT * FROM gauge WHERE station = $s;\nUPDATE gauge SET station = $s;',
+			),
+		).toBe('{ "s": "string" }');
+		expect(
+			await binds(
+				'SELECT * FROM gauge WHERE note = $n;\nUPDATE gauge SET note = $n;',
+			),
+		).toBe('{ "n": "option<string>" }');
+	});
+
+	it('an argument accepts NONE only when its kind is an option', () => {
+		const { files } = renderStatementModulesSync({
+			scopes: [
+				{
+					name: 'shop',
+					files: [
+						{
+							name: 'q',
+							sql: 'RETURN fn::label($a, $b);',
+						},
+					],
+					declared: {
+						tables: [],
+						functions: ['fn::label'],
+						detail: {
+							tables: {},
+							functions: {
+								'fn::label': ['option<string>', 'int'],
+							},
+						},
+					},
+				},
+			],
+		});
+		expect(files[0]?.content).toContain(
+			'\tbinds: { "a": "option<string>", "b": "int" },\n',
 		);
 	});
 
