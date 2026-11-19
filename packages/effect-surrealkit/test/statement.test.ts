@@ -558,6 +558,61 @@ describe('authored statements', () => {
 		).toThrow(/can be shadowed/);
 	});
 
+	it('check a part against its own text when it is declared', () => {
+		// Finding 5: a read nobody declared used to run as NONE.
+		expect(() =>
+			part({
+				name: 'by email',
+				sql: 'SELECT VALUE name FROM person WHERE email = $email;',
+			}),
+		).toThrow(/part `by email`.*free: the text reads \$email/);
+		// A name the text only reads is not one it defines.
+		expect(() =>
+			part({ sql: 'RETURN $n;', free: ['n'], defines: ['n'] }),
+		).toThrow(/defines: .*\$n.*not LET at the top level/);
+		expect(() => part({ sql: 'LET $n = 1;', free: ['n'] })).toThrow(
+			/free: .*\$n.*does not read/,
+		);
+		expect(() =>
+			part({ sql: 'LET $a = 1; RETURN $a;', defines: ['a'] }),
+		).toThrow(/slots: declared 1, the text returns 2/);
+		expect(() => part({ sql: "THROW 'boom';" })).toThrow(
+			/throws: the text can THROW 'boom'/,
+		);
+		expect(() =>
+			part({ sql: 'RETURN 1;', throws: ['never thrown'] }),
+		).toThrow(/throws: .*'never thrown'.*never THROWs/);
+		expect(() =>
+			part({ sql: 'SELECT * FROM person WHERE __FILTER__;' }),
+		).toThrow(/has holes \(__FILTER__\)/);
+		// What the text says, declared, is accepted as before.
+		expect(() =>
+			part({
+				sql: 'LET $a = $b; IF $a { THROW "no" }; RETURN $a;',
+				free: ['b'],
+				defines: ['a'],
+				slots: 3,
+				throws: ['no'],
+			}),
+		).not.toThrow();
+	});
+
+	it('check a part that was not declared with `part` when it is sequenced', () => {
+		const handMade: Part = {
+			sql: 'RETURN $a;',
+			free: [],
+			defines: [],
+			slots: 1,
+			throws: [],
+		};
+		expect(() =>
+			sequence(handMade).define({
+				params: {},
+				result: Schema.Unknown,
+			}),
+		).toThrow(/part 1 of the sequence.*free: the text reads \$a/);
+	});
+
 	it('declare a statement directly, unchecked', () => {
 		const statement = make({
 			sql: 'RETURN $a + 1;',

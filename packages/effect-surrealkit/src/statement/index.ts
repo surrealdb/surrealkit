@@ -48,6 +48,15 @@ export {
 	unsafeExpr,
 } from './expr.js';
 export {
+	type Contract,
+	type Exactly,
+	type Part,
+	part,
+	sequence,
+	type ThrownBy,
+	type Unbound,
+} from './part.js';
+export {
 	type FieldExpr,
 	type Fields,
 	type FieldsOf,
@@ -70,22 +79,15 @@ export {
 export {
 	type AnyStatement,
 	type Codec,
-	type Contract,
-	type Exactly,
 	type Input,
 	isStatement,
 	make,
 	type NoParams,
 	type Params,
-	type Part,
-	part,
 	type Result,
 	type Statement,
 	StatementTypeId,
-	sequence,
 	type Thrown,
-	type ThrownBy,
-	type Unbound,
 } from './statement.js';
 export {
 	type Condition,

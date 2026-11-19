@@ -299,9 +299,12 @@ immutable, so a base query can be shared.
 A multi-statement script stays SurrealQL. Describe each text as a `part`
 (the `$names` it reads and does not define, the names it `LET`s, how many
 results it returns, what it can `THROW`) and run parts in one scope with
-`sequence`. The contract must name exactly the names the sequence still
-needs: a missing or extra binding is a compile error, checked again when the
-statement is defined.
+`sequence`. `part` checks the description against the text with the
+package's own analyzer when it is declared: a `free`, `defines`, `slots` or
+`throws` that differs from what the text says is refused with the
+difference, and so is a text with holes. The contract must name exactly the
+names the sequence still needs: a missing or extra binding is a compile
+error, checked again when the statement is defined.
 
 ```ts
 import { part, sequence } from 'effect-surrealkit/statement';
@@ -332,7 +335,8 @@ const profile = sequence(bindOwner, requireOwner, readProfile).define({
 SurrealDB reads a parameter nothing bound as NONE, without an error (3.3
 and 4.0), so a misspelt binding would quietly change what a script does;
 that is what the contract is for. `make({ sql, params, result })` declares a
-statement with no such check.
+statement with no such check. Only `part` and `sequence` import the
+analyzer, so code that uses only the builders does not bundle it.
 
 ### Statements from `.surql` files
 
