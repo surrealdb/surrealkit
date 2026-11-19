@@ -1045,6 +1045,40 @@ const { files, warnings } = await Effect.runPromise(program);
 
 `renderStatementModulesSync` is the same, throwing the error.
 
+#### Pinning built statements
+
+Pinning keeps the SurrealQL text of statements built in TypeScript in
+checked-in `.surql` files, so a reviewer reads the built statement as SQL,
+a package upgrade that changes the emitted text shows up in a diff, and a
+recorded hash covers a text that is in the repository. Both functions are
+pure and synchronous; the caller reads and writes the files.
+`renderPinnedStatements(statements)` returns `[{ path, content }]`, sorted:
+`billing.openInvoices` becomes `billing/openInvoices.surql` holding its
+`sql` and one newline. It throws a `PinnedStatementsError` listing every
+unnamed, duplicate or colliding name and every segment that is empty or not
+letters, digits, `_` and `-`. `pinnedStatementProblems(statements, files)`
+compares the files on disk and returns `[{ path, name?, kind }]` with kind
+`missing`, `changed` or `stale`, ignoring files that are not `.surql`;
+empty means current.
+
+```ts
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { pinnedStatementProblems, renderPinnedStatements } from 'effect-surrealkit/analyze';
+
+// build: write every pin
+for (const { path, content } of renderPinnedStatements(statements)) {
+	mkdirSync(dirname(join('pins', path)), { recursive: true });
+	writeFileSync(join('pins', path), content);
+}
+// check: fail on any missing, changed or stale pin
+const files = readdirSync('pins', { recursive: true, encoding: 'utf8' })
+	.filter((path) => path.endsWith('.surql'))
+	.map((path) => ({ path, content: readFileSync(join('pins', path), 'utf8') }));
+const problems = pinnedStatementProblems(statements, files);
+if (problems.length > 0) throw new Error(problems.map((p) => `${p.kind} ${p.path}`).join('\n'));
+```
+
 The analyzer is `effect-surrealkit/analyze`, pure and host-neutral:
 `analyze(sql, { holes? })` returns `{ kind, sql, free, defines, slots,
 throws, throwsAt, holes, provisional, transactional, writes, diagnostics }` or fails

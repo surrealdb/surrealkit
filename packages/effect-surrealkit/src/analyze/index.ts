@@ -18,6 +18,14 @@ export {
 	type HoleDelimiters,
 } from './lexer.js';
 export {
+	type PinnableStatement,
+	type PinnedStatementDrift,
+	type PinnedStatementProblem,
+	PinnedStatementsError,
+	pinnedStatementProblems,
+	renderPinnedStatements,
+} from './pin.js';
+export {
 	type RenderStatementModulesInput,
 	renderStatementModules,
 	renderStatementModulesSync,
