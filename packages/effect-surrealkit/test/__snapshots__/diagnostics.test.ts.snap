@@ -600,8 +600,8 @@ exports[`type diagnostics > module/sequence-missing-principal 1`] = `
 
 exports[`type diagnostics > module/template-missing-fill 1`] = `
 [
-  "TS2345: Argument of type '{}' is not assignable to parameter of type '{ readonly __FILTER__: string | Text<string>; }'.
-  Property '__FILTER__' is missing in type '{}' but required in type '{ readonly __FILTER__: string | Text<string>; }'.",
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '{ readonly __FILTER__: string | Text<string, string, string, string, TextHoleScopes>; }'.
+  Property '__FILTER__' is missing in type '{}' but required in type '{ readonly __FILTER__: string | Text<string, string, string, string, TextHoleScopes>; }'.",
 ]
 `;
 

@@ -14,27 +14,58 @@ import {
 	type Token,
 } from './lexer.js';
 
-/** A fragment or template, as the `statements` command writes it. */
-export interface Text<Holes extends string = string> {
+/** What the text around one hole does with names; see `Analysis.holeScopes`. */
+export interface TextHoleScope<
+	Bound extends string = string,
+	Binds extends string = string,
+> {
+	readonly bound: ReadonlyArray<Bound>;
+	readonly binds: ReadonlyArray<Binds>;
+}
+
+/** The scope of each hole of a template, by hole. */
+export type TextHoleScopes = { readonly [hole: string]: TextHoleScope };
+
+/**
+ * A fragment or template, as the `statements` command writes it. The names
+ * it reads, defines and throws, and the scope of each hole, are kept as
+ * literal types, so `compose` (in `effect-surrealkit/statement`) can work
+ * out what a filled text reads.
+ */
+export interface Text<
+	Holes extends string = string,
+	Free extends string = string,
+	Defines extends string = string,
+	Throws extends string = string,
+	Scopes extends TextHoleScopes = TextHoleScopes,
+> {
 	readonly kind: 'part' | 'fragment';
 	readonly name?: string;
 	readonly source?: string;
 	readonly sql: string;
 	readonly holes: ReadonlyArray<Holes>;
 	/** As written; provisional while the text has holes. */
-	readonly free: ReadonlyArray<string>;
+	readonly free: ReadonlyArray<Free>;
 	/** As written; provisional while the text has holes. */
-	readonly defines: ReadonlyArray<string>;
+	readonly defines: ReadonlyArray<Defines>;
 	readonly provisional: boolean;
 	readonly slots: number;
-	readonly throws: ReadonlyArray<string>;
+	readonly throws: ReadonlyArray<Throws>;
 	readonly throwsAt?: Readonly<Record<string, ReadonlyArray<number>>>;
+	/** Per hole: see `Analysis.holeScopes`. Written for every template. */
+	readonly scopes?: Scopes;
 }
 
-/** Declares a {@link Text}, keeping its hole names as literal types. */
-export const text = <const Holes extends string = never>(
-	options: Text<Holes>,
-): Text<Holes> => options;
+/** Declares a {@link Text}, keeping its names as literal types. */
+export const text = <
+	const Holes extends string = never,
+	const Free extends string = never,
+	const Defines extends string = never,
+	const Throws extends string = never,
+	const Scopes extends TextHoleScopes = Record<never, never>,
+>(
+	options: Text<Holes, Free, Defines, Throws, Scopes>,
+): Text<Holes, Free, Defines, Throws, Scopes> => options;
 
 /** Why holes could not be filled. */
 export class FillError extends Data.TaggedError('FillError')<{
@@ -52,7 +83,7 @@ export interface FillOptions {
 
 /** The fills a template takes: one per hole when its holes are known. */
 export type Fills<T> =
-	T extends Text<infer Holes>
+	T extends Text<infer Holes, string, string, string, TextHoleScopes>
 		? string extends Holes
 			? Readonly<Record<string, string | Text>>
 			: { readonly [K in Holes]: string | Text }

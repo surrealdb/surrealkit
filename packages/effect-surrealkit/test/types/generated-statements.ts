@@ -7,7 +7,7 @@
 import type { Effect } from 'effect';
 import * as SurrealSchema from 'effect-surrealkit';
 
-import { type FillError, fill } from '../../src/analyze/index.js';
+import { type FillError, fill, type Text } from '../../src/analyze/index.js';
 import {
 	type Input,
 	type Result,
@@ -26,6 +26,17 @@ const same = <A, B>(_: Same<A, B>): void => undefined;
 same<(typeof accounts.bindOwner.free)[number], 'boundOwner'>(true);
 same<(typeof accounts.bindOwner.defines)[number], 'owner' | 'principal'>(true);
 same<(typeof counter.step.throws)[number], 'Too large'>(true);
+
+// A generated text keeps its free names and hole scopes as literals too, and
+// still is a `Text` to code that spells out none of its new parameters.
+same<(typeof accounts.ownerFilter.free)[number], 'owner'>(true);
+same<(typeof accounts.listWhere.holes)[number], '__FILTER__'>(true);
+same<keyof NonNullable<typeof accounts.listWhere.scopes>, '__FILTER__'>(true);
+export const plainTexts: ReadonlyArray<Text> = [
+	accounts.ownerFilter,
+	accounts.listWhere,
+];
+export const holedText: Text<'__FILTER__'> = accounts.listWhere;
 
 export const profile = sequence(
 	accounts.bindOwner,

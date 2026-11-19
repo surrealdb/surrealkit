@@ -172,6 +172,14 @@ const templateLiteral = (text: string): string =>
 const list = (values: ReadonlyArray<string>): string =>
 	`[${values.map((value) => JSON.stringify(value)).join(', ')}]`;
 
+const scopesField = (scopes: Analysis['holeScopes']): string =>
+	`{ ${Object.entries(scopes)
+		.map(
+			([hole, scope]) =>
+				`${JSON.stringify(hole)}: { bound: ${list(scope.bound)}, binds: ${list(scope.binds)} }`,
+		)
+		.join(', ')} }`;
+
 const lines = (throwsAt: Analysis['throwsAt']): string => {
 	const entries = Object.entries(throwsAt);
 	return entries.length === 0
@@ -326,6 +334,9 @@ const renderConstant = (
 		`free: ${list(analysis.free)}`,
 		`defines: ${list(analysis.defines)}`,
 		...(complete ? [] : [`provisional: ${analysis.provisional}`]),
+		...(analysis.holes.length > 0
+			? [`scopes: ${scopesField(analysis.holeScopes)}`]
+			: []),
 		`slots: ${analysis.slots}`,
 		`throws: ${list(analysis.throws)}`,
 		`throwsAt: ${lines(analysis.throwsAt)}`,

@@ -48,6 +48,8 @@ export {
 	type Fills,
 	fill,
 	type Text,
+	type TextHoleScope,
+	type TextHoleScopes,
 	text,
 } from './text.js';
 export type { BindingUse, BindingUses } from './uses.js';

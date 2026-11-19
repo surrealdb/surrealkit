@@ -29,6 +29,7 @@ export const listWhere = $analyze.text({
 	free: [],
 	defines: [],
 	provisional: true,
+	scopes: { "__FILTER__": { bound: [], binds: [] } },
 	slots: 1,
 	throws: [],
 	throwsAt: {},
