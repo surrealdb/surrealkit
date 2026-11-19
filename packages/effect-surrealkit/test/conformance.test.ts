@@ -1350,4 +1350,257 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 			expect(await attempt(' FOR UPDATE', 'held:b')).toBe('committed');
 		});
 	});
+
+	describe('full-text and nearest-neighbour search', () => {
+		const v = [1, 0, 0, 0];
+		beforeAll(async () => {
+			await query(`
+				DEFINE ANALYZER words TOKENIZERS blank, class FILTERS lowercase;
+				DEFINE TABLE ft_doc SCHEMAFULL;
+				DEFINE FIELD title ON ft_doc TYPE string;
+				DEFINE FIELD body ON ft_doc TYPE string;
+				DEFINE FIELD embedding ON ft_doc TYPE array<float, 4>;
+				DEFINE INDEX ft_doc_body ON ft_doc FIELDS body FULLTEXT ANALYZER words BM25 HIGHLIGHTS;
+				DEFINE INDEX ft_doc_title ON ft_doc FIELDS title FULLTEXT ANALYZER words BM25;
+				DEFINE INDEX ft_doc_embedding ON ft_doc FIELDS embedding HNSW DIMENSION 4 DIST COSINE;
+				${[0, 1, 2, 3, 4, 5]
+					.map(
+						(i) =>
+							`CREATE ft_doc:f${i} SET title = 'filler ${i}', body = 'common words only', embedding = [0.0, 0.0, 1.0, ${i}.0];`,
+					)
+					.join('\n')}
+				CREATE ft_doc:fox SET title = 'fox', body = 'the quick fox and another fox', embedding = [1.0, 0.0, 0.0, 0.0];
+				CREATE ft_doc:dog SET title = 'dog', body = 'a quick dog', embedding = [0.9, 0.1, 0.0, 0.0];
+				DEFINE TABLE ft_plain SCHEMAFULL;
+				DEFINE FIELD body ON ft_plain TYPE string;
+				DEFINE FIELD embedding ON ft_plain TYPE array<float>;
+				CREATE ft_plain:a SET body = 'the fox', embedding = [1.0, 0.0];
+				CREATE ft_plain:b SET body = 'a dog', embedding = [0.0, 1.0];
+			`);
+		});
+
+		it('a match reference, a neighbour count and a search effort are literals only', async () => {
+			await expect(
+				query("SELECT id FROM ft_doc WHERE body @$r@ 'fox';", { r: 1 }),
+			).rejects.toThrow(/expected a match reference/);
+			await expect(
+				query("SELECT id FROM ft_doc WHERE body @256@ 'fox';"),
+			).rejects.toThrow(/Parse error/);
+			expect(
+				await query(
+					"SELECT VALUE id FROM ft_doc WHERE body @255@ 'fox';",
+				),
+			).toHaveLength(1);
+			await expect(
+				query('SELECT id FROM ft_doc WHERE embedding <|$k,40|> $v;', {
+					k: 2,
+					v,
+				}),
+			).rejects.toThrow(/expected an unsigned integer/);
+			await expect(
+				query('SELECT id FROM ft_doc WHERE embedding <|2,$ef|> $v;', {
+					ef: 40,
+					v,
+				}),
+			).rejects.toThrow(/expected a distance of an integer/);
+		});
+
+		it('the search terms and the query vector take bindings', async () => {
+			expect(
+				await query(
+					'SELECT VALUE id FROM ft_doc WHERE body @1@ $terms; SELECT VALUE id FROM ft_doc WHERE embedding <|1,40|> $v;',
+					{ terms: 'fox', v },
+				),
+			).toMatchObject([[{ id: 'fox' }], [{ id: 'fox' }]]);
+		});
+
+		it('a match without a FULLTEXT index is an error', async () => {
+			await expect(
+				query("SELECT id FROM ft_plain WHERE body @1@ 'fox';"),
+			).rejects.toThrow(
+				/There was no suitable index supporting the expression/,
+			);
+		});
+
+		it('<|k, ef|> without a vector index is an error on SurrealDB 4 and no rows on 3', async () => {
+			const unindexed = query(
+				'SELECT id FROM ft_plain WHERE embedding <|1,40|> $v;',
+				{ v: [1, 0] },
+			);
+			if (engine.majorVersion >= 4) {
+				await expect(unindexed).rejects.toThrow(
+					/needs an HNSW or DiskANN index on `embedding`/,
+				);
+			} else {
+				expect(await unindexed).toStrictEqual([[]]);
+			}
+			// The brute-force form needs no index.
+			expect(
+				await query(
+					'SELECT VALUE id FROM ft_plain WHERE embedding <|1,EUCLIDEAN|> $v;',
+					{ v: [1, 0] },
+				),
+			).toMatchObject([[{ id: 'a' }]]);
+		});
+
+		it('scores a term in at least half the rows above 0 on SurrealDB 4 and 0 on 3; a rarer one above 0 on both', async () => {
+			const [common] = (await query(
+				"SELECT VALUE search::score(1) FROM ft_doc WHERE body @1@ 'common';",
+			)) as [Array<number>];
+			expect(common).toHaveLength(6);
+			for (const value of common) {
+				if (engine.majorVersion >= 4) expect(value).toBeGreaterThan(0);
+				else expect(value).toBe(0);
+			}
+			const [rare] = (await query(
+				"SELECT VALUE search::score(1) FROM ft_doc WHERE body @1@ 'quick';",
+			)) as [Array<number>];
+			expect(rare).toHaveLength(2);
+			for (const value of rare) expect(value).toBeGreaterThan(0);
+		});
+
+		it('a score of a reference no match defines reads another match’s score, without an error', async () => {
+			const [[row]] = (await query(
+				"SELECT search::score(1) AS s, search::score(2) AS stray FROM ft_doc WHERE body @1@ 'fox';",
+			)) as [[{ s: number; stray: number }]];
+			expect(row.s).toBeGreaterThan(0);
+			expect(row.stray).toBe(row.s);
+		});
+
+		it('a row admitted through OR scores 0, is unmarked and has no offsets', async () => {
+			const [rows] = (await query(
+				"SELECT id, search::score(1) AS s, search::highlight('<', '>', 1) AS h, search::offsets(1) AS o FROM ft_doc WHERE body @1@ 'fox' OR title = 'dog' ORDER BY id;",
+			)) as [Array<Record<string, unknown>>];
+			expect(rows.map(({ id, ...rest }) => rest)).toStrictEqual([
+				{ s: 0, h: 'a quick dog', o: undefined },
+				{
+					s: expect.any(Number),
+					h: 'the quick <fox> and another <fox>',
+					o: {
+						0: [
+							{ s: 10, e: 13 },
+							{ s: 26, e: 29 },
+						],
+					},
+				},
+			]);
+		});
+
+		it('two matches sharing a reference highlight both on SurrealDB 4 and the last on 3', async () => {
+			const [marked] = await query(
+				"SELECT VALUE search::highlight('<', '>', 1) FROM ft_doc WHERE body @1@ 'fox' AND body @1@ 'another';",
+			);
+			expect(marked).toStrictEqual(
+				engine.majorVersion >= 4
+					? ['the quick <fox> and <another> <fox>']
+					: ['the quick fox and <another> fox'],
+			);
+		});
+
+		it('an index without HIGHLIGHTS leaves the text unmarked', async () => {
+			expect(
+				await query(
+					"SELECT VALUE search::highlight('<', '>', 1) FROM ft_doc WHERE title @1@ 'fox';",
+				),
+			).toStrictEqual([['fox']]);
+		});
+
+		it('vector::distance::knn() is the distance of each hit, and an error without a search', async () => {
+			const [hits] = (await query(
+				'SELECT VALUE vector::distance::knn() FROM ft_doc WHERE embedding <|2,40|> $v;',
+				{ v },
+			)) as [Array<number>];
+			expect(hits[0]).toBe(0);
+			expect(hits[1]).toBeGreaterThan(0);
+			await expect(
+				query('SELECT vector::distance::knn() FROM ft_doc;'),
+			).rejects.toThrow(/no KNN operator found in WHERE condition/);
+		});
+
+		it('a WHERE takes one search on SurrealDB 4 (3 takes two), only at the top level on both', async () => {
+			const two = query(
+				'SELECT VALUE id FROM ft_doc WHERE embedding <|2,40|> $v AND embedding <|1,40|> $w;',
+				{ v, w: [0, 1, 0, 0] },
+			);
+			if (engine.majorVersion >= 4) {
+				await expect(two).rejects.toThrow(
+					/A WHERE clause supports a single KNN operator/,
+				);
+			} else {
+				expect(await two).toHaveLength(1);
+			}
+			await expect(
+				query(
+					"SELECT id FROM ft_doc WHERE (embedding <|2,40|> $v) OR title = 'dog';",
+					{ v },
+				),
+			).rejects.toThrow(
+				/must appear at the top level of the WHERE clause/,
+			);
+		});
+
+		it('a query vector of another length than the index dimension is an error', async () => {
+			await expect(
+				query('SELECT id FROM ft_doc WHERE embedding <|2,40|> $v;', {
+					v: [1, 0, 0],
+				}),
+			).rejects.toThrow(/Incorrect vector dimension \(3\)/);
+		});
+
+		it('rrf and linear merge rows by id, add their score, and leave out rows without an id', async () => {
+			const lists =
+				"[(SELECT id, title, vector::distance::knn() AS distance FROM ft_doc WHERE embedding <|2,40|> $v), (SELECT id, body, search::score(1) AS ft_score FROM ft_doc WHERE body @1@ 'quick')]";
+			type Rows = [Array<Record<string, unknown>>];
+			const [fused] = (await query(
+				`RETURN search::rrf(${lists}, 10, 60);`,
+				{ v },
+			)) as Rows;
+			const [weighted] = (await query(
+				`RETURN search::linear(${lists}, [1, 1], 10, 'minmax');`,
+				{ v },
+			)) as Rows;
+			const [noIds] = (await query(
+				'RETURN search::rrf([(SELECT title FROM ft_doc), (SELECT title FROM ft_doc)], 10);',
+			)) as Rows;
+			expect(fused.map((row) => Object.keys(row).sort())).toStrictEqual([
+				['body', 'distance', 'ft_score', 'id', 'rrf_score', 'title'],
+				['body', 'distance', 'ft_score', 'id', 'rrf_score', 'title'],
+			]);
+			expect(
+				weighted.every((row) => typeof row.linear_score === 'number'),
+			).toBe(true);
+			expect(noIds).toStrictEqual([]);
+			await expect(
+				query(`RETURN search::rrf(${lists}, 0, 60);`, { v }),
+			).rejects.toThrow(/limit must be at least 1/);
+		});
+
+		it('plans a match through its FULLTEXT index, <|k, ef|> through its vector index, and the brute-force form through none', async () => {
+			const plan = async (
+				sql: string,
+				bindings?: Record<string, unknown>,
+			) => JSON.stringify(await query(`${sql} EXPLAIN;`, bindings));
+			expect(
+				await plan("SELECT id FROM ft_doc WHERE body @1@ 'fox'"),
+			).toContain('"index":"ft_doc_body"');
+			expect(
+				await plan(
+					'SELECT id FROM ft_doc WHERE embedding <|2,40|> $v',
+					{
+						v,
+					},
+				),
+			).toContain('"index":"ft_doc_embedding"');
+			const brute = await plan(
+				'SELECT id FROM ft_doc WHERE embedding <|2,COSINE|> $v',
+				{ v },
+			);
+			expect(brute).toContain('"operator":"KnnTopK"');
+			expect(brute).not.toContain('"index"');
+			// Without its index a match plans a table scan, and fails when it runs.
+			expect(
+				await plan("SELECT id FROM ft_plain WHERE body @1@ 'fox'"),
+			).not.toContain('"index"');
+		});
+	});
 });
