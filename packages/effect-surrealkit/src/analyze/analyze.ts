@@ -6,7 +6,8 @@ import { Effect } from 'effect';
 
 import {
 	AnalyzeError,
-	holeMatcher,
+	type HoleDelimiters,
+	holeDelimiters,
 	type Lexed,
 	lex,
 	type Token,
@@ -23,10 +24,10 @@ export interface Diagnostic {
 
 export interface AnalyzeOptions {
 	/**
-	 * What a hole looks like, outside strings and comments. Default
-	 * `__[A-Z][A-Z0-9_]*__`.
+	 * The literal delimiters of a hole, outside strings and comments, around
+	 * a name matching `[A-Z][A-Z0-9_]*`. Default `__` and `__`.
 	 */
-	readonly holePattern?: RegExp | string;
+	readonly holes?: HoleDelimiters;
 }
 
 export interface Analysis {
@@ -524,7 +525,7 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 export const analyzeSync = (
 	sql: string,
 	options: AnalyzeOptions = {},
-): Analysis => analyzeLexed(sql, lex(sql, holeMatcher(options.holePattern)));
+): Analysis => analyzeLexed(sql, lex(sql, holeDelimiters(options.holes)));
 
 /**
  * Analyses one SurrealQL text: the `$names` it reads and does not define,

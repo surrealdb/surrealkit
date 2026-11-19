@@ -12,7 +12,11 @@ import { join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 
 import { type Analysis, analyzeSync } from '../analyze/analyze.js';
-import { AnalyzeError, holeMatcher } from '../analyze/lexer.js';
+import {
+	AnalyzeError,
+	type HoleDelimiters,
+	holeDelimiters,
+} from '../analyze/lexer.js';
 import { apply, compareWith, type OutputFile, problemsOf } from './files.js';
 import { type CliIo, UsageError } from './io.js';
 
@@ -29,8 +33,10 @@ Options:
   --check                    Write nothing; exit 1 if the output is not up to date
   --watch                    Regenerate whenever a file under --input changes
   --import-extension <ext>   .js (default) | .ts: extension of index.ts imports
-  --hole-pattern <regex>     What a template hole looks like
-                             (default __[A-Z][A-Z0-9_]*__)
+  --hole-open <text>         The text that opens a template hole (default __)
+  --hole-close <text>        The text that closes a template hole (default __);
+                             a hole is open, a name matching [A-Z][A-Z0-9_]*,
+                             then close
   --help                     Show this help
 
 Exit codes: 0 success, 1 generation failed or output out of date, 2 bad arguments.
@@ -181,7 +187,8 @@ const renderConstant = (source: Source, analysis: Analysis): string => {
 
 export interface StatementsOptions {
 	readonly importExtension: '.js' | '.ts';
-	readonly holePattern?: string;
+	/** The literal delimiters of a hole; default `__` and `__`. */
+	readonly holes?: HoleDelimiters;
 }
 
 /**
@@ -237,8 +244,8 @@ export const renderStatements = (
 		let analysis: Analysis;
 		try {
 			analysis = analyzeSync(source.sql, {
-				...(options.holePattern !== undefined && {
-					holePattern: options.holePattern,
+				...(options.holes !== undefined && {
+					holes: options.holes,
 				}),
 			});
 		} catch (error) {
@@ -358,7 +365,8 @@ export const statements = async (
 			check: { type: 'boolean' },
 			watch: { type: 'boolean' },
 			'import-extension': { type: 'string' },
-			'hole-pattern': { type: 'string' },
+			'hole-open': { type: 'string' },
+			'hole-close': { type: 'string' },
 			help: { type: 'boolean' },
 		},
 		strict: true,
@@ -377,12 +385,19 @@ export const statements = async (
 	const importExtension = values['import-extension'] ?? '.js';
 	if (importExtension !== '.js' && importExtension !== '.ts')
 		throw new UsageError('--import-extension must be .js or .ts');
-	const holePattern = values['hole-pattern'];
-	if (holePattern !== undefined) {
+	const holeOpen = values['hole-open'];
+	const holeClose = values['hole-close'];
+	let holes: HoleDelimiters | undefined;
+	if (holeOpen !== undefined || holeClose !== undefined) {
 		try {
-			holeMatcher(holePattern);
+			holes = holeDelimiters({
+				open: holeOpen ?? '__',
+				close: holeClose ?? '__',
+			});
 		} catch (error) {
-			throw new UsageError(`--hole-pattern: ${(error as Error).message}`);
+			throw new UsageError(
+				`--hole-open/--hole-close: ${(error as Error).message}`,
+			);
 		}
 	}
 	const input = resolve(io.cwd, values.input);
@@ -391,7 +406,7 @@ export const statements = async (
 		throw new UsageError('--out must be outside --input');
 	const options: StatementsOptions = {
 		importExtension,
-		...(holePattern !== undefined && { holePattern }),
+		...(holes !== undefined && { holes }),
 	};
 
 	const once = async (): Promise<number> => {

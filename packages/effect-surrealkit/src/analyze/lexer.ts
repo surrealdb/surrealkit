@@ -42,8 +42,21 @@ export interface Token {
 	readonly column: number;
 }
 
-/** The default hole pattern: `__NAME__` in capitals, digits and underscores. */
-export const DEFAULT_HOLE_PATTERN = /__[A-Z][A-Z0-9_]*__/;
+/**
+ * What a template hole looks like: a name of capitals, digits and
+ * underscores, starting with a capital, between two literal delimiters
+ * (`__NAME__` by default). Delimiters are matched as text, never compiled.
+ */
+export interface HoleDelimiters {
+	readonly open: string;
+	readonly close: string;
+}
+
+/** The default delimiters: `__NAME__`. */
+export const DEFAULT_HOLE_DELIMITERS: HoleDelimiters = {
+	open: '__',
+	close: '__',
+};
 
 const STRING_PREFIXES: ReadonlySet<string> = new Set([
 	'r',
@@ -140,39 +153,59 @@ const isWordChar = (c: string | undefined): boolean =>
 const isNameStart = (c: string | undefined): boolean =>
 	c !== undefined && /[A-Za-z_]/u.test(c);
 
-/** Compiles a hole pattern so it matches only at a given position. */
-export const holeMatcher = (pattern: RegExp | string | undefined): RegExp => {
-	const source =
-		pattern === undefined
-			? DEFAULT_HOLE_PATTERN
-			: typeof pattern === 'string'
-				? (() => {
-						try {
-							return new RegExp(pattern, 'u');
-						} catch (error) {
-							throw new AnalyzeError({
-								code: 'invalidHolePattern',
-								message: `the hole pattern is not a regular expression: ${(error as Error).message}`,
-								line: 1,
-								column: 1,
-								offset: 0,
-							});
-						}
-					})()
-				: pattern;
-	const flags = `${source.flags.replace(/[gy]/gu, '')}y`;
-	const matcher = new RegExp(source.source, flags);
-	matcher.lastIndex = 0;
-	if (matcher.test('')) {
-		throw new AnalyzeError({
-			code: 'invalidHolePattern',
-			message: `the hole pattern /${source.source}/ matches the empty string`,
-			line: 1,
-			column: 1,
-			offset: 0,
-		});
+const isCapital = (c: string | undefined): boolean =>
+	c !== undefined && c >= 'A' && c <= 'Z';
+
+const isHoleNameChar = (c: string | undefined): boolean =>
+	isCapital(c) || (c !== undefined && c >= '0' && c <= '9') || c === '_';
+
+const isBlank = (c: string): boolean => c.trim().length === 0;
+
+/**
+ * Checks hole delimiters: each must be a non-empty run of text without
+ * whitespace, so a hole is one token. `undefined` is the default.
+ */
+export const holeDelimiters = (
+	holes: HoleDelimiters | undefined,
+): HoleDelimiters => {
+	if (holes === undefined) return DEFAULT_HOLE_DELIMITERS;
+	for (const [which, text] of [
+		['open', holes.open],
+		['close', holes.close],
+	] as const) {
+		if (
+			typeof text !== 'string' ||
+			text.length === 0 ||
+			[...text].some(isBlank)
+		) {
+			throw new AnalyzeError({
+				code: 'invalidHoleDelimiters',
+				message: `the ${which} delimiter of a hole must be non-empty text without whitespace`,
+				line: 1,
+				column: 1,
+				offset: 0,
+			});
+		}
 	}
-	return matcher;
+	return { open: holes.open, close: holes.close };
+};
+
+/**
+ * The end of the hole that starts at `at`, or -1 when none does. The name
+ * is the longest run that the close delimiter follows, as the pattern
+ * `open[A-Z][A-Z0-9_]*close` would match it. A scan, never a regular
+ * expression, whatever the delimiters are.
+ */
+const holeEnd = (sql: string, at: number, holes: HoleDelimiters): number => {
+	if (!sql.startsWith(holes.open, at)) return -1;
+	const name = at + holes.open.length;
+	if (!isCapital(sql[name])) return -1;
+	let run = name + 1;
+	while (run < sql.length && isHoleNameChar(sql[run])) run++;
+	for (let end = run; end > name; end--) {
+		if (sql.startsWith(holes.close, end)) return end + holes.close.length;
+	}
+	return -1;
 };
 
 export interface Lexed {
@@ -189,7 +222,7 @@ export interface Lexed {
  * unterminated string, identifier or comment, an invalid escape, unbalanced
  * brackets, or a character it cannot classify.
  */
-export const lex = (sql: string, holes: RegExp): Lexed => {
+export const lex = (sql: string, holes: HoleDelimiters): Lexed => {
 	const lineStarts = [0];
 	for (let i = 0; i < sql.length; i++) {
 		if (sql[i] === '\n') lineStarts.push(i + 1);
@@ -333,19 +366,14 @@ export const lex = (sql: string, holes: RegExp): Lexed => {
 			continue;
 		}
 		// A hole, wherever a token can start.
-		holes.lastIndex = i;
-		const hole = holes.exec(sql);
+		const holeAt = holeEnd(sql, i, holes);
 		if (
-			hole !== null &&
-			hole[0].length > 0 &&
-			!(
-				isWordChar(hole[0][hole[0].length - 1]) &&
-				isWordChar(sql[i + hole[0].length])
-			) &&
-			!(isWordChar(hole[0][0]) && isWordChar(sql[i - 1]))
+			holeAt > i &&
+			!(isWordChar(sql[holeAt - 1]) && isWordChar(sql[holeAt])) &&
+			!(isWordChar(c) && isWordChar(sql[i - 1]))
 		) {
-			push('hole', i, i + hole[0].length, hole[0]);
-			i += hole[0].length;
+			push('hole', i, holeAt, sql.slice(i, holeAt));
+			i = holeAt;
 			continue;
 		}
 		if (c === "'" || c === '"') {

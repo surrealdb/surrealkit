@@ -19,9 +19,12 @@ const byte = Schema.Number.check(
 const LONE_SURROGATE =
 	/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
+const LONE_SURROGATES =
+	/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
 /** Replaces lone surrogates with U+FFFD, as UTF-8 transport would. */
 export const toWellFormed = (text: string): string =>
-	text.replace(new RegExp(LONE_SURROGATE.source, 'g'), '�');
+	text.replace(LONE_SURROGATES, '�');
 
 /**
  * `string`: a JS string SurrealDB can store. SurrealDB strings are UTF-8, so

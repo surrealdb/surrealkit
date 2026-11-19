@@ -352,18 +352,37 @@ describe('analyze: holes', () => {
 		expect(analyzeSync('RETURN X__A__ + __A__x;').holes).toEqual([]);
 	});
 
-	it('takes a configurable pattern', () => {
+	it('takes literal delimiters around a capitalised name', () => {
 		expect(
-			analyzeSync('RETURN {{ limit }};', {
-				holePattern: '\\{\\{ [a-z]+ \\}\\}',
+			analyzeSync('RETURN {{LIMIT}} + {{ LIMIT }} + {{limit}};', {
+				holes: { open: '{{', close: '}}' },
 			}).holes,
-		).toEqual(['{{ limit }}']);
-		expect(failure('RETURN 1;', { holePattern: 'a*' }).code).toBe(
-			'invalidHolePattern',
-		);
-		expect(failure('RETURN 1;', { holePattern: '(' }).code).toBe(
-			'invalidHolePattern',
-		);
+		).toEqual(['{{LIMIT}}']);
+		// Delimiters are text: characters a pattern would read as syntax
+		// match only themselves.
+		expect(
+			analyzeSync('RETURN [.*A+] + [.*B_2+] + [xA+];', {
+				holes: { open: '[.*', close: '+]' },
+			}).holes,
+		).toEqual(['[.*A+]', '[.*B_2+]']);
+		// The longest name the close delimiter follows, as by default.
+		expect(analyzeSync('RETURN __A__B__;').holes).toEqual(['__A__B__']);
+		for (const holes of [
+			{ open: '', close: '__' },
+			{ open: '__', close: '' },
+			{ open: '{ {', close: '}}' },
+		]) {
+			expect(failure('RETURN 1;', { holes }).code).toBe(
+				'invalidHoleDelimiters',
+			);
+		}
+	});
+
+	it('scans a long run without a close delimiter in linear time', () => {
+		const sql = `RETURN __${'A'.repeat(200_000)};`;
+		const started = Date.now();
+		expect(analyzeSync(sql).holes).toEqual([]);
+		expect(Date.now() - started).toBeLessThan(2000);
 	});
 });
 

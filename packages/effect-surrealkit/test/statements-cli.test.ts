@@ -307,11 +307,11 @@ describe('effect-surrealkit statements', () => {
 		expect(result.stderr).toMatch(/counter\/nested: a scope holds only/);
 	});
 
-	it('takes a hole pattern', async () => {
+	it('takes literal hole delimiters', async () => {
 		const cwd = input();
 		writeFileSync(
 			join(cwd, 'queries', 'counter', 'limited.surql'),
-			'SELECT * FROM t LIMIT {{limit}};\n',
+			'SELECT * FROM t LIMIT {{LIMIT}};\n',
 		);
 		const result = await cli(
 			[
@@ -319,15 +319,17 @@ describe('effect-surrealkit statements', () => {
 				'queries',
 				'--out',
 				'gen',
-				'--hole-pattern',
-				'\\{\\{[a-z]+\\}\\}',
+				'--hole-open',
+				'{{',
+				'--hole-close',
+				'}}',
 			],
 			cwd,
 		);
 		expect(result.code, result.stderr).toBe(0);
 		expect(
 			readFileSync(join(cwd, 'gen', 'counter', 'statements.ts'), 'utf8'),
-		).toContain('\tholes: ["{{limit}}"],');
+		).toContain('\tholes: ["{{LIMIT}}"],');
 	});
 
 	it('exits 2 on bad arguments', async () => {
@@ -343,6 +345,8 @@ describe('effect-surrealkit statements', () => {
 				'--import-extension',
 				'.mjs',
 			],
+			['--input', 'queries', '--out', 'gen', '--hole-open', ''],
+			['--input', 'queries', '--out', 'gen', '--hole-close', 'a b'],
 			['--input', 'queries', '--out', 'gen', '--hole-pattern', '('],
 			['--input', 'queries', '--out', 'queries/gen'],
 			['--input', 'queries', '--out', 'gen', '--check', '--watch'],

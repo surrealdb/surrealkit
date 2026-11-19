@@ -6,7 +6,7 @@ import { Effect, Fiber, Result, Schema, Tracer } from 'effect';
 import { DateTime, ExpressionError, RecordId } from 'surrealdb';
 import { describe, expect, it } from 'vitest';
 
-import { holeMatcher, lex } from '../src/analyze/lexer.js';
+import { DEFAULT_HOLE_DELIMITERS, lex } from '../src/analyze/lexer.js';
 
 import {
 	bind,
@@ -41,7 +41,7 @@ const topLevelKeywords = (sql: string): ReadonlyArray<string> => {
 	const keywords: Array<string> = [];
 	let depth = 0;
 	let first: string | undefined;
-	for (const token of lex(sql, holeMatcher(undefined)).tokens) {
+	for (const token of lex(sql, DEFAULT_HOLE_DELIMITERS).tokens) {
 		if (token.kind === 'punct' && token.value === ';' && depth === 0) {
 			if (first !== undefined) keywords.push(first);
 			first = undefined;

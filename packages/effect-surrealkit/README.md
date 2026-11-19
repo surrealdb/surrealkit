@@ -409,11 +409,12 @@ unchanged files untouched, stale generated files removed, files without the
 generated header never touched (nor overwritten), and `--check` writes
 nothing and exits 1 when anything is missing, stale or edited. `--watch`
 regenerates on change; `--import-extension .ts` changes the index's imports;
-`--hole-pattern <regex>` changes what a hole looks like. Any error stops
+`--hole-open <text>` and `--hole-close <text>` change the delimiters of a
+hole (default `__` and `__`). Any error stops
 generation with its file, line and column; warnings are printed.
 
 The analyzer is `effect-surrealkit/analyze`, pure and host-neutral:
-`analyze(sql, { holePattern? })` returns `{ kind, sql, free, defines, slots,
+`analyze(sql, { holes? })` returns `{ kind, sql, free, defines, slots,
 throws, throwsAt, holes, provisional, transactional, diagnostics }` or fails
 with an `AnalyzeError` carrying a line and column.
 
@@ -444,8 +445,11 @@ with an `AnalyzeError` carrying a line and column.
 - **Fragments.** A single expression or block without a final `;` is a
   `fragment`: no results, generated as a `text(…)` value, usable only to fill
   a hole. Several statements with an unterminated last one are an error.
-- **Holes and templates.** A token matching `__[A-Z][A-Z0-9_]*__` outside
-  strings and comments is a hole. A text with holes is a template, generated
+- **Holes and templates.** Outside strings and comments, a name matching
+  `[A-Z][A-Z0-9_]*` between two literal delimiters, `__NAME__` by default,
+  is a hole; `{ holes: { open, close } }` (or the command's `--hole-open`
+  and `--hole-close`) sets other delimiters, which are matched as text,
+  never compiled into a pattern. A text with holes is a template, generated
   as `text(…)` with its `holes`; its `free` and `defines` are `provisional`,
   because a fill can read or define names. `fill(template, fills)` returns
   the filled text, failing on an unknown hole, a missing fill or a fill

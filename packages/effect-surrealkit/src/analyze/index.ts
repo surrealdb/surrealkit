@@ -11,7 +11,11 @@ export {
 	analyzeSync,
 	type Diagnostic,
 } from './analyze.js';
-export { AnalyzeError, DEFAULT_HOLE_PATTERN } from './lexer.js';
+export {
+	AnalyzeError,
+	DEFAULT_HOLE_DELIMITERS,
+	type HoleDelimiters,
+} from './lexer.js';
 export {
 	FillError,
 	type FillOptions,

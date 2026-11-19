@@ -6,7 +6,13 @@
  */
 import { Data, Effect } from 'effect';
 
-import { AnalyzeError, holeMatcher, lex, type Token } from './lexer.js';
+import {
+	AnalyzeError,
+	type HoleDelimiters,
+	holeDelimiters,
+	lex,
+	type Token,
+} from './lexer.js';
 
 /** A fragment or template, as the `statements` command writes it. */
 export interface Text<Holes extends string = string> {
@@ -38,8 +44,8 @@ export class FillError extends Data.TaggedError('FillError')<{
 }> {}
 
 export interface FillOptions {
-	/** The hole pattern; default `__[A-Z][A-Z0-9_]*__`. */
-	readonly holePattern?: RegExp | string;
+	/** The literal delimiters of a hole; default `__` and `__`. */
+	readonly holes?: HoleDelimiters;
 	/** Accept fills that still have holes of their own. Default false. */
 	readonly allowHoles?: boolean;
 }
@@ -80,7 +86,12 @@ export const fill = <const T extends string | Text>(
 		}
 	});
 
-const lexed = (sql: string, holes: RegExp, what: string, hole?: string) => {
+const lexed = (
+	sql: string,
+	holes: HoleDelimiters,
+	what: string,
+	hole?: string,
+) => {
 	try {
 		return lex(sql, holes).tokens;
 	} catch (error) {
@@ -100,9 +111,9 @@ const fillSync = (
 	fills: Readonly<Record<string, string | Text>>,
 	options: FillOptions,
 ): string => {
-	let holes: RegExp;
+	let holes: HoleDelimiters;
 	try {
-		holes = holeMatcher(options.holePattern);
+		holes = holeDelimiters(options.holes);
 	} catch (error) {
 		if (error instanceof AnalyzeError) {
 			throw new FillError({ code: error.code, message: error.message });

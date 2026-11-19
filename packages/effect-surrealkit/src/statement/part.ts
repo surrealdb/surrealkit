@@ -61,8 +61,25 @@ const missingFrom = (
 ): ReadonlyArray<string> =>
 	[...new Set(values)].filter((value) => !other.includes(value)).sort();
 
-const reads = (sql: string, name: string): boolean =>
-	new RegExp(`\\$${name}(?![A-Za-z0-9_])`, 'u').test(sql);
+const isWordChar = (c: string | undefined): boolean =>
+	c !== undefined &&
+	((c >= 'A' && c <= 'Z') ||
+		(c >= 'a' && c <= 'z') ||
+		(c >= '0' && c <= '9') ||
+		c === '_');
+
+/** Whether `$name` occurs in `sql` as a whole name: a scan, not a pattern. */
+const reads = (sql: string, name: string): boolean => {
+	const needle = `$${name}`;
+	for (
+		let at = sql.indexOf(needle);
+		at !== -1;
+		at = sql.indexOf(needle, at + 1)
+	) {
+		if (!isWordChar(sql[at + needle.length])) return true;
+	}
+	return false;
+};
 
 /**
  * Checks a part against its own text and returns what the text does, or
