@@ -46,17 +46,22 @@ export type FieldsOf<R> = R extends {
 		? F
 		: never;
 
-type Unwrapped<S> = S extends { readonly schema: infer I extends Codec }
+/** @internal */
+export type Unwrapped<S> = S extends { readonly schema: infer I extends Codec }
 	? S extends { readonly '~type.optionality': 'optional' }
 		? I
 		: S
 	: S;
 
-type IsOptional<S> = S extends { readonly '~type.optionality': 'optional' }
+/** @internal */
+export type IsOptional<S> = S extends {
+	readonly '~type.optionality': 'optional';
+}
 	? true
 	: false;
 
-type NestedFields<S> = S extends RowCodecIn ? FieldsOf<S> : never;
+/** @internal */
+export type NestedFields<S> = S extends RowCodecIn ? FieldsOf<S> : never;
 
 /**
  * The expression of one field, a field path, with its children when it is
@@ -77,10 +82,12 @@ export type RowOf<F, Optional extends boolean = false> = {
 	>;
 };
 
-const isOptional = (codec: Codec): boolean =>
+/** @internal */
+export const isOptional = (codec: Codec): boolean =>
 	codec.ast.context?.isOptional === true;
 
-const unwrap = (codec: Codec): Codec =>
+/** @internal */
+export const unwrap = (codec: Codec): Codec =>
 	isOptional(codec) && 'schema' in codec && Schema.isSchema(codec.schema)
 		? (codec.schema as Codec)
 		: codec;

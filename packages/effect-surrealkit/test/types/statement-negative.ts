@@ -9,10 +9,12 @@ import * as SurrealSchema from 'effect-surrealkit';
 import { bind, run, transaction } from '../../src/client/index.js';
 import {
 	and,
+	arrayGroup,
 	at,
 	call,
 	cast,
 	contains,
+	count,
 	create,
 	deleteFrom,
 	eq,
@@ -31,6 +33,8 @@ import {
 	relate,
 	select,
 	sequence,
+	sum,
+	timeMin,
 	update,
 	upsert,
 } from '../../src/statement/index.js';
@@ -487,4 +491,41 @@ export const rejectedWrites = () => {
 	relate(MemberOfTable, id, param('team', TeamId)).returning('before');
 	// @ts-expect-error [delete/unknown-mode] DELETE has no such RETURN mode
 	deleteFrom(PersonTable).returning('everything');
+};
+
+// A grouped SELECT projects only its keys and aggregates.
+export const rejectedGrouping = () => {
+	const grouped = select(PersonTable).groupBy((row) => ({ role: row.role }));
+	grouped.aggregate((row) => ({
+		// @ts-expect-error [group/ungrouped-field] `name` is neither grouped nor aggregated
+		name: row.name,
+	}));
+	grouped.aggregate(() => ({
+		// @ts-expect-error [group/alias-of-key] `role` is already a key
+		role: count(),
+	}));
+	select(PersonTable).groupBy((row) => ({
+		// @ts-expect-error [group/key-not-a-path] GROUP BY takes a field path
+		upper: cast('string', row.age),
+	}));
+	grouped.aggregate((row) => ({
+		// @ts-expect-error [group/sum-of-string] math::sum takes a number field
+		total: sum(row.name),
+	}));
+	grouped.aggregate((row) => ({
+		// @ts-expect-error [group/group-of-array] array::group of an array differs between SurrealDB 3 and 4
+		tags: arrayGroup(row.tags),
+	}));
+	grouped.aggregate((row) => ({
+		// @ts-expect-error [group/time-of-string] time::min takes a datetime field
+		first: timeMin(row.name),
+	}));
+	select(PersonTable)
+		.groupAll()
+		.aggregate((row) => ({
+			// @ts-expect-error [group/all-ungrouped-field] GROUP ALL has no keys, so every field must be aggregated
+			score: row.score,
+		}));
+	// @ts-expect-error [group/order-by-unknown] ORDER BY takes an alias of the output
+	grouped.orderBy('name');
 };

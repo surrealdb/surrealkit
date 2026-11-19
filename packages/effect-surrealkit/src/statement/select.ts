@@ -29,6 +29,14 @@ import {
 	pathOf,
 	sqlOf,
 } from './expr.js';
+import {
+	type Base,
+	type CheckedKeys,
+	type GroupAll,
+	type Grouped,
+	groupAll,
+	groupBy,
+} from './group.js';
 import { type IdRange, IdRangeTypeId, isIdRange } from './record.js';
 import {
 	type CheckedProjection,
@@ -244,6 +252,32 @@ const render = (state: State): string => {
 	].join(' ');
 };
 
+/** What a grouped SELECT keeps of a select: its subject and conditions. */
+const baseOf = (state: State): Base => {
+	if (
+		state.fields !== '*' ||
+		state.only ||
+		state.order.length > 0 ||
+		state.limit !== undefined ||
+		state.start !== undefined
+	) {
+		throw new RangeError(
+			'group a SELECT before projecting, ordering, limiting it or reading ONLY one row',
+		);
+	}
+	return {
+		table: state.table,
+		row: state.row,
+		from:
+			state.source === undefined
+				? tableName(state.table)
+				: sqlOf(state.source),
+		where: state.where,
+		params: state.params,
+		pure: state.pure,
+	};
+};
+
 /** A table or an id range: what `FROM ONLY` reads one row of with `LIMIT 1`. */
 const readsMany = (state: State): boolean =>
 	state.source === undefined || state.range === true;
@@ -308,6 +342,18 @@ export interface Select<
 	 * adds `LIMIT 1`, because the engine fails `ONLY` on a second row.
 	 */
 	readonly only: () => Select<T, P, Row, true>;
+
+	/**
+	 * `GROUP BY`: one row per distinct combination of the keys, named field
+	 * paths of the row (`{ role: row.role, city: row.address.city }`), which
+	 * every row of the result holds. Add aggregates with `.aggregate(…)`.
+	 */
+	readonly groupBy: <const K>(
+		keys: (row: RowExprs<T>) => CheckedKeys<K>,
+	) => Grouped<T, P, K>;
+
+	/** `GROUP ALL`: one row of aggregates over every record. */
+	readonly groupAll: () => GroupAll<T, P>;
 
 	/** This query as a parenthesised subquery of another expression. */
 	readonly toExpr: () => Expr<SelectResult<Row, Only>, P>;
@@ -412,6 +458,12 @@ const builder = <
 			}
 			return builder({ ...state, only: true });
 		},
+		groupBy: (keys) =>
+			groupBy(
+				baseOf(state),
+				keys as (row: RowExprs<PureTable>) => unknown,
+			) as never,
+		groupAll: () => groupAll(baseOf(state)) as never,
 		toExpr: () =>
 			subquery(
 				resultOf(state) as SelectResult<Row, Only>,

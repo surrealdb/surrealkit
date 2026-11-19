@@ -474,6 +474,45 @@ stored record's own fields are not offered: SurrealDB 4.0 reads them there
 and 3.3 reads them as NONE. The conformance suite pins every cell of the
 table and both differences.
 
+### Grouping
+
+`.groupBy((row) => ({ role: row.role, city: row.address.city }))` groups
+the selected records by named field paths, which every result row holds
+(SurrealDB refuses a key the projection leaves out); `.groupAll()` makes
+one group of every record. `.aggregate((row) => ({ … }))` adds the
+aggregates of each group. Its `row` holds the stored fields as values only
+an aggregate takes, so projecting a field that is neither grouped nor
+aggregated is a compile error (SurrealDB would answer it with the array of
+the group's values):
+
+```ts
+const cities = select(PersonTable)
+  .where((row) => gte(row.score, 10))
+  .groupBy((row) => ({ city: row.address.city }))
+  .aggregate((row) => ({ people: count(), total: sum(row.score), names: arrayGroup(row.name) }))
+  .orderBy('people', 'DESC')
+  .build();
+// ReadonlyArray<{ city: string; people: number; total: number; names: ReadonlyArray<string> }>
+```
+
+| Aggregate | SurrealQL | Result |
+| --- | --- | --- |
+| `count()`, `count(boolField)` | `count()` | int |
+| `sum(field)` | `math::sum` | the field's number kind without its checks; the int 0 for no value, so a decimal sum that may be empty is `Decimal \| number` |
+| `mean`, `stddev`, `variance` | `math::mean` … | float, NaN for no value |
+| `median` | `math::median` | float, NONE for no value |
+| `min`, `max` | `math::min`, `math::max` | the field's value, or ±Infinity for no value |
+| `timeMin`, `timeMax` | `time::min`, `time::max` | the datetime, NONE for no value |
+| `arrayGroup`, `arrayDistinct` | `array::group`, `array::distinct` | the distinct values, NONE among them for an optional field |
+
+A group has no value of a field when every record holds NONE there, or
+when `GROUP ALL` reads no record; the result types say so where SurrealDB
+3.3 and 4.0 answer it differently from a value. `GROUP ALL` is always one
+row. `arrayGroup` refuses an array field: SurrealDB 4 flattens the arrays of
+a group and 3.3 does not. Aggregates take fields of the row, so none can
+nest in another (4.0 refuses that, 3.3 yields 0). `.orderBy(alias)`,
+`.limit` and `.start` follow; the conformance suite pins every result above.
+
 ### Authored SurrealQL
 
 A multi-statement script stays SurrealQL. Describe each text as a `part`
@@ -778,10 +817,11 @@ empty results.
 - **Authored text.** The analyzer derives a part's names, result count and
   messages, not its result type: a result codec that does not match the
   script fails when it runs, not when it compiles.
-- **Coverage.** `GROUP BY`, `SPLIT`, `FETCH`, graph traversal, full-text and
+- **Coverage.** `SPLIT`, `FETCH`, graph traversal, full-text and
   vector operators, live queries and views have no typed builder yet; use
   `unsafeExpr` or authored SurrealQL. `ON DUPLICATE KEY UPDATE` takes plain
-  assignments only (no `+=`).
+  assignments only (no `+=`), and an aggregate takes a field, not an
+  expression over fields.
 
 The engine suite (`test/statement-engine.test.ts`) runs every builder against
 the corpus schema and the modules generated from it, and passes on SurrealDB

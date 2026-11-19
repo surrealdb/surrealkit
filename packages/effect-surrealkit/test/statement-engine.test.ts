@@ -26,10 +26,12 @@ import {
 import * as SurrealSchema from '../src/index.js';
 import {
 	and,
+	arrayGroup,
 	at,
 	call,
 	cast,
 	contains,
+	count,
 	create,
 	deleteFrom,
 	eq,
@@ -42,6 +44,10 @@ import {
 	isNone,
 	literal,
 	make,
+	max,
+	mean,
+	median,
+	min,
 	not,
 	or,
 	param,
@@ -52,6 +58,8 @@ import {
 	select,
 	sequence,
 	sqlOf,
+	sum,
+	timeMin,
 	update,
 	upsert,
 } from '../src/statement/index.js';
@@ -1479,6 +1487,72 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 				),
 			);
 			expect(edgeIn).toEqual(cy.id);
+		});
+	});
+
+	describe('GROUP BY and GROUP ALL', () => {
+		it('groups by keys with typed aggregates, decoded strictly', async () => {
+			const statement = select(PersonTable)
+				.groupBy((row) => ({ city: row.address.city }))
+				.aggregate((row) => ({
+					people: count(),
+					total: sum(row.score),
+					average: mean(row.score),
+					oldest: max(row.age),
+					names: arrayGroup(row.name),
+					first: timeMin(row.created_at),
+				}))
+				.orderBy('city')
+				.build();
+			const rows = await ok(client.run(statement));
+			const york = rows.find((row) => row.city === 'York');
+			expect(york).toMatchObject({ people: expect.any(Number) });
+			expect(york?.names).toContain('Bob');
+			const leeds = rows.find((row) => row.city === 'Leeds');
+			expect(leeds?.names).toEqual(expect.arrayContaining(['Ann', 'Cy']));
+			expect(typeof leeds?.oldest).toBe('number');
+			expect(leeds?.first).toBeInstanceOf(DateTime);
+			expect(rows.map((row) => row.city)).toEqual(
+				[...rows.map((row) => row.city)].sort(),
+			);
+		});
+
+		it('GROUP ALL over no record is one row of empty aggregates', async () => {
+			const statement = select(PersonTable)
+				.where((row) =>
+					eq(row.email, param('email', SurrealSchema.String)),
+				)
+				.groupAll()
+				.aggregate((row) => ({
+					people: count(),
+					total: sum(row.score),
+					least: min(row.score),
+					median: median(row.score),
+					first: timeMin(row.created_at),
+				}))
+				.build();
+			expect(
+				await ok(
+					client.run(statement, { email: 'nobody@example.com' }),
+				),
+			).toEqual([
+				{
+					people: 0,
+					total: 0,
+					least: Number.POSITIVE_INFINITY,
+					median: undefined,
+					first: undefined,
+				},
+			]);
+			const [all] = await ok(
+				client.run(statement, { email: 'ann@example.com' }),
+			);
+			expect(all).toMatchObject({
+				people: 1,
+				total: 50,
+				least: 50,
+				median: 50,
+			});
 		});
 	});
 });

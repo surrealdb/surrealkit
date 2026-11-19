@@ -10,6 +10,8 @@
  * stops behaving as recorded here.
  */
 import {
+	DateTime,
+	Decimal,
 	Duration,
 	RecordId,
 	type Surreal,
@@ -721,6 +723,170 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 					edge: { out: new RecordId('rw', 'b') },
 				}),
 			).rejects.toThrow(/property 'in' is: NONE/);
+		});
+	});
+
+	describe('GROUP BY, GROUP ALL and aggregates', () => {
+		beforeAll(async () => {
+			await query(`
+				DEFINE TABLE gr SCHEMAFULL;
+				DEFINE FIELD role ON gr TYPE string;
+				DEFINE FIELD city ON gr TYPE object;
+				DEFINE FIELD city.name ON gr TYPE string;
+				DEFINE FIELD n ON gr TYPE int;
+				DEFINE FIELD d ON gr TYPE decimal;
+				DEFINE FIELD o ON gr TYPE option<int>;
+				DEFINE FIELD tags ON gr TYPE array<string>;
+				DEFINE FIELD at ON gr TYPE datetime;
+				DEFINE FIELD name ON gr TYPE string;
+				CREATE gr:1 CONTENT { role: 'a', city: { name: 'x' }, n: 1, d: 1.5dec, tags: ['t1', 't2'], at: d'2024-01-01T00:00:00Z', name: 'p1' };
+				CREATE gr:2 CONTENT { role: 'a', city: { name: 'y' }, n: 2, d: 2.5dec, tags: ['t2'], at: d'2024-01-02T00:00:00Z', name: 'p2' };
+				CREATE gr:3 CONTENT { role: 'b', city: { name: 'x' }, n: 4, d: 4dec, o: 3, tags: [], at: d'2024-01-03T00:00:00Z', name: 'p3' };
+				DEFINE TABLE gr_empty SCHEMAFULL;
+				DEFINE FIELD n ON gr_empty TYPE int;
+				DEFINE FIELD d ON gr_empty TYPE decimal;
+				DEFINE FIELD at ON gr_empty TYPE datetime;
+			`);
+		});
+
+		it('a field neither grouped nor aggregated yields the array of the group values, and a key left out of the projection is refused', async () => {
+			expect(
+				await query(
+					'SELECT role AS r, name, count() AS c FROM gr GROUP BY role ORDER BY r;',
+				),
+			).toStrictEqual([
+				[
+					{ r: 'a', name: ['p1', 'p2'], c: 2 },
+					{ r: 'b', name: ['p3'], c: 1 },
+				],
+			]);
+			await expect(
+				query('SELECT count() AS c FROM gr GROUP BY role;'),
+			).rejects.toThrow(
+				/Missing group idiom `role` in statement selection/,
+			);
+		});
+
+		it('groups by a nested path under an alias, orders by an alias, and limits groups', async () => {
+			expect(
+				await query(
+					'SELECT city.name AS city, count() AS c FROM gr GROUP BY city.name ORDER BY c DESC LIMIT 1;',
+				),
+			).toStrictEqual([[{ city: 'x', c: 2 }]]);
+		});
+
+		it('each aggregate per group: count, math::sum keeps the kind, mean and median are floats, min and max keep the field', async () => {
+			const [rows] = (await query(
+				'SELECT role AS role, count() AS c, math::sum(n) AS sum, math::sum(d) AS dsum, math::mean(n) AS mean, math::mean(d) AS dmean, math::median(n) AS med, math::min(d) AS dmin, math::max(n) AS max, math::stddev(n) AS sd, math::variance(n) AS var, time::max(at) AS last, array::group(name) AS names FROM gr GROUP BY role ORDER BY role;',
+			)) as [Array<Record<string, unknown>>];
+			const [a] = rows;
+			expect(a).toMatchObject({
+				role: 'a',
+				c: 2,
+				sum: 3,
+				mean: 1.5,
+				dmean: 2,
+				med: 1.5,
+				max: 2,
+				sd: Math.SQRT1_2,
+				var: 0.5,
+				names: ['p1', 'p2'],
+			});
+			expect(a?.dsum).toBeInstanceOf(Decimal);
+			expect(String(a?.dsum)).toBe('4');
+			expect(a?.dmin).toBeInstanceOf(Decimal);
+			expect(a?.last).toBeInstanceOf(DateTime);
+		});
+
+		it('GROUP ALL is one row, even over no record, where min and max are ±Infinity, mean NaN, sum the int 0 and median and time::min NONE', async () => {
+			expect(
+				await query(
+					'SELECT count() AS c, math::sum(n) AS sum FROM gr GROUP ALL; SELECT count() AS c FROM gr WHERE role = "z" GROUP ALL;',
+				),
+			).toStrictEqual([[{ c: 3, sum: 7 }], [{ c: 0 }]]);
+			expect(
+				await query(
+					'SELECT count() AS c, math::sum(n) AS sum, math::sum(d) AS dsum, math::min(n) AS min, math::max(n) AS max, math::mean(n) AS mean, math::median(n) AS med, time::min(at) AS first FROM gr_empty GROUP ALL;',
+				),
+			).toStrictEqual([
+				[
+					{
+						c: 0,
+						sum: 0,
+						dsum: 0,
+						min: Number.POSITIVE_INFINITY,
+						max: Number.NEGATIVE_INFINITY,
+						mean: Number.NaN,
+						med: undefined,
+						first: undefined,
+					},
+				],
+			]);
+		});
+
+		it('a group whose values are all NONE aggregates as no value', async () => {
+			const [rows] = (await query(
+				"SELECT role AS role, math::sum(o) AS sum, math::min(o) AS min, math::mean(o) AS mean FROM gr WHERE role = 'a' GROUP BY role;",
+			)) as [Array<Record<string, unknown>>];
+			expect(rows).toStrictEqual([
+				{
+					role: 'a',
+					sum: 0,
+					min: Number.POSITIVE_INFINITY,
+					mean: Number.NaN,
+				},
+			]);
+		});
+
+		it('another math function is no aggregate: it yields one value per record', async () => {
+			expect(
+				await query(
+					'SELECT role AS role, math::product(n) AS p FROM gr GROUP BY role ORDER BY role;',
+				),
+			).toStrictEqual([
+				[
+					{ role: 'a', p: [undefined, undefined] },
+					{ role: 'b', p: [undefined] },
+				],
+			]);
+		});
+
+		it('array::group flattens the arrays of a group on SurrealDB 4 and not on 3; NONE once on 4, once per record on 3', async () => {
+			const [arrays, nones] = (await query(
+				[
+					"SELECT role AS role, array::group(tags) AS g FROM gr WHERE role = 'a' GROUP BY role;",
+					"SELECT role AS role, array::group(o) AS g FROM gr WHERE role = 'a' GROUP BY role;",
+				].join('\n'),
+			)) as [unknown, unknown];
+			if (engine.majorVersion >= 4) {
+				expect(arrays).toStrictEqual([{ role: 'a', g: ['t1', 't2'] }]);
+				expect(nones).toStrictEqual([{ role: 'a', g: [undefined] }]);
+			} else {
+				expect(arrays).toStrictEqual([
+					{ role: 'a', g: [['t1', 't2'], ['t2']] },
+				]);
+				expect(nones).toStrictEqual([
+					{ role: 'a', g: [undefined, undefined] },
+				]);
+			}
+		});
+
+		it('a nested aggregate is refused on SurrealDB 4 and yields 0 on 3', async () => {
+			const nested = query(
+				'SELECT role AS role, math::sum(math::max(n)) AS v FROM gr GROUP BY role ORDER BY role;',
+			);
+			if (engine.majorVersion >= 4) {
+				await expect(nested).rejects.toThrow(
+					/Nested aggregate functions are not supported/,
+				);
+			} else {
+				expect(await nested).toStrictEqual([
+					[
+						{ role: 'a', v: 0 },
+						{ role: 'b', v: 0 },
+					],
+				]);
+			}
 		});
 	});
 

@@ -26,11 +26,14 @@ import {
 } from '../../src/client/index.js';
 import {
 	and,
+	arrayDistinct,
+	arrayGroup,
 	at,
 	type Codec,
 	call,
 	cast,
 	contains,
+	count,
 	create,
 	type Diff,
 	deleteFrom,
@@ -43,6 +46,9 @@ import {
 	inside,
 	isNone,
 	literal,
+	max,
+	median,
+	min,
 	not,
 	or,
 	type Params,
@@ -55,6 +61,10 @@ import {
 	type Statement,
 	select,
 	sequence,
+	stddev,
+	sum,
+	timeMax,
+	timeMin,
 	update,
 	upsert,
 } from '../../src/statement/index.js';
@@ -682,3 +692,61 @@ export const updatedDiff = update(PersonTable)
 	.returning('diff')
 	.build();
 same<Result<typeof updatedDiff>, ReadonlyArray<Diff>>(true);
+
+// ---- GROUP BY and GROUP ALL: keys and typed aggregates.
+
+export const groupedGroupedByRole = select(PersonTable)
+	.groupBy((row) => ({ role: row.role, city: row.address.city }))
+	.aggregate((row) => ({
+		people: count(),
+		total: sum(row.score),
+		oldest: max(row.age),
+		youngest: min(row.score),
+		names: arrayGroup(row.name),
+		nicknames: arrayDistinct(row.nickname),
+		lastSeen: timeMax(row.created_at),
+	}))
+	.orderBy('people', 'DESC')
+	.build();
+export type GroupedByRole = Result<typeof groupedGroupedByRole>[number];
+same<GroupedByRole['role'], Person['role']>(true);
+same<GroupedByRole['city'], string>(true);
+same<GroupedByRole['people'], number>(true);
+same<GroupedByRole['total'], number>(true);
+// A required field over a group of records always has a least value…
+same<GroupedByRole['youngest'], number>(true);
+// …an optional one may have none (±Infinity), still a number.
+same<GroupedByRole['oldest'], number>(true);
+same<GroupedByRole['names'], ReadonlyArray<string>>(true);
+same<GroupedByRole['nicknames'], ReadonlyArray<string | undefined>>(true);
+same<GroupedByRole['lastSeen'], DateTime>(true);
+// Keys alone, as a distinct list.
+export const roles = select(PersonTable)
+	.groupBy((row) => ({ role: row.role }))
+	.build();
+same<Result<typeof roles>, ReadonlyArray<{ readonly role: Person['role'] }>>(
+	true,
+);
+// GROUP ALL is one row; datetimes and medians may be NONE over no record.
+export const totals = select(PersonTable)
+	.where((row) => gte(row.score, param('floor', SurrealSchema.Float)))
+	.groupAll()
+	.aggregate((row) => ({
+		people: count(),
+		median: median(row.score),
+		first: timeMin(row.created_at),
+		spread: stddev(row.score),
+	}))
+	.build();
+same<
+	Result<typeof totals>,
+	readonly [
+		{
+			readonly people: number;
+			readonly median: number | undefined;
+			readonly first: DateTime | undefined;
+			readonly spread: number;
+		},
+	]
+>(true);
+same<Input<(typeof totals)['params']>, { readonly floor: number }>(true);

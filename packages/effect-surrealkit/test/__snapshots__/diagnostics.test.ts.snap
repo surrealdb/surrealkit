@@ -230,6 +230,54 @@ exports[`type diagnostics > flag/make-read-only 1`] = `
 ]
 `;
 
+exports[`type diagnostics > group/alias-of-key 1`] = `
+[
+  "TS2322: Type 'Aggregate<declareConstructor<number, number, readonly [], number>>' is not assignable to type '"\`role\` is already a key of this GROUP BY"'.",
+]
+`;
+
+exports[`type diagnostics > group/all-ungrouped-field 1`] = `
+[
+  "TS2322: Type 'RowValue<declareConstructor<number, number, readonly [], number> & Codec, false, true>' is not assignable to type '"\`score\` is a field that is neither grouped nor aggregated: group by it, or aggregate it (count, sum, …)"'.",
+]
+`;
+
+exports[`type diagnostics > group/group-of-array 1`] = `
+[
+  "TS2345: Argument of type 'RowValue<declareConstructor<ReadonlySet<string>, ReadonlySet<string>, readonly [declareConstructor<string, string, readonly [], string>], ReadonlySet<string>> & Codec, false, false>' is not assignable to parameter of type '"this aggregate takes a field that is not an array: SurrealDB 4 flattens the arrays of a group and 3.3 does not"'.",
+]
+`;
+
+exports[`type diagnostics > group/key-not-a-path 1`] = `
+[
+  "TS2322: Type 'Expr<declareConstructor<string, string, readonly [], string>, NoParams>' is not assignable to type '"GROUP BY takes a field path of the row, like \`row.role\` or \`row.address.city\`"'.",
+]
+`;
+
+exports[`type diagnostics > group/order-by-unknown 1`] = `
+[
+  "TS2345: Argument of type '"name"' is not assignable to parameter of type '"\`name\` is not a group key or an aggregate of this SELECT"'.",
+]
+`;
+
+exports[`type diagnostics > group/sum-of-string 1`] = `
+[
+  "TS2345: Argument of type 'RowValue<declareConstructor<string, string, readonly [], string> & Codec, false, false>' is not assignable to parameter of type '"\`math::sum\` takes a number field"'.",
+]
+`;
+
+exports[`type diagnostics > group/time-of-string 1`] = `
+[
+  "TS2345: Argument of type 'RowValue<declareConstructor<string, string, readonly [], string> & Codec, false, false>' is not assignable to parameter of type '"\`time::min\` takes a datetime field"'.",
+]
+`;
+
+exports[`type diagnostics > group/ungrouped-field 1`] = `
+[
+  "TS2322: Type 'RowValue<declareConstructor<string, string, readonly [], string> & Codec, false, false>' is not assignable to type '"\`name\` is a field that is neither grouped nor aggregated: group by it, or aggregate it (count, sum, …)"'.",
+]
+`;
+
 exports[`type diagnostics > insert/extra-field 1`] = `
 [
   "TS2345: Argument of type 'Expr<Struct<{ readonly bogus: declareConstructor<string, string, readonly [], string>; readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [...]>; ... 15 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }>' is not assignable to parameter of type '"\`bogus\` is not a field \`person\` accepts in INSERT"'.",

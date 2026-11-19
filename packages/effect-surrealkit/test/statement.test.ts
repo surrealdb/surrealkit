@@ -9,11 +9,13 @@ import { describe, expect, it } from 'vitest';
 import * as SurrealSchema from '../src/index.js';
 import {
 	and,
+	arrayGroup,
 	at,
 	call,
 	cast,
 	codecOf,
 	contains,
+	count,
 	create,
 	deleteFrom,
 	eq,
@@ -31,6 +33,9 @@ import {
 	lt,
 	lte,
 	make,
+	max,
+	mean,
+	median,
 	type NoParams,
 	ne,
 	not,
@@ -46,6 +51,8 @@ import {
 	select,
 	sequence,
 	sqlOf,
+	sum,
+	timeMin,
 	unsafeExpr,
 	update,
 	upsert,
@@ -1326,5 +1333,110 @@ describe('UPSERT, INSERT and every RETURN mode', () => {
 				.onDuplicate(() => ({ name: 'a' }))
 				.onDuplicate(() => ({ name: 'b' })),
 		).toThrow(/one ON DUPLICATE KEY UPDATE clause/);
+	});
+});
+
+describe('GROUP BY and GROUP ALL', () => {
+	it('projects every key and the aggregates, and groups by the key paths', () => {
+		const statement = select(PersonTable)
+			.where((row) => gte(row.score, 10))
+			.groupBy((row) => ({ role: row.role, city: row.address.city }))
+			.aggregate((row) => ({
+				people: count(),
+				total: sum(row.score),
+				oldest: max(row.age),
+				names: arrayGroup(row.name),
+			}))
+			.orderBy('people', 'DESC')
+			.limit(5)
+			.build();
+		expect(statement.sql).toBe(
+			'SELECT role AS role, address.city AS city, count() AS people, math::sum(score) AS total, math::max(age) AS oldest, array::group(name) AS names FROM ⟨person⟩ WHERE score >= 10 GROUP BY role, address.city ORDER BY people DESC LIMIT 5;',
+		);
+		const decode = Schema.decodeUnknownSync(statement.result);
+		// `age` is optional, so its maximum over the group may be -Infinity.
+		expect(
+			decode([
+				{
+					role: 'admin',
+					city: 'Leeds',
+					people: 2,
+					total: 30.5,
+					oldest: Number.NEGATIVE_INFINITY,
+					names: ['Ann', 'Bob'],
+				},
+			]),
+		).toHaveLength(1);
+	});
+
+	it('GROUP ALL is one row of aggregates', () => {
+		const statement = select(PersonTable)
+			.groupAll()
+			.aggregate((row) => ({
+				people: count(),
+				average: mean(row.score),
+				median: median(row.score),
+				first: timeMin(row.created_at),
+			}))
+			.build();
+		expect(statement.sql).toBe(
+			'SELECT count() AS people, math::mean(score) AS average, math::median(score) AS median, time::min(created_at) AS first FROM ⟨person⟩ GROUP ALL;',
+		);
+		const decode = Schema.decodeUnknownSync(statement.result);
+		expect(
+			decode([
+				{
+					people: 0,
+					average: Number.NaN,
+					median: undefined,
+					first: undefined,
+				},
+			]),
+		).toHaveLength(1);
+		expect(() => decode([])).toThrow();
+	});
+
+	it('picks the codec of math::sum from the field kind, without its checks', () => {
+		const statement = select(PersonTable)
+			.groupBy((row) => ({ role: row.role }))
+			.aggregate((row) => ({ ages: sum(row.age) }))
+			.build();
+		// `age` is checked to be at most 150; a sum of ages is not.
+		expect(
+			Schema.decodeUnknownSync(statement.result)([
+				{ role: 'admin', ages: 400 },
+			]),
+		).toEqual([{ role: 'admin', ages: 400 }]);
+	});
+
+	it('refuses at runtime what the types refuse', () => {
+		const untyped = select(PersonTable) as unknown as {
+			groupBy: (keys: (row: unknown) => unknown) => {
+				aggregate: (fields: (row: unknown) => unknown) => unknown;
+				orderBy: (alias: string) => unknown;
+			};
+		};
+		expect(() => untyped.groupBy(() => ({ role: literal(1) }))).toThrow(
+			/GROUP BY takes a field path/,
+		);
+		const grouped = untyped.groupBy((row) => ({
+			role: (row as { role: unknown }).role,
+		}));
+		expect(() =>
+			grouped.aggregate((row) => ({
+				name: (row as { name: unknown }).name,
+			})),
+		).toThrow('`name` is a field that is neither grouped nor aggregated');
+		expect(() => grouped.aggregate(() => ({ role: count() }))).toThrow(
+			'`role` is already a key of this GROUP BY',
+		);
+		expect(() => grouped.orderBy('nope')).toThrow(
+			'`nope` is not a group key or an aggregate of this SELECT',
+		);
+		expect(() =>
+			select(PersonTable)
+				.project((row) => ({ name: row.name }))
+				.groupAll(),
+		).toThrow(/group a SELECT before projecting/);
 	});
 });
