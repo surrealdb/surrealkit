@@ -1885,12 +1885,19 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 			);
 		});
 
-		it('<|k, ef|> without a vector index is an error on SurrealDB 4 and no rows on 3', async () => {
+		it('<|k, ef|> without a vector index is an error from SurrealDB 4.0.1 and no rows before', async () => {
 			const unindexed = query(
 				'SELECT id FROM ft_plain WHERE embedding <|1,40|> $v;',
 				{ v: [1, 0] },
 			);
-			if (engine.majorVersion >= 4) {
+			const [major = 0, minor = 0, patch = 0] = (
+				/(\d+)\.(\d+)\.(\d+)/u.exec(engine.version) ?? []
+			)
+				.slice(1)
+				.map(Number);
+			const rejects =
+				major !== 4 ? major > 4 : minor !== 0 ? minor > 0 : patch >= 1;
+			if (rejects) {
 				await expect(unindexed).rejects.toThrow(
 					/needs an HNSW or DiskANN index on `embedding`/,
 				);
