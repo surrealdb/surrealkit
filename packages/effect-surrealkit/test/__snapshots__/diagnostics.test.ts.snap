@@ -1126,6 +1126,18 @@ exports[`type diagnostics > search/order-by-value-alias 1`] = `
 ]
 `;
 
+exports[`type diagnostics > search/order-by-value-object-key 1`] = `
+[
+  "TS2345: Argument of type '"city"' is not assignable to parameter of type '"\`city\` is not a name the result row holds"'.",
+]
+`;
+
+exports[`type diagnostics > search/order-by-value-object-key-later 1`] = `
+[
+  "TS2345: Argument of type '"city"' is not assignable to parameter of type '"\`city\` is not a name the result row holds"'.",
+]
+`;
+
 exports[`type diagnostics > search/score-without-reference 1`] = `
 [
   "TS2345: Argument of type 'Match<undefined, declareConstructor<string, string, readonly [], string> & Codec, true, { readonly terms: declareConstructor<string, string, readonly [], string>; }>' is not assignable to parameter of type '"this match has no reference number, so search::score cannot name it: give it one, as in \`match(table, field, terms, { ref: 1 })\`"'.",

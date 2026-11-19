@@ -253,6 +253,7 @@ export {
 	type RecordSelect,
 	type Select,
 	type SelectResult,
+	type SelectValueRow,
 	type Split,
 	type SplitCodec,
 	type SplitField,

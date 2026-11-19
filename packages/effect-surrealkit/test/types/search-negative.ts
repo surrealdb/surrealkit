@@ -15,7 +15,7 @@ import {
 	score,
 	select,
 } from '../../src/statement/index.js';
-import { DocTable } from '../golden/corpus/index.js';
+import { DocTable, PersonTable } from '../golden/corpus/index.js';
 
 const terms = param('terms', SurrealSchema.String);
 
@@ -98,4 +98,10 @@ export const rejectedAliasOrders = () => {
 	const titles = select(DocTable).value((row) => row.title);
 	// @ts-expect-error [search/order-by-value-alias] SELECT VALUE has no names
 	titles.orderByAlias('title');
+	// A value that is an object has keys, but they are not names of the row.
+	const addresses = select(PersonTable).value((row) => row.address);
+	// @ts-expect-error [search/order-by-value-object-key] SELECT VALUE of an object has no names either
+	addresses.orderByAlias('city');
+	// @ts-expect-error [search/order-by-value-object-key-later] nor after another method
+	addresses.limit(3).orderByAlias('city');
 };

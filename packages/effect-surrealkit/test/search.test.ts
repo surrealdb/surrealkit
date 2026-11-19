@@ -27,7 +27,7 @@ import {
 	score,
 	select,
 } from '../src/statement/index.js';
-import { DocTable } from './golden/corpus/index.js';
+import { DocTable, PersonTable } from './golden/corpus/index.js';
 
 const terms = param('terms', SurrealSchema.String);
 const words = match(DocTable, 'body', terms, { ref: 1 });
@@ -409,5 +409,48 @@ describe('ordering by a score or a distance', () => {
 				'title',
 			),
 		).toThrow('`title` is not a name the result row holds');
+	});
+
+	it('checks each alias against what the finished statement returns, so a later projection cannot drop it', () => {
+		const untyped = (f: unknown) =>
+			f as (...args: ReadonlyArray<unknown>) => unknown;
+		// The alias is checked again when the statement is built or used.
+		const dropped = select(DocTable)
+			.orderByAlias('title')
+			.project((row) => ({ id: row.id }));
+		expect(() => dropped.build()).toThrow(
+			'ORDER BY `title`: `title` is not a name the result row holds',
+		);
+		expect(() => dropped.toExpr()).toThrow(
+			'ORDER BY `title`: `title` is not a name the result row holds',
+		);
+		expect(() =>
+			select(DocTable).orderByAlias('title').omit('title').build(),
+		).toThrow(
+			'ORDER BY `title`: `title` is not a name the result row holds',
+		);
+		expect(() =>
+			select(DocTable)
+				.orderByAlias('title')
+				.value((row) => row.title)
+				.build(),
+		).toThrow(/SELECT VALUE returns one value per row, with no names/);
+		// A projection that keeps the name keeps the sort key.
+		expect(
+			select(DocTable)
+				.orderByAlias('title', 'DESC')
+				.project((row) => ({ id: row.id, title: row.title }))
+				.build().sql,
+		).toBe(
+			'SELECT id AS id, title AS title FROM ⟨doc⟩ ORDER BY title DESC;',
+		);
+		// SELECT VALUE of an object holds its keys, but they are no aliases.
+		expect(() =>
+			untyped(
+				select(PersonTable).value((row) => row.address).orderByAlias,
+			)('city'),
+		).toThrow(
+			'`city` is not a name the result row holds: SELECT VALUE returns one value per row, with no names to order by; order by a field path of the stored row with `orderBy`',
+		);
 	});
 });

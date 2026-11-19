@@ -835,7 +835,12 @@ a binding, a fraction or a value out of range is a compile error.
 A search ranks by its score or distance through the alias it projects:
 `.orderByAlias('score', 'DESC')` renders `ORDER BY score DESC`, which
 SurrealDB 3.3 and 4.0 both sort by the projected value (3.3 parses no
-function call after `ORDER BY`). A hybrid search joins a match and a
+function call after `ORDER BY`). The name is checked when it is given and
+again when the statement is built, against what the statement then returns:
+`.orderByAlias('score')` before a `project` that drops `score` is refused,
+because SurrealDB would sort by a stored field of that name or by NONE, and
+`SELECT VALUE` holds no names, so `.value(…).orderByAlias(…)` is a compile
+error. A hybrid search joins a match and a
 nearest-neighbour search with `and`, projects both, and orders by either;
 `test/search-engine.test.ts` runs both orders and the hybrid on both
 engines.

@@ -116,15 +116,23 @@ export type OrderKey<K> = K extends Path
 	: 'ORDER BY takes a field path of the row, like `row.name` or `at(row.pins, 0)`';
 
 /** The names a row of `Row` holds, which ORDER BY can name as aliases. */
-export type OrderAlias<Row extends Codec> = Row['Type'] extends
-	| ReadonlyArray<unknown>
-	| RecordIdLike
+export type OrderAlias<Row extends Codec> = Row extends SelectValueRow
 	? never
-	: Row['Type'] extends object
-		? keyof Row['Type'] & string
-		: never;
+	: Row['Type'] extends ReadonlyArray<unknown> | RecordIdLike
+		? never
+		: Row['Type'] extends object
+			? keyof Row['Type'] & string
+			: never;
 
 type RecordIdLike = { readonly table: unknown; readonly id: unknown };
+
+/**
+ * Marks, for the compiler only, the row codec of a `SELECT VALUE`: its value
+ * may be an object, but it has no names `orderByAlias` could sort by.
+ */
+export interface SelectValueRow {
+	readonly '~effect-surrealkit/SelectValue': true;
+}
 
 /** The indexes a descriptor lists, by name. */
 type IndexesOf<T> = T extends { readonly indexes: infer I }
@@ -418,7 +426,24 @@ interface Order {
 	readonly direction: 'ASC' | 'DESC';
 	/** The field path sorted by, or none for an alias of the projection. */
 	readonly path?: PathData;
+	/** The name of the result row sorted by (`orderByAlias`). */
+	readonly alias?: string;
 }
+
+const valueHasNoNames =
+	'SELECT VALUE returns one value per row, with no names to order by; order by a field path of the stored row with `orderBy`';
+
+/** Why the rows `state` returns hold no field `name`, or `undefined`. */
+const missingName = (state: State, name: string): string | undefined => {
+	const missing = `\`${name}\` is not a name the result row holds`;
+	if (state.base.kind === 'value') return `${missing}: ${valueHasNoNames}`;
+	const holds =
+		state.fields === '*'
+			? Object.hasOwn(fieldsOf(state.table.select) ?? {}, name) &&
+				!(state.omit ?? []).includes(name)
+			: state.aliases.has(name);
+	return holds ? undefined : missing;
+};
 
 /**
  * SurrealDB resolves an `ORDER BY` path against the projection before the
@@ -426,7 +451,15 @@ interface Order {
  * anything but that field, would change what is sorted.
  */
 const assertOrder = (state: State): void => {
-	for (const { path, sql } of state.order) {
+	for (const { alias, path, sql } of state.order) {
+		if (alias !== undefined) {
+			// A projection, SELECT VALUE or OMIT after `orderByAlias` changes
+			// the names the row holds: the sort key must still be one of them.
+			const missing = missingName(state, alias);
+			if (missing !== undefined) {
+				throw new RangeError(`ORDER BY \`${alias}\`: ${missing}`);
+			}
+		}
 		if (path === undefined) continue;
 		const source = state.aliases.get(path.root);
 		if (source !== undefined && source !== path.rootSql) {
@@ -591,7 +624,10 @@ export interface Select<
 	 * projection, such as a full-text `score(…)` or a nearest-neighbour
 	 * `knnDistance(…)` (`.orderByAlias('score', 'DESC')`), or a field of
 	 * `SELECT *`. SurrealDB 3.3 parses no function call after ORDER BY, so
-	 * a computed value is sorted by its alias.
+	 * a computed value is sorted by its alias. The name is checked again
+	 * when the statement is built, against what it then returns: a later
+	 * `project`, `value` or `omit` that drops it is refused, because
+	 * SurrealDB would sort by a stored field or by NONE instead.
 	 */
 	readonly orderByAlias: <const A extends string>(
 		alias: A extends OrderAlias<Row>
@@ -619,10 +655,13 @@ export interface Select<
 		fields: (row: RowExprs<T>) => CheckedProjection<F>,
 	) => Select<T, P & ParamsOfAll<F[keyof F]>, ProjectedCodec<F>, Only>;
 
-	/** `SELECT VALUE`: one expression per row instead of an object. */
+	/**
+	 * `SELECT VALUE`: one expression per row instead of an object. Its rows
+	 * hold no names, so `orderByAlias` after it is a compile error.
+	 */
 	readonly value: <S extends Codec, P2 extends Params>(
 		pick: (row: RowExprs<T>) => Expr<S, P2>,
-	) => Select<T, P & P2, RowCodec<S>, Only>;
+	) => Select<T, P & P2, RowCodec<S> & SelectValueRow, Only>;
 
 	/**
 	 * `FROM ONLY`: one row, or NONE when there is none. Reading from a table
@@ -825,19 +864,14 @@ const builder = <
 		},
 		orderByAlias: (alias, direction = 'ASC') => {
 			const name = alias as string;
-			const holds =
-				state.fields === '*'
-					? Object.hasOwn(fieldsOf(state.table.select) ?? {}, name) &&
-						!(state.omit ?? []).includes(name)
-					: state.aliases.has(name);
-			if (!holds) {
-				throw new RangeError(
-					`\`${name}\` is not a name the result row holds`,
-				);
-			}
+			const missing = missingName(state, name);
+			if (missing !== undefined) throw new RangeError(missing);
 			return builder({
 				...state,
-				order: [...state.order, { sql: escapeIdent(name), direction }],
+				order: [
+					...state.order,
+					{ sql: escapeIdent(name), direction, alias: name },
+				],
 			});
 		},
 		limit: (rows) => {
