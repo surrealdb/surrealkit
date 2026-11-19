@@ -146,8 +146,8 @@ exports[`type diagnostics > content/extra-field 1`] = `
 
 exports[`type diagnostics > content/merge-value-missing-fields 1`] = `
 [
-  "TS2345: Argument of type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<SurrealValue, SurrealValue, never, never>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' is not assignable to parameter of type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<...>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }> & { ...; }'.
-  Property ''this value is not what the table accepts for this operation'' is missing in type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<SurrealValue, SurrealValue, never, never>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' but required in type '{ readonly 'this value is not what the table accepts for this operation': readonly [{ readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealValue; readonly city?: string; }; ... 12 more ...; readonly updated_at?: DateTime | undefined; }, { ...; }]; }'.",
+  "TS2345: Argument of type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<SurrealMergeValue, SurrealMergeValue, never, never>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' is not assignable to parameter of type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<...>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }> & { ...; }'.
+  Property ''this value is not what the table accepts for this operation'' is missing in type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<SurrealMergeValue, SurrealMergeValue, never, never>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' but required in type '{ readonly 'this value is not what the table accepts for this operation': readonly [{ readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealMergeValue; readonly city?: string; }; ... 12 more ...; readonly updated_at?: DateTime | undefined; }, { ...; }...'.",
 ]
 `;
 
@@ -160,8 +160,8 @@ exports[`type diagnostics > create/extra-field 1`] = `
 
 exports[`type diagnostics > create/merge-value-missing-fields 1`] = `
 [
-  "TS2345: Argument of type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<SurrealValue, SurrealValue, never, never>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' is not assignable to parameter of type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<...>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }> & { ...; }'.
-  Property ''this value is not what the table accepts for this operation'' is missing in type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<SurrealValue, SurrealValue, never, never>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' but required in type '{ readonly 'this value is not what the table accepts for this operation': readonly [{ readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealValue; readonly city?: string; }; ... 12 more ...; readonly updated_at?: DateTime | undefined; }, { ...; }]; }'.",
+  "TS2345: Argument of type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<SurrealMergeValue, SurrealMergeValue, never, never>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' is not assignable to parameter of type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<...>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }> & { ...; }'.
+  Property ''this value is not what the table accepts for this operation'' is missing in type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<SurrealMergeValue, SurrealMergeValue, never, never>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' but required in type '{ readonly 'this value is not what the table accepts for this operation': readonly [{ readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealMergeValue; readonly city?: string; }; ... 12 more ...; readonly updated_at?: DateTime | undefined; }, { ...; }...'.",
 ]
 `;
 
@@ -224,7 +224,7 @@ exports[`type diagnostics > flag/make-read-only 1`] = `
 exports[`type diagnostics > merge/element-missing-field 1`] = `
 [
   "TS2345: Argument of type 'Expr<Struct<{ readonly phones: $Array<Struct<{}>>; }>, { readonly changes: Struct<{ readonly phones: $Array<Struct<{}>>; }>; }>' is not assignable to parameter of type 'Expr<Struct<{ readonly phones: $Array<Struct<{}>>; }>, { readonly changes: Struct<{ readonly phones: $Array<Struct<{}>>; }>; }> & { ...; }'.
-  Property ''this value is not what the table accepts for this operation'' is missing in type 'Expr<Struct<{ readonly phones: $Array<Struct<{}>>; }>, { readonly changes: Struct<{ readonly phones: $Array<Struct<{}>>; }>; }>' but required in type '{ readonly 'this value is not what the table accepts for this operation': readonly [{ readonly phones: readonly {}[]; }, { readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealValue; readonly city?: string; }; ... 12 more ...; readonly updated_at?: D...'.",
+  Property ''this value is not what the table accepts for this operation'' is missing in type 'Expr<Struct<{ readonly phones: $Array<Struct<{}>>; }>, { readonly changes: Struct<{ readonly phones: $Array<Struct<{}>>; }>; }>' but required in type '{ readonly 'this value is not what the table accepts for this operation': readonly [{ readonly phones: readonly {}[]; }, { readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealMergeValue; readonly city?: string; }; ... 12 more ...; readonly updated_a...'.",
 ]
 `;
 
@@ -416,7 +416,7 @@ exports[`type diagnostics > schema/computed-field-in-create 1`] = `
 
 exports[`type diagnostics > schema/computed-field-in-merge 1`] = `
 [
-  "TS2353: Object literal may only specify known properties, and 'display' does not exist in type '{ readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealValue; readonly city?: string; }; readonly age?: number | undefined; ... 11 more ...; readonly updated_at?: DateTime | undefined; }'.",
+  "TS2353: Object literal may only specify known properties, and 'display' does not exist in type '{ readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealMergeValue; readonly city?: string; }; readonly age?: number | undefined; ... 11 more ...; readonly updated_at?: DateTime | undefined; }'.",
 ]
 `;
 
@@ -537,7 +537,7 @@ exports[`type diagnostics > schema/native-row-as-json 1`] = `
 
 exports[`type diagnostics > schema/none-for-plain-default 1`] = `
 [
-  "TS2375: Type '{ role: undefined; }' is not assignable to type '{ readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealValue; readonly city?: string; }; readonly age?: number | undefined; ... 11 more ...; readonly updated_at?: DateTime | undefined; }' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  "TS2375: Type '{ role: undefined; }' is not assignable to type '{ readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealMergeValue; readonly city?: string; }; readonly age?: number | undefined; ... 11 more ...; readonly updated_at?: DateTime | undefined; }' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
   Types of property 'role' are incompatible.
     Type 'undefined' is not assignable to type '"owner" | "member" | "admin"'.",
 ]
@@ -545,7 +545,7 @@ exports[`type diagnostics > schema/none-for-plain-default 1`] = `
 
 exports[`type diagnostics > schema/none-for-required-field 1`] = `
 [
-  "TS2375: Type '{ name: undefined; }' is not assignable to type '{ readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealValue; readonly city?: string; }; readonly age?: number | undefined; ... 11 more ...; readonly updated_at?: DateTime | undefined; }' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  "TS2375: Type '{ name: undefined; }' is not assignable to type '{ readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealMergeValue; readonly city?: string; }; readonly age?: number | undefined; ... 11 more ...; readonly updated_at?: DateTime | undefined; }' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
   Types of property 'name' are incompatible.
     Type 'undefined' is not assignable to type 'string'.",
 ]
@@ -576,7 +576,7 @@ exports[`type diagnostics > schema/readonly-field-in-content 1`] = `
 
 exports[`type diagnostics > schema/readonly-field-in-merge 1`] = `
 [
-  "TS2353: Object literal may only specify known properties, and 'created_at' does not exist in type '{ readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealValue; readonly city?: string; }; readonly age?: number | undefined; ... 11 more ...; readonly updated_at?: DateTime | undefined; }'.",
+  "TS2353: Object literal may only specify known properties, and 'created_at' does not exist in type '{ readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealMergeValue; readonly city?: string; }; readonly age?: number | undefined; ... 11 more ...; readonly updated_at?: DateTime | undefined; }'.",
 ]
 `;
 
