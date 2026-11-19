@@ -8,7 +8,7 @@
  */
 import type { Schema } from 'effect';
 
-import { assertResolved } from './refs.js';
+import { assertResolved, withoutRefs } from './refs.js';
 
 /** A codec that needs no services, so a statement needs only a client. */
 export type Codec = Schema.Codec<unknown, unknown, never, never>;
@@ -368,7 +368,9 @@ export const make = <
 		[StatementTypeId]: StatementTypeId,
 		name: options.name ?? 'statement',
 		sql: terminated(options.sql),
-		params: options.params,
+		// A built statement's search references are resolved and its own, so a
+		// block or a transaction that takes it in never joins them.
+		params: withoutRefs(options.params),
 		result: options.result,
 		slots: options.slots ?? 1,
 		throws: options.throws ?? [],

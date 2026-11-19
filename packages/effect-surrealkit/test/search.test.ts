@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import * as SurrealSchema from '../src/index.js';
 import {
 	and,
+	block,
 	eq,
 	evaluate,
 	highlight,
@@ -320,5 +321,50 @@ describe('fused rankings', () => {
 		expect(() => rrf([meaning, scored], { limit: 2 })).toThrow(
 			/a fused list has a field `rrf_score`/,
 		);
+	});
+});
+
+describe('searches in a block', () => {
+	it('binds one search per statement, each resolved on its own, so two nearest-neighbour searches in two locals are no conflict', () => {
+		const other = knn(DocTable, 'embedding', 'second', { k: 3, ef: 40 });
+		const statement = block()
+			.let('words', () =>
+				select(DocTable)
+					.where(() => words)
+					.project((row) => ({ id: row.id, score: score(words) }))
+					.build(),
+			)
+			.let('near', () =>
+				select(DocTable)
+					.where(() => near)
+					.project((row) => ({
+						id: row.id,
+						distance: knnDistance(near),
+					}))
+					.build(),
+			)
+			.let('other', () =>
+				select(DocTable)
+					.where(() => other)
+					.project((row) => ({
+						id: row.id,
+						distance: knnDistance(other),
+					}))
+					.build(),
+			)
+			.return(($) => ({ words: $.words, near: $.near, other: $.other }))
+			.build('three searches');
+		expect(statement.sql).toContain('WHERE embedding <|5,40|> $query');
+		expect(statement.sql).toContain('WHERE embedding <|3,40|> $second');
+		expect(Object.keys(statement.params).sort()).toEqual([
+			'query',
+			'second',
+			'terms',
+		]);
+		const built = select(DocTable)
+			.where(() => near)
+			.project((row) => ({ id: row.id, distance: knnDistance(near) }))
+			.build();
+		expect(Object.getOwnPropertySymbols(built.params)).toEqual([]);
 	});
 });
