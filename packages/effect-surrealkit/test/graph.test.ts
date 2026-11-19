@@ -30,7 +30,9 @@ import {
 	sqlOf,
 } from '../src/statement/index.js';
 import {
+	DocTable,
 	MemberOf,
+	MemberOfTable,
 	Person,
 	PersonId,
 	PersonTable,
@@ -138,6 +140,42 @@ describe('record links', () => {
 			'SELECT manager.name AS boss FROM ⟨person⟩ WHERE manager.name = $boss;',
 		);
 		expect(statement.writes).toBeUndefined();
+	});
+});
+
+describe('the README example', () => {
+	it('renders as documented', () => {
+		const byOwner = select(DocTable)
+			.where((row) =>
+				eq(
+					follow(store, row.owner).name,
+					param('owner', SurrealSchema.String),
+				),
+			)
+			.project((row) => ({
+				title: row.title,
+				teams: outgoing(store, row.owner, 'member_of', {
+					where: (edge) =>
+						eq(edge.role, param('role', MemberOfTable.fields.role)),
+				}),
+				roles: follow(
+					store,
+					edges(outgoing(store, row.owner, 'member_of')),
+				).role,
+				reach: follow(
+					store,
+					collect(row.owner, (node) =>
+						outgoing(store, node, 'knows'),
+					),
+				).name,
+			}))
+			.build();
+		expect(byOwner.sql).toBe(
+			'SELECT title AS title, owner->(member_of WHERE role = $role)->? AS teams, owner->member_of.role AS roles, owner.{..+collect}(->knows->?).name AS reach FROM ⟨doc⟩ WHERE owner.name = $owner;',
+		);
+		expect(
+			select(PersonTable).fetch(store, 'manager', 'watchers').build().sql,
+		).toBe('SELECT * FROM ⟨person⟩ FETCH manager, watchers;');
 	});
 });
 
@@ -394,5 +432,135 @@ describe('recursive paths', () => {
 		expect(() =>
 			untyped(recurse)(person.watchers, { min: 1, max: 2 }, knows),
 		).toThrow(/one list per record|one record/);
+	});
+});
+
+describe('FETCH', () => {
+	const PalId = SurrealSchema.RecordIdFor('pal').pipe(Schema.brand('t/pal'));
+	const Pal = Schema.Struct({
+		id: PalId,
+		n: SurrealSchema.Int,
+		next: Schema.optionalKey(PalId),
+		friends: Schema.Array(PalId),
+		box: Schema.Struct({ pal: PalId }),
+	});
+	const PalTable = { name: 'pal', id: PalId, select: Pal } as const;
+	const pals = { tables: { pal: PalTable }, edges: {} } as const;
+	const a = new RecordId('pal', 'a');
+	const b = new RecordId('pal', 'b');
+	const leaf = { id: b, n: 2, friends: [], box: { pal: a } };
+
+	it('renders after LIMIT and START, each path quoted', () => {
+		expect(
+			select(PersonTable)
+				.limit(2)
+				.start(1)
+				.fetch(store, 'manager', 'watchers')
+				.build().sql,
+		).toBe(
+			'SELECT * FROM ⟨person⟩ LIMIT 2 START 1 FETCH manager, watchers;',
+		);
+		expect(
+			select(PalTable).fetch(pals, 'next.next', 'box.pal').build().sql,
+		).toBe('SELECT * FROM ⟨pal⟩ FETCH next.next, box.pal;');
+	});
+
+	it('replaces a link with its row, which may be absent', () => {
+		const statement = select(PalTable).fetch(pals, 'next').build();
+		expect(
+			decode(statement.result, [
+				{ id: a, n: 1, next: leaf, friends: [], box: { pal: b } },
+				{ id: b, n: 2, next: undefined, friends: [], box: { pal: a } },
+			]),
+		).toEqual([
+			{ id: a, n: 1, next: leaf, friends: [], box: { pal: b } },
+			{ id: b, n: 2, friends: [], box: { pal: a } },
+		]);
+		expect(() =>
+			decode(statement.result, [{ ...leaf, next: b }]),
+		).toThrow();
+		expect(statement.writes).toBe(false);
+	});
+
+	it('replaces a list of links, each record possibly NONE, and a nested link', () => {
+		const statement = select(PalTable)
+			.fetch(pals, 'friends')
+			.fetch(pals, 'box.pal')
+			.build();
+		expect(
+			decode(statement.result, [
+				{ id: a, n: 1, friends: [undefined, leaf], box: { pal: leaf } },
+			]),
+		).toEqual([
+			{ id: a, n: 1, friends: [undefined, leaf], box: { pal: leaf } },
+		]);
+	});
+
+	it('fetches through a fetched record', () => {
+		const statement = select(PalTable).fetch(pals, 'next.next').build();
+		const deep = { ...leaf, next: { ...leaf, id: a } };
+		expect(
+			decode(statement.result, [
+				{ id: a, n: 1, next: deep, friends: [], box: { pal: b } },
+			]),
+		).toEqual([{ id: a, n: 1, next: deep, friends: [], box: { pal: b } }]);
+	});
+
+	it('names the aliases of a projection', () => {
+		const statement = select(PalTable)
+			.project((row) => ({ boss: row.next, n: row.n }))
+			.fetch(pals, 'boss')
+			.only()
+			.build();
+		expect(statement.sql).toBe(
+			'SELECT next AS boss, n AS n FROM ONLY ⟨pal⟩ LIMIT 1 FETCH boss;',
+		);
+		expect(decode(statement.result, { boss: leaf, n: 1 })).toEqual({
+			boss: leaf,
+			n: 1,
+		});
+		expect(decode(statement.result, { boss: undefined, n: 1 })).toEqual({
+			boss: undefined,
+			n: 1,
+		});
+	});
+
+	it('refuses a projection after it, SELECT VALUE, and what is not a link', () => {
+		expect(() =>
+			select(PalTable)
+				.fetch(pals, 'next')
+				.project((row) => ({ n: row.n })),
+		).toThrow(/call `project` before `fetch`/);
+		expect(() =>
+			untyped(select(PalTable).value((row) => row.next).fetch)(
+				pals,
+				'next',
+			),
+		).toThrow(/SELECT VALUE/);
+		expect(() => untyped(select(PalTable).fetch)(pals, 'n')).toThrow(
+			'`n` is not a record link, so FETCH has nothing to replace',
+		);
+		expect(() => untyped(select(PalTable).fetch)(pals, 'nope')).toThrow(
+			'`nope` is not a field of what the select returns',
+		);
+		expect(() => untyped(select(PalTable).fetch)(pals, 'next.')).toThrow(
+			/not a FETCH path/,
+		);
+	});
+
+	it('fetches a union link to the row of whichever table it names', () => {
+		const statement = select(store.tables.member_of)
+			.project((row) => ({ out: row.out }))
+			.fetch(store, 'out')
+			.build();
+		expect(
+			decode(statement.result, [
+				{ out: { id: red, name: 'Red', members: [] } },
+				{ out: { id: acme, name: 'Acme' } },
+			]),
+		).toEqual([
+			{ out: { id: red, name: 'Red', members: [] } },
+			{ out: { id: acme, name: 'Acme' } },
+		]);
 	});
 });

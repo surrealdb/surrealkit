@@ -296,6 +296,36 @@ exports[`type diagnostics > expr/index-non-array 1`] = `
 ]
 `;
 
+exports[`type diagnostics > fetch/any-table 1`] = `
+[
+  "TS2345: Argument of type '"k_record_any"' is not assignable to parameter of type '"\`k_record_any\` can point at any table (\`record\`), so FETCH has no row type for it"'.",
+]
+`;
+
+exports[`type diagnostics > fetch/nested-not-a-link 1`] = `
+[
+  "TS2345: Argument of type '"manager.name"' is not assignable to parameter of type '"\`manager.name\` is not a record link, so FETCH has nothing to replace"'.",
+]
+`;
+
+exports[`type diagnostics > fetch/no-such-field 1`] = `
+[
+  "TS2345: Argument of type '"nope"' is not assignable to parameter of type '"\`nope\` is not a field of what the select returns"'.",
+]
+`;
+
+exports[`type diagnostics > fetch/not-a-link 1`] = `
+[
+  "TS2345: Argument of type '"name"' is not assignable to parameter of type '"\`name\` is not a record link, so FETCH has nothing to replace"'.",
+]
+`;
+
+exports[`type diagnostics > fetch/projection-has-no-such-alias 1`] = `
+[
+  "TS2345: Argument of type '"manager"' is not assignable to parameter of type '"\`manager\` is not a field of what the select returns"'.",
+]
+`;
+
 exports[`type diagnostics > flag/build-read-only 1`] = `
 [
   "TS2353: Object literal may only specify known properties, and 'readOnly' does not exist in type '{ readonly writes?: boolean; }'.",

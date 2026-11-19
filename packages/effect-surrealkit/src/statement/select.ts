@@ -31,6 +31,14 @@ import {
 	sqlOf,
 } from './expr.js';
 import {
+	type CheckedFetch,
+	type FetchBase,
+	type Fetched,
+	fetchedCodec,
+	fetchPath,
+} from './fetch.js';
+import type { GraphStore } from './graph.js';
+import {
 	type Base,
 	type CheckedKeys,
 	type GroupAll,
@@ -326,6 +334,9 @@ interface State {
 	/** `FOR UPDATE`: the record read conflicts with a concurrent write. */
 	readonly lock?: boolean;
 	readonly params: Params;
+	/** What the select returns, which FETCH paths name fields of. */
+	readonly base: FetchBase;
+	readonly fetch: ReadonlyArray<string>;
 }
 
 interface Order {
@@ -389,8 +400,20 @@ const render = (state: State): string => {
 			: []),
 		...(limit === undefined ? [] : [`LIMIT ${limit}`]),
 		...(state.start === undefined ? [] : [`START ${state.start}`]),
+		...(state.fetch.length > 0
+			? [`FETCH ${state.fetch.map(fetchPath).join(', ')}`]
+			: []),
 		...(state.lock === true ? ['FOR UPDATE'] : []),
 	].join(' ');
+};
+
+/** FETCH paths name fields of the projection, so they come after it. */
+const assertNoFetch = (state: State, method: string): void => {
+	if (state.fetch.length > 0) {
+		throw new RangeError(
+			`FETCH ${state.fetch.join(', ')} names fields of what the select returns; call \`${method}\` before \`fetch\``,
+		);
+	}
 };
 
 /**
@@ -414,6 +437,7 @@ const baseOf = (state: State): Base => {
 	if (
 		state.split !== undefined ||
 		state.omit !== undefined ||
+		state.fetch.length > 0 ||
 		state.fields !== '*' ||
 		state.only ||
 		state.order.length > 0 ||
@@ -421,7 +445,7 @@ const baseOf = (state: State): Base => {
 		state.start !== undefined
 	) {
 		throw new RangeError(
-			'group a SELECT before projecting, ordering, limiting it or reading ONLY one row',
+			'group a SELECT before projecting, ordering, limiting, fetching it or reading ONLY one row',
 		);
 	}
 	return {
@@ -543,6 +567,23 @@ export interface Select<
 	/** `GROUP ALL`: one row of aggregates over every record. */
 	readonly groupAll: () => GroupAll<T, P>;
 
+	/**
+	 * `FETCH`: replaces each record link `paths` names with the record it
+	 * points at, found in `store` by its table. A path names a field of
+	 * what the select returns (the stored row, or the projection's
+	 * aliases), dot-separated through objects and fetched records
+	 * (`manager.team`). A fetched link may be absent (SurrealDB answers
+	 * NONE for a missing or unreadable record), and so may each record of
+	 * a fetched list. Call it after `project`.
+	 */
+	readonly fetch: <
+		S extends GraphStore,
+		const Paths extends readonly [string, ...ReadonlyArray<string>],
+	>(
+		store: S,
+		...paths: CheckedFetch<Row['Type'], S, Paths>
+	) => Select<T, P, Fetched<Row, S, Paths>, Only>;
+
 	/** This query as a parenthesised subquery of another expression. */
 	readonly toExpr: () => Expr<SelectResult<Row, Only>, P>;
 
@@ -647,8 +688,18 @@ const builder = <
 			}
 			const projection = fields(row) as Projection;
 			const projected = project(projection);
+			assertNoFetch(state, 'project');
 			return builder({
 				...state,
+				base: {
+					kind: 'projection',
+					fields: Object.fromEntries(
+						Object.entries(projection).map(([alias, value]) => [
+							alias,
+							codecOf(value),
+						]),
+					),
+				},
 				fields: projected.sql,
 				aliases: projected.aliases,
 				pure: state.pure && Object.values(projection).every(isPath),
@@ -663,13 +714,23 @@ const builder = <
 				);
 			}
 			const picked = pick(row);
+			assertNoFetch(state, 'value');
 			return builder({
 				...state,
+				base: { kind: 'value' },
 				fields: `VALUE ${sqlOf(picked)}`,
 				aliases: new Map(),
 				pure: state.pure && isPath(picked),
 				out: rowCodec(codecOf(picked)),
 				params: mergeParams(state.params, paramsOf(picked)),
+			});
+		},
+		fetch: (store, ...paths) => {
+			const fetch = [...state.fetch, ...(paths as ReadonlyArray<string>)];
+			return builder({
+				...state,
+				fetch,
+				out: fetchedCodec(store, state.base, fetch),
 			});
 		},
 		only: () => {
@@ -681,6 +742,7 @@ const builder = <
 			return builder({ ...state, only: true });
 		},
 		omit: (...names) => {
+			assertNoFetch(state, 'omit');
 			if (state.fields !== '*') {
 				throw new RangeError(
 					'OMIT leaves fields out of `SELECT *`; a projection names the fields it keeps instead',
@@ -711,13 +773,16 @@ const builder = <
 					([name]) => !omitted.includes(name),
 				),
 			);
+			const select = rebuild(state.table.select, kept);
 			return builder({
 				...state,
 				omit: omitted,
-				out: rowCodec(rebuild(state.table.select, kept)),
+				out: rowCodec(select),
+				base: { kind: 'row', table: { ...state.table, select } },
 			}) as never;
 		},
 		split: (field) => {
+			assertNoFetch(state, 'split');
 			const name = field as string;
 			if (
 				state.fields !== '*' ||
@@ -758,6 +823,7 @@ const builder = <
 				table,
 				row: rowExprs(table),
 				out: storedRow(table),
+				base: { kind: 'row', table },
 				split: name,
 			}) as never;
 		},
@@ -843,6 +909,8 @@ export const select: {
 		start: undefined,
 		only: false,
 		params: {},
+		base: { kind: 'row', table },
+		fetch: [],
 	};
 	if (typeof id === 'string') {
 		const where = uniqueLookup(table, state.row, id, values ?? {});

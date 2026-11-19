@@ -73,6 +73,12 @@ export {
 	sqlOf,
 	unsafeExpr,
 } from './expr.js';
+export type {
+	CheckedFetch,
+	Fetched,
+	FetchProblem,
+	FetchTarget,
+} from './fetch.js';
 export {
 	both,
 	type CheckedShape,

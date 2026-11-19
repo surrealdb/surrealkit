@@ -20,6 +20,7 @@ import {
 import {
 	DocTable,
 	Kinds,
+	KindsTable,
 	MemberOfTable,
 	Person,
 	PersonTable,
@@ -131,4 +132,21 @@ export const rejectedRecursion = () => {
 			(node) => outgoing(store, node, 'knows'),
 		),
 	}));
+};
+
+// ---- FETCH
+
+export const rejectedFetches = () => {
+	// @ts-expect-error [fetch/not-a-link] `name` is a string
+	select(PersonTable).fetch(store, 'name');
+	// @ts-expect-error [fetch/no-such-field] the row has no such field
+	select(PersonTable).fetch(store, 'nope');
+	// @ts-expect-error [fetch/any-table] `record` can point at any table
+	select(KindsTable).fetch(store, 'k_record_any');
+	// @ts-expect-error [fetch/nested-not-a-link] `manager.name` is a string of the fetched record
+	select(PersonTable).fetch(store, 'manager.name');
+	select(PersonTable)
+		.project((row) => ({ boss: row.manager }))
+		// @ts-expect-error [fetch/projection-has-no-such-alias] FETCH names the projection's aliases
+		.fetch(store, 'manager');
 };

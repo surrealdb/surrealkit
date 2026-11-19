@@ -24,14 +24,17 @@ import {
 	shortest,
 } from '../../src/statement/index.js';
 import {
+	type DocRow,
 	DocTable,
 	MemberOfTable,
 	type OrgId,
+	type OrgRow,
 	PersonId,
 	type PersonRow,
 	PersonTable,
 	store,
 	type TeamId,
+	type TeamRow,
 	TeamTable,
 } from '../golden/corpus/index.js';
 
@@ -209,3 +212,32 @@ same<
 	Input<(typeof reached)['params']>,
 	{ readonly from: PersonId; readonly to: PersonId }
 >(true);
+
+// ---- FETCH: a link becomes its row, possibly absent.
+
+export const fetched = select(PersonTable).fetch(store, 'manager').build();
+type FetchedPerson = Result<typeof fetched>[number];
+same<FetchedPerson['manager'], PersonRow | undefined>(true);
+same<FetchedPerson['name'], string>(true);
+
+export const fetchedList = select(PersonTable)
+	.fetch(store, 'watchers', 'team')
+	.build();
+type FetchedList = Result<typeof fetchedList>[number];
+same<FetchedList['watchers'], ReadonlyArray<PersonRow | undefined>>(true);
+same<FetchedList['team'], TeamRow | undefined>(true);
+
+export const fetchedDeep = select(DocTable)
+	.fetch(store, 'owner.manager')
+	.build();
+type FetchedDoc = Result<typeof fetchedDeep>[number];
+same<NonNullable<FetchedDoc['owner']>['manager'], PersonRow | undefined>(true);
+same<Omit<FetchedDoc, 'owner'>, Omit<DocRow, 'owner'>>(true);
+
+export const fetchedUnion = select(MemberOfTable)
+	.project((row) => ({ out: row.out, role: row.role }))
+	.fetch(store, 'out')
+	.build();
+same<Result<typeof fetchedUnion>[number]['out'], OrgRow | TeamRow | undefined>(
+	true,
+);

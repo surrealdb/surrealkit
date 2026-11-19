@@ -444,5 +444,62 @@ describe.skipIf(!engineConfigured)(
 				expect(result?.depth).toEqual([]);
 			});
 		});
+
+		describe('FETCH', () => {
+			it('replaces a link with its row, absent for a missing or absent target', async () => {
+				const statement = select(PersonTable)
+					.fetch(store, 'manager')
+					.orderBy((row) => row.id)
+					.build();
+				const result = await ok(client.run(statement));
+				expect(result.map((row) => row.manager?.name)).toEqual([
+					undefined,
+					'Ann',
+					undefined,
+					'Bob',
+				]);
+				expect(result.map((row) => 'manager' in row)).toEqual([
+					false,
+					true,
+					false,
+					true,
+				]);
+			});
+
+			it('replaces a list of links, NONE for each missing record', async () => {
+				const statement = select(PersonTable, param('who', PersonId))
+					.fetch(store, 'watchers')
+					.build();
+				const [row] = await ok(
+					client.run(statement, { who: cy as PersonId }),
+				);
+				expect(row?.watchers.map((watcher) => watcher?.name)).toEqual([
+					undefined,
+					'Ann',
+				]);
+			});
+
+			it('fetches through a fetched record, and a link to several tables', async () => {
+				const statement = select(DocTable)
+					.fetch(store, 'owner.manager')
+					.build();
+				const [doc] = await ok(client.run(statement));
+				expect(doc?.owner?.name).toBe('Bob');
+				expect(doc?.owner?.manager?.name).toBe('Ann');
+				const union = select(MemberOfTable)
+					.project((row) => ({ out: row.out, role: row.role }))
+					.fetch(store, 'out')
+					.build();
+				const result = await ok(client.run(union));
+				expect(result.map((row) => row.out?.name).sort()).toEqual([
+					'Acme',
+					'Red',
+					'Red',
+				]);
+				expect(
+					keys(result.map((row) => row.out?.id as RecordId)),
+				).toEqual(['org:acme', 'team:red', 'team:red']);
+			});
+		});
 	},
 );
