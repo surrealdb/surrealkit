@@ -56,6 +56,10 @@ export const rejectedNeighbours = (count: number) => {
 	knn(DocTable, 'title', 'query', { k: 3, ef: 40 });
 	// @ts-expect-error [search/knn-not-a-vector] a brute-force search needs an array of numbers
 	knn(DocTable, 'title', 'query', { k: 3, distance: 'COSINE' });
+	// @ts-expect-error [search/knn-pearson] SurrealDB 3.3 and 4.0 rank PEARSON differently
+	knn(DocTable, 'embedding', 'query', { k: 3, distance: 'PEARSON' });
+	// @ts-expect-error [search/knn-jaccard] SurrealDB 3.3 and 4.0 rank JACCARD differently
+	knn(DocTable, 'embedding', 'query', { k: 3, distance: 'JACCARD' });
 	// @ts-expect-error [search/knn-count-not-literal] the neighbour count is a literal
 	knn(DocTable, 'embedding', 'query', { k: count, ef: 40 });
 	// @ts-expect-error [search/knn-count-fractional] the neighbour count is a positive integer

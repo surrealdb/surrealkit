@@ -16,6 +16,7 @@ import { run, type SurrealClient } from '../src/client/index.js';
 import * as SurrealSchema from '../src/index.js';
 import {
 	and,
+	type Distance,
 	evaluate,
 	highlight,
 	knn,
@@ -195,6 +196,102 @@ describe.skipIf(!engineConfigured)('search on a disposable engine', () => {
 			await runHere(
 				expectNoIndex(bruteForce, { query: [1, 0, 0, 0] }, index),
 			);
+		}
+	});
+
+	/** Each brute-force distance as SurrealDB 3.3 and 4.0 both compute it. */
+	const formulas: ReadonlyArray<
+		readonly [
+			Distance,
+			(a: ReadonlyArray<number>, b: ReadonlyArray<number>) => number,
+		]
+	> = (() => {
+		const diffs = (a: ReadonlyArray<number>, b: ReadonlyArray<number>) =>
+			a.map((x, i) => Math.abs(x - (b[i] ?? 0)));
+		const dot = (a: ReadonlyArray<number>, b: ReadonlyArray<number>) =>
+			a.reduce((sum, x, i) => sum + x * (b[i] ?? 0), 0);
+		const norm = (a: ReadonlyArray<number>) => Math.sqrt(dot(a, a));
+		return [
+			['EUCLIDEAN', (a, b) => Math.hypot(...diffs(a, b))],
+			['MANHATTAN', (a, b) => diffs(a, b).reduce((x, y) => x + y, 0)],
+			['CHEBYSHEV', (a, b) => Math.max(...diffs(a, b))],
+			[
+				['MINKOWSKI', 3],
+				(a, b) =>
+					diffs(a, b).reduce((x, y) => x + y ** 3, 0) ** (1 / 3),
+			],
+			['HAMMING', (a, b) => diffs(a, b).filter((d) => d !== 0).length],
+			['COSINE', (a, b) => 1 - dot(a, b) / (norm(a) * norm(b))],
+			// Assumes unit vectors: one minus the dot product.
+			['COSINE_NORMALIZED', (a, b) => 1 - dot(a, b)],
+			['INNER_PRODUCT', (a, b) => -dot(a, b)],
+		];
+	})();
+
+	it.each(
+		formulas.map(([distance, formula]) => [
+			JSON.stringify(distance),
+			distance,
+			formula,
+		]),
+	)('a brute-force %s search finds the nearest rows by the distance both engines compute', async (_, distance, formula) => {
+		for (const query of [
+			[0.8, 0.15, 0.45, 1.3],
+			[0.9, 0.1, 0.0, 0.0],
+		]) {
+			const nearest = (
+				hit: ReturnType<
+					typeof knn<typeof DocTable, 'embedding', 'query', number>
+				>,
+			) =>
+				select(DocTable)
+					.where(() => hit)
+					.project((row) => ({
+						id: row.id,
+						embedding: row.embedding,
+						distance: knnDistance(hit),
+					}))
+					.build();
+			const all = await runHere(
+				run(
+					nearest(
+						knn(DocTable, 'embedding', 'query', { k: 8, distance }),
+					),
+					{ query },
+				),
+			);
+			expect(all).toHaveLength(8);
+			for (const row of all) {
+				expect(row.distance).toBeCloseTo(
+					formula(row.embedding, query),
+					9,
+				);
+			}
+			// The three nearest are the three least distant, when no tie
+			// straddles the third.
+			const sorted = all.map((row) => row.distance).sort((a, b) => a - b);
+			const three = await runHere(
+				run(
+					nearest(
+						knn(DocTable, 'embedding', 'query', { k: 3, distance }),
+					),
+					{ query },
+				),
+			);
+			expect(three).toHaveLength(3);
+			const third = sorted[2] ?? Number.NaN;
+			if (third < (sorted[3] ?? Number.POSITIVE_INFINITY) - 1e-12) {
+				expect(three.map((row) => row.id.id).sort()).toEqual(
+					all
+						.filter((row) => row.distance <= third + 1e-12)
+						.map((row) => row.id.id)
+						.sort(),
+				);
+			} else {
+				for (const row of three) {
+					expect(row.distance).toBeLessThanOrEqual(third + 1e-12);
+				}
+			}
 		}
 	});
 

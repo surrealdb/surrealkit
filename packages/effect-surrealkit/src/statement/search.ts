@@ -436,7 +436,12 @@ export interface Knn<P extends Params> extends Expr<Schema.Boolean, P> {
 	readonly [KnnTypeId]: { readonly sql: string };
 }
 
-/** The distances SurrealDB computes without an index (`<|k, DISTANCE|>`). */
+/**
+ * The distances SurrealDB computes without an index (`<|k, DISTANCE|>`), each
+ * the same on SurrealDB 3.3 and 4.0 (`test/search-engine.test.ts` checks them
+ * against their formulas on both). `JACCARD` and `PEARSON` are not among
+ * them: the two majors compute them differently and find other rows.
+ */
 export type Distance =
 	| 'CHEBYSHEV'
 	| 'COSINE'
@@ -444,9 +449,7 @@ export type Distance =
 	| 'EUCLIDEAN'
 	| 'HAMMING'
 	| 'INNER_PRODUCT'
-	| 'JACCARD'
 	| 'MANHATTAN'
-	| 'PEARSON'
 	| readonly ['MINKOWSKI', number];
 
 const distances: ReadonlySet<string> = new Set([
@@ -456,14 +459,25 @@ const distances: ReadonlySet<string> = new Set([
 	'EUCLIDEAN',
 	'HAMMING',
 	'INNER_PRODUCT',
-	'JACCARD',
 	'MANHATTAN',
-	'PEARSON',
 ]);
+
+/** Distances SurrealDB parses but 3.3 and 4.0 compute differently. */
+const differing: Readonly<Record<string, string>> = {
+	JACCARD:
+		'SurrealDB 3.3 answers a measure of the sets of values (0 for most vectors of floats) and 4.0 one minus the weighted Jaccard similarity',
+	PEARSON:
+		'SurrealDB 3.3 answers the Pearson correlation itself as the distance, so its nearest rows are the least correlated, and 4.0 answers one minus it',
+};
 
 const distanceText = (distance: Distance): string => {
 	if (typeof distance === 'string' && distances.has(distance)) {
 		return distance;
+	}
+	if (typeof distance === 'string' && Object.hasOwn(differing, distance)) {
+		throw new RangeError(
+			`${distance} is refused: ${differing[distance]}; the same search finds other rows on each`,
+		);
 	}
 	if (Array.isArray(distance) && distance[0] === 'MINKOWSKI') {
 		const order = distance[1];

@@ -441,6 +441,84 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 				),
 			).toStrictEqual([undefined]);
 		});
+
+		it('an array is found through a unique index on SurrealDB 3.3 only when the field is declared an array kind; 4.0 finds it on any field', async () => {
+			await query(`
+				DEFINE TABLE uq_free SCHEMALESS;
+				DEFINE INDEX uq_free_f ON uq_free FIELDS f UNIQUE;
+				CREATE uq_free:1 CONTENT { f: [1, 2] };
+				DEFINE TABLE uq_any SCHEMALESS;
+				DEFINE FIELD f ON uq_any TYPE any;
+				DEFINE INDEX uq_any_f ON uq_any FIELDS f UNIQUE;
+				CREATE uq_any:1 CONTENT { f: [1, 2] };
+				CREATE uq_any:2 CONTENT { f: 'x' };
+				DEFINE TABLE uq_union SCHEMAFULL;
+				DEFINE FIELD f ON uq_union TYPE array<int> | string;
+				DEFINE INDEX uq_union_f ON uq_union FIELDS f UNIQUE;
+				CREATE uq_union:1 CONTENT { f: [1, 2] };
+				CREATE uq_union:2 CONTENT { f: 'x' };
+				DEFINE TABLE uq_set SCHEMAFULL;
+				DEFINE FIELD f ON uq_set TYPE array<int> | set<string>;
+				DEFINE INDEX uq_set_f ON uq_set FIELDS f UNIQUE;
+				CREATE uq_set:1 CONTENT { f: [1, 2] };
+				DEFINE TABLE uq_array SCHEMALESS;
+				DEFINE FIELD f ON uq_array TYPE option<array<int>>;
+				DEFINE INDEX uq_array_f ON uq_array FIELDS f UNIQUE;
+				CREATE uq_array:1 CONTENT { f: [1, 2] };
+				DEFINE TABLE uq_arrays SCHEMAFULL;
+				DEFINE FIELD f ON uq_arrays TYPE array<int> | array<string> | null;
+				DEFINE INDEX uq_arrays_f ON uq_arrays FIELDS f UNIQUE;
+				CREATE uq_arrays:1 CONTENT { f: [1, 2] };
+			`);
+			const lookup = (table: string, value: unknown) =>
+				query(
+					`SELECT VALUE id FROM ONLY ${table} WITH INDEX ${table}_f WHERE f = $v LIMIT 1;`,
+					{ v: value },
+				);
+			const mixed = [
+				await lookup('uq_free', [1, 2]),
+				await lookup('uq_any', [1, 2]),
+				await lookup('uq_union', [1, 2]),
+				await lookup('uq_set', [1, 2]),
+			];
+			if (engine.majorVersion >= 4) {
+				expect(mixed).toStrictEqual([
+					[new RecordId('uq_free', 1)],
+					[new RecordId('uq_any', 1)],
+					[new RecordId('uq_union', 1)],
+					[new RecordId('uq_set', 1)],
+				]);
+			} else {
+				expect(mixed).toStrictEqual([
+					[undefined],
+					[undefined],
+					[undefined],
+					[undefined],
+				]);
+				// A scan of the table reads the index too, and misses as well.
+				expect(
+					await query(
+						'SELECT VALUE id FROM uq_free WHERE f = [1, 2];',
+					),
+				).toStrictEqual([[]]);
+			}
+			// The same on both: an array-only field, and a value that is not an array.
+			expect([
+				await lookup('uq_array', [1, 2]),
+				await lookup('uq_arrays', [1, 2]),
+				await lookup('uq_any', 'x'),
+				await lookup('uq_union', 'x'),
+			]).toStrictEqual([
+				[new RecordId('uq_array', 1)],
+				[new RecordId('uq_arrays', 1)],
+				[new RecordId('uq_any', 2)],
+				[new RecordId('uq_union', 2)],
+			]);
+			// Both index an array by its elements for uniqueness.
+			await expect(
+				query('CREATE uq_free:2 CONTENT { f: [2, 3] };'),
+			).rejects.toThrow(/Database index `uq_free_f` already contains 2/);
+		});
 	});
 
 	describe('RETURN modes on writes', () => {
@@ -1726,6 +1804,41 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 					{ terms: 'fox', v },
 				),
 			).toMatchObject([[{ id: 'fox' }], [{ id: 'fox' }]]);
+		});
+
+		it('brute-force JACCARD and PEARSON give other distances and other nearest rows on SurrealDB 3.3 than on 4.0', async () => {
+			const nearest = async (distance: string) =>
+				(
+					(await query(
+						`SELECT record::id(id) AS id, vector::distance::knn() AS d FROM ft_doc WHERE embedding <|3,${distance}|> $q ORDER BY d, id;`,
+						{ q: [0.8, 0.15, 0.45, 1.3] },
+					)) as [Array<{ id: string; d: number }>]
+				)[0].map(({ id, d }) => [id, Number(d.toFixed(6))]);
+			if (engine.majorVersion >= 4) {
+				// One minus the similarity: a distance.
+				expect(await nearest('JACCARD')).toStrictEqual([
+					['f1', 0.553846],
+					['f2', 0.556962],
+					['f3', 0.646465],
+				]);
+				expect(await nearest('PEARSON')).toStrictEqual([
+					['f5', 0.178193],
+					['f4', 0.189275],
+					['f3', 0.212946],
+				]);
+			} else {
+				// JACCARD is 0 for every row, so the nearest are any three;
+				// PEARSON is the correlation itself (4.0's one minus it), so
+				// the least correlated rows come first.
+				expect(
+					(await nearest('JACCARD')).map(([, d]) => d),
+				).toStrictEqual([0, 0, 0]);
+				expect(await nearest('PEARSON')).toStrictEqual([
+					['f0', -0.303562],
+					['dog', 0.092856],
+					['fox', 0.168646],
+				]);
+			}
 		});
 
 		it('a match without a FULLTEXT index is an error', async () => {

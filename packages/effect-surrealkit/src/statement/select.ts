@@ -5,7 +5,7 @@
  * query can be shared. The result codec is derived from the descriptor's
  * select schema, or from the projection's own expressions.
  */
-import { Schema } from 'effect';
+import { Schema, SchemaAST } from 'effect';
 import { escapeIdent } from 'surrealdb';
 
 import {
@@ -198,6 +198,39 @@ type Mismatched<T extends PureTable, C, V> = {
 	string;
 
 /**
+ * Whether a value of stored type `E` may be an array (`true`), may be
+ * another kind (`false`), or either (`boolean`); NONE and NULL count as
+ * neither. A set is not an array.
+ */
+type MayBeArray<E> = unknown extends E
+	? boolean
+	: Exclude<E, undefined | null> extends infer X
+		? [X] extends [never]
+			? never
+			: [X] extends [ReadonlyArray<unknown>]
+				? true
+				: [Extract<X, ReadonlyArray<unknown>>] extends [never]
+					? false
+					: boolean
+		: never;
+
+/**
+ * The index fields that may hold an array or another kind and are looked up
+ * by a value that may be an array: SurrealDB 3.3 finds no array through a
+ * unique index on such a field, and 4.0 does.
+ */
+type AmbiguousArray<T extends PureTable, C, V> = {
+	[K in keyof C & keyof V]-?: boolean extends MayBeArray<
+		CodecOf<ExprAt<RowExprs<T>, C[K]>>['Encoded']
+	>
+		? true extends MayBeArray<OperandEncoded<V[K]>>
+			? K
+			: never
+		: never;
+}[keyof C & keyof V] &
+	string;
+
+/**
  * The values `V` of a lookup by the unique index `N`, when they are exactly
  * one operand per field of the index (its path joined by `.`, like
  * `profile.bio`) and each compares with its field; otherwise a message
@@ -212,7 +245,11 @@ export type UniqueValues<
 	? [Exclude<keyof ColumnsOf<IndexesOf<T>[N]>, keyof V>] extends [never]
 		? [Exclude<keyof V, keyof ColumnsOf<IndexesOf<T>[N]>>] extends [never]
 			? [Mismatched<T, ColumnsOf<IndexesOf<T>[N]>, V>] extends [never]
-				? V
+				? [AmbiguousArray<T, ColumnsOf<IndexesOf<T>[N]>, V>] extends [
+						never,
+					]
+					? V
+					: `\`${AmbiguousArray<T, ColumnsOf<IndexesOf<T>[N]>, V>}\` may hold an array or another kind, and SurrealDB 3.3 finds no array through its unique index (4.0 does): look it up by a value that is not an array, or declare it an array kind only`
 				: `\`${Mismatched<T, ColumnsOf<IndexesOf<T>[N]>, V>}\` never compares with this value: their stored types do not overlap`
 			: `\`${Exclude<keyof V, keyof ColumnsOf<IndexesOf<T>[N]>> & string}\` is not a field of the unique index \`${N & string}\``
 		: `the unique index \`${N & string}\` also needs \`${Exclude<keyof ColumnsOf<IndexesOf<T>[N]>, keyof V> & string}\``
@@ -1101,7 +1138,9 @@ export const select: {
 	 * makes the engine read that index: with `LIMIT 1` it otherwise reads
 	 * any index on a prefix of the fields whose name sorts first. An index
 	 * that is not unique, a missing or extra field and a value that never
-	 * compares with its field are compile errors.
+	 * compares with its field are compile errors, as is a value that may be
+	 * an array on a field that may hold an array or another kind: SurrealDB
+	 * 3.3 finds no array through such an index, and 4.0 does.
 	 */
 	<
 		T extends PureTable,
@@ -1299,6 +1338,50 @@ export const selectFrom = <S extends GraphStore, const R extends Expr>(
 };
 
 /** The conditions of a lookup by a unique index, checked as the types are. */
+/** Whether a value `ast` describes may be an array, and may be another kind. */
+const arrayShape = (
+	ast: SchemaAST.AST,
+	seen: Set<SchemaAST.AST> = new Set(),
+): { readonly array: boolean; readonly other: boolean } => {
+	if (seen.has(ast)) return { array: false, other: false };
+	seen.add(ast);
+	if (SchemaAST.isUndefined(ast) || SchemaAST.isNull(ast)) {
+		return { array: false, other: false };
+	}
+	if (SchemaAST.isUnknown(ast) || SchemaAST.isAny(ast)) {
+		return { array: true, other: true };
+	}
+	if (SchemaAST.isArrays(ast)) return { array: true, other: false };
+	if (SchemaAST.isSuspend(ast)) return arrayShape(ast.thunk(), seen);
+	if (SchemaAST.isUnion(ast)) {
+		const members = ast.types.map((member) => arrayShape(member, seen));
+		return {
+			array: members.some((member) => member.array),
+			other: members.some((member) => member.other),
+		};
+	}
+	return { array: false, other: true };
+};
+
+/**
+ * Refuses an array lookup SurrealDB 3.3 and 4.0 answer differently: 3.3
+ * finds no array through a unique index on a field that may also hold
+ * another kind (`any`, `array<int> | string`); 4.0 does.
+ */
+const assertSameOnBoth = (
+	field: Expr,
+	value: Operand,
+	key: string,
+	index: string,
+): void => {
+	const stored = arrayShape(codecOf(field).ast);
+	if (!stored.array || !stored.other || !isExpr(value)) return;
+	if (!arrayShape(codecOf(value).ast).array) return;
+	throw new RangeError(
+		`\`${key}\` of the unique index \`${index}\` may hold an array or another kind, and SurrealDB 3.3 finds no array through such an index (4.0 does): look it up by a value that is not an array, or declare \`${key}\` an array kind only`,
+	);
+};
+
 const uniqueLookup = (
 	table: PureTable,
 	row: RowExprs<PureTable>,
@@ -1349,7 +1432,9 @@ const uniqueLookup = (
 				`\`${keys[at]}\` of the unique index \`${name}\` is not a declared field of \`${table.name}\``,
 			);
 		}
+		const value = values[keys[at] as string] as Operand;
+		assertSameOnBoth(field, value, keys[at] as string, name);
 		const compare = eq as (left: Expr, right: Operand) => Expr;
-		return compare(field, values[keys[at] as string] as Operand);
+		return compare(field, value);
 	});
 };

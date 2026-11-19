@@ -539,6 +539,15 @@ first (`member_region` before `member_region_number`); the conformance
 suite pins both. `select(readAs(table), index, values)` looks up through
 the row a restricted session reads.
 
+A lookup by a value that may be an array, on a field that may hold an
+array or another kind (`any`, `array<int> | string`, `array<int> |
+set<string>`), is a compile error and is refused when built: SurrealDB 3.3
+finds no array through a unique index on such a field (it answers NONE,
+even on a schemaless table), and 4.0 finds the row. An array-only field
+(`array<int>`, `option<array<int>>`, `array<int> | array<string>`) and a
+value that is not an array work on both; `test/lookup-engine.test.ts` runs
+them on both engines.
+
 `.orderBy(…)` takes a field path of the stored row (`row.name`,
 `row.address.city`, `at(row.pins, 0)`), the only thing SurrealDB parses
 after `ORDER BY`; anything else is a compile error. SurrealDB resolves an
@@ -821,7 +830,7 @@ const fused = evaluate(rrf([byMeaning.toExpr(), byWords.toExpr()], { limit: 10 }
 | `match(table, field, terms, { ref?, operator? })` | `field @ref@ terms`, `@ref,AND@`, `@OR@`, `@@`; a compile error unless a `FULLTEXT` index covers `field`; `ref` is a literal 0 to 255 |
 | `score(m)`, `highlight(m, open, close)`, `offsets(m)` | `search::score(ref)` (a float), `search::highlight(open, close, ref)` (the field's type; the index must keep `HIGHLIGHTS`), `search::offsets(ref)` (`{ [element]: [{ s, e }] }` or NONE) |
 | `knn(table, field, vector, { k, ef })` | `field <|k,ef|> $vector` through the field's `HNSW` or `DISKANN` index (a compile error without one) |
-| `knn(table, field, vector, { k, distance })` | `field <|k,DISTANCE|> $vector` by brute force: `EUCLIDEAN`, `COSINE`, `MANHATTAN`, `CHEBYSHEV`, `HAMMING`, `JACCARD`, `PEARSON`, `INNER_PRODUCT`, `COSINE_NORMALIZED` or `['MINKOWSKI', p]` |
+| `knn(table, field, vector, { k, distance })` | `field <|k,DISTANCE|> $vector` by brute force: `EUCLIDEAN`, `COSINE`, `MANHATTAN`, `CHEBYSHEV`, `HAMMING`, `INNER_PRODUCT`, `COSINE_NORMALIZED` or `['MINKOWSKI', p]`, each computed the same by SurrealDB 3.3 and 4.0; `JACCARD` and `PEARSON` are refused (see below) |
 | `knnDistance(hit)` | `vector::distance::knn()`, the distance of each hit |
 | `rrf(lists, { limit, k? })`, `linear(lists, { weights, limit, normalisation })` | `search::rrf(…)`, `search::linear(…)` over two or more subqueries whose rows have an `id` |
 | `evaluate(expr)` | `RETURN expr;` as a statement, for a fused ranking |
@@ -849,6 +858,17 @@ A fused row has the `id` of every list, every other field of any list as an
 optional key (SurrealDB merges rows by `id`, so a field is absent when the
 row was not in that list), and `rrf_score` or `linear_score`. A list whose
 rows have no `id` is a compile error: SurrealDB leaves such rows out.
+
+A brute-force search takes only the distances SurrealDB 3.3 and 4.0
+compute alike; `test/search-engine.test.ts` checks each against its formula
+on both (`COSINE_NORMALIZED` is one minus the dot product, so it assumes
+unit vectors, and `INNER_PRODUCT` the negated dot product). `JACCARD` and
+`PEARSON` are a compile error and refused when built: 3.3 answers the
+Pearson correlation itself as the distance, so its nearest rows are the
+least correlated, and a set measure for `JACCARD` that is 0 for most
+vectors of floats, where 4.0 answers one minus each similarity. The same
+search finds other rows on each, and a statement does not know which
+engine runs it; the conformance suite pins both.
 
 What is refused when the statement is built, because SurrealDB would answer
 without an error: a `score`, `highlight` or `offsets` of a reference no match

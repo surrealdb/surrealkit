@@ -1061,9 +1061,21 @@ exports[`type diagnostics > search/knn-effort-zero 1`] = `
 ]
 `;
 
+exports[`type diagnostics > search/knn-jaccard 1`] = `
+[
+  "TS2322: Type '"JACCARD"' is not assignable to type 'Distance'.",
+]
+`;
+
 exports[`type diagnostics > search/knn-not-a-vector 1`] = `
 [
   "TS2345: Argument of type '"title"' is not assignable to parameter of type '"\`doc.title\` is not an array of numbers, so it has no nearest neighbours"'.",
+]
+`;
+
+exports[`type diagnostics > search/knn-pearson 1`] = `
+[
+  "TS2322: Type '"PEARSON"' is not assignable to type 'Distance'.",
 ]
 `;
 
@@ -1311,9 +1323,27 @@ exports[`type diagnostics > transaction/unbound-statement 1`] = `
 ]
 `;
 
+exports[`type diagnostics > unique/array-on-any-field 1`] = `
+[
+  "TS2345: Argument of type '{ f: Expr<Schema.$Array<Schema.declareConstructor<number, number, readonly [], number>>, { readonly f: Schema.$Array<Schema.declareConstructor<number, number, readonly [], number>>; }>; }' is not assignable to parameter of type '"\`f\` may hold an array or another kind, and SurrealDB 3.3 finds no array through its unique index (4.0 does): look it up by a value that is not an array, or declare it an array kind only"'.",
+]
+`;
+
+exports[`type diagnostics > unique/array-on-union-field 1`] = `
+[
+  "TS2345: Argument of type '{ f: Expr<Schema.$Array<Schema.declareConstructor<number, number, readonly [], number>>, { readonly f: Schema.$Array<Schema.declareConstructor<number, number, readonly [], number>>; }>; }' is not assignable to parameter of type '"\`f\` may hold an array or another kind, and SurrealDB 3.3 finds no array through its unique index (4.0 does): look it up by a value that is not an array, or declare it an array kind only"'.",
+]
+`;
+
 exports[`type diagnostics > unique/extra-field 1`] = `
 [
   "TS2345: Argument of type '{ handle: string; region: string; }' is not assignable to parameter of type '"\`region\` is not a field of the unique index \`member_handle\`"'.",
+]
+`;
+
+exports[`type diagnostics > unique/maybe-array-on-any-field 1`] = `
+[
+  "TS2345: Argument of type '{ f: Expr<Schema.Codec<SurrealSchema.SurrealValue, SurrealSchema.SurrealValue, never, never>, { readonly f: Schema.Codec<SurrealSchema.SurrealValue, SurrealSchema.SurrealValue, never, never>; }>; }' is not assignable to parameter of type '"\`f\` may hold an array or another kind, and SurrealDB 3.3 finds no array through its unique index (4.0 does): look it up by a value that is not an array, or declare it an array kind only"'.",
 ]
 `;
 

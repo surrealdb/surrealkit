@@ -52,6 +52,7 @@ import {
 	TeamTable,
 } from '../golden/example/index.js';
 import { MemberTable } from '../golden/members/index.js';
+import { LookupAnyTable, LookupUnionTable } from '../lookups.js';
 
 // ---- expressions
 
@@ -395,6 +396,24 @@ export const rejectedUniqueLookups = () => {
 	select(MemberTable, 'member_handle', { handle: handleAsInt });
 	// @ts-expect-error [unique/nested-by-root] a nested field is named by its path
 	select(MemberTable, 'member_bio', { profile: 'b' });
+};
+
+// SurrealDB 3.3 finds no array through a unique index on a field that may
+// also hold another kind, and 4.0 does: such a lookup is refused.
+export const rejectedArrayLookups = () => {
+	const ints = param('f', Schema.Array(SurrealSchema.Int));
+	// @ts-expect-error [unique/array-on-any-field] an `any` field may hold an array or another kind
+	select(LookupAnyTable, 'lk_any_f', { f: ints });
+	// @ts-expect-error [unique/array-on-union-field] `array<int> | string` may hold either
+	select(LookupUnionTable, 'lk_union_f', { f: ints });
+	const anything = param('f', SurrealSchema.SurrealValue);
+	// @ts-expect-error [unique/maybe-array-on-any-field] a value that may be an array
+	select(LookupAnyTable, 'lk_any_f', { f: anything });
+	// A value that is not an array is looked up on both.
+	select(LookupAnyTable, 'lk_any_f', { f: 'x' });
+	select(LookupUnionTable, 'lk_union_f', {
+		f: param('s', SurrealSchema.String),
+	});
 };
 
 // A record id is built from the key its table's id codec declares.

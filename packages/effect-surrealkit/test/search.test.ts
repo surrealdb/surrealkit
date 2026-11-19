@@ -192,6 +192,25 @@ describe('nearest neighbours', () => {
 		).toThrow(/is not a distance/);
 	});
 
+	it('refuses JACCARD and PEARSON, whose distances and nearest rows differ between SurrealDB 3.3 and 4.0', () => {
+		expect(() =>
+			knn(DocTable, 'embedding', 'q', {
+				k: 2,
+				distance: 'PEARSON' as never,
+			}),
+		).toThrow(
+			'PEARSON is refused: SurrealDB 3.3 answers the Pearson correlation itself as the distance, so its nearest rows are the least correlated, and 4.0 answers one minus it; the same search finds other rows on each',
+		);
+		expect(() =>
+			knn(DocTable, 'embedding', 'q', {
+				k: 2,
+				distance: 'JACCARD' as never,
+			}),
+		).toThrow(
+			'JACCARD is refused: SurrealDB 3.3 answers a measure of the sets of values (0 for most vectors of floats) and 4.0 one minus the weighted Jaccard similarity; the same search finds other rows on each',
+		);
+	});
+
 	it('checks the query vector against the index dimension when encoding', () => {
 		const statement = select(DocTable)
 			.where(() => near)
