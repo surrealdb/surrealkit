@@ -58,6 +58,12 @@ export interface Analysis {
 	readonly provisional: boolean;
 	/** The text writes its own `BEGIN`, `COMMIT` or `CANCEL`. */
 	readonly transactional: boolean;
+	/**
+	 * The text can change data or schema: `CREATE`, `INSERT`, `UPDATE`,
+	 * `UPSERT`, `DELETE`, `RELATE`, `DEFINE`, `REMOVE` or `ALTER` starts a
+	 * statement or a subquery somewhere in it, outside strings and comments.
+	 */
+	readonly writes: boolean;
 	readonly diagnostics: ReadonlyArray<Diagnostic>;
 }
 
@@ -96,6 +102,22 @@ const STATEMENT_WORDS: ReadonlySet<string> = new Set([
 	'USE',
 	'OPTION',
 ]);
+
+/** Words that start a statement that can change data or schema. */
+const WRITE_WORDS: ReadonlySet<string> = new Set([
+	'CREATE',
+	'INSERT',
+	'UPDATE',
+	'UPSERT',
+	'DELETE',
+	'RELATE',
+	'DEFINE',
+	'REMOVE',
+	'ALTER',
+]);
+
+/** Words after which a statement can stand as a value. */
+const VALUE_WORDS: ReadonlySet<string> = new Set(['RETURN', 'THEN', 'ELSE']);
 
 const identifier = /^[A-Za-z_][A-Za-z0-9_]*$/u;
 
@@ -184,6 +206,7 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 
 	let slots = 0;
 	let transactional = false;
+	let writes = false;
 	let statementFirst: Token | undefined;
 	let inDefinition = false;
 	let inTransaction = false;
@@ -253,14 +276,13 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 		const token = tokens[i] as Token;
 		const current = top();
 		if (skip.has(i)) continue;
+		let starting = false;
 		if (!isPunct(token, ';')) {
-			if (
+			starting =
 				current === root
 					? statementFirst === undefined
-					: current.statementStart
-			) {
-				startStatement(token, current);
-			}
+					: current.statementStart;
+			if (starting) startStatement(token, current);
 			current.statementStart = false;
 		}
 		switch (token.kind) {
@@ -300,6 +322,18 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 					isPunct(previous, ':') ||
 					isPunct(next, ':');
 				if (member) break;
+				if (
+					WRITE_WORDS.has(word) &&
+					(starting ||
+						isPunct(previous, '(') ||
+						(previous?.kind === 'word' &&
+							VALUE_WORDS.has(previous.value.toUpperCase())) ||
+						(isPunct(previous, '=') &&
+							tokens[i - 2]?.kind === 'param' &&
+							isWord(tokens[i - 3], 'LET')))
+				) {
+					writes = true;
+				}
 				if (word === 'LET' && next?.kind === 'param') {
 					skip.add(i + 1);
 					if (PROTECTED.has(next.value)) {
@@ -358,7 +392,7 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 						diagnose(
 							'warning',
 							'dynamicThrow',
-							'THROW of something other than a string literal: its message is not declared, so a client reports it as a request error',
+							'THROW of something other than a string literal: its message is not declared, so a client reports it as an unexpected throw',
 							token,
 						);
 					}
@@ -517,6 +551,7 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 		holes: sorted(holes),
 		provisional: holes.size > 0,
 		transactional,
+		writes,
 		diagnostics,
 	};
 };

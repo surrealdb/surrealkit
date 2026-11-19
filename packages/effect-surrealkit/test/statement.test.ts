@@ -594,6 +594,49 @@ describe('writes', () => {
 		);
 		expect(names(statement)).toEqual(['membership', 'person', 'team']);
 	});
+
+	it('declare that they write, and which of them always return a row', () => {
+		const changes = param('changes', PersonMerge);
+		const edge = relate(
+			MemberOfTable,
+			param('person', PersonId),
+			param('team', TeamId),
+		).content(param('membership', MemberOfTable.create));
+		const cases = [
+			[create(PersonTable).content(person).build(), true],
+			[
+				create(PersonTable)
+					.content(person)
+					.returning((row) => ({ id: row.id }))
+					.build(),
+				true,
+			],
+			[edge.build(), true],
+			// RETURN NONE is NONE whether or not anything was written.
+			[
+				create(PersonTable).content(person).returning('none').build(),
+				false,
+			],
+			[edge.returning('none').build(), false],
+			// An update or delete may match nothing.
+			[update(PersonTable, id).merge(changes).build(), false],
+			[
+				update(PersonTable)
+					.merge(changes)
+					.where((row) => eq(row.role, 'member'))
+					.build(),
+				false,
+			],
+			[deleteFrom(PersonTable, id).returning('before').build(), false],
+		] as const;
+		for (const [statement, nonEmpty] of cases) {
+			expect(statement.writes, statement.sql).toBe(true);
+			expect(statement.nonEmpty, statement.sql).toBe(nonEmpty);
+		}
+		const read = select(PersonTable).build();
+		expect(read.writes).toBe(false);
+		expect(read.nonEmpty).toBe(false);
+	});
 });
 
 describe('authored statements', () => {
@@ -808,5 +851,46 @@ describe('authored statements', () => {
 				result: Schema.Undefined,
 			}),
 		).toThrow(/set by SurrealDB/);
+	});
+
+	it('take what the text writes from the analyzer, and check a declared one', () => {
+		expect(part({ sql: 'CREATE t:one;' }).writes).toBe(true);
+		expect(part({ sql: 'RETURN 1;' }).writes).toBe(false);
+		expect(part({ sql: 'CREATE t:one;', writes: true }).writes).toBe(true);
+		expect(() => part({ sql: 'CREATE t:one;', writes: false })).toThrow(
+			/writes: declared false, the text writes/,
+		);
+		expect(() => part({ sql: 'RETURN 1;', writes: true })).toThrow(
+			/writes: declared true, the text does not write/,
+		);
+		const statement = sequence(
+			part({
+				name: 'guard',
+				source: 'a/guard.surql',
+				sql: "IF $n < 0 { THROW 'Negative' };",
+				free: ['n'],
+				throws: ['Negative'],
+				throwsAt: { Negative: [1] },
+			}),
+			{
+				sql: 'UPDATE t:one SET n = $n;',
+				free: ['n'],
+				defines: [],
+				slots: 1,
+				throws: [],
+			},
+		).define({
+			name: 'set',
+			params: { n: SurrealSchema.Int },
+			result: Schema.Unknown,
+		});
+		expect(statement.writes).toBe(true);
+		expect(statement.sources).toEqual(['a/guard.surql']);
+		expect(statement.throwSites).toEqual({
+			Negative: { source: 'a/guard.surql', lines: [1] },
+		});
+		expect(
+			make({ sql: 'RETURN 1;', params: {}, result: Schema.Unknown }),
+		).toMatchObject({ writes: false, nonEmpty: false });
 	});
 });

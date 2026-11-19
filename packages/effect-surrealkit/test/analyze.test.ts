@@ -386,6 +386,49 @@ describe('analyze: holes', () => {
 	});
 });
 
+describe('analyze: writes', () => {
+	it('reports a write keyword that starts a statement or a subquery', () => {
+		for (const sql of [
+			'CREATE t:one;',
+			'insert INTO t { n: 1 };',
+			'UPDATE t SET n = 1;',
+			'UPSERT t:one SET n = 1;',
+			'DELETE t:one;',
+			'RELATE a:one->likes->b:one;',
+			'DEFINE TABLE t;',
+			'REMOVE TABLE t;',
+			'ALTER TABLE t COMMENT "x";',
+			'LET $x = 1; IF $x { CREATE t:one };',
+			'FOR $i IN [1] { DELETE t:one; };',
+			'SELECT * FROM (UPDATE t SET n = 1);',
+			'LET $x = CREATE t:one;',
+			'RETURN DELETE t:one;',
+			'IF true THEN UPDATE t:one ELSE 1 END;',
+			'BEGIN; CREATE t:one; COMMIT;',
+		]) {
+			expect(analyzeSync(sql).writes, sql).toBe(true);
+		}
+	});
+
+	it('ignores the same words in strings, comments, names and fields', () => {
+		for (const sql of [
+			"RETURN 'CREATE t:one';",
+			'-- DELETE t:one\nRETURN 1;',
+			'/* UPDATE */ RETURN 1;',
+			'SELECT update, delete FROM t;',
+			'SELECT * FROM t WHERE create = 1;',
+			'RETURN { update: 1 };',
+			'RETURN $row.delete;',
+			'SELECT * FROM update:one;',
+			'RETURN fn::create();',
+			'RETURN `DELETE`;',
+			'BEGIN; RETURN 1; COMMIT;',
+		]) {
+			expect(analyzeSync(sql).writes, sql).toBe(false);
+		}
+	});
+});
+
 describe('fill', () => {
 	const template = text({
 		kind: 'part',

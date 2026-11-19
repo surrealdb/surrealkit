@@ -160,6 +160,13 @@ const finish = <P extends Params, R extends Codec>(
 		sql: `${render(state)};`,
 		params: state.params as P,
 		result: resultOf(state) as R,
+		writes: true,
+		// CREATE ONLY and RELATE ONLY make one record whenever they apply;
+		// a denied one returns NONE without an error.
+		nonEmpty:
+			(state.verb === 'CREATE' || state.verb === 'RELATE') &&
+			state.returning !== undefined &&
+			state.returning.sql !== 'BEFORE',
 	});
 
 const start = (

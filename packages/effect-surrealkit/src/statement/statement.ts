@@ -52,6 +52,17 @@ export const StatementTypeId = '~effect-surrealkit/Statement';
  *   another statement of the same transaction defines.
  * - `transactional`: the text writes its own `BEGIN`, `COMMIT` or `CANCEL`,
  *   so it cannot run inside a client's `transaction`.
+ * - `writes`: the text can change data or schema, so a client that cannot
+ *   decode its result says the writes are committed. Builders set it;
+ *   `sequence` takes it from the analyzer; `make` takes it as declared.
+ * - `nonEmpty`: the last result is a row, or a non-empty list, whenever
+ *   the statement applies (`create` and `relate` returning rows), so a
+ *   client reports NONE or an empty list as an empty result, which
+ *   permissions cause.
+ * - `sources`: where the text came from (the `source` of each part), for
+ *   messages and tracing.
+ * - `throwSites`: for a `THROW` message, the source and lines of the
+ *   first part that declares it with both.
  */
 export interface Statement<
 	P extends Params = Params,
@@ -67,6 +78,16 @@ export interface Statement<
 	readonly throws: ReadonlyArray<Throws>;
 	readonly defines: ReadonlyArray<string>;
 	readonly transactional: boolean;
+	readonly writes?: boolean;
+	readonly nonEmpty?: boolean;
+	readonly sources?: ReadonlyArray<string>;
+	readonly throwSites?: Readonly<Record<string, ThrowSite>>;
+}
+
+/** Where a declared `THROW` message comes from. */
+export interface ThrowSite {
+	readonly source: string;
+	readonly lines: ReadonlyArray<number>;
 }
 
 /** Any statement, whatever it binds, returns and throws. */
@@ -286,6 +307,17 @@ export const make = <
 	readonly defines?: ReadonlyArray<string>;
 	/** The text writes its own `BEGIN`, `COMMIT` or `CANCEL`. Default false. */
 	readonly transactional?: boolean;
+	/** The text can change data or schema. Default false. */
+	readonly writes?: boolean;
+	/**
+	 * The last result is a row or a non-empty list whenever the statement
+	 * applies. Default false.
+	 */
+	readonly nonEmpty?: boolean;
+	/** Where the text came from. */
+	readonly sources?: ReadonlyArray<string>;
+	/** The source and lines of each declared `THROW` message. */
+	readonly throwSites?: Readonly<Record<string, ThrowSite>>;
 }): Statement<P, R, Throws> => {
 	const statement: Statement<P, R, Throws> = {
 		[StatementTypeId]: StatementTypeId,
@@ -297,6 +329,13 @@ export const make = <
 		throws: options.throws ?? [],
 		defines: options.defines ?? [],
 		transactional: options.transactional ?? false,
+		writes: options.writes ?? false,
+		nonEmpty: options.nonEmpty ?? false,
+		...(options.sources !== undefined &&
+			options.sources.length > 0 && { sources: options.sources }),
+		...(options.throwSites !== undefined && {
+			throwSites: options.throwSites,
+		}),
 	};
 	assertStatement(statement);
 	if (options.defines === undefined) {

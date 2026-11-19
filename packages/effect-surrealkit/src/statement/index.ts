@@ -90,6 +90,7 @@ export {
 	type Statement,
 	StatementTypeId,
 	type Thrown,
+	type ThrowSite,
 } from './statement.js';
 export {
 	type Condition,

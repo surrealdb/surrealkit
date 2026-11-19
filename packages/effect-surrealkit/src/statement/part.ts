@@ -13,6 +13,7 @@ import {
 	make,
 	type Params,
 	type Statement,
+	type ThrowSite,
 } from './statement.js';
 
 /**
@@ -24,7 +25,9 @@ import {
  * - `slots`: how many results it returns (one per top-level statement);
  * - `throws`: the messages it can `THROW`;
  * - optionally `name` and `source` (where the text came from) and `throwsAt`
- *   (the lines each message is thrown on), for messages and tooling.
+ *   (the lines each message is thrown on), for messages and tooling;
+ * - `writes`: whether the text can change data or schema. {@link part}
+ *   sets it from the analyzer; declared by hand, it is checked.
  *
  * `effect-surrealkit statements` derives these from `.surql` files
  * (`effect-surrealkit/analyze`). Written by hand they are checked against
@@ -44,6 +47,7 @@ export interface Part<
 	readonly slots: number;
 	readonly throws: ReadonlyArray<Throws>;
 	readonly throwsAt?: Readonly<Record<string, ReadonlyArray<number>>>;
+	readonly writes?: boolean;
 }
 
 /** What each checked part's text does. */
@@ -157,6 +161,13 @@ const verify = (item: Part, label: string): Analysis => {
 			`throws: declared ${messages(unthrown)}, which the text never THROWs`,
 		);
 	}
+	if (item.writes !== undefined && item.writes !== analysis.writes) {
+		differences.push(
+			analysis.writes
+				? 'writes: declared false, the text writes'
+				: 'writes: declared true, the text does not write',
+		);
+	}
 	if (differences.length > 0) {
 		throw new RangeError(
 			`${label} does not declare what its text does: ${differences.join('; ')}`,
@@ -191,6 +202,8 @@ export const part = <
 	readonly slots?: number;
 	readonly throws?: ReadonlyArray<Throws>;
 	readonly throwsAt?: Readonly<Record<string, ReadonlyArray<number>>>;
+	/** Checked against the text when given; derived from it either way. */
+	readonly writes?: boolean;
 }): Part<Free, Defines, Throws> => {
 	const declared: Part<Free, Defines, Throws> = {
 		...(options.name !== undefined && { name: options.name }),
@@ -201,9 +214,31 @@ export const part = <
 		slots: options.slots ?? 1,
 		throws: options.throws ?? [],
 		...(options.throwsAt !== undefined && { throwsAt: options.throwsAt }),
+		...(options.writes !== undefined && { writes: options.writes }),
 	};
-	verify(declared, nameOf(options.name, 'part'));
-	return declared;
+	const analysis = verify(declared, nameOf(options.name, 'part'));
+	const result: Part<Free, Defines, Throws> = {
+		...declared,
+		writes: analysis.writes,
+	};
+	checked.set(result, analysis);
+	return result;
+};
+
+/** The source and lines of the first part declaring each message with both. */
+const throwSitesOf = (
+	parts: ReadonlyArray<Part>,
+): Readonly<Record<string, ThrowSite>> | undefined => {
+	const sites: Record<string, ThrowSite> = {};
+	for (const item of parts) {
+		if (item.source === undefined || item.throwsAt === undefined) continue;
+		for (const message of item.throws) {
+			const lines = item.throwsAt[message];
+			if (lines === undefined || Object.hasOwn(sites, message)) continue;
+			sites[message] = { source: item.source, lines };
+		}
+	}
+	return Object.keys(sites).length > 0 ? sites : undefined;
 };
 
 /**
@@ -295,6 +330,7 @@ export const sequence = <const Parts extends ReadonlyArray<Part>>(
 				nameOf(item.name, `part ${index + 1} of the sequence`),
 			),
 		);
+		const throwSites = throwSitesOf(parts);
 		const expected = unboundOf(parts);
 		const declared = Object.keys(contract.params);
 		const missing = expected.filter((name) => !declared.includes(name));
@@ -323,6 +359,15 @@ export const sequence = <const Parts extends ReadonlyArray<Part>>(
 			] as ReadonlyArray<ThrownBy<Parts>>,
 			defines: [...new Set(parts.flatMap((item) => item.defines))].sort(),
 			transactional: analyses.some((analysis) => analysis.transactional),
+			writes: analyses.some((analysis) => analysis.writes),
+			sources: [
+				...new Set(
+					parts.flatMap((item) =>
+						item.source === undefined ? [] : [item.source],
+					),
+				),
+			],
+			...(throwSites !== undefined && { throwSites }),
 		});
 	},
 });
