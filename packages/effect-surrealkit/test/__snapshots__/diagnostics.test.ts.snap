@@ -378,7 +378,7 @@ exports[`type diagnostics > flag/define-read-only 1`] = `
 
 exports[`type diagnostics > flag/make-read-only 1`] = `
 [
-  "TS2353: Object literal may only specify known properties, and 'readOnly' does not exist in type '{ readonly name?: string; readonly sql: string; readonly params: {}; readonly result: declareConstructor<number, number, readonly [], number>; readonly slots?: number; readonly throws?: readonly never[]; ... 5 more ...; readonly throwSites?: Readonly<...>; }'.",
+  "TS2353: Object literal may only specify known properties, and 'readOnly' does not exist in type '{ readonly name?: string; readonly sql: string; readonly params: {}; readonly result: declareConstructor<number, number, readonly [], number>; readonly slots?: number; readonly valueSlot?: number; ... 6 more ...; readonly throwSites?: Readonly<...>; }'.",
 ]
 `;
 
