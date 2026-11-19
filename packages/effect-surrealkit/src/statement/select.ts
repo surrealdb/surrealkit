@@ -22,6 +22,7 @@ import {
 	sqlOf,
 } from './expr.js';
 import {
+	type CheckedProjection,
 	type ProjectedCodec,
 	type Projection,
 	type RowCodec,
@@ -52,6 +53,14 @@ import {
 export type Count =
 	| number
 	| Expr<Schema.Codec<unknown, number, never, never>, Params>;
+
+/**
+ * A sort key as its callback returned it, `K`: a field path, or else a
+ * message saying that only a field path can be one.
+ */
+export type OrderKey<K> = K extends Path
+	? K
+	: 'ORDER BY takes a field path of the row, like `row.name` or `at(row.pins, 0)`';
 
 /** What a `SELECT` returns: every row, or with `ONLY` one row or NONE. */
 export type SelectResult<
@@ -160,8 +169,8 @@ export interface Select<
 	 * field the path starts from must be that field (`.project((row) =>
 	 * ({ age: row.age }))`), or the statement is refused when it is built.
 	 */
-	readonly orderBy: (
-		key: (row: RowExprs<T>) => Path,
+	readonly orderBy: <K>(
+		key: (row: RowExprs<T>) => OrderKey<K>,
 		direction?: 'ASC' | 'DESC',
 	) => Select<T, P, Row, Only>;
 
@@ -180,8 +189,8 @@ export interface Select<
 	 * returned object is a field of the result, decoded by its expression's
 	 * codec.
 	 */
-	readonly project: <const F extends Projection>(
-		fields: (row: RowExprs<T>) => F,
+	readonly project: <const F>(
+		fields: (row: RowExprs<T>) => CheckedProjection<F>,
 	) => Select<T, P & ParamsOfAll<F[keyof F]>, ProjectedCodec<F>, Only>;
 
 	/** `SELECT VALUE`: one expression per row instead of an object. */
@@ -268,7 +277,7 @@ const builder = <
 				pure: state.pure && !isExpr(rows),
 			}),
 		project: (fields) => {
-			const projection = fields(row);
+			const projection = fields(row) as Projection;
 			const projected = project(projection);
 			return builder({
 				...state,

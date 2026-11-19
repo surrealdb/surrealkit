@@ -36,6 +36,26 @@ export type Input<P extends Params> = Simplify<
 	}
 >;
 
+type RequiredNames<P extends Params> = Exclude<keyof P, OptionalNames<P>>;
+
+/**
+ * The type `input`, as the caller wrote it (`I`), is checked against:
+ * `I` itself when it is the statement's input, a message naming each
+ * binding left without a value, and otherwise `Input<P>`, so the compiler
+ * reports an unknown or misspelt name and a wrong value as it always does.
+ * The first test is `I` against `Input<P>`, so generic code that forwards
+ * an `Input<P>` passes it unchanged.
+ */
+export type CheckedInput<P extends Params, I> = [I] extends [Input<P>]
+	? [Exclude<keyof I, keyof P>] extends [never]
+		? I
+		: Input<P>
+	: [Exclude<keyof I, keyof P>] extends [never]
+		? [Exclude<RequiredNames<P>, keyof I>] extends [never]
+			? Input<P>
+			: `binding \`${Exclude<RequiredNames<P>, keyof I> & string}\` has no value`
+		: Input<P>;
+
 export const StatementTypeId = '~effect-surrealkit/Statement';
 
 /**

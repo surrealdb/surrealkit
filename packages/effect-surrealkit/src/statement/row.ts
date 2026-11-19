@@ -146,13 +146,23 @@ export const rowCodec = <S extends Codec>(schema: S): RowCodec<S> =>
 /** The row a projection yields: one key per alias. */
 export type Projection = { readonly [alias: string]: Expr };
 
+/**
+ * A projection as its callback returned it, `F`, checked: a value that is
+ * not an expression is typed as a message saying so.
+ */
+export type CheckedProjection<F> = {
+	readonly [K in keyof F]: F[K] extends Expr
+		? F[K]
+		: 'a projected field is an expression: inline a constant with `literal`';
+};
+
 /** The struct a projection decodes with. */
-export type ProjectedFields<F extends Projection> = {
+export type ProjectedFields<F> = {
 	readonly [K in keyof F]: CodecOf<F[K]>;
 };
 
 /** The codec of a projected row. */
-export type ProjectedCodec<F extends Projection> = Schema.declareConstructor<
+export type ProjectedCodec<F> = Schema.declareConstructor<
 	Schema.Struct<ProjectedFields<F>>['Type'],
 	Schema.Struct<ProjectedFields<F>>['Encoded'],
 	readonly [Schema.Struct<ProjectedFields<F>>]

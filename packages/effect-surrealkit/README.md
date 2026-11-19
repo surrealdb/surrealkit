@@ -254,7 +254,18 @@ const rows = await Effect.runPromise(
 ```
 
 A misspelt field, a string compared with an int, a missing or extra binding
-and a wrong binding type are compile errors. `row` has one expression per
+and a wrong binding type are compile errors. Where a mistake would otherwise
+only print types, the expected type at the failing position is a message,
+so the first line of the diagnostic says what is wrong:
+
+```text
+Argument of type '{ email: string; }' is not assignable to parameter of type '"binding `name` has no value"'.
+Argument of type '...' is not assignable to parameter of type '"`bogus` is not a field `person` accepts in MERGE"'.
+Type 'Expr<...>' is not assignable to type '"ORDER BY takes a field path of the row, like `row.name` or `at(row.pins, 0)`"'.
+```
+
+`test/diagnostics.test.ts` pins the diagnostic of every negative type
+fixture. `row` has one expression per
 field of the table's select schema; an object field carries its children
 (`row.address.city`), and an optional field, or anything read through one,
 may be NONE.

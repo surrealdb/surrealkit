@@ -21,6 +21,7 @@ import { BoundQuery, type SurrealSession } from 'surrealdb';
 
 import type {
 	AnyStatement,
+	CheckedInput,
 	Codec,
 	Input,
 	Params,
@@ -68,17 +69,20 @@ export interface RunOptions {
 	readonly unsafeSkipValueCheck?: boolean;
 }
 
-/** The input argument: optional when no binding needs a value. */
-export type InputOf<P extends Params> =
+/**
+ * The input argument: optional when no binding needs a value. `I` is the
+ * input as the caller wrote it, checked by {@link CheckedInput}.
+ */
+export type InputOf<P extends Params, I = Input<P>> =
 	Record<never, never> extends Input<P>
-		? readonly [input?: Input<P>]
-		: readonly [input: Input<P>];
+		? readonly [input?: CheckedInput<P, I>]
+		: readonly [input: CheckedInput<P, I>];
 
 /** The arguments after the statement: its input, then the options. */
-export type RunArgs<P extends Params> =
+export type RunArgs<P extends Params, I = Input<P>> =
 	Record<never, never> extends Input<P>
-		? readonly [input?: Input<P>, options?: RunOptions]
-		: readonly [input: Input<P>, options?: RunOptions];
+		? readonly [input?: CheckedInput<P, I>, options?: RunOptions]
+		: readonly [input: CheckedInput<P, I>, options?: RunOptions];
 
 /** Only {@link bind} makes a {@link Bound}: no other code can name this. */
 declare const BoundTypeId: unique symbol;
@@ -97,24 +101,42 @@ export interface Bound<
 }
 
 /** Pairs a statement with its input, to run it inside {@link Client.transaction}. */
-export const bind = <P extends Params, R extends Codec, Throws extends string>(
+export const bind = <
+	P extends Params,
+	R extends Codec,
+	Throws extends string,
+	I = Input<P>,
+>(
 	statement: Statement<P, R, Throws>,
-	...input: InputOf<P>
+	...input: InputOf<P, I>
 ): Bound<R, Throws> =>
 	({
 		statement,
 		input: (input[0] ?? {}) as Readonly<Record<string, unknown>>,
 	}) as unknown as Bound<R, Throws>;
 
+/**
+ * The statements of a transaction as the caller wrote them, `S`: each one
+ * not made by {@link bind} is typed as a message saying so.
+ */
+export type BoundStatements<S extends ReadonlyArray<unknown>> = {
+	// Only the mark is tested, so a bound statement of a generic result passes.
+	readonly [I in keyof S]: S[I] extends {
+		readonly [BoundTypeId]: 'made by bind';
+	}
+		? S[I]
+		: 'a transaction takes statements paired with their input by `bind`';
+};
+
 /** The decoded results of the statements of a transaction, in order. */
-export type Results<S extends ReadonlyArray<Bound>> = {
+export type Results<S extends ReadonlyArray<unknown>> = {
 	readonly [I in keyof S]: S[I] extends Bound<infer R, string>
 		? R['Type']
 		: never;
 };
 
 /** The messages any statement of a transaction can `THROW`. */
-export type ThrownByAny<S extends ReadonlyArray<Bound>> =
+export type ThrownByAny<S extends ReadonlyArray<unknown>> =
 	S[number] extends Bound<Codec, infer T> ? T : never;
 
 export interface Client {
@@ -125,9 +147,14 @@ export interface Client {
 	 * (`BEGIN … COMMIT`), each of its SurrealQL statements commits on its
 	 * own; use {@link Client.transaction} for all-or-nothing.
 	 */
-	readonly run: <P extends Params, R extends Codec, Throws extends string>(
+	readonly run: <
+		P extends Params,
+		R extends Codec,
+		Throws extends string,
+		I = Input<P>,
+	>(
 		statement: Statement<P, R, Throws>,
-		...args: RunArgs<P>
+		...args: RunArgs<P, I>
 	) => Effect.Effect<R['Type'], StatementError<Throws>>;
 
 	/**
@@ -145,8 +172,8 @@ export interface Client {
 	 * transaction there. A declared `THROW` names the statement that
 	 * declares it.
 	 */
-	readonly transaction: <const S extends ReadonlyArray<Bound>>(
-		statements: S,
+	readonly transaction: <const S extends ReadonlyArray<unknown>>(
+		statements: BoundStatements<S>,
 		options?: RunOptions,
 	) => Effect.Effect<Results<S>, StatementError<ThrownByAny<S>>>;
 }
@@ -549,11 +576,11 @@ const declarer = (
  * const client = make(db);
  */
 export const make = (db: Queryable): Client => ({
-	run: <P extends Params, R extends Codec, Throws extends string>(
+	run: <P extends Params, R extends Codec, Throws extends string, I>(
 		statement: Statement<P, R, Throws>,
-		...args: RunArgs<P>
+		...args: RunArgs<P, I>
 	) => {
-		const input: Readonly<Record<string, unknown>> = args[0] ?? {};
+		const input = (args[0] ?? {}) as Readonly<Record<string, unknown>>;
 		const options = args[1];
 		const writes = changesOf([statement]);
 		const sent = { count: 0 };
@@ -595,10 +622,11 @@ export const make = (db: Queryable): Client => ({
 			}),
 		) as Effect.Effect<R['Type'], StatementError<Throws>>;
 	},
-	transaction: <const S extends ReadonlyArray<Bound>>(
-		statements: S,
+	transaction: <const S extends ReadonlyArray<unknown>>(
+		given: BoundStatements<S>,
 		options?: RunOptions,
 	) => {
+		const statements = given as unknown as ReadonlyArray<Bound>;
 		const name = `transaction(${statements
 			.map(({ statement }) => statement.name)
 			.join(', ')})`;
@@ -698,19 +726,24 @@ export const layer = (db: Queryable): Layer.Layer<SurrealClient> =>
 	Layer.succeed(SurrealClient, make(db));
 
 /** Runs a statement through the {@link SurrealClient} in context. */
-export const run = <P extends Params, R extends Codec, Throws extends string>(
+export const run = <
+	P extends Params,
+	R extends Codec,
+	Throws extends string,
+	I = Input<P>,
+>(
 	statement: Statement<P, R, Throws>,
-	...args: RunArgs<P>
+	...args: RunArgs<P, I>
 ): Effect.Effect<R['Type'], StatementError<Throws>, SurrealClient> =>
 	Effect.flatMap(Effect.service(SurrealClient), (client) =>
-		client.run(statement, ...args),
+		client.run<P, R, Throws, I>(statement, ...args),
 	);
 
 /** Runs statements atomically through the {@link SurrealClient} in context. */
-export const transaction = <const S extends ReadonlyArray<Bound>>(
-	statements: S,
+export const transaction = <const S extends ReadonlyArray<unknown>>(
+	statements: BoundStatements<S>,
 	options?: RunOptions,
 ): Effect.Effect<Results<S>, StatementError<ThrownByAny<S>>, SurrealClient> =>
 	Effect.flatMap(Effect.service(SurrealClient), (client) =>
-		client.transaction(statements, options),
+		client.transaction<S>(statements, options),
 	);

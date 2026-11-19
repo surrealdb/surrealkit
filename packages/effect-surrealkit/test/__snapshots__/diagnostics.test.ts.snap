@@ -14,8 +14,7 @@ exports[`type diagnostics > bind/missing-input 1`] = `
 
 exports[`type diagnostics > bind/missing-value 1`] = `
 [
-  "TS2345: Argument of type '{ email: string; }' is not assignable to parameter of type '{ readonly name: string; readonly email: string; }'.
-  Property 'name' is missing in type '{ email: string; }' but required in type '{ readonly name: string; readonly email: string; }'.",
+  "TS2345: Argument of type '{ email: string; }' is not assignable to parameter of type '"binding \`name\` has no value"'.",
 ]
 `;
 
@@ -27,35 +26,31 @@ exports[`type diagnostics > bind/wrong-type 1`] = `
 
 exports[`type diagnostics > bound/hand-built 1`] = `
 [
-  "TS2741: Property '[BoundTypeId]' is missing in type '{ statement: Statement<NoParams & { readonly email: Schema.declareConstructor<string, string, readonly [], string>; }, Schema.$Array<Schema.declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 18 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { readonly id: _RecordId<"pe...' but required in type 'Bound<Codec, string>'.",
+  "TS2322: Type '{ statement: Statement<NoParams & { readonly email: Schema.declareConstructor<string, string, readonly [], string>; }, Schema.$Array<Schema.declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 18 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { readonly id: _RecordId<"pe...' is not assignable to type '"a transaction takes statements paired with their input by \`bind\`"'.",
 ]
 `;
 
 exports[`type diagnostics > bound/hand-built-wrong-value 1`] = `
 [
-  "TS2741: Property '[BoundTypeId]' is missing in type '{ statement: Statement<NoParams & { readonly email: Schema.declareConstructor<string, string, readonly [], string>; }, Schema.$Array<Schema.declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 18 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { readonly id: _RecordId<"pe...' but required in type 'Bound<Codec, string>'.",
+  "TS2322: Type '{ statement: Statement<NoParams & { readonly email: Schema.declareConstructor<string, string, readonly [], string>; }, Schema.$Array<Schema.declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 18 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { readonly id: _RecordId<"pe...' is not assignable to type '"a transaction takes statements paired with their input by \`bind\`"'.",
 ]
 `;
 
 exports[`type diagnostics > call/missing-argument 1`] = `
 [
-  "TS2554: Expected 2-4 arguments, but got 1.",
+  "TS2345: Argument of type '{ readonly name: "fn::greet"; readonly args: Schema.Tuple<readonly [Schema.declareConstructor<string, string, readonly [], string>, Schema.optional<Schema.declareConstructor<string, string, readonly [], string>>, Schema.optional<...>]>; readonly returns: Schema.declareConstructor<...>; }' is not assignable to parameter of type '"\`fn::greet\` needs more than 0 arguments"'.",
 ]
 `;
 
 exports[`type diagnostics > call/too-many-arguments 1`] = `
 [
-  "TS2554: Expected 2-4 arguments, but got 5.",
+  "TS2345: Argument of type '2' is not assignable to parameter of type '"\`fn::greet\` takes no fourth argument"'.",
 ]
 `;
 
 exports[`type diagnostics > call/wrong-argument 1`] = `
 [
-  "TS2345: Argument of type 'Path<UndefinedOr<declareConstructor<number, number, readonly [], number> & Codec>>' is not assignable to parameter of type 'ArgumentOf<string>'.
-  Type 'Path<UndefinedOr<declareConstructor<number, number, readonly [], number> & Codec>>' is not assignable to type 'Expr<Codec<unknown, string, never, never>, Params>'.
-    The types of '[ExprTypeId].codec["Encoded"]' are incompatible between these types.
-      Type 'number | undefined' is not assignable to type 'string'.
-        Type 'undefined' is not assignable to type 'string'.",
+  "TS2345: Argument of type 'Path<UndefinedOr<declareConstructor<number, number, readonly [], number> & Codec>>' is not assignable to parameter of type '"\`fn::greet\` does not accept this as its first argument"'.",
 ]
 `;
 
@@ -69,29 +64,25 @@ exports[`type diagnostics > condition/and-non-boolean 1`] = `
 
 exports[`type diagnostics > condition/contains-wrong-element 1`] = `
 [
-  "TS2345: Argument of type '1' is not assignable to parameter of type '1 & { readonly 'these operands never compare: their stored types do not overlap': readonly [string, 1]; }'.
-  Type 'number' is not assignable to type '{ readonly 'these operands never compare: their stored types do not overlap': readonly [string, 1]; }'.",
+  "TS2345: Argument of type '1' is not assignable to parameter of type '"these operands never compare: their stored types do not overlap"'.",
 ]
 `;
 
 exports[`type diagnostics > condition/inside-wrong-elements 1`] = `
 [
-  "TS2345: Argument of type '[1, 2]' is not assignable to parameter of type 'readonly [1, 2] & { readonly 'these operands never compare: their stored types do not overlap': readonly [string, 2 | 1]; }'.
-  Property ''these operands never compare: their stored types do not overlap'' is missing in type '[1, 2]' but required in type '{ readonly 'these operands never compare: their stored types do not overlap': readonly [string, 2 | 1]; }'.",
+  "TS2345: Argument of type 'number[]' is not assignable to parameter of type '"these operands never compare: their stored types do not overlap"'.",
 ]
 `;
 
 exports[`type diagnostics > condition/int-field-with-string-binding 1`] = `
 [
-  "TS2345: Argument of type 'Expr<declareConstructor<string, string, readonly [], string>, { readonly minimum: declareConstructor<string, string, readonly [], string>; }>' is not assignable to parameter of type 'Expr<declareConstructor<string, string, readonly [], string>, { readonly minimum: declareConstructor<string, string, readonly [], string>; }> & { ...; }'.
-  Property ''these operands never compare: their stored types do not overlap'' is missing in type 'Expr<declareConstructor<string, string, readonly [], string>, { readonly minimum: declareConstructor<string, string, readonly [], string>; }>' but required in type '{ readonly 'these operands never compare: their stored types do not overlap': readonly [number | undefined, string]; }'.",
+  "TS2345: Argument of type 'Expr<declareConstructor<string, string, readonly [], string>, { readonly minimum: declareConstructor<string, string, readonly [], string>; }>' is not assignable to parameter of type '"these operands never compare: their stored types do not overlap"'.",
 ]
 `;
 
 exports[`type diagnostics > condition/literal-union-non-member 1`] = `
 [
-  "TS2345: Argument of type '"guest"' is not assignable to parameter of type '"guest" & { readonly 'these operands never compare: their stored types do not overlap': readonly ["owner" | "member" | "admin", "guest"]; }'.
-  Type 'string' is not assignable to type '{ readonly 'these operands never compare: their stored types do not overlap': readonly ["owner" | "member" | "admin", "guest"]; }'.",
+  "TS2345: Argument of type '"guest"' is not assignable to parameter of type '"these operands never compare: their stored types do not overlap"'.",
 ]
 `;
 
@@ -125,57 +116,49 @@ exports[`type diagnostics > condition/not-non-boolean 1`] = `
 
 exports[`type diagnostics > condition/person-id-with-team-id 1`] = `
 [
-  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to parameter of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }> & { ...; }'.
-  Property ''these operands never compare: their stored types do not overlap'' is missing in type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' but required in type '{ readonly 'these operands never compare: their stored types do not overlap': readonly [_RecordId<"person"> | undefined, _RecordId<"team">]; }'.",
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to parameter of type '"these operands never compare: their stored types do not overlap"'.",
 ]
 `;
 
 exports[`type diagnostics > condition/string-field-with-number 1`] = `
 [
-  "TS2345: Argument of type '5' is not assignable to parameter of type '5 & { readonly 'these operands never compare: their stored types do not overlap': readonly [string, 5]; }'.
-  Type 'number' is not assignable to type '{ readonly 'these operands never compare: their stored types do not overlap': readonly [string, 5]; }'.",
+  "TS2345: Argument of type '5' is not assignable to parameter of type '"these operands never compare: their stored types do not overlap"'.",
 ]
 `;
 
 exports[`type diagnostics > content/extra-field 1`] = `
 [
-  "TS2345: Argument of type 'Expr<Struct<{ readonly bogus: declareConstructor<number, number, readonly [], number>; readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [...]>; ... 14 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }>' is not assignable to parameter of type 'Expr<Struct<{ readonly bogus: declareConstructor<number, number, readonly [], number>; readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [...]>; ... 14 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }> & { ...; }'.
-  Property '"\`bogus\` is not a field the table accepts for this operation"' is missing in type 'Expr<Struct<{ readonly bogus: declareConstructor<number, number, readonly [], number>; readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [...]>; ... 14 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }>' but required in type '{ readonly "\`bogus\` is not a field the table accepts for this operation": never; }'.",
+  "TS2345: Argument of type 'Expr<Struct<{ readonly bogus: declareConstructor<number, number, readonly [], number>; readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [...]>; ... 14 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }>' is not assignable to parameter of type '"\`bogus\` is not a field \`person\` accepts in CONTENT"'.",
 ]
 `;
 
 exports[`type diagnostics > content/merge-value-missing-fields 1`] = `
 [
-  "TS2345: Argument of type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<SurrealMergeValue, SurrealMergeValue, never, never>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' is not assignable to parameter of type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<...>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }> & { ...; }'.
-  Property ''this value is not what the table accepts for this operation'' is missing in type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<SurrealMergeValue, SurrealMergeValue, never, never>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' but required in type '{ readonly 'this value is not what the table accepts for this operation': readonly [{ readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealMergeValue; readonly city?: string; }; ... 12 more ...; readonly updated_at?: DateTime | undefined; }, { ...; }...'.",
+  "TS2345: Argument of type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<SurrealMergeValue, SurrealMergeValue, never, never>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' is not assignable to parameter of type '"\`name\` is required by \`person\` in CONTENT" | "\`role\` is required by \`person\` in CONTENT" | "\`address\` is required by \`person\` in CONTENT" | "\`email\` is required by \`person\` in CONTENT" | "\`bio\` is required by \`person\` in CONTENT" | "\`phones\` is required by \`person\` in CONTENT" | "\`score\` is required by \`person\` in ...'.",
 ]
 `;
 
 exports[`type diagnostics > create/extra-field 1`] = `
 [
-  "TS2345: Argument of type 'Expr<Struct<{ readonly bogus: declareConstructor<number, number, readonly [], number>; readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [...]>; ... 15 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }>' is not assignable to parameter of type 'Expr<Struct<{ readonly bogus: declareConstructor<number, number, readonly [], number>; readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [...]>; ... 15 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }> & { ...; }'.
-  Property '"\`bogus\` is not a field the table accepts for this operation"' is missing in type 'Expr<Struct<{ readonly bogus: declareConstructor<number, number, readonly [], number>; readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [...]>; ... 15 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }>' but required in type '{ readonly "\`bogus\` is not a field the table accepts for this operation": never; }'.",
+  "TS2345: Argument of type 'Expr<Struct<{ readonly bogus: declareConstructor<number, number, readonly [], number>; readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [...]>; ... 15 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }>' is not assignable to parameter of type '"\`bogus\` is not a field \`person\` accepts in CREATE"'.",
 ]
 `;
 
 exports[`type diagnostics > create/merge-value-missing-fields 1`] = `
 [
-  "TS2345: Argument of type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<SurrealMergeValue, SurrealMergeValue, never, never>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' is not assignable to parameter of type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<...>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }> & { ...; }'.
-  Property ''this value is not what the table accepts for this operation'' is missing in type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<SurrealMergeValue, SurrealMergeValue, never, never>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' but required in type '{ readonly 'this value is not what the table accepts for this operation': readonly [{ readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealMergeValue; readonly city?: string; }; ... 12 more ...; readonly updated_at?: DateTime | undefined; }, { ...; }...'.",
+  "TS2345: Argument of type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<SurrealMergeValue, SurrealMergeValue, never, never>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' is not assignable to parameter of type '"\`name\` is required by \`person\` in CREATE" | "\`address\` is required by \`person\` in CREATE" | "\`email\` is required by \`person\` in CREATE" | "\`bio\` is required by \`person\` in CREATE" | "\`score\` is required by \`person\` in CREATE"'.",
 ]
 `;
 
 exports[`type diagnostics > create/missing-field 1`] = `
 [
-  "TS2345: Argument of type 'import("<package>/src/statement/expr").Expr<...>' is not assignable to parameter of type 'import("<package>/src/statement/expr").Expr<...>'.
-  Property ''this value is not what the table accepts for this operation'' is missing in type 'Expr<Struct<{ readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [$Record<String, Codec<SurrealValue, SurrealValue, never, never>>]>; readonly bio: NullOr<...>; readonly email: declareConstructor<...>; readonly score: declareConstructor<...>...' but required in type '{ readonly 'this value is not what the table accepts for this operation': readonly [{ readonly address: { readonly [x: string]: SurrealValue; readonly city: string; }; readonly bio: string | null; readonly email: string; readonly score: number; }, { ...; }]; }'.",
+  "TS2345: Argument of type 'Expr<Struct<{ readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [$Record<String, Codec<SurrealValue, SurrealValue, never, never>>]>; readonly bio: NullOr<...>; readonly email: declareConstructor<...>; readonly score: declareConstructor<...>...' is not assignable to parameter of type '"\`name\` is required by \`person\` in CREATE"'.",
 ]
 `;
 
 exports[`type diagnostics > create/not-an-object 1`] = `
 [
-  "TS2345: Argument of type 'Expr<declareConstructor<string, string, readonly [], string>, { readonly person: declareConstructor<string, string, readonly [], string>; }>' is not assignable to parameter of type 'Expr<declareConstructor<string, string, readonly [], string>, { readonly person: declareConstructor<string, string, readonly [], string>; }> & { ...; }'.
-  Property ''this value is not what the table accepts for this operation'' is missing in type 'Expr<declareConstructor<string, string, readonly [], string>, { readonly person: declareConstructor<string, string, readonly [], string>; }>' but required in type '{ readonly 'this value is not what the table accepts for this operation': readonly [string, { readonly name: string; readonly address: { readonly [x: string]: SurrealValue; readonly city: string; }; ... 14 more ...; readonly updated_at?: DateTime; }]; }'.",
+  "TS2345: Argument of type 'Expr<declareConstructor<string, string, readonly [], string>, { readonly person: declareConstructor<string, string, readonly [], string>; }>' is not assignable to parameter of type '"this value is not an object, which \`person\` takes in CREATE"'.",
 ]
 `;
 
@@ -186,8 +169,8 @@ exports[`type diagnostics > create/return-before 1`] = `
     Argument of type '"before"' is not assignable to parameter of type '"none"'.
   Overload 2 of 3, '(mode: "after"): Create<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 7 more ...; readonly permissions: { ...; }; }, NoParams, declareConstructor<...>>', gave the following error.
     Argument of type '"before"' is not assignable to parameter of type '"after"'.
-  Overload 3 of 3, '(fields: (row: RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 7 more ...; readonly permissions: { ...; }; }>) => Projection): Create<...>', gave the following error.
-    Argument of type 'string' is not assignable to parameter of type '(row: RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 7 more ...; readonly permissions: { ...; }; }>) => Projection'.",
+  Overload 3 of 3, '(fields: (row: RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 7 more ...; readonly permissions: { ...; }; }>) => CheckedProjection<...>): Create<...>', gave the following error.
+    Argument of type 'string' is not assignable to parameter of type '(row: RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 7 more ...; readonly permissions: { ...; }; }>) => CheckedProjecti...'.",
 ]
 `;
 
@@ -211,7 +194,7 @@ exports[`type diagnostics > flag/build-read-only 1`] = `
 
 exports[`type diagnostics > flag/define-read-only 1`] = `
 [
-  "TS2353: Object literal may only specify known properties, and 'readOnly' does not exist in type '{ readonly name?: string; readonly writes?: boolean; readonly params: Params & {} & { readonly [x: string]: \`$\${string} is not read by this sequence\`; readonly [x: number]: never; }; readonly result: declareConstructor<number, number, readonly [], number>; }'.",
+  "TS2353: Object literal may only specify known properties, and 'readOnly' does not exist in type '{ readonly name?: string; readonly writes?: boolean; readonly params: {}; readonly result: declareConstructor<number, number, readonly [], number>; }'.",
 ]
 `;
 
@@ -223,36 +206,31 @@ exports[`type diagnostics > flag/make-read-only 1`] = `
 
 exports[`type diagnostics > merge/element-missing-field 1`] = `
 [
-  "TS2345: Argument of type 'Expr<Struct<{ readonly phones: $Array<Struct<{}>>; }>, { readonly changes: Struct<{ readonly phones: $Array<Struct<{}>>; }>; }>' is not assignable to parameter of type 'Expr<Struct<{ readonly phones: $Array<Struct<{}>>; }>, { readonly changes: Struct<{ readonly phones: $Array<Struct<{}>>; }>; }> & { ...; }'.
-  Property ''this value is not what the table accepts for this operation'' is missing in type 'Expr<Struct<{ readonly phones: $Array<Struct<{}>>; }>, { readonly changes: Struct<{ readonly phones: $Array<Struct<{}>>; }>; }>' but required in type '{ readonly 'this value is not what the table accepts for this operation': readonly [{ readonly phones: readonly {}[]; }, { readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealMergeValue; readonly city?: string; }; ... 12 more ...; readonly updated_a...'.",
+  "TS2345: Argument of type 'Expr<Struct<{ readonly phones: $Array<Struct<{}>>; }>, { readonly changes: Struct<{ readonly phones: $Array<Struct<{}>>; }>; }>' is not assignable to parameter of type '"\`phones\` is not a value \`person\` accepts in MERGE"'.",
 ]
 `;
 
 exports[`type diagnostics > merge/extra-field 1`] = `
 [
-  "TS2345: Argument of type 'Expr<Struct<{ readonly bogus: declareConstructor<string, string, readonly [], string>; readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [...]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' is not assignable to parameter of type 'Expr<Struct<{ readonly bogus: declareConstructor<string, string, readonly [], string>; readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [...]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }> & ...'.
-  Property '"\`bogus\` is not a field the table accepts for this operation"' is missing in type 'Expr<Struct<{ readonly bogus: declareConstructor<string, string, readonly [], string>; readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [...]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' but required in type '{ readonly "\`bogus\` is not a field the table accepts for this operation": never; }'.",
+  "TS2345: Argument of type 'Expr<Struct<{ readonly bogus: declareConstructor<string, string, readonly [], string>; readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [...]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' is not assignable to parameter of type '"\`bogus\` is not a field \`person\` accepts in MERGE"'.",
 ]
 `;
 
 exports[`type diagnostics > module/sequence-extra-binding 1`] = `
 [
-  "TS2322: Type 'declareConstructor<_RecordId, _RecordId, readonly [], _RecordId>' is not assignable to type 'declareConstructor<_RecordId, _RecordId, readonly [], _RecordId> & "$owner is not read by this sequence"'.
-  Type 'declareConstructor<_RecordId, _RecordId, readonly [], _RecordId>' is not assignable to type '"$owner is not read by this sequence"'.",
+  "TS2322: Type 'declareConstructor<_RecordId, _RecordId, readonly [], _RecordId>' is not assignable to type '"binding \`$owner\` is not read by this sequence"'.",
 ]
 `;
 
 exports[`type diagnostics > module/sequence-missing-binding 1`] = `
 [
-  "TS2322: Type '{}' is not assignable to type '{ readonly boundOwner: Codec; } & {}'.
-  Property 'boundOwner' is missing in type '{}' but required in type '{ readonly boundOwner: Codec; }'.",
+  "TS2322: Type '{}' is not assignable to type '"binding \`$boundOwner\` is read by this sequence and has no codec"'.",
 ]
 `;
 
 exports[`type diagnostics > module/sequence-missing-principal 1`] = `
 [
-  "TS2322: Type '{ owner: declareConstructor<_RecordId, _RecordId, readonly [], _RecordId>; }' is not assignable to type '{ readonly owner: declareConstructor<_RecordId, _RecordId, readonly [], _RecordId>; } & { readonly owner: Codec; readonly principal: Codec; } & {}'.
-  Property 'principal' is missing in type '{ owner: declareConstructor<_RecordId, _RecordId, readonly [], _RecordId>; }' but required in type '{ readonly owner: Codec; readonly principal: Codec; }'.",
+  "TS2322: Type '{ owner: declareConstructor<_RecordId, _RecordId, readonly [], _RecordId>; }' is not assignable to type '"binding \`$principal\` is read by this sequence and has no codec"'.",
 ]
 `;
 
@@ -265,73 +243,49 @@ exports[`type diagnostics > module/template-missing-fill 1`] = `
 
 exports[`type diagnostics > order/bound-array-element 1`] = `
 [
-  "TS2322: Type 'Expr<UndefinedOr<declareConstructor<number, number, readonly [], number>>, { readonly xs: $Array<declareConstructor<number, number, readonly [], number>>; }>' is not assignable to type 'Path<Codec>'.
-  Types of property '[ExprTypeId]' are incompatible.
-    Type 'ExprData<UndefinedOr<declareConstructor<number, number, readonly [], number>>, { readonly xs: $Array<declareConstructor<number, number, readonly [], number>>; }>' is not assignable to type 'ExprData<Codec, NoParams> & { readonly path: PathData; }'.
-      Type 'ExprData<UndefinedOr<declareConstructor<number, number, readonly [], number>>, { readonly xs: $Array<declareConstructor<number, number, readonly [], number>>; }>' is not assignable to type '{ readonly path: PathData; }'.
-        Property 'path' is optional in type 'ExprData<UndefinedOr<declareConstructor<number, number, readonly [], number>>, { readonly xs: $Array<declareConstructor<number, number, readonly [], number>>; }>' but required in type '{ readonly path: PathData; }'.",
+  "TS2322: Type 'Expr<UndefinedOr<declareConstructor<number, number, readonly [], number>>, { readonly xs: $Array<declareConstructor<number, number, readonly [], number>>; }>' is not assignable to type '"ORDER BY takes a field path of the row, like \`row.name\` or \`at(row.pins, 0)\`"'.",
 ]
 `;
 
 exports[`type diagnostics > order/call 1`] = `
 [
-  "TS2322: Type 'Expr<declareConstructor<string, string, readonly [], string>, NoParams>' is not assignable to type 'Path<Codec>'.
-  Types of property '[ExprTypeId]' are incompatible.
-    Type 'ExprData<declareConstructor<string, string, readonly [], string>, NoParams>' is not assignable to type 'ExprData<Codec, NoParams> & { readonly path: PathData; }'.
-      Type 'ExprData<declareConstructor<string, string, readonly [], string>, NoParams>' is not assignable to type '{ readonly path: PathData; }'.
-        Property 'path' is optional in type 'ExprData<declareConstructor<string, string, readonly [], string>, NoParams>' but required in type '{ readonly path: PathData; }'.",
+  "TS2322: Type 'Expr<declareConstructor<string, string, readonly [], string>, NoParams>' is not assignable to type '"ORDER BY takes a field path of the row, like \`row.name\` or \`at(row.pins, 0)\`"'.",
 ]
 `;
 
 exports[`type diagnostics > order/cast 1`] = `
 [
-  "TS2322: Type 'Expr<declareConstructor<string, string, readonly [], string>, NoParams>' is not assignable to type 'Path<Codec>'.
-  Types of property '[ExprTypeId]' are incompatible.
-    Type 'ExprData<declareConstructor<string, string, readonly [], string>, NoParams>' is not assignable to type 'ExprData<Codec, NoParams> & { readonly path: PathData; }'.
-      Type 'ExprData<declareConstructor<string, string, readonly [], string>, NoParams>' is not assignable to type '{ readonly path: PathData; }'.
-        Property 'path' is optional in type 'ExprData<declareConstructor<string, string, readonly [], string>, NoParams>' but required in type '{ readonly path: PathData; }'.",
+  "TS2322: Type 'Expr<declareConstructor<string, string, readonly [], string>, NoParams>' is not assignable to type '"ORDER BY takes a field path of the row, like \`row.name\` or \`at(row.pins, 0)\`"'.",
 ]
 `;
 
 exports[`type diagnostics > order/comparison 1`] = `
 [
-  "TS2322: Type 'Expr<Boolean, NoParams>' is not assignable to type 'Path<Codec>'.
-  Types of property '[ExprTypeId]' are incompatible.
-    Type 'ExprData<Boolean, NoParams>' is not assignable to type 'ExprData<Codec, NoParams> & { readonly path: PathData; }'.
-      Type 'ExprData<Boolean, NoParams>' is not assignable to type '{ readonly path: PathData; }'.
-        Property 'path' is optional in type 'ExprData<Boolean, NoParams>' but required in type '{ readonly path: PathData; }'.",
+  "TS2322: Type 'Expr<Boolean, NoParams>' is not assignable to type '"ORDER BY takes a field path of the row, like \`row.name\` or \`at(row.pins, 0)\`"'.",
 ]
 `;
 
 exports[`type diagnostics > order/constant 1`] = `
 [
-  "TS2322: Type 'Expr<Literal<1>, NoParams>' is not assignable to type 'Path<Codec>'.
-  Types of property '[ExprTypeId]' are incompatible.
-    Type 'ExprData<Literal<1>, NoParams>' is not assignable to type 'ExprData<Codec, NoParams> & { readonly path: PathData; }'.
-      Type 'ExprData<Literal<1>, NoParams>' is not assignable to type '{ readonly path: PathData; }'.
-        Property 'path' is optional in type 'ExprData<Literal<1>, NoParams>' but required in type '{ readonly path: PathData; }'.",
+  "TS2322: Type 'Expr<Literal<1>, NoParams>' is not assignable to type '"ORDER BY takes a field path of the row, like \`row.name\` or \`at(row.pins, 0)\`"'.",
 ]
 `;
 
 exports[`type diagnostics > order/param 1`] = `
 [
-  "TS2322: Type 'Expr<declareConstructor<number, number, readonly [], number>, { readonly x: declareConstructor<number, number, readonly [], number>; }>' is not assignable to type 'Path<Codec>'.
-  Types of property '[ExprTypeId]' are incompatible.
-    Type 'ExprData<declareConstructor<number, number, readonly [], number>, { readonly x: declareConstructor<number, number, readonly [], number>; }>' is not assignable to type 'ExprData<Codec, NoParams> & { readonly path: PathData; }'.
-      Type 'ExprData<declareConstructor<number, number, readonly [], number>, { readonly x: declareConstructor<number, number, readonly [], number>; }>' is not assignable to type '{ readonly path: PathData; }'.
-        Property 'path' is optional in type 'ExprData<declareConstructor<number, number, readonly [], number>, { readonly x: declareConstructor<number, number, readonly [], number>; }>' but required in type '{ readonly path: PathData; }'.",
+  "TS2322: Type 'Expr<declareConstructor<number, number, readonly [], number>, { readonly x: declareConstructor<number, number, readonly [], number>; }>' is not assignable to type '"ORDER BY takes a field path of the row, like \`row.name\` or \`at(row.pins, 0)\`"'.",
 ]
 `;
 
 exports[`type diagnostics > project/alias-number 1`] = `
 [
-  "TS2322: Type 'number' is not assignable to type 'Expr<Codec, Params>'.",
+  "TS2322: Type '1' is not assignable to type '"a projected field is an expression: inline a constant with \`literal\`"'.",
 ]
 `;
 
 exports[`type diagnostics > project/alias-string 1`] = `
 [
-  "TS2322: Type 'string' is not assignable to type 'Expr<Codec, Params>'.",
+  "TS2322: Type '"person"' is not assignable to type '"a projected field is an expression: inline a constant with \`literal\`"'.",
 ]
 `;
 
@@ -358,22 +312,19 @@ exports[`type diagnostics > relate/not-a-relation 1`] = `
 
 exports[`type diagnostics > relate/wrong-content 1`] = `
 [
-  "TS2345: Argument of type 'Expr<Struct<{ readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [$Record<String, Codec<SurrealValue, SurrealValue, never, never>>]>; ... 15 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }>' is not assignable to parameter of type 'Expr<Struct<{ readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [$Record<String, Codec<SurrealValue, SurrealValue, never, never>>]>; ... 15 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }> & { ...; }'.
-  Property ''this value is not what the table accepts for this operation'' is missing in type 'Expr<Struct<{ readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [$Record<String, Codec<SurrealValue, SurrealValue, never, never>>]>; ... 15 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }>' but required in type '{ readonly 'this value is not what the table accepts for this operation': readonly [{ readonly name: string; readonly address: { readonly [x: string]: SurrealValue; readonly city: string; }; readonly email: string; ... 13 more ...; readonly updated_at?: DateTime; }, { ...; }]; }'.",
+  "TS2345: Argument of type 'Expr<Struct<{ readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [$Record<String, Codec<SurrealValue, SurrealValue, never, never>>]>; ... 15 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }>' is not assignable to parameter of type '"\`role\` is not a value \`member_of\` accepts in RELATE"'.",
 ]
 `;
 
 exports[`type diagnostics > relate/wrong-in-endpoint 1`] = `
 [
-  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to parameter of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }> & { ...; }'.
-  Property ''this record id is not an endpoint the relation accepts'' is missing in type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' but required in type '{ readonly 'this record id is not an endpoint the relation accepts': readonly [_RecordId<"team"> & Brand<"corpus/team">, _RecordId<"person"> & Brand<"corpus/person">]; }'.",
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to parameter of type '"this record id is not an \`in\` endpoint of \`member_of\`"'.",
 ]
 `;
 
 exports[`type diagnostics > relate/wrong-out-endpoint 1`] = `
 [
-  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person">, { ...; }>' is not assignable to parameter of type 'Expr<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person">, { ...; }> & { ...; }'.
-  Property ''this record id is not an endpoint the relation accepts'' is missing in type 'Expr<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person">, { ...; }>' but required in type '{ readonly 'this record id is not an endpoint the relation accepts': readonly [_RecordId<"person"> & Brand<"corpus/person">, (_RecordId<"org"> & Brand<"corpus/org">) | (_RecordId<...> & Brand<...>)]; }'.",
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person">, { ...; }>' is not assignable to parameter of type '"this record id is not an \`out\` endpoint of \`member_of\`"'.",
 ]
 `;
 
@@ -391,8 +342,7 @@ exports[`type diagnostics > run/missing-input 1`] = `
 
 exports[`type diagnostics > run/missing-value 1`] = `
 [
-  "TS2345: Argument of type '{ email: string; }' is not assignable to parameter of type '{ readonly name: string; readonly email: string; }'.
-  Property 'name' is missing in type '{ email: string; }' but required in type '{ readonly name: string; readonly email: string; }'.",
+  "TS2345: Argument of type '{ email: string; }' is not assignable to parameter of type '"binding \`name\` has no value"'.",
 ]
 `;
 
@@ -673,28 +623,25 @@ exports[`type diagnostics > select/limit-non-number 1`] = `
 
 exports[`type diagnostics > sequence/contract-of-other-sequence 1`] = `
 [
-  "TS2322: Type 'declareConstructor<string, string, readonly [], string>' is not assignable to type 'declareConstructor<string, string, readonly [], string> & "$boundProducer is not read by this sequence"'.
-  Type 'declareConstructor<string, string, readonly [], string>' is not assignable to type '"$boundProducer is not read by this sequence"'.",
+  "TS2322: Type 'declareConstructor<string, string, readonly [], string>' is not assignable to type '"binding \`$boundProducer\` is not read by this sequence"'.",
 ]
 `;
 
 exports[`type diagnostics > sequence/extra-binding 1`] = `
 [
-  "TS2322: Type 'declareConstructor<string, string, readonly [], string>' is not assignable to type 'declareConstructor<string, string, readonly [], string> & "$producer is not read by this sequence"'.
-  Type 'declareConstructor<string, string, readonly [], string>' is not assignable to type '"$producer is not read by this sequence"'.",
+  "TS2322: Type 'declareConstructor<string, string, readonly [], string>' is not assignable to type '"binding \`$producer\` is not read by this sequence"'.",
 ]
 `;
 
 exports[`type diagnostics > sequence/missing-binding 1`] = `
 [
-  "TS2322: Type '{}' is not assignable to type '{ readonly boundProducer: Codec; } & {}'.
-  Property 'boundProducer' is missing in type '{}' but required in type '{ readonly boundProducer: Codec; }'.",
+  "TS2322: Type '{}' is not assignable to type '"binding \`$boundProducer\` is read by this sequence and has no codec"'.",
 ]
 `;
 
 exports[`type diagnostics > transaction/unbound-statement 1`] = `
 [
-  "TS2739: Type 'Statement<NoParams & { readonly email: declareConstructor<string, string, readonly [], string>; }, $Array<declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 18 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { ...; }>>, never>' is missing the following properties from type 'Bound<Codec, string>': statement, input, [BoundTypeId]",
+  "TS2322: Type 'Statement<NoParams & { readonly email: declareConstructor<string, string, readonly [], string>; }, $Array<declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 18 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { ...; }>>, never>' is not assignable to type '"a transaction takes statements paired with their input by \`bind\`"'.",
 ]
 `;
 

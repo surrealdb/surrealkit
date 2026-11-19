@@ -20,7 +20,7 @@ import {
 	type ParamsOfAll,
 	paramsOf,
 } from './expr.js';
-import type { ProjectedCodec, Projection } from './row.js';
+import type { CheckedProjection, ProjectedCodec, Projection } from './row.js';
 import {
 	type Codec,
 	make,
@@ -67,32 +67,56 @@ type ExtraFields<S, Target> = S extends object
 	? Exclude<keyof S, keyof Target> & string
 	: never;
 
+/** The top-level fields an object of type `A` always has. */
+type RequiredFields<A> = {
+	[K in keyof A]-?: Record<never, never> extends Pick<A, K> ? never : K;
+}[keyof A];
+
+/** The top-level fields both send, where `S` sends what `Target` refuses. */
+type WrongFields<S, Target> = {
+	[K in keyof S & keyof Target]-?: [S[K]] extends [Target[K]] ? never : K;
+}[keyof S & keyof Target] &
+	string;
+
 /**
- * `S` may be bound as the data of an operation when what it sends is what
- * the table's schema for that operation sends, with no field the schema
- * does not have (SurrealDB refuses one, and assignability alone would let
- * it through). An open schema (a `FLEXIBLE` object, a schemaless table)
- * accepts any field.
+ * Data of encoded type `S` for a schema of encoded type `Target`: `V` when
+ * it fits, otherwise a message naming what does not, read in this order: a
+ * value that is not an object, a field `Target` requires that `S` may leave
+ * out, a field whose value `Target` refuses, any other mismatch, and a field
+ * `Target` does not have.
  */
-export type Fits<Target extends Codec, S extends Codec> = [Target] extends [
-	never,
-]
-	? { readonly 'this table takes no data for this operation': never }
-	: [S['Encoded']] extends [Target['Encoded']]
-		? [ExtraFields<S['Encoded'], Target['Encoded']>] extends [never]
-			? unknown
-			: {
-					readonly [K in ExtraFields<
-						S['Encoded'],
-						Target['Encoded']
-					> as `\`${K}\` is not a field the table accepts for this operation`]: never;
-				}
-		: {
-				readonly 'this value is not what the table accepts for this operation': readonly [
-					S['Encoded'],
-					Target['Encoded'],
-				];
-			};
+type FitsEncoded<S, Target, V, Table extends string, Clause extends string> = [
+	S,
+] extends [Target]
+	? [ExtraFields<S, Target>] extends [never]
+		? V
+		: `\`${ExtraFields<S, Target>}\` is not a field \`${Table}\` accepts in ${Clause}`
+	: [S] extends [object]
+		? [Exclude<RequiredFields<Target>, RequiredFields<S>>] extends [never]
+			? [WrongFields<S, Target>] extends [never]
+				? `this value is not what \`${Table}\` accepts in ${Clause}`
+				: `\`${WrongFields<S, Target>}\` is not a value \`${Table}\` accepts in ${Clause}`
+			: `\`${Exclude<RequiredFields<Target>, RequiredFields<S>> & string}\` is required by \`${Table}\` in ${Clause}`
+		: `this value is not an object, which \`${Table}\` takes in ${Clause}`;
+
+/**
+ * `V`, the data expression of codec `S`, when `S` may be bound as the data
+ * of an operation whose schema is `Target`: what it sends is what the
+ * schema sends, with no field the schema does not have (SurrealDB refuses
+ * one, and assignability alone would let it through). An open schema (a
+ * `FLEXIBLE` object, a schemaless table) accepts any field. Otherwise the
+ * data's expected type is a message naming the first field that does not
+ * fit, with the table and the clause (`CREATE`, `MERGE`, …).
+ */
+export type Fits<
+	Target extends Codec,
+	S extends Codec,
+	V,
+	Table extends string,
+	Clause extends string,
+> = [Target] extends [never]
+	? `\`${Table}\` takes no data in ${Clause}`
+	: FitsEncoded<S['Encoded'], Target['Encoded'], V, Table, Clause>;
 
 /** A table that is a relation with declared endpoints. */
 export type RelationTable = PureTable & {
@@ -100,21 +124,20 @@ export type RelationTable = PureTable & {
 };
 
 /**
- * `S` may be an endpoint when its decoded id is one of the relation's
- * declared endpoint ids (brands included), or the relation declares none.
+ * `V`, the endpoint expression of codec `S`, when its decoded id is one of
+ * the relation's declared endpoint ids (brands included) or the relation
+ * declares none; otherwise the expected type is `Message`.
  */
-export type Endpoint<Accepted extends ReadonlyArray<Codec>, S extends Codec> = [
-	Accepted[number],
-] extends [never]
-	? unknown
+export type Endpoint<
+	Accepted extends ReadonlyArray<Codec>,
+	S extends Codec,
+	V,
+	Message extends string,
+> = [Accepted[number]] extends [never]
+	? V
 	: [S['Type']] extends [Accepted[number]['Type']]
-		? unknown
-		: {
-				readonly 'this record id is not an endpoint the relation accepts': readonly [
-					S['Type'],
-					Accepted[number]['Type'],
-				];
-			};
+		? V
+		: Message;
 
 interface State {
 	readonly verb: 'CREATE' | 'UPDATE' | 'DELETE' | 'RELATE';
@@ -247,15 +270,21 @@ export interface Create<
 > {
 	/** `CONTENT`: the new record's data, as the table's create schema. */
 	readonly content: <S extends Codec, P2 extends Params>(
-		data: Expr<S, P2> & Fits<OperationOf<T, 'create'>, S>,
+		data: Fits<
+			OperationOf<T, 'create'>,
+			S,
+			Expr<S, P2>,
+			T['name'],
+			'CREATE'
+		>,
 	) => Create<T, P & P2, R>;
 
 	/** `RETURN NONE`, `RETURN AFTER` (the default) or chosen expressions. */
 	readonly returning: {
 		(mode: 'none'): Create<T, P, Schema.Undefined>;
 		(mode: 'after'): Create<T, P, StoredRow<T>>;
-		<const F extends Projection>(
-			fields: (row: RowExprs<T>) => F,
+		<const F>(
+			fields: (row: RowExprs<T>) => CheckedProjection<F>,
 		): Create<T, P & ParamsOfAll<F[keyof F]>, ProjectedCodec<F>>;
 	};
 
@@ -268,9 +297,9 @@ type Returning = 'none' | 'after' | 'before' | ((row: never) => Projection);
 const creating = <T extends PureTable, P extends Params, R extends Codec>(
 	state: State,
 ): Create<T, P, R> => ({
-	content: (data) => creating(withData(state, 'CONTENT', data)),
+	content: (data) => creating(withData(state, 'CONTENT', data as Expr)),
 	returning: ((returning: Returning) =>
-		creating(withReturning(state, returning))) as Create<
+		creating(withReturning(state, returning))) as unknown as Create<
 		T,
 		P,
 		R
@@ -316,8 +345,8 @@ export interface Update<
 		(
 			mode: 'after' | 'before',
 		): Update<T, P, WriteResult<StoredRow<T>, S>, S>;
-		<const F extends Projection>(
-			fields: (row: RowExprs<T>) => F,
+		<const F>(
+			fields: (row: RowExprs<T>) => CheckedProjection<F>,
 		): Update<
 			T,
 			P & ParamsOfAll<F[keyof F]>,
@@ -363,11 +392,17 @@ export interface UpdateTarget<
 	 * removable field. The data is the table's merge schema.
 	 */
 	readonly merge: <D extends Codec, P2 extends Params>(
-		data: Expr<D, P2> & Fits<OperationOf<T, 'merge'>, D>,
+		data: Fits<OperationOf<T, 'merge'>, D, Expr<D, P2>, T['name'], 'MERGE'>,
 	) => Update<T, P & P2, WriteResult<StoredRow<T>, S>, S>;
 	/** `CONTENT`: replaces the writable fields, as the table's content schema. */
 	readonly content: <D extends Codec, P2 extends Params>(
-		data: Expr<D, P2> & Fits<OperationOf<T, 'content'>, D>,
+		data: Fits<
+			OperationOf<T, 'content'>,
+			D,
+			Expr<D, P2>,
+			T['name'],
+			'CONTENT'
+		>,
 	) => Update<T, P & P2, WriteResult<StoredRow<T>, S>, S>;
 }
 
@@ -393,8 +428,8 @@ export const update: {
 		returning: 'AFTER',
 	});
 	return {
-		merge: (data) => updating(withData(state, 'MERGE', data)),
-		content: (data) => updating(withData(state, 'CONTENT', data)),
+		merge: (data) => updating(withData(state, 'MERGE', data as Expr)),
+		content: (data) => updating(withData(state, 'CONTENT', data as Expr)),
 	};
 };
 
@@ -472,15 +507,21 @@ export interface Relate<
 > {
 	/** `CONTENT`: the edge's own fields, as the table's create schema. */
 	readonly content: <S extends Codec, P2 extends Params>(
-		data: Expr<S, P2> & Fits<OperationOf<T, 'create'>, S>,
+		data: Fits<
+			OperationOf<T, 'create'>,
+			S,
+			Expr<S, P2>,
+			T['name'],
+			'RELATE'
+		>,
 	) => Relate<T, P & P2, R>;
 
 	/** `RETURN NONE`, `RETURN AFTER` (the default) or chosen expressions. */
 	readonly returning: {
 		(mode: 'none'): Relate<T, P, Schema.Undefined>;
 		(mode: 'after'): Relate<T, P, StoredRow<T>>;
-		<const F extends Projection>(
-			fields: (row: RowExprs<T>) => F,
+		<const F>(
+			fields: (row: RowExprs<T>) => CheckedProjection<F>,
 		): Relate<T, P & ParamsOfAll<F[keyof F]>, ProjectedCodec<F>>;
 	};
 
@@ -491,9 +532,9 @@ export interface Relate<
 const relating = <T extends PureTable, P extends Params, R extends Codec>(
 	state: State,
 ): Relate<T, P, R> => ({
-	content: (data) => relating(withData(state, 'CONTENT', data)),
+	content: (data) => relating(withData(state, 'CONTENT', data as Expr)),
 	returning: ((returning: Returning) =>
-		relating(withReturning(state, returning))) as Relate<
+		relating(withReturning(state, returning))) as unknown as Relate<
 		T,
 		P,
 		R
@@ -513,14 +554,27 @@ export const relate = <
 	PT extends Params,
 >(
 	table: T,
-	from: Expr<From, PF> & Endpoint<T['edge']['in'], From>,
-	to: Expr<To, PT> & Endpoint<T['edge']['out'], To>,
-): Relate<T, PF & PT, StoredRow<T>> =>
-	relating(
+	from: Endpoint<
+		T['edge']['in'],
+		From,
+		Expr<From, PF>,
+		`this record id is not an \`in\` endpoint of \`${T['name']}\``
+	>,
+	to: Endpoint<
+		T['edge']['out'],
+		To,
+		Expr<To, PT>,
+		`this record id is not an \`out\` endpoint of \`${T['name']}\``
+	>,
+): Relate<T, PF & PT, StoredRow<T>> => {
+	const source = from as Expr;
+	const target = to as Expr;
+	return relating(
 		start('RELATE', table, {
-			target: `${operand(from)}->${tableName(table)}->${operand(to)}`,
+			target: `${operand(source)}->${tableName(table)}->${operand(target)}`,
 			shape: 'one',
-			params: mergeParams(paramsOf(from), paramsOf(to)),
+			params: mergeParams(paramsOf(source), paramsOf(target)),
 			returning: 'AFTER',
 		}),
 	);
+};

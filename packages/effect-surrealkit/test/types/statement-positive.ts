@@ -8,6 +8,7 @@ import * as SurrealSchema from 'effect-surrealkit';
 import type { DateTime } from 'surrealdb';
 
 import {
+	type Bound,
 	bind,
 	run,
 	type StatementConflict,
@@ -26,6 +27,7 @@ import {
 import {
 	and,
 	at,
+	type Codec,
 	call,
 	cast,
 	contains,
@@ -39,11 +41,13 @@ import {
 	literal,
 	not,
 	or,
+	type Params,
 	param,
 	part,
 	type Result,
 	readAs,
 	relate,
+	type Statement,
 	select,
 	sequence,
 	update,
@@ -344,6 +348,56 @@ same<
 		StatementError<'Not the owner'>,
 		SurrealClient
 	>
+>(true);
+
+// The input checks accept what the statement reads: a member of a literal
+// union written inline, an omitted binding whose codec accepts NONE, and a
+// value held in a variable that has more properties than the statement reads.
+const byRole = select(PersonTable)
+	.where((row) => eq(row.role, param('role', PersonTable.select.fields.role)))
+	.where((row) =>
+		eq(
+			row.nickname,
+			param('nickname', Schema.UndefinedOr(SurrealSchema.String)),
+		),
+	)
+	.build();
+same<
+	Input<(typeof byRole)['params']>,
+	{
+		readonly role: 'owner' | 'member' | 'admin';
+		readonly nickname?: string | undefined;
+	}
+>(true);
+export const ranByRole = run(byRole, { role: 'admin' });
+export const boundByRole = bind(byRole, { role: 'owner', nickname: 'x' });
+const wider = { role: 'member' as const, unread: 1 };
+export const ranWider = run(byRole, wider);
+// A trailing optional argument of a function may be left out.
+export const greeting = call(fn_greet, 'Ann', literal('Hi'));
+
+// Generic code forwards a statement's input to `run` and `bind` unchanged:
+// whatever checks the input of a concrete statement must accept `Input<P>`.
+export const forwardRun = <P extends Params, R extends Codec, T extends string>(
+	statement: Statement<P, R, T>,
+	input: Input<P>,
+): Effect.Effect<R['Type'], StatementError<T>, SurrealClient> =>
+	run(statement, input);
+export const forwardBind = <
+	P extends Params,
+	R extends Codec,
+	T extends string,
+>(
+	statement: Statement<P, R, T>,
+	input: Input<P>,
+): Bound<R, T> => bind(statement, input);
+export const forwardTransaction = <P extends Params, R extends Codec>(
+	statement: Statement<P, R>,
+	input: Input<P>,
+) => transaction([bind(statement, input), bind(names)]);
+same<
+	Effect.Success<ReturnType<typeof forwardTransaction>>,
+	readonly [unknown, ReadonlyArray<string>]
 >(true);
 
 // Codecs stay values: a result codec is an ordinary schema.

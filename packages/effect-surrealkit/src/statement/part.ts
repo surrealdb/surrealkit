@@ -270,20 +270,26 @@ export type ThrownBy<Parts extends ReadonlyArray<Part>> =
 	Parts[number]['throws'][number];
 
 /**
- * `P` must name exactly `Names`: a missing binding is a missing property, and
- * a binding nothing reads is typed as a message naming it.
+ * `P`, the codecs a contract declares, when they name exactly `Names`.
+ * Otherwise a binding nothing reads is typed as a message naming it, and
+ * when none is extra, the contract's expected type is a message naming each
+ * binding it leaves without a codec.
  */
-export type Exactly<Names extends string, P> = {
-	readonly [K in Names]: Codec;
-} & {
-	readonly [K in Exclude<
-		keyof P,
-		Names
-	>]: `$${K & string} is not read by this sequence`;
-};
+export type Exactly<Names extends string, P> = [
+	Exclude<keyof P, Names>,
+] extends [never]
+	? [Exclude<Names, keyof P>] extends [never]
+		? P
+		: `binding \`$${Exclude<Names, keyof P>}\` is read by this sequence and has no codec`
+	: {
+			readonly [K in keyof P]: K extends Names
+				? P[K]
+				: `binding \`$${K & string}\` is not read by this sequence`;
+		};
 
 /**
- * The contract of a sequence. Parts that are not typed as literals (a
+ * The contract of a sequence: `P`, checked by {@link Exactly} against the
+ * names the parts leave unbound. Parts that are not typed as literals (a
  * widened list, names typed `string`) cannot be checked by the compiler, so
  * they are left to the check `define` makes when it runs.
  */
@@ -291,9 +297,9 @@ export type Contract<
 	Parts extends ReadonlyArray<Part>,
 	P,
 > = number extends Parts['length']
-	? unknown
+	? P
 	: string extends Unbound<Parts>
-		? unknown
+		? P
 		: Exactly<Unbound<Parts>, P>;
 
 /**
@@ -351,7 +357,7 @@ export const sequence = <const Parts extends ReadonlyArray<Part>>(
 		 * from the parts.
 		 */
 		readonly writes?: boolean;
-		readonly params: P & Contract<Parts, P>;
+		readonly params: Contract<Parts, P>;
 		readonly result: R;
 	}): Statement<P, R, ThrownBy<Parts>> => {
 		const analyses = parts.map((item, index) =>

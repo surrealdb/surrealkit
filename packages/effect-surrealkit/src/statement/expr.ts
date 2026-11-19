@@ -441,21 +441,17 @@ export const unsafeExpr = <
 };
 
 /**
- * Two operands compare when the stored type of one is assignable to the
- * other's. Refinements and brands sit on the decoded type, so a branded or
- * narrowed binding still compares with its column, while a string never
- * compares with an int.
+ * The right operand `V`, when its stored type `B` compares with the left
+ * operand's stored type `A`: one is assignable to the other. Refinements
+ * and brands sit on the decoded type, so a branded or narrowed binding
+ * still compares with its column, while a string never compares with an
+ * int. Otherwise the operand's expected type is a message saying so.
  */
-export type Comparable<A, B> = [A] extends [B]
-	? unknown
+export type Comparable<A, B, V> = [A] extends [B]
+	? V
 	: [B] extends [A]
-		? unknown
-		: {
-				readonly 'these operands never compare: their stored types do not overlap': readonly [
-					A,
-					B,
-				];
-			};
+		? V
+		: 'these operands never compare: their stored types do not overlap';
 
 type BooleanCodec = Schema.Codec<unknown, boolean, never, never>;
 
@@ -463,9 +459,9 @@ const binary =
 	(operator: string) =>
 	<A extends Codec, PA extends Params, const B extends Operand>(
 		left: Expr<A, PA>,
-		right: B & Comparable<A['Encoded'], OperandEncoded<B>>,
+		right: Comparable<A['Encoded'], OperandEncoded<B>, B>,
 	): Expr<Schema.Boolean, PA & OperandParams<B>> => {
-		const other = lift(right);
+		const other = lift(right as Operand);
 		return makeExpr(
 			Schema.Boolean,
 			`${operand(left)} ${operator} ${operand(other)}`,
@@ -573,9 +569,9 @@ export const inside = <
 	const B extends Collection,
 >(
 	needle: Expr<A, PA>,
-	haystack: B & Comparable<A['Encoded'], ElementOf<CollectionEncoded<B>>>,
+	haystack: Comparable<A['Encoded'], ElementOf<CollectionEncoded<B>>, B>,
 ): Expr<Schema.Boolean, PA & OperandParams<B>> => {
-	const collection = liftCollection(haystack);
+	const collection = liftCollection(haystack as Collection);
 	return makeExpr(
 		Schema.Boolean,
 		`${operand(needle)} INSIDE ${operand(collection)}`,
@@ -592,9 +588,9 @@ export const contains = <
 	const B extends Operand,
 >(
 	haystack: Expr<A, PA>,
-	needle: B & Comparable<ElementOf<A['Encoded']>, OperandEncoded<B>>,
+	needle: Comparable<ElementOf<A['Encoded']>, OperandEncoded<B>, B>,
 ): Expr<Schema.Boolean, PA & OperandParams<B>> => {
-	const value = lift(needle);
+	const value = lift(needle as Operand);
 	return makeExpr(
 		Schema.Boolean,
 		`${operand(haystack)} CONTAINS ${operand(value)}`,
@@ -712,19 +708,67 @@ export type CallArguments<F extends PureFunction> =
 		? ArgumentsOf<T>
 		: never;
 
+type Ordinals = readonly [
+	'first',
+	'second',
+	'third',
+	'fourth',
+	'fifth',
+	'sixth',
+	'seventh',
+	'eighth',
+	'ninth',
+	'tenth',
+];
+
+type OrdinalOf<I> = I extends keyof Ordinals ? Ordinals[I] : 'next';
+
+/**
+ * The function `F`, or a message when `A` leaves out an argument it needs.
+ * An argument past the last is refused where it is ({@link CheckedArguments}).
+ */
+export type CallTarget<
+	F extends PureFunction,
+	A extends ReadonlyArray<unknown>,
+> = A['length'] extends CallArguments<F>['length']
+	? F
+	: [Exclude<keyof A & `${number}`, keyof CallArguments<F>>] extends [never]
+		? `\`${F['name']}\` needs more than ${A['length']} ${A['length'] extends 1 ? 'argument' : 'arguments'}`
+		: F;
+
+/**
+ * The arguments `A` as the caller wrote them, each checked against the
+ * parameter in its position: one that does not fit, or one past the last
+ * parameter, is typed as a message naming the position.
+ */
+export type CheckedArguments<
+	F extends PureFunction,
+	A extends ReadonlyArray<unknown>,
+> = {
+	readonly [I in keyof A]: I extends keyof CallArguments<F>
+		? A[I] extends CallArguments<F>[I]
+			? A[I]
+			: `\`${F['name']}\` does not accept this as its ${OrdinalOf<I>} argument`
+		: `\`${F['name']}\` takes no ${OrdinalOf<I>} argument`;
+};
+
 /**
  * Calls a `DEFINE FUNCTION` through its generated descriptor: the arguments
  * are checked against the declared parameter kinds, trailing optional ones
  * may be left out, and the result decodes with the declared return kind.
  */
-export const call = <F extends PureFunction, const A extends CallArguments<F>>(
-	fn: F,
-	...args: A
+export const call = <
+	F extends PureFunction,
+	const A extends ReadonlyArray<unknown>,
+>(
+	fn: CallTarget<F, A>,
+	...args: CheckedArguments<F, A>
 ): Expr<F['returns'], ParamsOfAll<A[number]>> => {
 	const values = (args as ReadonlyArray<Operand>).map(lift);
+	const target = fn as F;
 	return makeExpr(
-		fn.returns as F['returns'],
-		`${fn.name}(${values.map(sqlOf).join(', ')})`,
+		target.returns as F['returns'],
+		`${target.name}(${values.map(sqlOf).join(', ')})`,
 		mergeParams(...values.map(paramsOf)) as ParamsOfAll<A[number]>,
 		Level.atom,
 	);
