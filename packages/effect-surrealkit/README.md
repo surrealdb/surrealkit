@@ -735,11 +735,18 @@ engines in `test/block-engine.test.ts` over the schema in
 `test/fixtures/scripts`, generated as `test/golden/scripts`). A block builds
 without the analyzer, so builder bundles stay without it.
 
+The [built-in functions](#built-in-functions) are expressions like any
+other, so they fit a guard (`.throwIf(($) => lt(math.abs($.wallet.balance),
+1), …)`), a local, the result, and the conditions and projections of the
+statements a block binds, a grouped select's condition included;
+`test/block-engine.test.ts` runs such a block on both engines.
+
 What blocks leave out: loops (`FOR`), which would need a body whose value is
-discarded and a way to type what it changes; arithmetic and built-in
-functions, which have no typed expressions yet (`call` a `DEFINE FUNCTION`,
-or `unsafeExpr`); and the empty-result check of a `create` bound to a local,
-since only a statement's last result is checked. A block costs the compiler
+discarded and a way to type what it changes; arithmetic operators (`+`,
+`-`, `*`, `/`), which have no typed expressions yet (use a built-in such as
+`math.fixed`, `call` a `DEFINE FUNCTION`, or `unsafeExpr`); and the
+empty-result check of a `create` bound to a local, since only a statement's
+last result is checked. A block costs the compiler
 about what nine statements do (`test/budget.test.ts`).
 
 ### Search

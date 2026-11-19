@@ -22,7 +22,13 @@ import {
 } from '../src/client/index.js';
 import * as SurrealSchema from '../src/index.js';
 import { eq, param, part, select, sequence } from '../src/statement/index.js';
-import { acceptInvite, pay, payAndRead, withdraw } from './blocks.js';
+import {
+	acceptInvite,
+	pay,
+	payAndRead,
+	summarise,
+	withdraw,
+} from './blocks.js';
 import {
 	type Engine,
 	engineConfigured,
@@ -420,6 +426,60 @@ describe.skipIf(!engineConfigured)('blocks on a disposable engine', () => {
 			expect(paid.kind === 'paid' && paid.payment).not.toEqual(earlier);
 			// The branch's `$payment` did not replace the binding.
 			expect(after?.id).toEqual(earlier);
+		});
+	});
+	describe('built-in functions', () => {
+		beforeAll(async () => {
+			await engine.db.query(`
+				CREATE wallet:fun SET owner = account:dee, balance = 7, frozen = false;
+				CREATE wallet:none SET owner = account:dee, balance = 0, frozen = false;
+				CREATE payment:fun1 SET wallet = wallet:fun, amount = -3, key = 'fun-b';
+				CREATE payment:fun2 SET wallet = wallet:fun, amount = 2, key = 'fun-a';
+				CREATE payment:fun3 SET wallet = wallet:ann, amount = 4, key = 'fun-c';
+				CREATE payment:other SET wallet = wallet:fun, amount = 9, key = 'other';
+			`);
+		});
+
+		it('calls catalogue functions in guards, locals, the result, conditions, projections and a grouped condition', async () => {
+			const summary = await ok(
+				client.run(summarise, {
+					wallet_id: wallet('fun'),
+					label: 'loud',
+					prefix: 'fun-',
+				}),
+			);
+			expect(summary.shout).toBe('LOUD');
+			expect(summary.length).toBe(4);
+			expect(summary.payments).toEqual([
+				{ key: 'FUN-A', size: 2 },
+				{ key: 'FUN-B', size: 3 },
+			]);
+			expect(summary.count).toBe(2);
+			expect(
+				summary.totals
+					.map((row) => [String(row.wallet), row.total, row.payments])
+					.sort(),
+			).toEqual([
+				['wallet:ann', 4, 1],
+				['wallet:fun', -1, 2],
+			]);
+			expect(Number(summary.rounded)).toBe(7);
+		});
+
+		it.each([
+			[{ wallet: 'fun', label: 'not ok' }, 'Label is not alphanumeric'],
+			[{ wallet: 'none', label: 'ok' }, 'Wallet is empty'],
+			[{ wallet: 'ghost', label: 'ok' }, 'Wallet not found'],
+		])('a guard of built-in functions throws its message: %o', async (input, message) => {
+			const error = await failure(
+				client.run(summarise, {
+					wallet_id: wallet(input.wallet),
+					label: input.label,
+					prefix: 'fun-',
+				}),
+			);
+			expect(error).toBeInstanceOf(StatementThrown);
+			expect((error as StatementThrown<string>).message).toBe(message);
 		});
 	});
 });

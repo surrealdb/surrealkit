@@ -4,18 +4,23 @@
  * from authored SurrealQL, and the small blocks the unit, client and
  * transaction tests use.
  */
+import { array, math, string } from '../src/functions/index.js';
 import * as SurrealSchema from '../src/index.js';
 import {
+	and,
 	block,
 	call,
+	count,
 	create,
 	eq,
 	gte,
 	lt,
 	ne,
+	not,
 	object,
 	param,
 	select,
+	sum,
 	update,
 } from '../src/statement/index.js';
 import {
@@ -266,3 +271,51 @@ export const payAndRead = block()
 	)
 	.return(($) => ({ outcome: $.outcome, balance: $.wallet_after.balance }))
 	.build('pay and read');
+
+const label = param('label', SurrealSchema.String);
+const prefix = param('prefix', SurrealSchema.String);
+
+/**
+ * Built-in functions wherever a block takes an expression: a guard, a
+ * local, the result, and a select's condition and projection, a grouped
+ * select's condition included.
+ */
+export const summarise = block()
+	.let('wallet', () =>
+		select(WalletTable, param('wallet_id', WalletId)).only().build(),
+	)
+	.throwIfNone('wallet', 'Wallet not found')
+	.throwIf(() => not(string.isAlphanum(label)), 'Label is not alphanumeric')
+	.throwIf(($) => lt(math.abs($.wallet.balance), 1), 'Wallet is empty')
+	.let('shout', () => string.uppercase(label))
+	.let('payments', ($) =>
+		select(PaymentTable)
+			.where((row) =>
+				and(
+					eq(row.wallet, $.wallet.id),
+					string.startsWith(row.key, prefix),
+				),
+			)
+			.project((row) => ({
+				key: string.uppercase(row.key),
+				size: math.abs(row.amount),
+			}))
+			.orderByAlias('key')
+			.build(),
+	)
+	.let('totals', () =>
+		select(PaymentTable)
+			.where((row) => string.startsWith(row.key, prefix))
+			.groupBy((row) => ({ wallet: row.wallet }))
+			.aggregate((row) => ({ total: sum(row.amount), payments: count() }))
+			.build(),
+	)
+	.return(($) => ({
+		shout: $.shout,
+		length: string.len($.shout),
+		payments: $.payments,
+		count: array.len($.payments),
+		totals: $.totals,
+		rounded: math.fixed($.wallet.balance, 1),
+	}))
+	.build('summarise', { writes: false });
