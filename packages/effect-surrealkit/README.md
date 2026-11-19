@@ -538,7 +538,8 @@ regenerating them.
 `test/types` compiles the golden modules with positive and `@ts-expect-error`
 fixtures under `strict` and `exactOptionalPropertyTypes`.
 
-The engine, statement and field-presence suites need a real engine. A plain `bun run test` runs them on the in-process, in-memory engine of
+The engine, statement, field-presence and conformance suites need a real
+engine. A plain `bun run test` runs them on the in-process, in-memory engine of
 `@surrealdb/node` (SurrealDB 4.0.1; a dev dependency). Set one of these to run
 them against a server instead, which is also the only way to run the JSON
 round trips over HTTP `/sql`; the embedded engine has no HTTP endpoint, so
@@ -548,6 +549,14 @@ those are skipped (with a notice) without a server:
 SURREAL_BIN=/usr/local/bin/surreal bun run test          # starts `surreal start … memory`
 SURREAL_URL=ws://127.0.0.1:8000/rpc bun run test         # a throwaway container, root/root
 ```
+
+`test/conformance.test.ts` pins engine and SDK behaviour the documentation
+does not state and the statement layer relies on: what each statement
+contributes to a request's results, the stateless transaction, unbound and
+protected parameters, missing records and tables, `LIMIT`/`START`/`TIMEOUT`
+with bindings, `RETURN` modes, and what a record user sees where permissions
+deny a table, a write, a field or a function. It names the mode and engine
+version it ran on, and where SurrealDB 3 and 4 differ it asserts each.
 
 The round-trip properties (`test/roundtrip.test.ts`) run the generated corpus
 modules against a database prepared by `surrealkit test --exec`: create →
