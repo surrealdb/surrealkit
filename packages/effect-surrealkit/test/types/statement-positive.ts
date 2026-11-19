@@ -463,3 +463,30 @@ same<
 	(typeof RefinedMembers.select)['Type']['email'],
 	string & Brand.Brand<'Email'>
 >(true);
+
+// ---- SELECT by a unique index: exactly its fields, at most one row.
+
+export const byHandle = select(Members.MemberTable, 'member_handle', {
+	handle: param('handle', SurrealSchema.String),
+}).build();
+same<Result<typeof byHandle>, Members.MemberRow | undefined>(true);
+same<Input<(typeof byHandle)['params']>, { readonly handle: string }>(true);
+// A composite index takes every field; a constant is inlined.
+export const byRegionNumber = select(
+	Members.MemberTable,
+	'member_region_number',
+	{ region: 'north', number: param('number', SurrealSchema.Int) },
+).build();
+same<Input<(typeof byRegionNumber)['params']>, { readonly number: number }>(
+	true,
+);
+// A nested field by its path; through the row a restricted session reads.
+export const byBio = select(readAs(Members.MemberTable), 'member_bio', {
+	'profile.bio': param('bio', SurrealSchema.String),
+})
+	.project((row) => ({ handle: row.handle, email: row.email }))
+	.build();
+same<
+	Result<typeof byBio>,
+	{ readonly handle: string; readonly email: string | undefined } | undefined
+>(true);

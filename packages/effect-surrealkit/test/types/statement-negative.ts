@@ -38,6 +38,7 @@ import {
 	PersonTable,
 	TeamId,
 } from '../golden/example/index.js';
+import { MemberTable } from '../golden/members/index.js';
 
 // ---- expressions
 
@@ -364,4 +365,21 @@ export const rejectedReadView = () => {
 	} as const;
 	// @ts-expect-error [read-view/no-visible-row] a hand-written descriptor has no generated `visible` row to read through
 	readAs(handWritten);
+};
+
+// A lookup by a unique index takes exactly that index's fields.
+export const rejectedUniqueLookups = () => {
+	// @ts-expect-error [unique/not-unique] `member_region` is a standard index
+	select(MemberTable, 'member_region', { region: 'north' });
+	// @ts-expect-error [unique/no-such-index] the table has no such index
+	select(MemberTable, 'member_nope', { handle: 'ann' });
+	// @ts-expect-error [unique/missing-field] the composite index also needs `number`
+	select(MemberTable, 'member_region_number', { region: 'north' });
+	// @ts-expect-error [unique/extra-field] `region` is not a field of `member_handle`
+	select(MemberTable, 'member_handle', { handle: 'ann', region: 'north' });
+	const handleAsInt = param('handle', SurrealSchema.Int);
+	// @ts-expect-error [unique/wrong-value] `handle` is a string, never an int
+	select(MemberTable, 'member_handle', { handle: handleAsInt });
+	// @ts-expect-error [unique/nested-by-root] a nested field is named by its path
+	select(MemberTable, 'member_bio', { profile: 'b' });
 };

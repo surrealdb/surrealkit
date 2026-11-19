@@ -6,13 +6,19 @@
  * select schema, or from the projection's own expressions.
  */
 import { Schema } from 'effect';
+import { escapeIdent } from 'surrealdb';
 
 import {
+	type CodecOf,
+	type Comparable,
 	codecOf,
 	type Expr,
+	eq,
 	isExpr,
 	isPath,
 	mergeParams,
+	type Operand,
+	type OperandEncoded,
 	type OperandParams,
 	type ParamsOfAll,
 	type Path,
@@ -63,6 +69,90 @@ export type OrderKey<K> = K extends Path
 	? K
 	: 'ORDER BY takes a field path of the row, like `row.name` or `at(row.pins, 0)`';
 
+/** The indexes a descriptor lists, by name. */
+type IndexesOf<T> = T extends { readonly indexes: infer I }
+	? I
+	: Record<never, never>;
+
+/** A column path as a lookup key: its segments joined by `.`. */
+type ColumnKey<C> = C extends readonly [infer H extends string]
+	? H
+	: C extends readonly [
+				infer H extends string,
+				...infer R extends ReadonlyArray<string>,
+			]
+		? `${H}.${ColumnKey<R>}`
+		: never;
+
+/** Each column of an index, by its lookup key. */
+type ColumnsOf<I> = I extends {
+	readonly columns: infer C extends ReadonlyArray<ReadonlyArray<string>>;
+}
+	? { readonly [P in C[number] as ColumnKey<P>]: P }
+	: never;
+
+/** The expression at a column path of the row. */
+type ExprAt<R, P> = P extends readonly [
+	infer H extends string,
+	...infer Rest extends ReadonlyArray<string>,
+]
+	? H extends keyof R
+		? Rest extends readonly []
+			? R[H]
+			: ExprAt<R[H], Rest>
+		: never
+	: never;
+
+/**
+ * `N`, when it names a unique index of `T` over field paths; otherwise a
+ * message saying why it cannot be looked up by.
+ */
+export type UniqueIndex<T extends PureTable, N> = N extends keyof IndexesOf<T>
+	? IndexesOf<T>[N] extends { readonly type: 'unique' }
+		? [
+				Extract<
+					keyof ColumnsOf<IndexesOf<T>[N]>,
+					`${string}*${string}`
+				>,
+			] extends [never]
+			? N
+			: `\`${N & string}\` indexes array elements, which a unique lookup cannot address`
+		: `\`${N & string}\` is a ${IndexesOf<T>[N] extends { readonly type: infer K extends string } ? K : 'non-unique'} index of \`${T['name']}\`, not a unique one`
+	: `\`${T['name']}\` has no index \`${N & string}\``;
+
+/** The index fields whose value never compares with what `V` gives. */
+type Mismatched<T extends PureTable, C, V> = {
+	[K in keyof C & keyof V]-?: Comparable<
+		CodecOf<ExprAt<RowExprs<T>, C[K]>>['Encoded'],
+		OperandEncoded<V[K]>,
+		true
+	> extends true
+		? never
+		: K;
+}[keyof C & keyof V] &
+	string;
+
+/**
+ * The values `V` of a lookup by the unique index `N`, when they are exactly
+ * one operand per field of the index (its path joined by `.`, like
+ * `profile.bio`) and each compares with its field; otherwise a message
+ * naming the first field that does not fit. An unknown index is reported
+ * on the index itself.
+ */
+export type UniqueValues<
+	T extends PureTable,
+	N,
+	V,
+> = N extends keyof IndexesOf<T>
+	? [Exclude<keyof ColumnsOf<IndexesOf<T>[N]>, keyof V>] extends [never]
+		? [Exclude<keyof V, keyof ColumnsOf<IndexesOf<T>[N]>>] extends [never]
+			? [Mismatched<T, ColumnsOf<IndexesOf<T>[N]>, V>] extends [never]
+				? V
+				: `\`${Mismatched<T, ColumnsOf<IndexesOf<T>[N]>, V>}\` never compares with this value: their stored types do not overlap`
+			: `\`${Exclude<keyof V, keyof ColumnsOf<IndexesOf<T>[N]>> & string}\` is not a field of the unique index \`${N & string}\``
+		: `the unique index \`${N & string}\` also needs \`${Exclude<keyof ColumnsOf<IndexesOf<T>[N]>, keyof V> & string}\``
+	: V;
+
 /** What a `SELECT` returns: every row, or with `ONLY` one row or NONE. */
 export type SelectResult<
 	Row extends Codec,
@@ -87,6 +177,8 @@ interface State {
 	readonly limit: string | undefined;
 	readonly start: string | undefined;
 	readonly only: boolean;
+	/** The index a lookup by a unique index names in `WITH INDEX`. */
+	readonly index?: string;
 	readonly params: Params;
 }
 
@@ -131,6 +223,9 @@ const render = (state: State): string => {
 				? tableName(state.table)
 				: sqlOf(state.source)
 		}`,
+		...(state.index === undefined
+			? []
+			: [`WITH INDEX ${escapeIdent(state.index)}`]),
 		...(state.where.length > 0 ? [`WHERE ${andAll(state.where)}`] : []),
 		...(state.order.length > 0
 			? [
@@ -344,11 +439,34 @@ export const select: {
 		table: T,
 		id: IdOf<T, P>,
 	): Select<T, P, StoredRow<T>, false>;
-} = <T extends PureTable>(table: T, id?: Expr) =>
-	builder<T, Params, StoredRow<T>, false>({
+	/**
+	 * `SELECT * FROM ONLY table WITH INDEX index WHERE … LIMIT 1` by a
+	 * unique index: one operand per field of the index (`{ email:
+	 * param('email', String) }`; a nested field by its path,
+	 * `'profile.bio'`), so the result is the row or NONE. `WITH INDEX`
+	 * makes the engine read that index: with `LIMIT 1` it otherwise reads
+	 * any index on a prefix of the fields whose name sorts first. An index
+	 * that is not unique, a missing or extra field and a value that never
+	 * compares with its field are compile errors.
+	 */
+	<
+		T extends PureTable,
+		const N extends string,
+		const V extends { readonly [field: string]: Operand },
+	>(
+		table: T,
+		index: UniqueIndex<T, N>,
+		values: UniqueValues<T, N, V>,
+	): Select<T, ParamsOfAll<V[keyof V]>, StoredRow<T>, true>;
+} = <T extends PureTable>(
+	table: T,
+	id?: Expr | string,
+	values?: { readonly [field: string]: Operand },
+): never => {
+	const state: State = {
 		table,
 		row: rowExprs(table),
-		source: id,
+		source: undefined,
 		out: storedRow(table),
 		fields: '*',
 		where: [],
@@ -358,5 +476,78 @@ export const select: {
 		limit: undefined,
 		start: undefined,
 		only: false,
-		params: id === undefined ? {} : paramsOf(id),
+		params: {},
+	};
+	if (typeof id === 'string') {
+		const where = uniqueLookup(table, state.row, id, values ?? {});
+		return builder<T, Params, StoredRow<T>, true>({
+			...state,
+			where,
+			pure: false,
+			only: true,
+			index: id,
+			params: mergeParams(...where.map(paramsOf)),
+		}) as never;
+	}
+	return builder<T, Params, StoredRow<T>, false>(
+		id === undefined
+			? state
+			: { ...state, source: id, params: paramsOf(id) },
+	) as never;
+};
+
+/** The conditions of a lookup by a unique index, checked as the types are. */
+const uniqueLookup = (
+	table: PureTable,
+	row: RowExprs<PureTable>,
+	name: string,
+	values: { readonly [field: string]: Operand },
+): ReadonlyArray<Expr> => {
+	const index = table.indexes?.[name];
+	if (index === undefined) {
+		throw new RangeError(`\`${table.name}\` has no index \`${name}\``);
+	}
+	if (index.type !== 'unique') {
+		throw new RangeError(
+			`\`${name}\` is a ${index.type} index of \`${table.name}\`, not a unique one`,
+		);
+	}
+	const keys = index.columns.map((path) => path.join('.'));
+	if (index.columns.some((path) => path.includes('*'))) {
+		throw new RangeError(
+			`\`${name}\` indexes array elements, which a unique lookup cannot address`,
+		);
+	}
+	for (const key of keys) {
+		if (!Object.hasOwn(values, key)) {
+			throw new RangeError(
+				`the unique index \`${name}\` also needs \`${key}\``,
+			);
+		}
+	}
+	for (const key of Object.keys(values)) {
+		if (!keys.includes(key)) {
+			throw new RangeError(
+				`\`${key}\` is not a field of the unique index \`${name}\``,
+			);
+		}
+	}
+	return index.columns.map((path, at) => {
+		let field: unknown = row;
+		for (const segment of path) {
+			field =
+				typeof field === 'object' &&
+				field !== null &&
+				Object.hasOwn(field, segment)
+					? (field as Record<string, unknown>)[segment]
+					: undefined;
+		}
+		if (!isPath(field)) {
+			throw new RangeError(
+				`\`${keys[at]}\` of the unique index \`${name}\` is not a declared field of \`${table.name}\``,
+			);
+		}
+		const compare = eq as (left: Expr, right: Operand) => Expr;
+		return compare(field, values[keys[at] as string] as Operand);
 	});
+};

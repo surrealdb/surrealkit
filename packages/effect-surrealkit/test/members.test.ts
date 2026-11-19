@@ -15,8 +15,10 @@ import {
 	StatementDecodeError,
 	type SurrealClient,
 } from '../src/client/index.js';
-import { readAs, select } from '../src/statement/index.js';
+import * as SurrealSchema from '../src/index.js';
+import { param, readAs, select } from '../src/statement/index.js';
 import {
+	expectIndex,
 	layerFrom,
 	recordUser,
 	type TestDatabase,
@@ -129,6 +131,68 @@ describe.skipIf(!engineConfigured)('the members golden on an engine', () => {
 			]);
 			expect(rows[0]?.profile.phone).toBe('1');
 			expect(rows[0]?.nickname).toBe('an');
+		});
+	});
+
+	describe('select by a unique index', () => {
+		const byHandle = select(MemberTable, 'member_handle', {
+			handle: param('handle', SurrealSchema.String),
+		}).build('member by handle');
+		const byRegionNumber = select(MemberTable, 'member_region_number', {
+			region: param('region', SurrealSchema.String),
+			number: param('number', SurrealSchema.Int),
+		}).build('member by region and number');
+		const byBio = select(readAs(MemberTable), 'member_bio', {
+			'profile.bio': param('bio', SurrealSchema.String),
+		}).build('member by bio');
+
+		const root = <A, E>(effect: Effect.Effect<A, E, SurrealClient>) =>
+			Effect.runPromise(effect.pipe(Effect.provide(database)));
+
+		it('reads the row, or NONE when no record has those values', async () => {
+			expect((await root(run(byHandle, { handle: 'ann' })))?.email).toBe(
+				'ann@example.com',
+			);
+			expect(await root(run(byHandle, { handle: 'nobody' }))).toBe(
+				undefined,
+			);
+			expect(
+				(
+					await root(
+						run(byRegionNumber, { region: 'north', number: 2 }),
+					)
+				)?.handle,
+			).toBe('bob');
+			expect(
+				await root(run(byRegionNumber, { region: 'south', number: 2 })),
+			).toBe(undefined);
+			const seen = await asViewer((client) =>
+				client.run(byBio, { bio: 'b1' }),
+			);
+			expect(seen).toEqual({
+				id: expect.anything(),
+				handle: 'ann',
+				region: 'north',
+				number: 1,
+				profile: { bio: 'b1' },
+			});
+		});
+
+		it.each([
+			['a single field', byHandle, { handle: 'ann' }, 'member_handle'],
+			[
+				'every field of a composite index',
+				byRegionNumber,
+				{ region: 'north', number: 1 },
+				'member_region_number',
+			],
+			['a nested field', byBio, { bio: 'b1' }, 'member_bio'],
+		] as const)('the engine plans %s through the unique index', async (_, statement, input, index) => {
+			await Effect.runPromise(
+				expectIndex(statement as never, input as never, index).pipe(
+					Effect.provide(database),
+				),
+			);
 		});
 	});
 });

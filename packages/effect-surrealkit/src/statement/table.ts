@@ -47,6 +47,13 @@ export interface PureTable {
 		readonly in: ReadonlyArray<Codec>;
 		readonly out: ReadonlyArray<Codec>;
 	};
+	/** Every `DEFINE INDEX` of the table, by name. */
+	readonly indexes?: {
+		readonly [name: string]: {
+			readonly type: string;
+			readonly columns: ReadonlyArray<ReadonlyArray<string>>;
+		};
+	};
 }
 
 /** The row object a table's callbacks receive. */

@@ -346,11 +346,33 @@ two codecs is refused, as are names SurrealDB sets itself (`$auth`, `$this`,
 | `select(table)` | rows; `.project(…)` named expressions, `.value(…)` one expression per row |
 | `select(table).only()` | one row or `undefined` (adds `LIMIT 1`) |
 | `select(table, id).only()` | the record or `undefined` |
+| `select(table, index, values)` | by a unique index: the row or `undefined` |
 | `create(table)`, `create(table, id)` | the created row (`CREATE ONLY … CONTENT`) |
 | `update(table, id).merge(x)` / `.content(x)` | the row, or `undefined` when the record is not there |
 | `update(table).merge(x).where(…)` | every changed row |
 | `deleteFrom(table, id)`, `deleteFrom(table).where(…)` | nothing; `.returning('before')` for the deleted rows |
 | `relate(edgeTable, from, to)` | the edge (`RELATE ONLY`); the endpoints must be ids the relation declares |
+
+`select(table, index, values)` looks a row up by a unique index of the
+descriptor: `values` holds one operand per field of the index, a nested
+field by its path, and is rendered as
+`SELECT * FROM ONLY ⟨member⟩ WITH INDEX member_region_number WHERE region = $region AND number = $number LIMIT 1`.
+An index that is not unique, a missing or extra field and a value that
+never compares with its field are compile errors:
+
+```ts
+const byRegionNumber = select(MemberTable, 'member_region_number', {
+  region: param('region', SurrealSchema.String),
+  number: param('number', SurrealSchema.Int),
+}).build();
+// Statement<{ region: …; number: … }, Member | undefined>
+```
+
+`WITH INDEX` is there because, with `LIMIT 1`, SurrealDB 3.3 and 4.0 plan
+such a lookup through any index on a prefix of its fields whose name sorts
+first (`member_region` before `member_region_number`); the conformance
+suite pins both. `select(readAs(table), index, values)` looks up through
+the row a restricted session reads.
 
 `.orderBy(…)` takes a field path of the stored row (`row.name`,
 `row.address.city`, `at(row.pins, 0)`), the only thing SurrealDB parses

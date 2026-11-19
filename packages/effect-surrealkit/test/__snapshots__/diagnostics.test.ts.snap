@@ -669,6 +669,42 @@ exports[`type diagnostics > transaction/unbound-statement 1`] = `
 ]
 `;
 
+exports[`type diagnostics > unique/extra-field 1`] = `
+[
+  "TS2345: Argument of type '{ handle: string; region: string; }' is not assignable to parameter of type '"\`region\` is not a field of the unique index \`member_handle\`"'.",
+]
+`;
+
+exports[`type diagnostics > unique/missing-field 1`] = `
+[
+  "TS2345: Argument of type '{ region: string; }' is not assignable to parameter of type '"the unique index \`member_region_number\` also needs \`number\`"'.",
+]
+`;
+
+exports[`type diagnostics > unique/nested-by-root 1`] = `
+[
+  "TS2345: Argument of type '{ profile: string; }' is not assignable to parameter of type '"the unique index \`member_bio\` also needs \`profile.bio\`"'.",
+]
+`;
+
+exports[`type diagnostics > unique/no-such-index 1`] = `
+[
+  "TS2345: Argument of type '"member_nope"' is not assignable to parameter of type '"\`member\` has no index \`member_nope\`"'.",
+]
+`;
+
+exports[`type diagnostics > unique/not-unique 1`] = `
+[
+  "TS2345: Argument of type '"member_region"' is not assignable to parameter of type '"\`member_region\` is a standard index of \`member\`, not a unique one"'.",
+]
+`;
+
+exports[`type diagnostics > unique/wrong-value 1`] = `
+[
+  "TS2345: Argument of type '{ handle: Expr<Schema.declareConstructor<number, number, readonly [], number>, { readonly handle: Schema.declareConstructor<number, number, readonly [], number>; }>; }' is not assignable to parameter of type '"\`handle\` never compares with this value: their stored types do not overlap"'.",
+]
+`;
+
 exports[`type diagnostics > update/id-of-other-table 1`] = `
 [
   "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to parameter of type 'IdOf<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, { ...; }>'.

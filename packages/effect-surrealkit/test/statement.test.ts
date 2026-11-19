@@ -53,6 +53,7 @@ import {
 	PersonTable,
 	TeamId,
 } from './golden/example/index.js';
+import * as Members from './golden/members/index.js';
 
 const names = (statement: { readonly params: object }) =>
 	Object.keys(statement.params).sort();
@@ -937,5 +938,72 @@ describe('authored statements', () => {
 			make({ ...made, writes: false, params: {}, result: Schema.Unknown })
 				.writes,
 		).toBe(false);
+	});
+});
+
+describe('select by a unique index', () => {
+	it('reads one row through an equality on every field of the index', () => {
+		const byHandle = select(Members.MemberTable, 'member_handle', {
+			handle: param('handle', SurrealSchema.String),
+		}).build();
+		expect(byHandle.sql).toBe(
+			'SELECT * FROM ONLY ⟨member⟩ WITH INDEX member_handle WHERE handle = $handle LIMIT 1;',
+		);
+		expect(Object.keys(byHandle.params)).toEqual(['handle']);
+		const composite = select(Members.MemberTable, 'member_region_number', {
+			number: param('number', SurrealSchema.Int),
+			region: 'north',
+		}).build();
+		// In the index's own column order, whatever the order of the values.
+		expect(composite.sql).toBe(
+			'SELECT * FROM ONLY ⟨member⟩ WITH INDEX member_region_number WHERE region = s"north" AND number = $number LIMIT 1;',
+		);
+		const nested = select(Members.MemberTable, 'member_bio', {
+			'profile.bio': param('bio', SurrealSchema.String),
+		})
+			.where((row) => eq(row.region, 'north'))
+			.build();
+		expect(nested.sql).toBe(
+			'SELECT * FROM ONLY ⟨member⟩ WITH INDEX member_bio WHERE profile.bio = $bio AND region = s"north" LIMIT 1;',
+		);
+		const decode = Schema.decodeUnknownSync(byHandle.result);
+		expect(decode(undefined)).toBeUndefined();
+	});
+
+	it('refuses at runtime what the types refuse', () => {
+		const untyped = select as unknown as (
+			table: unknown,
+			index: string,
+			values: Record<string, unknown>,
+		) => unknown;
+		const { MemberTable } = Members;
+		expect(() =>
+			untyped(MemberTable, 'member_region', { region: 'a' }),
+		).toThrow(
+			'`member_region` is a standard index of `member`, not a unique one',
+		);
+		expect(() => untyped(MemberTable, 'nope', {})).toThrow(
+			'`member` has no index `nope`',
+		);
+		expect(() =>
+			untyped(MemberTable, 'member_region_number', { region: 'a' }),
+		).toThrow(
+			'the unique index `member_region_number` also needs `number`',
+		);
+		expect(() =>
+			untyped(MemberTable, 'member_handle', { handle: 'a', x: 1 }),
+		).toThrow('`x` is not a field of the unique index `member_handle`');
+		expect(() =>
+			untyped(
+				{
+					...MemberTable,
+					indexes: {
+						tagged: { type: 'unique', columns: [['tags', '*']] },
+					},
+				},
+				'tagged',
+				{ 'tags.*': 'a' },
+			),
+		).toThrow('`tagged` indexes array elements');
 	});
 });

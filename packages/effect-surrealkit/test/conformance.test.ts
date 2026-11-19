@@ -264,6 +264,56 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 		});
 	});
 
+	describe('the index a lookup reads', () => {
+		/** The indexes the plan of `sql` names. */
+		const planned = async (sql: string): Promise<string[]> => {
+			const [plan] = await query(sql, { a: 'x', b: 1 });
+			return [
+				...JSON.stringify(plan).matchAll(/"index":"([^"]+)"/gu),
+			].map((match) => match[1] as string);
+		};
+
+		beforeAll(async () => {
+			await query(`
+				DEFINE TABLE pick SCHEMAFULL;
+				DEFINE FIELD a ON pick TYPE string;
+				DEFINE FIELD b ON pick TYPE int;
+				DEFINE INDEX pick_a ON pick FIELDS a;
+				DEFINE INDEX pick_ab ON pick FIELDS a, b UNIQUE;
+				CREATE pick:1 SET a = 'x', b = 1;
+				CREATE pick:2 SET a = 'x', b = 2;
+			`);
+		});
+
+		it('with LIMIT 1, equality on every field of a composite unique index reads a single-field index whose name sorts first', async () => {
+			expect(
+				await planned(
+					'SELECT * FROM ONLY pick WHERE a = $a AND b = $b LIMIT 1 EXPLAIN;',
+				),
+			).toStrictEqual(['pick_a']);
+		});
+
+		it('WITH INDEX makes the plan read the named index, and the lookup still finds its row', async () => {
+			expect(
+				await planned(
+					'SELECT * FROM ONLY pick WITH INDEX pick_ab WHERE a = $a AND b = $b LIMIT 1 EXPLAIN;',
+				),
+			).toStrictEqual(['pick_ab']);
+			expect(
+				await query(
+					'SELECT VALUE id FROM ONLY pick WITH INDEX pick_ab WHERE a = $a AND b = $b LIMIT 1;',
+					{ a: 'x', b: 2 },
+				),
+			).toMatchObject([{ id: 2 }]);
+			expect(
+				await query(
+					'SELECT * FROM ONLY pick WITH INDEX pick_ab WHERE a = $a AND b = $b LIMIT 1;',
+					{ a: 'x', b: 3 },
+				),
+			).toStrictEqual([undefined]);
+		});
+	});
+
 	describe('RETURN modes on writes', () => {
 		beforeAll(async () => {
 			await query(
