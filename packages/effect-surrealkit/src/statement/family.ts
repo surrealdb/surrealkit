@@ -350,9 +350,17 @@ export interface Family<A extends Axes, N, P extends Params, R extends Codec> {
 	readonly select: <const K extends KeyOf<A>>(
 		key: CheckedVariantKey<A, K>,
 	) => Statement<ParamsAt<P, FreeOf<N, K>>, R, ThrowsOf<N, K> & string>;
-	/** Every variant, built, with its key: for pinning and tests. */
+	/**
+	 * Every variant, built, with its key: for a build step, tests and
+	 * pinning. Each entry is a pinnable statement: `name` is the family's
+	 * name and one `axis-value` segment per axis (`listings.price-true.…`),
+	 * and `sql` the variant's text, so `renderPinnedStatements` and
+	 * `pinnedStatementProblems` take the list as it is.
+	 */
 	readonly variants: () => ReadonlyArray<{
 		readonly key: KeyOf<A>;
+		readonly name: string;
+		readonly sql: string;
 		readonly statement: Statement<
 			Params,
 			R,
@@ -685,6 +693,20 @@ const describeKey = (key: RuntimeKey): string =>
 		.map(([axis, value]) => `${axis}=${String(value)}`)
 		.join(', ');
 
+/**
+ * Where a variant is pinned: the family's name, then `axis-value` for each
+ * axis. A `.` in a value would nest the pin a level deeper, so it is
+ * written `%2E`, which pinning refuses as a segment.
+ */
+const pinName = (family: string, key: RuntimeKey): string =>
+	[
+		family,
+		...Object.entries(key).map(
+			([axis, value]) =>
+				`${axis}-${String(value).replaceAll('.', '%2E')}`,
+		),
+	].join('.');
+
 const axesOf = (node: TextNode, into: Map<string, Set<string>>): void => {
 	const kind = nodeKind(node);
 	if (kind === 'choose') {
@@ -871,10 +893,15 @@ export const family = <const A extends Axes, const N extends TextNode>(
 			axes,
 			select: select as unknown as Family<A, N, P, R>['select'],
 			variants: () =>
-				keys.map((key) => ({
-					key: key as KeyOf<A>,
-					statement: build(key),
-				})) as unknown as ReturnType<Family<A, N, P, R>['variants']>,
+				keys.map((key) => {
+					const statement = build(key);
+					return {
+						key: key as KeyOf<A>,
+						name: pinName(name, key),
+						sql: statement.sql,
+						statement,
+					};
+				}) as unknown as ReturnType<Family<A, N, P, R>['variants']>,
 		};
 	},
 });

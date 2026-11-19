@@ -7,8 +7,19 @@ import {
 	renderPinnedStatements,
 } from '../src/analyze/index.js';
 import * as SurrealSchema from '../src/index.js';
-import { gte, param, part, select, sequence } from '../src/statement/index.js';
+import {
+	choose,
+	compose,
+	family,
+	gte,
+	param,
+	part,
+	select,
+	sequence,
+} from '../src/statement/index.js';
 import { PersonTable } from './golden/corpus/index.js';
+import { catalog } from './golden/statements/index.js';
+import { listings, sized, summary } from './types/family.js';
 
 const failure = (
 	statements: ReadonlyArray<PinnableStatement>,
@@ -162,5 +173,79 @@ describe('pinning built statements', () => {
 			},
 		]);
 		expect(pinnedStatementProblems([adults, touch], files)).toEqual([]);
+	});
+});
+
+describe('pinning a statement family', () => {
+	it('pins every variant under the family name, one segment per axis', () => {
+		const files = renderPinnedStatements(listings.variants());
+		expect(files).toHaveLength(8);
+		expect(files[0]?.path).toBe(
+			'listings/price-false/region-false/vector-false.surql',
+		);
+		expect(files[7]?.path).toBe(
+			'listings/price-true/region-true/vector-true.surql',
+		);
+		expect(files[0]?.content).toBe(
+			`${listings.select({ price: false, region: false, vector: false }).sql}\n`,
+		);
+		expect(
+			renderPinnedStatements(sized.variants()).map((f) => f.path),
+		).toEqual(['sized/size-1.surql', 'sized/size-2.surql']);
+		expect(renderPinnedStatements(summary.variants())).toEqual([
+			{ path: 'summary.surql', content: `${summary.select({}).sql}\n` },
+		]);
+	});
+
+	it('reports a variant whose text changed, one not yet pinned and one gone', () => {
+		const [first, second, ...rest] = renderPinnedStatements(
+			listings.variants(),
+		);
+		const onDisk = [
+			...rest,
+			{ path: first?.path ?? '', content: 'RETURN 0;\n' },
+			{ path: 'listings/price-maybe.surql', content: 'RETURN 0;\n' },
+		];
+		expect(pinnedStatementProblems(listings.variants(), onDisk)).toEqual([
+			{
+				path: 'listings/price-false/region-false/vector-false.surql',
+				name: 'listings.price-false.region-false.vector-false',
+				kind: 'changed',
+			},
+			{
+				path: 'listings/price-false/region-false/vector-true.surql',
+				name: 'listings.price-false.region-false.vector-true',
+				kind: 'missing',
+			},
+			{ path: 'listings/price-maybe.surql', kind: 'stale' },
+		]);
+		expect(second?.path).toBe(
+			'listings/price-false/region-false/vector-true.surql',
+		);
+		expect(
+			pinnedStatementProblems(
+				listings.variants(),
+				renderPinnedStatements(listings.variants()),
+			),
+		).toEqual([]);
+	});
+
+	it('refuses an axis value that is not a name segment', () => {
+		const versioned = family(
+			{ version: ['1.0', '2'] },
+			compose(catalog.guarded, {
+				__BODY__: choose('version', {
+					'1.0': catalog.noRows,
+					2: catalog.notReady,
+				}),
+			}),
+		).define({
+			name: 'versioned',
+			params: { tenant: SurrealSchema.String },
+			result: Schema.Unknown,
+		});
+		expect(failure(versioned.variants()).message).toBe(
+			'statement "versioned.version-1%2E0" has a name segment that is empty or not letters, digits, _ and -',
+		);
 	});
 });
