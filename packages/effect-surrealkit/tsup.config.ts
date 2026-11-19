@@ -9,6 +9,7 @@ export default defineConfig([
 			emitter: "src/emitter/index.ts",
 			statement: "src/statement/index.ts",
 			client: "src/client/index.ts",
+			analyze: "src/analyze/index.ts",
 		},
 		format: ["esm"],
 		dts: true,

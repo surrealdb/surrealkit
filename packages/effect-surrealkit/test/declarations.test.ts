@@ -32,6 +32,7 @@ const link = (target: string, path: string) => {
 
 const statements = `import { Effect, Schema } from 'effect';
 import * as SurrealSchema from 'effect-surrealkit';
+import { analyze, fill, text } from 'effect-surrealkit/analyze';
 import { bind, run, transaction } from 'effect-surrealkit/client';
 import {
 	call,
@@ -81,6 +82,21 @@ export const guarded = sequence(
 	params: { name: SurrealSchema.String },
 	result: Schema.Undefined,
 });
+
+export const filter = text({
+	kind: 'part',
+	sql: 'SELECT * FROM person WHERE __FILTER__;',
+	holes: ['__FILTER__'],
+	free: [],
+	defines: [],
+	provisional: true,
+	slots: 1,
+	throws: [],
+});
+
+export const filtered = fill(filter, { __FILTER__: 'name = $name' }).pipe(
+	Effect.flatMap((sql) => analyze(sql)),
+);
 
 export const program = (person: typeof PersonCreate.Type) =>
 	Effect.gen(function* () {
@@ -163,7 +179,8 @@ describe('declaration emit in a pnpm consumer', () => {
 
 		cpSync(goldenDir('corpus'), join(root, 'src'), { recursive: true });
 		// A consumer module that exports statements and an effect built from
-		// them, through the package's `statement` and `client` subpaths.
+		// them, through the package's `statement`, `client` and `analyze`
+		// subpaths.
 		writeFileSync(join(root, 'src', 'statements.ts'), statements);
 		writeFileSync(
 			join(root, 'tsconfig.json'),

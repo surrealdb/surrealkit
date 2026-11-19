@@ -178,21 +178,27 @@ export const make = <
  * - `defines`: the names it `LET`s at the top level, which later parts of a
  *   sequence can read;
  * - `slots`: how many results it returns (one per top-level statement);
- * - `throws`: the messages it can `THROW`.
+ * - `throws`: the messages it can `THROW`;
+ * - optionally `name` and `source` (where the text came from) and `throwsAt`
+ *   (the lines each message is thrown on), for messages and tooling.
  *
- * A generator derives these from a `.surql` file; written by hand they are
- * checked only as far as {@link sequence} can check them.
+ * `effect-surrealkit statements` derives these from `.surql` files
+ * (`effect-surrealkit/analyze`); written by hand they are checked only as
+ * far as {@link sequence} can check them.
  */
 export interface Part<
 	Free extends string = string,
 	Defines extends string = string,
 	Throws extends string = string,
 > {
+	readonly name?: string;
+	readonly source?: string;
 	readonly sql: string;
 	readonly free: ReadonlyArray<Free>;
 	readonly defines: ReadonlyArray<Defines>;
 	readonly slots: number;
 	readonly throws: ReadonlyArray<Throws>;
+	readonly throwsAt?: Readonly<Record<string, ReadonlyArray<number>>>;
 }
 
 /** Declares a {@link Part}, keeping its names as literal types. */
@@ -201,17 +207,23 @@ export const part = <
 	const Defines extends string = never,
 	const Throws extends string = never,
 >(options: {
+	readonly name?: string;
+	readonly source?: string;
 	readonly sql: string;
 	readonly free?: ReadonlyArray<Free>;
 	readonly defines?: ReadonlyArray<Defines>;
 	readonly slots?: number;
 	readonly throws?: ReadonlyArray<Throws>;
+	readonly throwsAt?: Readonly<Record<string, ReadonlyArray<number>>>;
 }): Part<Free, Defines, Throws> => ({
+	...(options.name !== undefined && { name: options.name }),
+	...(options.source !== undefined && { source: options.source }),
 	sql: options.sql,
 	free: options.free ?? [],
 	defines: options.defines ?? [],
 	slots: options.slots ?? 1,
 	throws: options.throws ?? [],
+	...(options.throwsAt !== undefined && { throwsAt: options.throwsAt }),
 });
 
 /**
