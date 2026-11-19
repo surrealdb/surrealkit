@@ -32,7 +32,12 @@ const link = (target: string, path: string) => {
 
 const statements = `import { Effect, Schema } from 'effect';
 import * as SurrealSchema from 'effect-surrealkit';
-import { analyze, fill, text } from 'effect-surrealkit/analyze';
+import {
+	analyze,
+	fill,
+	renderStatementModules,
+	text,
+} from 'effect-surrealkit/analyze';
 import { bind, run, transaction } from 'effect-surrealkit/client';
 import { math, string } from 'effect-surrealkit/functions';
 import { expectIndex, fake, fakeLayer, memoryLayer, result } from 'effect-surrealkit/testing';
@@ -135,6 +140,16 @@ export const filter = text({
 
 export const filtered = fill(filter, { __FILTER__: 'name = $name' }).pipe(
 	Effect.flatMap((sql) => analyze(sql)),
+);
+
+export const rendered = renderStatementModules({
+	scopes: [{ name: 'people', files: [{ name: 'count', sql: 'RETURN 1;' }] }],
+	importExtension: '.ts',
+}).pipe(
+	Effect.map(({ files, warnings }) => [files[0]?.path, warnings.length] as const),
+	Effect.catchTag('StatementModulesError', (error) =>
+		Effect.succeed([error.problems[0]?.text, 0] as const),
+	),
 );
 
 // The testing subpath declares without \`@surrealdb/node\` installed.

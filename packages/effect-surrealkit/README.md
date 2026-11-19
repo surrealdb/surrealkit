@@ -1016,6 +1016,35 @@ regenerates on change; `--import-extension .ts` changes the index's imports;
 hole (default `__` and `__`). Any error stops
 generation with its file, line and column; warnings are printed.
 
+#### Rendering in process
+
+The command is a thin wrapper over `renderStatementModules` from
+`effect-surrealkit/analyze`: it reads the tree, refuses anything that is not
+a `.surql` file, and writes, checks or watches; analysis, naming checks and
+rendering are all the function's. Call it directly to generate the modules
+without the CLI or a filesystem:
+
+```ts
+import { Effect } from 'effect';
+import { renderStatementModules } from 'effect-surrealkit/analyze';
+
+const program = renderStatementModules({
+	scopes: [
+		{ name: 'accounts', files: [{ name: 'bindOwner', sql: 'LET $owner = $boundOwner;' }] },
+	],
+	importExtension: '.ts', // default .js
+	// holes: { open: '{{', close: '}}' },
+});
+// Succeeds with { files: [{ path: 'accounts/statements.ts', content }, { path: 'index.ts', content }],
+// warnings: [{ scope, file, line, column, code, message, text }] }, the same
+// bytes the command writes; fails with a StatementModulesError whose
+// `problems` hold every rejected file, invalid, reserved or case-colliding
+// name and invalid scope.
+const { files, warnings } = await Effect.runPromise(program);
+```
+
+`renderStatementModulesSync` is the same, throwing the error.
+
 The analyzer is `effect-surrealkit/analyze`, pure and host-neutral:
 `analyze(sql, { holes? })` returns `{ kind, sql, free, defines, slots,
 throws, throwsAt, holes, provisional, transactional, writes, diagnostics }` or fails
