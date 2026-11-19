@@ -36,6 +36,7 @@ import {
 	eq,
 	gte,
 	type Input,
+	idRange,
 	inside,
 	isNone,
 	literal,
@@ -46,12 +47,14 @@ import {
 	part,
 	type Result,
 	readAs,
+	recordId,
 	relate,
 	type Statement,
 	select,
 	sequence,
 	update,
 } from '../../src/statement/index.js';
+import * as Corpus from '../golden/corpus/index.js';
 import {
 	fn_greet,
 	fn_optional_first,
@@ -64,6 +67,7 @@ import {
 	type PersonRow,
 	PersonTable,
 	TeamId,
+	TeamTable,
 } from '../golden/example/index.js';
 import * as Members from '../golden/members/index.js';
 
@@ -490,3 +494,95 @@ same<
 	Result<typeof byBio>,
 	{ readonly handle: string; readonly email: string | undefined } | undefined
 >(true);
+
+// ---- Record ids from their key parts, and id ranges.
+
+export const byKey = select(
+	PersonTable,
+	recordId(PersonTable, param('key', SurrealSchema.String)),
+)
+	.only()
+	.build();
+same<Result<typeof byKey>, PersonRow | undefined>(true);
+same<Input<(typeof byKey)['params']>, { readonly key: string }>(true);
+// An array key, part by part; a constant part is inlined.
+export const byArrayKey = select(
+	Corpus.IdArrayTable,
+	recordId(Corpus.IdArrayTable, ['a', param('at', SurrealSchema.DateTime)]),
+).build();
+same<Input<(typeof byArrayKey)['params']>, { readonly at: DateTime }>(true);
+// An object key, part by part.
+export const byObjectKey = update(
+	Corpus.IdObjectTable,
+	recordId(Corpus.IdObjectTable, {
+		n: param('n', SurrealSchema.Int),
+		region: param('region', SurrealSchema.String),
+	}),
+)
+	.merge(param('changes', Corpus.IdObjectTable.merge))
+	.build();
+same<keyof Input<(typeof byObjectKey)['params']>, 'n' | 'region' | 'changes'>(
+	true,
+);
+// The built id is the subject of every builder that takes one, and an endpoint.
+export const createByKey = create(
+	PersonTable,
+	recordId(PersonTable, param('key', SurrealSchema.String)),
+)
+	.content(param('person', PersonCreate))
+	.build();
+export const deleteByKey = deleteFrom(
+	Corpus.IdIntTable,
+	recordId(Corpus.IdIntTable, param('n', SurrealSchema.Int)),
+).build();
+export const relateByKey = relate(
+	MemberOfTable,
+	recordId(PersonTable, param('person', SurrealSchema.String)),
+	recordId(TeamTable, 'core'),
+).build();
+// A projected id decodes with the table's id codec.
+export const keyed = select(PersonTable)
+	.project(() => ({ id: recordId(PersonTable, 'ann') }))
+	.build();
+same<Result<typeof keyed>, ReadonlyArray<{ readonly id: PersonId }>>(true);
+
+// Ranges read many rows: both bounds, an open side, an included end.
+export const between = select(
+	Corpus.IdIntTable,
+	idRange(Corpus.IdIntTable, {
+		from: param('low', SurrealSchema.Int),
+		through: param('high', SurrealSchema.Int),
+	}),
+).build();
+same<Result<typeof between>, ReadonlyArray<typeof Corpus.IdIntRow.Type>>(true);
+same<
+	Input<(typeof between)['params']>,
+	{ readonly low: number; readonly high: number }
+>(true);
+export const fromOnwards = select(
+	Corpus.IdIntTable,
+	idRange(Corpus.IdIntTable, { after: 10 }),
+)
+	.orderBy((row) => row.id)
+	.limit(5)
+	.build();
+export const everyKey = select(
+	Corpus.IdArrayTable,
+	idRange(Corpus.IdArrayTable, {}),
+).build();
+export const cityWeek = select(
+	Corpus.IdArrayTable,
+	idRange(Corpus.IdArrayTable, {
+		from: [
+			param('city', SurrealSchema.String),
+			param('start', SurrealSchema.DateTime),
+		],
+		to: [
+			param('city', SurrealSchema.String),
+			param('end', SurrealSchema.DateTime),
+		],
+	}),
+)
+	.only()
+	.build();
+same<keyof Input<(typeof cityWeek)['params']>, 'city' | 'start' | 'end'>(true);

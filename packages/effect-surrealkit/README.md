@@ -347,11 +347,49 @@ two codecs is refused, as are names SurrealDB sets itself (`$auth`, `$this`,
 | `select(table).only()` | one row or `undefined` (adds `LIMIT 1`) |
 | `select(table, id).only()` | the record or `undefined` |
 | `select(table, index, values)` | by a unique index: the row or `undefined` |
+| `select(table, idRange(table, bounds))` | the records whose ids the range spans |
 | `create(table)`, `create(table, id)` | the created row (`CREATE ONLY … CONTENT`) |
 | `update(table, id).merge(x)` / `.content(x)` | the row, or `undefined` when the record is not there |
 | `update(table).merge(x).where(…)` | every changed row |
 | `deleteFrom(table, id)`, `deleteFrom(table).where(…)` | nothing; `.returning('before')` for the deleted rows |
 | `relate(edgeTable, from, to)` | the edge (`RELATE ONLY`); the endpoints must be ids the relation declares |
+
+A record id of a table is built from its key parts by `recordId(table,
+key)`: one part, an array of parts for an array key, or an object of parts
+for an object key, each a binding or a constant. Each part must be what the
+table's id codec declares for that position (a compile error names the
+part that is not), and the id decodes with that codec. It is the subject
+`select`, `create`, `update` and `deleteFrom` take, and a `relate`
+endpoint:
+
+```ts
+const reading = recordId(ReadingTable, [
+  param('city', SurrealSchema.String),
+  param('at', SurrealSchema.DateTime),
+]);
+select(ReadingTable, reading).only().build();
+// SELECT * FROM ONLY type::record(s"reading", [$city, $at]);
+```
+
+`idRange(table, bounds)` is the records whose ids fall between two keys,
+a `select` subject that reads many rows: `from` (included) or `after`
+(excluded) starts it, `to` (excluded, as SurrealQL's `..` excludes it) or
+`through` (included) ends it, and a side left out is open:
+
+```ts
+select(ReadingTable, idRange(ReadingTable, {
+  from: [param('city', SurrealSchema.String), param('start', SurrealSchema.DateTime)],
+  through: [param('city', SurrealSchema.String), param('end', SurrealSchema.DateTime)],
+})).build();
+// SELECT * FROM type::record(s"reading", [$city, $start]..=[$city, $end]);
+```
+
+Both render as `type::record`, whose key and bounds may be bindings:
+SurrealDB 3.3 and 4.0 parse no binding as a scalar key in a record id or
+range literal (`reading:$k`, `n:$a..$b`), and read the records
+`type::record` names by key, never by a table scan. A `RELATE` endpoint
+that is not a bare binding is parenthesised, which is the only way RELATE
+parses `type::record(…)`. The conformance suite pins all of it.
 
 `select(table, index, values)` looks a row up by a unique index of the
 descriptor: `values` holds one operand per field of the index, a nested

@@ -59,6 +59,21 @@ export {
 	type Unbound,
 } from './part.js';
 export {
+	type CheckedKey,
+	type CheckedRange,
+	type IdRange,
+	IdRangeTypeId,
+	idRange,
+	isIdRange,
+	type KeyParams,
+	type KeyPart,
+	type KeyParts,
+	type RangeBounds,
+	type RangeParams,
+	type RecordKeyOf,
+	recordId,
+} from './record.js';
+export {
 	type FieldExpr,
 	type Fields,
 	type FieldsOf,
@@ -77,6 +92,8 @@ export {
 	type Select,
 	type SelectResult,
 	select,
+	type UniqueIndex,
+	type UniqueValues,
 } from './select.js';
 export {
 	type AnyStatement,
@@ -100,6 +117,7 @@ export {
 	type RowExprs,
 	readAs,
 	type StoredRow,
+	type WithVisible,
 } from './table.js';
 export {
 	type Create,

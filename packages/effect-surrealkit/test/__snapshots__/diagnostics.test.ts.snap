@@ -307,6 +307,39 @@ exports[`type diagnostics > project/alias-string 1`] = `
 ]
 `;
 
+exports[`type diagnostics > range/not-a-record 1`] = `
+[
+  "TS2345: Argument of type 'IdRange<"id_int", Record<never, never>>' is not assignable to parameter of type 'IdOf<{ readonly name: "id_int"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<RecordIdOf<"id_int", number>, RecordIdOf<"id_int", number>, readonly [...], RecordIdOf<...>>, "corpus/id_int">; ... 10 more ...; readonly indexes: {}; }, Params>'.
+  Property '[ExprTypeId]' is missing in type 'IdRange<"id_int", Record<never, never>>' but required in type 'Expr<Codec<unknown, RecordIdOf<"id_int", number>, never, never>, Params>'.",
+]
+`;
+
+exports[`type diagnostics > range/other-table 1`] = `
+[
+  "TS2345: Argument of type 'IdRange<"team", Record<never, never>>' is not assignable to parameter of type 'IdOf<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, Record<...>> | IdRange<...>'.
+  Type 'IdRange<"team", Record<never, never>>' is not assignable to type 'IdRange<"person", Record<never, never>>'.
+    Type '"team"' is not assignable to type '"person"'.",
+]
+`;
+
+exports[`type diagnostics > range/two-ends 1`] = `
+[
+  "TS2345: Argument of type '{ to: number; through: number; }' is not assignable to parameter of type '"a range ends \`to\` a key (excluded) or \`through\` one (included), not both"'.",
+]
+`;
+
+exports[`type diagnostics > range/two-starts 1`] = `
+[
+  "TS2345: Argument of type '{ from: number; after: number; }' is not assignable to parameter of type '"a range starts \`from\` a key (included) or \`after\` one (excluded), not both"'.",
+]
+`;
+
+exports[`type diagnostics > range/wrong-bound 1`] = `
+[
+  "TS2345: Argument of type '{ from: string; }' is not assignable to parameter of type '"\`from\`: this is not a key of \`id_int\`"'.",
+]
+`;
+
 exports[`type diagnostics > read-view/no-visible-row 1`] = `
 [
   "TS2345: Argument of type '{ readonly name: "note"; readonly id: Schema.declareConstructor<_RecordId<"note">, _RecordId<"note">, readonly [Schema.declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>; readonly select: Schema.Struct<...>; }' is not assignable to parameter of type '"this descriptor has no generated \`visible\` row: regenerate it, or pass the row the session reads as the second argument"'.",
@@ -324,6 +357,59 @@ exports[`type diagnostics > read-view/wrong-record-table 1`] = `
 [
   "TS2345: Argument of type 'Struct<{ readonly id: brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">; }>' is not assignable to parameter of type 'Struct<{ readonly id: brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">; }> & { ...; }'.
   Property 'incompatibleRecordLinks' is missing in type 'Struct<{ readonly id: brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">; }>' but required in type '{ readonly incompatibleRecordLinks: "id"; }'.",
+]
+`;
+
+exports[`type diagnostics > record/array-length 1`] = `
+[
+  "TS2345: Argument of type 'string[]' is not assignable to parameter of type '"a key of \`id_array\` has 2 parts, not 1"'.",
+]
+`;
+
+exports[`type diagnostics > record/array-part 1`] = `
+[
+  "TS2345: Argument of type '(string | number)[]' is not assignable to parameter of type '"the part at index 1 of this key is not what a key of \`id_array\` holds there"'.",
+]
+`;
+
+exports[`type diagnostics > record/not-an-array 1`] = `
+[
+  "TS2345: Argument of type 'number[]' is not assignable to parameter of type '"the key of \`id_int\` is not an array"'.",
+]
+`;
+
+exports[`type diagnostics > record/object-extra-part 1`] = `
+[
+  "TS2345: Argument of type '{ n: number; region: string; extra: number; }' is not assignable to parameter of type '"\`extra\` is not part of a key of \`id_object\`"'.",
+]
+`;
+
+exports[`type diagnostics > record/object-missing-part 1`] = `
+[
+  "TS2345: Argument of type '{ n: number; }' is not assignable to parameter of type '"a key of \`id_object\` also needs \`region\`"'.",
+]
+`;
+
+exports[`type diagnostics > record/object-wrong-part 1`] = `
+[
+  "TS2345: Argument of type '{ n: string; region: string; }' is not assignable to parameter of type '"\`n\` is not what a key of \`id_object\` holds there"'.",
+]
+`;
+
+exports[`type diagnostics > record/other-table 1`] = `
+[
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, Record<...>>' is not assignable to parameter of type 'IdOf<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, Record<...>> | IdRange<...>'.
+  Type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, Record<...>>' is not assignable to type 'IdOf<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, Record<...>>'.
+    Type 'brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">' is not assignable to type 'Codec<unknown, _RecordId<"person">, never, never>'.
+      Types of property '"Encoded"' are incompatible.
+        Type '_RecordId<"team">' is not assignable to type '_RecordId<"person">'.
+          Type '"team"' is not assignable to type '"person"'.",
+]
+`;
+
+exports[`type diagnostics > record/wrong-key 1`] = `
+[
+  "TS2345: Argument of type 'Expr<declareConstructor<string, string, readonly [], string>, { readonly key: declareConstructor<string, string, readonly [], string>; }>' is not assignable to parameter of type '"this is not a key of \`id_int\`"'.",
 ]
 `;
 
@@ -627,11 +713,12 @@ exports[`type diagnostics > schema/unbranded-sdk-id 1`] = `
 
 exports[`type diagnostics > select/id-of-other-table 1`] = `
 [
-  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to parameter of type 'IdOf<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, { ...; }>'.
-  Type 'brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">' is not assignable to type 'Codec<unknown, _RecordId<"person">, never, never>'.
-    Types of property '"Encoded"' are incompatible.
-      Type '_RecordId<"team">' is not assignable to type '_RecordId<"person">'.
-        Type '"team"' is not assignable to type '"person"'.",
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to parameter of type 'IdOf<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, { ...; }> | IdRange<...>'.
+  Type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to type 'IdOf<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, { ...; }>'.
+    Type 'brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">' is not assignable to type 'Codec<unknown, _RecordId<"person">, never, never>'.
+      Types of property '"Encoded"' are incompatible.
+        Type '_RecordId<"team">' is not assignable to type '_RecordId<"person">'.
+          Type '"team"' is not assignable to type '"person"'.",
 ]
 `;
 

@@ -16,6 +16,8 @@ import {
 	eq,
 	isExpr,
 	isPath,
+	Level,
+	makeExpr,
 	mergeParams,
 	type Operand,
 	type OperandEncoded,
@@ -27,6 +29,7 @@ import {
 	pathOf,
 	sqlOf,
 } from './expr.js';
+import { type IdRange, IdRangeTypeId, isIdRange } from './record.js';
 import {
 	type CheckedProjection,
 	type ProjectedCodec,
@@ -163,6 +166,8 @@ interface State {
 	readonly table: PureTable;
 	readonly row: RowExprs<PureTable>;
 	readonly source: Expr | undefined;
+	/** The source is an id range, which reads many rows as a table does. */
+	readonly range?: boolean;
 	readonly out: Codec;
 	readonly fields: string;
 	readonly where: ReadonlyArray<Expr>;
@@ -216,7 +221,7 @@ const count = (value: Count, clause: string): string => {
 
 const render = (state: State): string => {
 	assertOrder(state);
-	const limit = state.only && state.source === undefined ? '1' : state.limit;
+	const limit = state.only && readsMany(state) ? '1' : state.limit;
 	return [
 		`SELECT ${state.fields} FROM ${state.only ? 'ONLY ' : ''}${
 			state.source === undefined
@@ -238,6 +243,10 @@ const render = (state: State): string => {
 		...(state.start === undefined ? [] : [`START ${state.start}`]),
 	].join(' ');
 };
+
+/** A table or an id range: what `FROM ONLY` reads one row of with `LIMIT 1`. */
+const readsMany = (state: State): boolean =>
+	state.source === undefined || state.range === true;
 
 const resultOf = (state: State): Codec =>
 	state.only ? Schema.UndefinedOr(state.out) : Schema.Array(state.out);
@@ -353,7 +362,7 @@ const builder = <
 			});
 		},
 		limit: (rows) => {
-			if (state.only && state.source === undefined) {
+			if (state.only && readsMany(state)) {
 				throw new RangeError(
 					'a SELECT … FROM ONLY a table already reads at most one row',
 				);
@@ -396,7 +405,7 @@ const builder = <
 			});
 		},
 		only: () => {
-			if (state.source === undefined && state.limit !== undefined) {
+			if (readsMany(state) && state.limit !== undefined) {
 				throw new RangeError(
 					'a SELECT … FROM ONLY a table reads at most one row; drop the LIMIT',
 				);
@@ -423,8 +432,10 @@ const builder = <
 };
 
 /**
- * `SELECT * FROM table`, or `SELECT * FROM $id` with a record id expression
- * of that table. Rows decode with the descriptor's select schema.
+ * `SELECT * FROM table`; `SELECT * FROM $id` with a record id expression of
+ * that table (a binding, or {@link recordId}); or the records an
+ * {@link idRange} of that table spans. Rows decode with the descriptor's
+ * select schema.
  *
  * @example
  * const recent = select(PersonTable)
@@ -437,7 +448,7 @@ export const select: {
 	<T extends PureTable>(table: T): Select<T, NoParams, StoredRow<T>, false>;
 	<T extends PureTable, P extends Params>(
 		table: T,
-		id: IdOf<T, P>,
+		subject: IdOf<T, P> | IdRange<T['name'], P>,
 	): Select<T, P, StoredRow<T>, false>;
 	/**
 	 * `SELECT * FROM ONLY table WITH INDEX index WHERE … LIMIT 1` by a
@@ -460,7 +471,7 @@ export const select: {
 	): Select<T, ParamsOfAll<V[keyof V]>, StoredRow<T>, true>;
 } = <T extends PureTable>(
 	table: T,
-	id?: Expr | string,
+	id?: Expr | IdRange | string,
 	values?: { readonly [field: string]: Operand },
 ): never => {
 	const state: State = {
@@ -487,6 +498,21 @@ export const select: {
 			only: true,
 			index: id,
 			params: mergeParams(...where.map(paramsOf)),
+		}) as never;
+	}
+	if (isIdRange(id)) {
+		const { sql, params } = id[IdRangeTypeId];
+		if (id[IdRangeTypeId].table !== table.name) {
+			throw new RangeError(
+				`a range of \`${id[IdRangeTypeId].table}\` is not a subject of \`${table.name}\``,
+			);
+		}
+		return builder<T, Params, StoredRow<T>, false>({
+			...state,
+			source: makeExpr(Schema.Unknown, sql, params, Level.atom),
+			range: true,
+			pure: false,
+			params,
 		}) as never;
 	}
 	return builder<T, Params, StoredRow<T>, false>(

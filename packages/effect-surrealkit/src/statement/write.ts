@@ -19,6 +19,7 @@ import {
 	operand,
 	type ParamsOfAll,
 	paramsOf,
+	sqlOf,
 } from './expr.js';
 import type { CheckedProjection, ProjectedCodec, Projection } from './row.js';
 import {
@@ -600,6 +601,16 @@ const relating = <T extends PureTable, P extends Params, R extends Codec>(
 });
 
 /**
+ * A `RELATE` endpoint: a binding as it is, anything else parenthesised,
+ * since SurrealDB 3.3 and 4.0 parse only a binding or a record literal
+ * there (`type::record(…)` needs the parentheses).
+ */
+const endpoint = (value: Expr): string => {
+	const sql = sqlOf(value);
+	return /^\$[A-Za-z_][A-Za-z0-9_]*$/u.test(sql) ? sql : `(${sql})`;
+};
+
+/**
  * `RELATE ONLY $from->table->$to`: one edge between two records. Each
  * endpoint must be a record id the relation declares for that side.
  */
@@ -628,7 +639,7 @@ export const relate = <
 	const target = to as Expr;
 	return relating(
 		start('RELATE', table, {
-			target: `${operand(source)}->${tableName(table)}->${operand(target)}`,
+			target: `${endpoint(source)}->${tableName(table)}->${endpoint(target)}`,
 			shape: 'one',
 			params: mergeParams(paramsOf(source), paramsOf(target)),
 			returning: 'AFTER',

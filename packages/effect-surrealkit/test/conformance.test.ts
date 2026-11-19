@@ -264,6 +264,127 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 		});
 	});
 
+	describe('record ids and ranges from bound key parts', () => {
+		beforeAll(async () => {
+			await query(`
+				DEFINE TABLE rk_n; DEFINE TABLE rk_a; DEFINE TABLE rk_o; DEFINE TABLE rk_s;
+				DEFINE TABLE rk_edge TYPE RELATION;
+				CREATE rk_n:1 SET v = 1; CREATE rk_n:2 SET v = 2; CREATE rk_n:3 SET v = 3; CREATE rk_n:4 SET v = 4;
+				CREATE rk_a:['x', 1] SET v = 1; CREATE rk_a:['x', 2] SET v = 2; CREATE rk_a:['y', 1] SET v = 3;
+				CREATE rk_o:{ r: 'eu', n: 1 } SET v = 1;
+				CREATE rk_s:ann SET v = 1; CREATE rk_s:bob SET v = 2;
+			`);
+		});
+
+		it('a binding is no scalar key in a record id or range literal', async () => {
+			const unparsed =
+				/Unexpected token `\$param` expected a record-id key/;
+			await expect(
+				query('SELECT * FROM rk_s:$k;', { k: 'ann' }),
+			).rejects.toThrow(unparsed);
+			await expect(
+				query('SELECT * FROM rk_n:$a..$b;', { a: 1, b: 3 }),
+			).rejects.toThrow(unparsed);
+		});
+
+		it('type::record builds an id from a scalar, an array or an object of bound parts', async () => {
+			expect(
+				await query(
+					[
+						'SELECT VALUE v FROM ONLY type::record(s"rk_s", $k);',
+						'SELECT VALUE v FROM ONLY type::record(s"rk_a", [$p, $q]);',
+						'SELECT VALUE v FROM ONLY type::record(s"rk_o", { "r": $r, "n": $n });',
+						// A key is a value, never parsed as an id.
+						'RETURN <string> type::record(s"rk_s", $odd);',
+					].join('\n'),
+					{ k: 'bob', p: 'x', q: 2, r: 'eu', n: 1, odd: 'a:b' },
+				),
+			).toStrictEqual([2, 2, 1, 'rk_s:`a:b`']);
+		});
+
+		it('CREATE, UPDATE and DELETE take it as their subject; RELATE takes it parenthesised', async () => {
+			const [created, updated, deleted] = (await query(
+				[
+					'CREATE ONLY type::record(s"rk_s", $k) SET v = 9 RETURN VALUE v;',
+					'UPDATE ONLY type::record(s"rk_s", $k) SET v = 10 RETURN VALUE v;',
+					'DELETE ONLY type::record(s"rk_s", $k) RETURN VALUE $before.v;',
+				].join('\n'),
+				{ k: 'dee' },
+			)) as unknown[];
+			expect([created, updated, deleted]).toStrictEqual([9, 10, 10]);
+			await expect(
+				query(
+					'RELATE ONLY type::record(s"rk_s", $k)->rk_edge->rk_s:bob;',
+					{ k: 'ann' },
+				),
+			).rejects.toThrow(/Parse error/);
+			const [edge] = (await query(
+				'RELATE ONLY (type::record(s"rk_s", $k))->rk_edge->(r"rk_s:bob") RETURN VALUE [<string> in, <string> out];',
+				{ k: 'ann' },
+			)) as [unknown];
+			expect(edge).toStrictEqual(['rk_s:ann', 'rk_s:bob']);
+		});
+
+		it('type::record spans a range between bound keys: open sides, an excluded start, an included end', async () => {
+			expect(
+				await query(
+					[
+						'SELECT VALUE v FROM type::record(s"rk_n", $lo..$hi);',
+						'SELECT VALUE v FROM type::record(s"rk_n", $lo..=$hi);',
+						'SELECT VALUE v FROM type::record(s"rk_n", $lo..);',
+						'SELECT VALUE v FROM type::record(s"rk_n", ..=$hi);',
+						'SELECT VALUE v FROM type::record(s"rk_n", ..);',
+						'SELECT VALUE v FROM type::record(s"rk_n", $lo>..$hi);',
+						'SELECT VALUE v FROM type::record(s"rk_a", [$p, $q]..=[$p, $r]);',
+						'SELECT VALUE v FROM type::record(s"rk_n", $hi..$lo);',
+					].join('\n'),
+					{ lo: 1, hi: 3, p: 'x', q: 1, r: 2 },
+				),
+			).toStrictEqual([
+				[1, 2],
+				[1, 2, 3],
+				[1, 2, 3, 4],
+				[1, 2, 3],
+				[1, 2, 3, 4],
+				[2],
+				[1, 2],
+				[],
+			]);
+			await expect(
+				query('SELECT * FROM type::record(s"rk_n", $lo..$hi);', {
+					lo: undefined,
+					hi: 3,
+				}),
+			).rejects.toThrow(/is not a valid id/);
+		});
+
+		it('reads the records by key, never by a table scan', async () => {
+			const operators = async (sql: string) => {
+				const [plan] = await query(sql, { k: 2, lo: 1, hi: 3 });
+				return [
+					...JSON.stringify(plan).matchAll(/"operator":"([^"]+)"/gu),
+				].map((match) => match[1]);
+			};
+			const id = await operators(
+				'SELECT * FROM type::record(s"rk_n", $k) EXPLAIN;',
+			);
+			const range = await operators(
+				'SELECT * FROM type::record(s"rk_n", $lo..=$hi) EXPLAIN;',
+			);
+			if (engine.majorVersion >= 4) {
+				expect([id, range]).toStrictEqual([
+					['Values', 'SelectProject'],
+					['Values', 'SelectProject'],
+				]);
+			} else {
+				expect([id, range]).toStrictEqual([
+					['RecordIdScan', 'SelectProject'],
+					['DynamicScan', 'SelectProject'],
+				]);
+			}
+		});
+	});
+
 	describe('the index a lookup reads', () => {
 		/** The indexes the plan of `sql` names. */
 		const planned = async (sql: string): Promise<string[]> => {

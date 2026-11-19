@@ -16,6 +16,7 @@ import {
 	create,
 	eq,
 	gt,
+	idRange,
 	inside,
 	literal,
 	make,
@@ -23,6 +24,7 @@ import {
 	param,
 	part,
 	readAs,
+	recordId,
 	relate,
 	select,
 	sequence,
@@ -37,6 +39,7 @@ import {
 	PersonMerge,
 	PersonTable,
 	TeamId,
+	TeamTable,
 } from '../golden/example/index.js';
 import { MemberTable } from '../golden/members/index.js';
 
@@ -382,4 +385,37 @@ export const rejectedUniqueLookups = () => {
 	select(MemberTable, 'member_handle', { handle: handleAsInt });
 	// @ts-expect-error [unique/nested-by-root] a nested field is named by its path
 	select(MemberTable, 'member_bio', { profile: 'b' });
+};
+
+// A record id is built from the key its table's id codec declares.
+export const rejectedRecordIds = () => {
+	// @ts-expect-error [record/wrong-key] an `id_int` key is an int
+	recordId(Corpus.IdIntTable, param('key', SurrealSchema.String));
+	// @ts-expect-error [record/array-length] an `id_array` key has two parts
+	recordId(Corpus.IdArrayTable, ['a']);
+	// @ts-expect-error [record/array-part] the second part of an `id_array` key is a datetime
+	recordId(Corpus.IdArrayTable, ['a', 1]);
+	// @ts-expect-error [record/not-an-array] an `id_int` key is no array
+	recordId(Corpus.IdIntTable, [1, 2]);
+	// @ts-expect-error [record/object-missing-part] an `id_object` key also needs `region`
+	recordId(Corpus.IdObjectTable, { n: 1 });
+	// @ts-expect-error [record/object-extra-part] `extra` is no part of an `id_object` key
+	recordId(Corpus.IdObjectTable, { n: 1, region: 'eu', extra: 2 });
+	// @ts-expect-error [record/object-wrong-part] `n` of an `id_object` key is an int
+	recordId(Corpus.IdObjectTable, { n: 'one', region: 'eu' });
+	// @ts-expect-error [record/other-table] a team id is not a subject of `person`
+	select(PersonTable, recordId(TeamTable, 'core'));
+};
+
+export const rejectedRanges = () => {
+	// @ts-expect-error [range/two-starts] a range has one start
+	idRange(Corpus.IdIntTable, { from: 1, after: 2 });
+	// @ts-expect-error [range/two-ends] a range has one end
+	idRange(Corpus.IdIntTable, { to: 1, through: 2 });
+	// @ts-expect-error [range/wrong-bound] an `id_int` key is an int
+	idRange(Corpus.IdIntTable, { from: 'a' });
+	// @ts-expect-error [range/other-table] a range of `team` is not a subject of `person`
+	select(PersonTable, idRange(TeamTable, {}));
+	// @ts-expect-error [range/not-a-record] UPDATE takes a record id, not a range
+	update(Corpus.IdIntTable, idRange(Corpus.IdIntTable, {}));
 };

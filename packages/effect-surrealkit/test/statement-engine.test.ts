@@ -34,6 +34,8 @@ import {
 	deleteFrom,
 	eq,
 	gte,
+	type IdRange,
+	idRange,
 	inside,
 	isNone,
 	literal,
@@ -43,6 +45,7 @@ import {
 	param,
 	part,
 	readAs,
+	recordId,
 	relate,
 	select,
 	sequence,
@@ -60,6 +63,9 @@ import {
 import {
 	fn_double,
 	fn_greet,
+	IdArrayTable,
+	IdIntTable,
+	IdObjectTable,
 	MemberOfCreate,
 	MemberOfTable,
 	PersonCreate,
@@ -988,5 +994,180 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 			result: Schema.Boolean,
 		});
 		expect(await ok(client.run(unbound))).toBe(true);
+	});
+
+	describe('record ids from their key parts, and id ranges', () => {
+		const at = (iso: string) => new DateTime(iso);
+		const intId = recordId(IdIntTable, param('n', SurrealSchema.Int));
+		const createInt = create(IdIntTable, intId).build('create id_int');
+		const readInt = select(IdIntTable, intId).only().build('read id_int');
+		const deleteInt = deleteFrom(IdIntTable, intId)
+			.returning('before')
+			.build('delete id_int');
+		const cityAt = recordId(IdArrayTable, [
+			param('city', SurrealSchema.String),
+			param('at', SurrealSchema.DateTime),
+		]);
+		const regionN = recordId(IdObjectTable, {
+			n: param('n', SurrealSchema.Int),
+			region: param('region', SurrealSchema.String),
+		});
+
+		beforeAll(async () => {
+			for (const n of [1, 2, 3, 4, 5]) {
+				await ok(client.run(createInt, { n }));
+			}
+			const createCity = create(IdArrayTable, cityAt).build();
+			for (const [city, iso] of [
+				['leeds', '2024-01-01T00:00:00Z'],
+				['leeds', '2024-01-02T00:00:00Z'],
+				['leeds', '2024-01-03T00:00:00Z'],
+				['york', '2024-01-02T00:00:00Z'],
+			] as const) {
+				await ok(client.run(createCity, { city, at: at(iso) }));
+			}
+		});
+
+		it('creates, reads and deletes a record by a key built from a binding', async () => {
+			const read = await ok(client.run(readInt, { n: 3 }));
+			expect(read?.id.id).toBe(3);
+			expect(read?.id.table.name).toBe('id_int');
+			expect(await ok(client.run(readInt, { n: 99 }))).toBe(undefined);
+			const created = await ok(client.run(createInt, { n: 6 }));
+			expect(created.id.id).toBe(6);
+			expect((await ok(client.run(deleteInt, { n: 6 })))?.id.id).toBe(6);
+			expect(await ok(client.run(readInt, { n: 6 }))).toBe(undefined);
+		});
+
+		it('reads by an array key and an object key, part by part', async () => {
+			const row = await ok(
+				client.run(select(IdArrayTable, cityAt).only().build(), {
+					city: 'leeds',
+					at: at('2024-01-02T00:00:00Z'),
+				}),
+			);
+			expect(row?.id.id[0]).toBe('leeds');
+			const object = create(IdObjectTable, regionN).build();
+			const made = await ok(client.run(object, { n: 7, region: 'eu' }));
+			expect(made.id.id).toEqual({ n: 7, region: 'eu' });
+			const updated = await ok(
+				client.run(
+					update(IdObjectTable, regionN)
+						.merge(param('changes', IdObjectTable.merge))
+						.build(),
+					{ n: 7, region: 'eu', changes: {} },
+				),
+			);
+			expect(updated?.id.id).toEqual({ n: 7, region: 'eu' });
+		});
+
+		it('relates records by keys built from bindings', async () => {
+			const keyed = create(
+				PersonTable,
+				recordId(PersonTable, param('key', SurrealSchema.String)),
+			)
+				.content(param('person', PersonCreate))
+				.build();
+			await ok(client.run(keyed, { key: 'dot', person: person('Dot') }));
+			await ok(
+				client.run(
+					create(TeamTable, recordId(TeamTable, 'keyed'))
+						.content(param('team', TeamCreate))
+						.build(),
+					{ team: { name: 'Keyed' } },
+				),
+			);
+			const edge = await ok(
+				client.run(
+					relate(
+						MemberOfTable,
+						recordId(
+							PersonTable,
+							param('key', SurrealSchema.String),
+						),
+						recordId(
+							TeamTable,
+							param('team', SurrealSchema.String),
+						),
+					)
+						.content(param('membership', MemberOfCreate))
+						.build(),
+					{ key: 'dot', team: 'keyed', membership: {} },
+				),
+			);
+			expect([edge.in.id, edge.out.id]).toEqual(['dot', 'keyed']);
+		});
+
+		/** The keys of the rows a range of `id_int` reads, in key order. */
+		const keysOf = async (
+			range: IdRange<'id_int'>,
+			input: Readonly<Record<string, number>>,
+		): Promise<ReadonlyArray<number>> => {
+			const statement = select(IdIntTable, range)
+				.orderBy((row) => row.id)
+				.build();
+			const rows = await ok(client.run(statement, input));
+			return rows.map((row) => row.id.id);
+		};
+
+		it('reads the records a range spans: both bounds, an open side, an excluded start', async () => {
+			const low = param('low', SurrealSchema.Int);
+			const high = param('high', SurrealSchema.Int);
+			expect(
+				await keysOf(idRange(IdIntTable, { from: low, to: high }), {
+					low: 2,
+					high: 4,
+				}),
+			).toEqual([2, 3]);
+			expect(
+				await keysOf(
+					idRange(IdIntTable, { from: low, through: high }),
+					{
+						low: 2,
+						high: 4,
+					},
+				),
+			).toEqual([2, 3, 4]);
+			expect(
+				await keysOf(idRange(IdIntTable, { after: low }), { low: 3 }),
+			).toEqual([4, 5]);
+			expect(
+				await keysOf(idRange(IdIntTable, { through: high }), {
+					high: 2,
+				}),
+			).toEqual([1, 2]);
+			expect(await keysOf(idRange(IdIntTable, {}), {})).toEqual([
+				1, 2, 3, 4, 5,
+			]);
+		});
+
+		it('reads an array-key range within one leading part, as many rows or with ONLY one', async () => {
+			const week = select(
+				IdArrayTable,
+				idRange(IdArrayTable, {
+					from: [
+						param('city', SurrealSchema.String),
+						param('start', SurrealSchema.DateTime),
+					],
+					through: [
+						param('city', SurrealSchema.String),
+						param('end', SurrealSchema.DateTime),
+					],
+				}),
+			);
+			const input = {
+				city: 'leeds',
+				start: at('2024-01-02T00:00:00Z'),
+				end: at('2024-01-03T00:00:00Z'),
+			};
+			const rows = await ok(client.run(week.build(), input));
+			expect(rows.map((row) => row.id.id[1].toString()).sort()).toEqual([
+				at('2024-01-02T00:00:00Z').toString(),
+				at('2024-01-03T00:00:00Z').toString(),
+			]);
+			expect(rows.every((row) => row.id.id[0] === 'leeds')).toBe(true);
+			const one = await ok(client.run(week.only().build(), input));
+			expect(one?.id.id[0]).toBe('leeds');
+		});
 	});
 });

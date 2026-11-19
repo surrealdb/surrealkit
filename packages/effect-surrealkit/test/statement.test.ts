@@ -19,6 +19,8 @@ import {
 	eq,
 	gt,
 	gte,
+	type IdRange,
+	idRange,
 	inside,
 	isNone,
 	isNotNone,
@@ -27,6 +29,7 @@ import {
 	lt,
 	lte,
 	make,
+	type NoParams,
 	ne,
 	not,
 	or,
@@ -35,6 +38,7 @@ import {
 	paramsOf,
 	part,
 	readAs,
+	recordId,
 	relate,
 	rowOf,
 	select,
@@ -43,6 +47,7 @@ import {
 	unsafeExpr,
 	update,
 } from '../src/statement/index.js';
+import * as Corpus from './golden/corpus/index.js';
 import {
 	fn_greet,
 	MemberOfTable,
@@ -1005,5 +1010,133 @@ describe('select by a unique index', () => {
 				{ 'tags.*': 'a' },
 			),
 		).toThrow('`tagged` indexes array elements');
+	});
+});
+
+describe('record ids from their key parts, and id ranges', () => {
+	const { IdArrayTable, IdIntTable, IdObjectTable } = Corpus;
+
+	it('build an id with type::record from a scalar, an array or an object of parts', () => {
+		const scalar = recordId(
+			PersonTable,
+			param('key', SurrealSchema.String),
+		);
+		expect(sqlOf(scalar)).toBe('type::record(s"person", $key)');
+		expect(Object.keys(paramsOf(scalar))).toEqual(['key']);
+		expect(
+			sqlOf(
+				recordId(IdArrayTable, [
+					'a',
+					param('at', SurrealSchema.DateTime),
+				]),
+			),
+		).toBe('type::record(s"id_array", [s"a", $at])');
+		expect(
+			sqlOf(
+				recordId(IdObjectTable, {
+					region: param('region', SurrealSchema.String),
+					n: 1,
+				}),
+			),
+		).toBe('type::record(s"id_object", { "region": $region, "n": 1 })');
+		// The id decodes with the table's id codec.
+		expect(codecOf(scalar)).toBe(PersonTable.id);
+	});
+
+	it('are the subject of every builder that takes a record id', () => {
+		const key = recordId(IdIntTable, param('n', SurrealSchema.Int));
+		expect(select(IdIntTable, key).only().build().sql).toBe(
+			'SELECT * FROM ONLY type::record(s"id_int", $n);',
+		);
+		expect(create(IdIntTable, key).build().sql).toBe(
+			'CREATE ONLY type::record(s"id_int", $n) RETURN AFTER;',
+		);
+		expect(
+			update(IdIntTable, key)
+				.merge(param('changes', Corpus.IdIntMerge))
+				.build().sql,
+		).toBe(
+			'UPDATE ONLY type::record(s"id_int", $n) MERGE $changes RETURN AFTER;',
+		);
+		expect(deleteFrom(IdIntTable, key).build().sql).toBe(
+			'DELETE ONLY type::record(s"id_int", $n) RETURN NONE;',
+		);
+		// RELATE parses only a binding or a record literal as an endpoint.
+		expect(
+			relate(
+				MemberOfTable,
+				recordId(PersonTable, param('person', SurrealSchema.String)),
+				param('team', TeamId),
+			).build().sql,
+		).toBe(
+			'RELATE ONLY (type::record(s"person", $person))->⟨member_of⟩->$team RETURN AFTER;',
+		);
+	});
+
+	it('span a range of keys: both bounds, an open side, an excluded start, an included end', () => {
+		const low = param('low', SurrealSchema.Int);
+		const high = param('high', SurrealSchema.Int);
+		const untyped = idRange as unknown as (
+			table: typeof IdIntTable,
+			bounds: unknown,
+		) => IdRange<'id_int', NoParams>;
+		const text = (bounds: unknown) =>
+			select(IdIntTable, untyped(IdIntTable, bounds)).build().sql;
+		expect(text({ from: low, to: high })).toBe(
+			'SELECT * FROM type::record(s"id_int", $low..$high);',
+		);
+		expect(text({ from: low, through: high })).toBe(
+			'SELECT * FROM type::record(s"id_int", $low..=$high);',
+		);
+		expect(text({ after: low })).toBe(
+			'SELECT * FROM type::record(s"id_int", $low>..);',
+		);
+		expect(text({ through: high })).toBe(
+			'SELECT * FROM type::record(s"id_int", ..=$high);',
+		);
+		expect(text({})).toBe('SELECT * FROM type::record(s"id_int", ..);');
+		const week = select(
+			IdArrayTable,
+			idRange(IdArrayTable, {
+				from: ['a', param('start', SurrealSchema.DateTime)],
+				to: ['a', param('end', SurrealSchema.DateTime)],
+			}),
+		);
+		expect(week.build().sql).toBe(
+			'SELECT * FROM type::record(s"id_array", [s"a", $start]..[s"a", $end]);',
+		);
+		// A range reads many rows, so ONLY reads one of them.
+		expect(week.only().build().sql).toBe(
+			'SELECT * FROM ONLY type::record(s"id_array", [s"a", $start]..[s"a", $end]) LIMIT 1;',
+		);
+		expect(() => week.only().limit(2)).toThrow(/at most one row/);
+	});
+
+	it('refuse at runtime what the types refuse', () => {
+		const untypedRange = idRange as unknown as (
+			table: unknown,
+			bounds: unknown,
+		) => unknown;
+		expect(() => untypedRange(IdIntTable, { from: 1, after: 2 })).toThrow(
+			/not both/,
+		);
+		expect(() => untypedRange(IdIntTable, { to: 1, through: 2 })).toThrow(
+			/not both/,
+		);
+		const untypedId = recordId as unknown as (
+			table: unknown,
+			key: unknown,
+		) => unknown;
+		expect(() => untypedId(IdArrayTable, [['nested'], 1])).toThrow(
+			/nest no array or object inside a key/,
+		);
+		expect(() => untypedId(IdArrayTable, [])).toThrow(/at least one part/);
+		const untypedSelect = select as unknown as (
+			table: unknown,
+			subject: unknown,
+		) => unknown;
+		expect(() =>
+			untypedSelect(PersonTable, idRange(IdIntTable, {})),
+		).toThrow('a range of `id_int` is not a subject of `person`');
 	});
 });
