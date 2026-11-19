@@ -705,6 +705,42 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 			).toStrictEqual([undefined, ['d', 3]]);
 		});
 
+		it('UPSERT of a table by a condition that matches, with RETURN NONE, also creates a record on SurrealDB 3, not on 4; RETURN VALUE NONE does not on either, and answers one NONE per record', async () => {
+			await query(
+				[
+					'DEFINE TABLE rwu SCHEMAFULL;',
+					'DEFINE FIELD name ON rwu TYPE string;',
+					'DEFINE FIELD n ON rwu TYPE int;',
+					"CREATE rwu:a CONTENT { name: 'm', n: 1 };",
+					"CREATE rwu:b CONTENT { name: 'm', n: 1 };",
+				].join('\n'),
+			);
+			const matching = "SELECT VALUE n FROM rwu WHERE name = 'm';";
+			expect(
+				await query(
+					`UPSERT rwu MERGE { name: 'm', n: 2 } WHERE name = 'm' RETURN VALUE NONE; ${matching}`,
+				),
+			).toStrictEqual([
+				[undefined, undefined],
+				[2, 2],
+			]);
+			// No record matches: one is created, and answered as one NONE.
+			expect(
+				await query(
+					"UPSERT rwu MERGE { name: 'fresh', n: 1 } WHERE name = 'fresh' RETURN VALUE NONE; SELECT VALUE n FROM rwu WHERE name = 'fresh';",
+				),
+			).toStrictEqual([[undefined], [1]]);
+			const none = await query(
+				`UPSERT rwu MERGE { name: 'm', n: 3 } WHERE name = 'm' RETURN NONE; ${matching}`,
+			);
+			expect(none).toStrictEqual(
+				engine.majorVersion >= 4
+					? [[], [3, 3]]
+					: // The two records changed, and a third was created.
+						[[], [3, 3, 3]],
+			);
+		});
+
 		it('INSERT returns a list for one row or many, takes no ONLY, and fails on a taken unique value', async () => {
 			expect(
 				await query(

@@ -16,7 +16,7 @@
  * `INSERT` that created it), `RETURN AFTER` NONE for a deleted one, and
  * `RETURN DIFF` each record's JSON Patch ({@link Diff}).
  */
-import { Schema } from 'effect';
+import { Schema, SchemaTransformation } from 'effect';
 import { escapeIdent } from 'surrealdb';
 
 import { SurrealValue } from '../value.js';
@@ -313,18 +313,32 @@ const reading = (state: State, exprs: ReadonlyArray<Expr>): State => {
 };
 
 /**
- * The `RETURN` clause. An `UPSERT` of one record says `RETURN VALUE NONE`
- * for nothing: SurrealDB 3.3 checks the data of `UPSERT <record> … RETURN
- * NONE` against the schema as if the record did not exist, so a MERGE of
- * some fields of an existing record fails; `RETURN VALUE NONE` does not, on
- * 3.3 or 4.0.
+ * The `RETURN` clause. An `UPSERT` says `RETURN VALUE NONE` for nothing:
+ * with `RETURN NONE`, SurrealDB 3.3 treats the statement as if no record
+ * were there. `UPSERT <record> … RETURN NONE` checks its data against the
+ * schema as if the record did not exist, so a MERGE of some fields of an
+ * existing record fails; `UPSERT <table> … WHERE … RETURN NONE` changes
+ * the records the condition holds for and creates one more. `RETURN VALUE
+ * NONE` does neither, on 3.3 or 4.0 (`test/conformance.test.ts` pins both).
  */
 const returnClause = (state: State): string => {
 	if (state.returning !== undefined) return `RETURN ${state.returning.sql}`;
-	return state.verb === 'UPSERT' && state.shape !== 'many'
-		? 'RETURN VALUE NONE'
-		: 'RETURN NONE';
+	return state.verb === 'UPSERT' ? 'RETURN VALUE NONE' : 'RETURN NONE';
 };
+
+/**
+ * What `UPSERT <table> … RETURN VALUE NONE` answers, one NONE for each
+ * record it changed or created, read as the empty list `NoResult` types.
+ */
+const NoRows = Schema.Array(Schema.Undefined).pipe(
+	Schema.decodeTo(
+		Schema.Tuple([]),
+		SchemaTransformation.transform<readonly [], ReadonlyArray<undefined>>({
+			decode: () => [],
+			encode: () => [],
+		}),
+	),
+);
 
 const render = (state: State): string =>
 	[
@@ -361,7 +375,8 @@ const resultOf = (state: State): Codec => {
 	// `RETURN NONE` is an empty list for many records and NONE for one, as
 	// `NoResult` types it.
 	if (state.returning === undefined) {
-		return state.shape === 'many' ? Schema.Tuple([]) : Schema.Undefined;
+		if (state.shape !== 'many') return Schema.Undefined;
+		return state.verb === 'UPSERT' ? NoRows : Schema.Tuple([]);
 	}
 	const element = elementOf(state);
 	if (state.shape === 'one') return element;

@@ -1220,10 +1220,14 @@ describe('UPSERT, INSERT and every RETURN mode', () => {
 			.where((row) => eq(row.email, param('email', SurrealSchema.String)))
 			.returning('none')
 			.build();
+		// With `RETURN NONE`, SurrealDB 3.3 also creates a record when the
+		// condition matches; `RETURN VALUE NONE` answers one NONE per record.
 		expect(statement.sql).toBe(
-			'UPSERT ⟨person⟩ MERGE $changes WHERE email = $email RETURN NONE;',
+			'UPSERT ⟨person⟩ MERGE $changes WHERE email = $email RETURN VALUE NONE;',
 		);
 		expect(decode(statement)([])).toEqual([]);
+		expect(decode(statement)([undefined, undefined])).toEqual([]);
+		expect(() => decode(statement)([{ name: 'x' }])).toThrow();
 	});
 
 	it('INSERT one row or many, ON DUPLICATE KEY UPDATE from $input, INSERT RELATION', () => {

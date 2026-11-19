@@ -595,10 +595,14 @@ whole record for one a statement created, NONE for one it deleted) and
 An `UPSERT` may create the record or change it, so its data must fit both
 the create schema and the merge (or content) schema: what CREATE requires,
 and nothing MERGE refuses, such as a READONLY field. An `UPSERT` of one
-record takes no condition (SurrealDB does not evaluate it) and renders
-nothing as `RETURN VALUE NONE`: SurrealDB 3.3 checks the data of
-`UPSERT <record> … RETURN NONE` against the schema as if the record were
-new, so a MERGE of some fields of an existing record fails there.
+record takes no condition (SurrealDB does not evaluate it). Every `UPSERT`
+renders nothing as `RETURN VALUE NONE`, because with `RETURN NONE`
+SurrealDB 3.3 treats the statement as if no record were there:
+`UPSERT <record> … RETURN NONE` checks its data against the schema as if
+the record were new, so a MERGE of some fields of an existing record fails,
+and `UPSERT <table> … WHERE … RETURN NONE` changes the records the
+condition holds for and creates one more. `RETURN VALUE NONE` of a table
+answers one NONE per record, which decodes as the empty list.
 
 An `INSERT` row is the create row with an optional `id`; an edge of
 `INSERT RELATION` also has its `in` and `out`, ids the relation declares.
