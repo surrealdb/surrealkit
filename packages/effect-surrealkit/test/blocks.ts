@@ -4,6 +4,8 @@
  * from authored SurrealQL, and the small blocks the unit, client and
  * transaction tests use.
  */
+import { Schema } from 'effect';
+
 import { array, math, string } from '../src/functions/index.js';
 import * as SurrealSchema from '../src/index.js';
 import {
@@ -28,6 +30,7 @@ import {
 	score,
 	select,
 	sum,
+	unsafeExpr,
 	update,
 	upsert,
 } from '../src/statement/index.js';
@@ -423,3 +426,42 @@ export const bestMatch = block()
 	.throwIf(($) => eq(array.len($.hits), 0), 'No match')
 	.return(($) => ({ best: array.first($.hits), matches: array.len($.hits) }))
 	.build('best match', { writes: false });
+
+/** Long enough for a test to write a record while a block is between steps. */
+const pause = unsafeExpr({
+	sql: 'sleep(400ms)',
+	codec: Schema.Undefined,
+	params: {},
+});
+
+const recording = (locked: boolean) => {
+	const read = select(WalletTable, param('wallet_id', WalletId));
+	return block()
+		.let('wallet', () => (locked ? read.forUpdate() : read).only().build())
+		.throwIfNone('wallet', 'Wallet not found')
+		.let('pause', () => pause)
+		.let('payment', ($) =>
+			create(PaymentTable)
+				.content(
+					object({
+						wallet: $.wallet.id,
+						amount: $.wallet.balance,
+						key: param('key', SurrealSchema.String),
+					}),
+				)
+				.build(),
+		)
+		.return(($) => ({ seen: $.wallet.balance }));
+};
+
+/**
+ * Reads a wallet `FOR UPDATE`, pauses, and records the balance it read in
+ * another record: a write to the wallet during the pause conflicts with the
+ * read (`test/block-engine.test.ts` races one against it).
+ */
+export const recordBalance = recording(true).build('record balance');
+
+/** The same without the lock: it records a balance that has since changed. */
+export const recordBalanceUnlocked = recording(false).build(
+	'record balance, unlocked',
+);

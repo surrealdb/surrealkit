@@ -751,6 +751,15 @@ it commits; no lock is held. SurrealDB 3.3 and 4.0 accept it only on a
 record id held by a parameter, so the id is a binding or a local (`LET` a
 field such as `$.invite.team` first).
 
+`test/block-engine.test.ts` races a write against a block that reads a
+wallet `FOR UPDATE` and then records its balance elsewhere. Without the
+lock the block commits with the balance it read, which has since changed.
+With it, the block in a `transaction` fails with a `StatementConflict` on
+SurrealDB 3.3 and 4.0 and writes nothing. Run alone, it fails the same way
+on 3.3, while 4.0 runs the statement again itself and the block reads the
+new balance. With `{ retry: schedule }` both forms succeed on both, having
+read the balance after the write.
+
 The whole block is one SurrealQL statement, `{ … }`, and never writes
 `RETURN`. SurrealDB 3.3.4 and 4.0.1 agree on what that gives
 (`test/conformance.test.ts`):
@@ -1118,8 +1127,9 @@ unsafeSkipValueCheck: true }` turns it off.
 `{ retry: schedule }` takes an Effect `Schedule` and sends the same,
 already encoded request again while the engine reports a
 `StatementConflict`; no other error is retried. SurrealDB 4 already retries
-a single conflicting statement on the server, so this matters most for
-transactions and for SurrealDB 3.
+a single conflicting statement on the server (a block run alone that loses
+a conflict there succeeds, as `test/block-engine.test.ts` shows), so this
+matters most for transactions and for SurrealDB 3.
 
 ```ts
 yield* transaction([bind(bump)], { retry: Schedule.recurs(3) });

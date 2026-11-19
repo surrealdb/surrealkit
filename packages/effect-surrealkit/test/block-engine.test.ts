@@ -9,7 +9,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { Effect, Schema } from 'effect';
+import { Effect, Schedule, Schema } from 'effect';
 import { DateTime, RecordId } from 'surrealdb';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -17,6 +17,7 @@ import {
 	bind,
 	type Client,
 	make as makeClient,
+	StatementConflict,
 	StatementScopeError,
 	StatementThrown,
 } from '../src/client/index.js';
@@ -26,6 +27,8 @@ import {
 	acceptInvite,
 	pay,
 	payAndRead,
+	recordBalance,
+	recordBalanceUnlocked,
 	summarise,
 	topUp,
 	withdraw,
@@ -278,6 +281,118 @@ describe.skipIf(!engineConfigured)('blocks on a disposable engine', () => {
 				statement: 'pay',
 				reason: message,
 			});
+		});
+	});
+
+	describe('a FOR UPDATE read and a concurrent write to the record', () => {
+		const held = wallet('held');
+		const readBalance = select(WalletTable, param('id', WalletId))
+			.only()
+			.value((row) => row.balance)
+			.build();
+		const recorded = (key: string) =>
+			ok(client.run(paymentByKey, { key })).then((payments) =>
+				payments.map((payment) => payment.amount),
+			);
+		const balance = () => ok(client.run(readBalance, { id: held }));
+
+		beforeAll(async () => {
+			await engine.db.query(
+				'CREATE wallet:held SET owner = account:ann, balance = 100, frozen = false;',
+			);
+		});
+
+		/**
+		 * Starts `effect`, whose block reads the wallet and then pauses,
+		 * adds one to the wallet's balance during the pause, and answers how
+		 * the effect ended.
+		 */
+		const raced = async <A, E>(effect: Effect.Effect<A, E>) => {
+			const running = Effect.runPromise(Effect.result(effect));
+			await new Promise((resolve) => setTimeout(resolve, 120));
+			await engine.db.query('UPDATE $id SET balance += 1;', {
+				id: held,
+			});
+			return within(running, 20_000);
+		};
+
+		it('without the lock the block commits, having recorded a balance that changed under it', async () => {
+			const before = await balance();
+			const outcome = await raced(
+				client.transaction([
+					bind(recordBalanceUnlocked, {
+						wallet_id: held,
+						key: 'unlocked',
+					}),
+				]),
+			);
+			expect(outcome).toMatchObject({
+				_tag: 'Success',
+				success: [{ seen: before }],
+			});
+			expect(await recorded('unlocked')).toEqual([before]);
+			expect(await balance()).toBe((before ?? 0) + 1);
+		});
+
+		it('in a transaction the client reports a StatementConflict on SurrealDB 3 and 4, and nothing is written', async () => {
+			const before = await balance();
+			const outcome = await raced(
+				client.transaction([
+					bind(recordBalance, { wallet_id: held, key: 'locked' }),
+				]),
+			);
+			expect(outcome._tag).toBe('Failure');
+			const error = outcome._tag === 'Failure' ? outcome.failure : null;
+			expect(error).toBeInstanceOf(StatementConflict);
+			expect(error?.message).toMatch(/Transaction conflict/u);
+			expect(await recorded('locked')).toEqual([]);
+			expect(await balance()).toBe((before ?? 0) + 1);
+		});
+
+		it('run alone, SurrealDB 3 reports the conflict and 4 retries the statement itself, reading the new balance', async () => {
+			const before = await balance();
+			const outcome = await raced(
+				client.run(recordBalance, { wallet_id: held, key: 'alone' }),
+			);
+			if (engine.majorVersion >= 4) {
+				// A statement outside a transaction that loses a conflict is
+				// run again by the server.
+				expect(outcome).toMatchObject({
+					_tag: 'Success',
+					success: { seen: (before ?? 0) + 1 },
+				});
+				expect(await recorded('alone')).toEqual([(before ?? 0) + 1]);
+			} else {
+				expect(outcome._tag).toBe('Failure');
+				expect(
+					outcome._tag === 'Failure' ? outcome.failure : null,
+				).toBeInstanceOf(StatementConflict);
+				expect(await recorded('alone')).toEqual([]);
+			}
+			expect(await balance()).toBe((before ?? 0) + 1);
+		});
+
+		it.each([
+			'transaction',
+			'run',
+		] as const)('with a retry schedule the %s succeeds, recording the balance after the write', async (form) => {
+			const before = await balance();
+			const key = `retried ${form}`;
+			const input = { wallet_id: held, key };
+			const options = { retry: Schedule.recurs(3) };
+			const outcome = await raced(
+				form === 'transaction'
+					? client
+							.transaction([bind(recordBalance, input)], options)
+							.pipe(Effect.map(([result]) => result))
+					: client.run(recordBalance, input, options),
+			);
+			expect(outcome).toMatchObject({
+				_tag: 'Success',
+				success: { seen: (before ?? 0) + 1 },
+			});
+			expect(await recorded(key)).toEqual([(before ?? 0) + 1]);
+			expect(await balance()).toBe((before ?? 0) + 1);
 		});
 	});
 
