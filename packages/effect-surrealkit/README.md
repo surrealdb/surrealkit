@@ -236,7 +236,7 @@ const adults = select(PersonTable)
   .orderBy((row) => row.name)
   .project((row) => ({ id: row.id, name: row.name, nickname: row.nickname }))
   .build('adults in a city');
-// adults.sql: SELECT id AS id, name AS name, nickname AS nickname FROM person
+// adults.sql: SELECT id AS id, name AS name, nickname AS nickname FROM ⟨person⟩
 //             WHERE age >= $minimum AND address.city = $city ORDER BY name ASC;
 
 const db = new Surreal();
@@ -259,7 +259,7 @@ may be NONE.
 | Function | SurrealQL |
 | --- | --- |
 | `param(name, codec)` | `$name`, encoded through `codec` when the statement runs |
-| `literal(value)`, `literal(value, codec)` | a constant in the text, as the SDK prints it (`s"…"`, `d"…"`, `r"…"`) |
+| `literal(value)`, `literal(value, codec)` | a constant in the text (`s"…"`, `d"…"`, `r"…"`), every part checked as its codec checks a binding |
 | `eq` `ne` `lt` `lte` `gt` `gte` | `=` `!=` `<` `<=` `>` `>=`; the right side may be a primitive |
 | `and(…)` `or(…)` `not(x)` | `AND` `OR` `!` |
 | `isNone(x)` `isNotNone(x)` | `x = NONE`, `x != NONE` |
@@ -269,6 +269,13 @@ may be NONE.
 | `call(fn, …args)` | a `DEFINE FUNCTION`, through its generated descriptor |
 | `select(…).toExpr()` | a subquery |
 | `unsafeExpr({ sql, codec, params })` | raw SurrealQL: nothing is checked, and it must never be built from input |
+
+A constant is validated as a value is: a string must be well-formed (inline
+lists included) and an integer must fit a signed 64-bit int. A datetime is
+written with `dateTimeToString`, because the SDK's formatter is a second
+late before 1970 with a fractional second; a record id whose key holds a
+datetime, a `Set`, a `Map`, bytes and class instances have no faithful
+literal and are refused (bind them).
 
 Operands compare when their stored types overlap: a branded or refined
 binding compares with its column, a string never compares with an int. A
@@ -296,6 +303,12 @@ after `ORDER BY`; anything else is a compile error. SurrealDB resolves an
 projection alias named like the field a path starts from must be that same
 field (`age: row.age`); any other alias of that name is refused when the
 statement is built.
+
+A table name is always delimited where it is the subject of a statement
+(`FROM`, `FROM ONLY`, `CREATE`, `UPDATE`, `DELETE`, `RELATE`), as `⟨name⟩`,
+or with backticks when it holds `⟩` or `\`: bare, `from` and `ONLY` are
+keywords there, `none` is NONE and `a.b` is a field path (SurrealDB 3.3 and
+4.0 accept both delimiters in every one of those positions).
 
 Data is always bound, and must fit the descriptor's schema for the operation
 (`create`, `merge`, `content`). `.returning('none' | 'after' | 'before')` or a

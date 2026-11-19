@@ -119,6 +119,55 @@ describe('expressions', () => {
 		).toBe('r"person:ann"');
 	});
 
+	it('write a datetime constant with the package formatter', () => {
+		// Finding 6: the SDK printed this one second late.
+		const instant = SurrealSchema.dateTimeFromString(
+			'1969-12-31T23:59:59.999999999Z',
+		);
+		expect(sqlOf(literal(instant, SurrealSchema.DateTime))).toBe(
+			'd"1969-12-31T23:59:59.999999999Z"',
+		);
+		expect(
+			sqlOf(
+				literal(
+					{ at: [instant] },
+					Schema.Struct({ at: Schema.Array(SurrealSchema.DateTime) }),
+				),
+			),
+		).toBe('{ "at": [ d"1969-12-31T23:59:59.999999999Z" ] }');
+		// A record id spells its key with the SDK's formatter: refused.
+		expect(() =>
+			literal(new RecordId('t', [instant]), Schema.Unknown),
+		).toThrow(/datetime.*bind it with `param`/);
+	});
+
+	it('validate every constant through its codec', () => {
+		const row = rowOf(Person);
+		// Finding 8: list items skipped the well-formed string check.
+		expect(() => inside(row.name, ['ok', '\ud800'])).toThrow(
+			/lone UTF-16 surrogate/,
+		);
+		expect(sqlOf(inside(row.age, [1, 2]))).toBe('age INSIDE [ 1, 2 ]');
+		// An integer the engine cannot parse as an int.
+		expect(() => literal(12345678901234567890n)).toThrow(
+			/outside the SurrealDB int range/,
+		);
+		expect(() => literal(2n ** 63n)).toThrow(/outside the SurrealDB int/);
+		expect(sqlOf(literal(-(2n ** 63n)))).toBe('-9223372036854775808');
+		expect(() =>
+			literal([2n ** 64n], Schema.Array(Schema.Unknown)),
+		).toThrow(/outside the SurrealDB int range/);
+		expect(() => literal({ a: '\udc00' }, Schema.Unknown)).toThrow(
+			/lone UTF-16 surrogate/,
+		);
+		// Bytes have no literal the SDK can print: it wrote `5`.
+		expect(() => literal(new Uint8Array([5]), SurrealSchema.Bytes)).toThrow(
+			/no SurrealQL literal/,
+		);
+		const bare = Object.assign(Object.create(null), { a: 1 });
+		expect(sqlOf(literal(bare, Schema.Unknown))).toBe('{ "a": 1 }');
+	});
+
 	it('refuse constants that have no faithful literal', () => {
 		expect(() => literal(Number.NaN)).toThrow(/no portable SurrealQL/);
 		expect(() =>
@@ -245,7 +294,7 @@ describe('select', () => {
 	it('reads the whole table by default', () => {
 		const statement = select(PersonTable).build();
 		expect(isStatement(statement)).toBe(true);
-		expect(statement.sql).toBe('SELECT * FROM person;');
+		expect(statement.sql).toBe('SELECT * FROM ⟨person⟩;');
 		expect(statement.name).toBe('select person');
 		expect(statement.slots).toBe(1);
 		expect(names(statement)).toEqual([]);
@@ -263,7 +312,7 @@ describe('select', () => {
 			.start(10)
 			.build('adults');
 		expect(statement.sql).toBe(
-			'SELECT * FROM person WHERE age >= $minimum AND (role = s"admin" OR address.city = s"Leeds") ORDER BY name ASC, created_at DESC LIMIT $rows START 10;',
+			'SELECT * FROM ⟨person⟩ WHERE age >= $minimum AND (role = s"admin" OR address.city = s"Leeds") ORDER BY name ASC, created_at DESC LIMIT $rows START 10;',
 		);
 		expect(statement.name).toBe('adults');
 		expect(names(statement)).toEqual(['minimum', 'rows']);
@@ -283,7 +332,7 @@ describe('select', () => {
 			}))
 			.build();
 		expect(statement.sql).toBe(
-			'SELECT name AS name, address.city AS city, ⟨odd.name⟩ AS ⟨odd alias⟩, fn::greet(name, $greeting) AS greeting FROM person;',
+			'SELECT name AS name, address.city AS city, ⟨odd.name⟩ AS ⟨odd alias⟩, fn::greet(name, $greeting) AS greeting FROM ⟨person⟩;',
 		);
 		expect(names(statement)).toEqual(['greeting']);
 		expect(() => select(PersonTable).project(() => ({}))).toThrow(
@@ -313,7 +362,7 @@ describe('select', () => {
 		const statement = select(PersonTable)
 			.value((row) => cast('string', row.id))
 			.build();
-		expect(statement.sql).toBe('SELECT VALUE <string>id FROM person;');
+		expect(statement.sql).toBe('SELECT VALUE <string>id FROM ⟨person⟩;');
 	});
 
 	it('reads at most one row with ONLY', () => {
@@ -324,7 +373,7 @@ describe('select', () => {
 				)
 				.only()
 				.build().sql,
-		).toBe('SELECT * FROM ONLY person WHERE email = $email LIMIT 1;');
+		).toBe('SELECT * FROM ONLY ⟨person⟩ WHERE email = $email LIMIT 1;');
 		expect(() => select(PersonTable).limit(2).only()).toThrow(
 			/at most one row/,
 		);
@@ -358,7 +407,7 @@ describe('select', () => {
 			}))
 			.build();
 		expect(statement.sql).toBe(
-			'SELECT name AS name, (SELECT VALUE name FROM person WHERE role = $role) AS peers FROM person;',
+			'SELECT name AS name, (SELECT VALUE name FROM ⟨person⟩ WHERE role = $role) AS peers FROM ⟨person⟩;',
 		);
 		expect(names(statement)).toEqual(['role']);
 	});
@@ -368,13 +417,13 @@ describe('select', () => {
 		const first = base.limit(1).build().sql;
 		const second = base.orderBy((row) => row.name).build().sql;
 		expect(first).toBe(
-			'SELECT * FROM person WHERE role = s"admin" LIMIT 1;',
+			'SELECT * FROM ⟨person⟩ WHERE role = s"admin" LIMIT 1;',
 		);
 		expect(second).toBe(
-			'SELECT * FROM person WHERE role = s"admin" ORDER BY name ASC;',
+			'SELECT * FROM ⟨person⟩ WHERE role = s"admin" ORDER BY name ASC;',
 		);
 		expect(base.build().sql).toBe(
-			'SELECT * FROM person WHERE role = s"admin";',
+			'SELECT * FROM ⟨person⟩ WHERE role = s"admin";',
 		);
 	});
 
@@ -407,7 +456,7 @@ describe('select', () => {
 				.project((row) => ({ age: row.age, address: row.address }))
 				.build().sql,
 		).toBe(
-			'SELECT age AS age, address AS address FROM person ORDER BY address.city ASC, age DESC;',
+			'SELECT age AS age, address AS address FROM ⟨person⟩ ORDER BY address.city ASC, age DESC;',
 		);
 		expect(
 			select(PersonTable)
@@ -415,7 +464,7 @@ describe('select', () => {
 				.project((row) => ({ city: row.address.city }))
 				.build().sql,
 		).toBe(
-			'SELECT address.city AS city FROM person ORDER BY phones[0] ASC;',
+			'SELECT address.city AS city FROM ⟨person⟩ ORDER BY phones[0] ASC;',
 		);
 	});
 
@@ -443,7 +492,9 @@ describe('select', () => {
 		const statement = select(readAs(PersonTable, Visible))
 			.where((row) => isNotNone(row.email))
 			.build();
-		expect(statement.sql).toBe('SELECT * FROM person WHERE email != NONE;');
+		expect(statement.sql).toBe(
+			'SELECT * FROM ⟨person⟩ WHERE email != NONE;',
+		);
 		const decode = Schema.decodeUnknownSync(statement.result);
 		expect(
 			decode([{ id: new RecordId('person', 'a'), name: 'Ann' }]),
@@ -458,7 +509,7 @@ describe('writes', () => {
 	it('create one record and return it', () => {
 		const statement = create(PersonTable).content(person).build();
 		expect(statement.sql).toBe(
-			'CREATE ONLY person CONTENT $person RETURN AFTER;',
+			'CREATE ONLY ⟨person⟩ CONTENT $person RETURN AFTER;',
 		);
 		expect(statement.name).toBe('create person');
 		expect(names(statement)).toEqual(['person']);
@@ -472,7 +523,7 @@ describe('writes', () => {
 				.returning((row) => ({ id: row.id, city: row.address.city }))
 				.build().sql,
 		).toBe(
-			'CREATE ONLY person CONTENT $person RETURN id AS id, address.city AS city;',
+			'CREATE ONLY ⟨person⟩ CONTENT $person RETURN id AS id, address.city AS city;',
 		);
 	});
 
@@ -489,7 +540,7 @@ describe('writes', () => {
 				.returning('before')
 				.build().sql,
 		).toBe(
-			'UPDATE person MERGE $changes WHERE role = s"member" AND age < $age RETURN BEFORE;',
+			'UPDATE ⟨person⟩ MERGE $changes WHERE role = s"member" AND age < $age RETURN BEFORE;',
 		);
 		expect(
 			update(PersonTable, id)
@@ -508,7 +559,7 @@ describe('writes', () => {
 				.where((row) => eq(row.role, 'member'))
 				.returning('before')
 				.build().sql,
-		).toBe('DELETE person WHERE role = s"member" RETURN BEFORE;');
+		).toBe('DELETE ⟨person⟩ WHERE role = s"member" RETURN BEFORE;');
 	});
 
 	it('relate two records through an edge table', () => {
@@ -520,7 +571,7 @@ describe('writes', () => {
 			.content(param('membership', MemberOfTable.create))
 			.build();
 		expect(statement.sql).toBe(
-			'RELATE ONLY $person->member_of->$team CONTENT $membership RETURN AFTER;',
+			'RELATE ONLY $person->⟨member_of⟩->$team CONTENT $membership RETURN AFTER;',
 		);
 		expect(names(statement)).toEqual(['membership', 'person', 'team']);
 	});

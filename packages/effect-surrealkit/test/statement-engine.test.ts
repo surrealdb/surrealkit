@@ -6,8 +6,8 @@
  */
 import { readFileSync } from 'node:fs';
 
-import { Effect, Schema } from 'effect';
-import { RecordId } from 'surrealdb';
+import { Arbitrary, Effect, Schema } from 'effect';
+import { DateTime, RecordId } from 'surrealdb';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -43,6 +43,7 @@ import {
 	relate,
 	select,
 	sequence,
+	sqlOf,
 	update,
 } from '../src/statement/index.js';
 import { corpusPath, readJson } from './documents.js';
@@ -690,6 +691,149 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 		);
 		expect(outcome._tag).toBe('None');
 		expect(Date.now() - started).toBeLessThan(5000);
+	});
+
+	it('writes a datetime constant the engine reads as the same instant as the binding', async () => {
+		// Finding 6: instants before 1970 with a fractional second.
+		const instants = Arbitrary.all([
+			Arbitrary.schema(
+				Schema.BigInt.check(
+					Schema.isBetweenBigInt({
+						minimum: SurrealSchema.DATETIME_MIN_SECONDS,
+						maximum: -1n,
+					}),
+				),
+			),
+			Arbitrary.schema(
+				Schema.Number.check(
+					Schema.isInt(),
+					Schema.isBetween({ minimum: 1, maximum: 999_999_999 }),
+				),
+			),
+		]);
+		const result = await within(
+			Effect.runPromise(
+				Arbitrary.checkEffect(
+					instants,
+					([seconds, nanos]) =>
+						Effect.gen(function* () {
+							const instant = new DateTime([
+								seconds,
+								BigInt(nanos),
+							]);
+							const same = make({
+								sql: `RETURN ${sqlOf(literal(instant, SurrealSchema.DateTime))} = $instant;`,
+								params: { instant: SurrealSchema.DateTime },
+								result: Schema.Boolean,
+							});
+							return yield* client.run(same, { instant });
+						}),
+					{ runs: 100, seed: 20261119 },
+				),
+			),
+			60_000,
+		);
+		expect(Arbitrary.formatCheckFailure(result) ?? 'Passed').toBe('Passed');
+	});
+
+	it('reads any table name as a name in every subject position', async () => {
+		// Finding 7: `from` and `ONLY` were left bare, and failed to parse.
+		const awkward = [
+			'from',
+			'ONLY',
+			'only',
+			'select',
+			'none',
+			'NONE',
+			'value',
+			'odd.name',
+			'odd-name',
+			'ünïcödé',
+			'1st',
+			'tick`name',
+			'angle⟩name',
+			'back\\slash',
+		];
+		const node = (id: string) => new RecordId('node', id);
+		await engine.db.query('CREATE node:a; CREATE node:b;');
+		for (const name of awkward) {
+			const Id = SurrealSchema.RecordIdFor(name);
+			const Row = Schema.Struct({
+				id: Id,
+				v: SurrealSchema.Int,
+				w: Schema.optionalKey(SurrealSchema.Int),
+			});
+			const Data = Schema.Struct({ v: SurrealSchema.Int });
+			const table = {
+				name,
+				id: Id,
+				select: Row,
+				create: Data,
+				merge: Schema.Struct({ w: SurrealSchema.Int }),
+			};
+			const made = await ok(
+				client.run(create(table).content(param('data', Data)).build(), {
+					data: { v: 1 },
+				}),
+			);
+			expect(made.id.table.name).toBe(name);
+			await ok(
+				client.run(
+					create(table)
+						.content(param('data', Data))
+						.returning('none')
+						.build(),
+					{ data: { v: 2 } },
+				),
+			);
+			const all = select(table)
+				.orderBy((row) => row.v)
+				.value((row) => row.v)
+				.build();
+			expect(await ok(client.run(all))).toEqual([1, 2]);
+			const one = select(table)
+				.where((row) => eq(row.v, 1))
+				.only()
+				.build();
+			expect((await ok(client.run(one)))?.id.equals(made.id)).toBe(true);
+			const changed = update(table)
+				.merge(param('changes', table.merge))
+				.where((row) => eq(row.v, 1))
+				.build();
+			expect(
+				await ok(client.run(changed, { changes: { w: 3 } })),
+			).toMatchObject([{ v: 1, w: 3 }]);
+			const removed = deleteFrom(table)
+				.where((row) => eq(row.v, 2))
+				.returning('before')
+				.build();
+			expect(await ok(client.run(removed))).toMatchObject([{ v: 2 }]);
+			await ok(client.run(deleteFrom(table).build()));
+
+			const NodeId = SurrealSchema.RecordIdFor('node');
+			const edge = {
+				name,
+				id: Id,
+				select: Schema.Struct({
+					id: Id,
+					in: NodeId,
+					out: NodeId,
+					v: SurrealSchema.Int,
+				}),
+				create: Data,
+				edge: { table: name, in: [NodeId], out: [NodeId] },
+			};
+			const linked = await ok(
+				client.run(
+					relate(edge, param('from', NodeId), param('to', NodeId))
+						.content(param('data', Data))
+						.build(),
+					{ from: node('a'), to: node('b'), data: { v: 4 } },
+				),
+			);
+			expect(linked.id.table.name).toBe(name);
+			expect(linked.in.equals(node('a'))).toBe(true);
+		}
 	});
 
 	it('reads an unbound parameter as NONE, which is why bindings are checked', async () => {

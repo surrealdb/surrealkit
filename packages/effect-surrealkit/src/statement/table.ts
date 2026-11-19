@@ -78,8 +78,19 @@ export const readAs = <T extends PureTable, S extends RowCodecIn>(
 	select: S,
 ): Omit<T, 'select'> & { readonly select: S } => ({ ...table, select });
 
-/** @internal */
-export const tableName = (table: PureTable): string => escapeIdent(table.name);
+/**
+ * A table name as SurrealQL reads it in subject position (`FROM`,
+ * `FROM ONLY`, `CREATE`, `UPDATE`, `DELETE`, `RELATE`), whatever the word:
+ * always delimited, because a bare `from`, `ONLY` or `select` there is a
+ * keyword, `none` is NONE and `a.b` a field path. `⟨…⟩` cannot escape a `⟩`,
+ * so a name with `⟩` or `\` takes backticks, escaping `\` and `` ` ``.
+ *
+ * @internal
+ */
+export const tableName = (table: PureTable): string =>
+	/[⟩\\]/u.test(table.name)
+		? `\`${table.name.replace(/[\\`]/gu, (char) => `\\${char}`)}\``
+		: `⟨${table.name}⟩`;
 
 /** @internal */
 export const storedRow = <T extends PureTable>(table: T): StoredRow<T> =>

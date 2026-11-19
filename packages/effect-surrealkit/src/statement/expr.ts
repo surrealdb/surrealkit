@@ -7,14 +7,28 @@
  * a statement cannot read a binding it did not declare.
  */
 import { Schema } from 'effect';
-import { toSurqlString } from 'surrealdb';
+import {
+	FileRef,
+	Future,
+	Geometry,
+	Range,
+	RecordId,
+	RecordIdRange,
+	DateTime as SdkDateTime,
+	Decimal as SdkDecimal,
+	Duration as SdkDuration,
+	Uuid as SdkUuid,
+	StringRecordId,
+	Table,
+	toSurqlString,
+} from 'surrealdb';
 
 import { Decimal, SurrealNumber } from '../decimal.js';
-import { Int } from '../int.js';
+import { Int, int64 } from '../int.js';
 import { isPlainObject } from '../internal/declare.js';
 import { SurrealString, Uuid } from '../scalars.js';
 import type { FunctionDescriptor } from '../table.js';
-import { DateTime, Duration } from '../temporal.js';
+import { DateTime, Duration, dateTimeToString } from '../temporal.js';
 import {
 	assertBindingName,
 	type Codec,
@@ -217,20 +231,131 @@ export type LiteralCodec<V> = [V] extends [null]
 			? Schema.Literal<V>
 			: never;
 
-const assertInlinable = (value: unknown): void => {
+const noLiteral = (what: string): RangeError =>
+	new RangeError(`${what} has no SurrealQL literal; bind it with \`param\``);
+
+const describe = (value: object): string => {
+	const name = (value as { constructor?: { name?: unknown } }).constructor
+		?.name;
+	return typeof name === 'string' && name.length > 0
+		? `a ${name}`
+		: 'this value';
+};
+
+/** A string as a constant: well-formed, as the string codec requires. */
+const stringLiteral = (value: string): string =>
+	JSON.stringify(Schema.encodeUnknownSync(SurrealString)(value));
+
+/**
+ * Checks what a record id or range spells inside its `r"…"` text, which the
+ * SDK formats: its strings and integers as their codecs require, and no
+ * datetime, which the SDK formats wrongly before 1970.
+ */
+const assertKey = (value: unknown, seen: Set<object>): void => {
+	if (typeof value === 'string') {
+		stringLiteral(value);
+	} else if (typeof value === 'bigint') {
+		int64(value);
+	} else if (typeof value === 'object' && value !== null) {
+		if (seen.has(value)) throw noLiteral('a cyclic value');
+		seen.add(value);
+		if (value instanceof SdkDateTime) {
+			throw new RangeError(
+				'a record id or range whose key holds a datetime has no faithful literal (the SDK spells the datetime); bind it with `param`',
+			);
+		}
+		if (value instanceof RecordId) assertKey(value.id, seen);
+		else if (value instanceof Range || value instanceof RecordIdRange) {
+			assertKey(value.begin?.value, seen);
+			assertKey(value.end?.value, seen);
+		} else if (Array.isArray(value)) {
+			for (const item of value) assertKey(item, seen);
+		} else if (isPlainObject(value)) {
+			for (const [key, item] of Object.entries(value)) {
+				stringLiteral(key);
+				assertKey(item, seen);
+			}
+		}
+		seen.delete(value);
+	}
+};
+
+/**
+ * The SurrealQL literal of an encoded constant. Every part is checked as
+ * its codec checks a binding (a string must be well-formed, an integer an
+ * int64), datetimes are written with {@link dateTimeToString}, and what has
+ * no faithful literal (a `Set`, a `Map`, bytes, a class instance, a
+ * non-finite number) is refused.
+ */
+const inline = (value: unknown, seen: Set<object>): string => {
+	switch (typeof value) {
+		case 'string':
+			return `s${stringLiteral(value)}`;
+		case 'number':
+			if (!Number.isFinite(value)) {
+				throw new RangeError(
+					`${String(value)} has no portable SurrealQL literal; bind it with \`param\``,
+				);
+			}
+			return toSurqlString(value);
+		case 'bigint':
+			return String(int64(value));
+		case 'boolean':
+			return String(value);
+		case 'undefined':
+			return 'NONE';
+		case 'object':
+			break;
+		default:
+			throw noLiteral(`a ${typeof value}`);
+	}
+	if (value === null) return 'NULL';
 	if (value instanceof Set || value instanceof Map) {
 		throw new RangeError(
 			'a Set or Map has no SurrealQL literal; bind it with `param`',
 		);
 	}
-	if (typeof value === 'number' && !Number.isFinite(value)) {
-		throw new RangeError(
-			`${String(value)} has no portable SurrealQL literal; bind it with \`param\``,
-		);
-	}
-	if (Array.isArray(value)) value.forEach(assertInlinable);
-	else if (isPlainObject(value)) {
-		Object.values(value).forEach(assertInlinable);
+	if (seen.has(value)) throw noLiteral('a cyclic value');
+	seen.add(value);
+	try {
+		if (Array.isArray(value)) {
+			return `[ ${value.map((item) => inline(item, seen)).join(', ')} ]`;
+		}
+		if (isPlainObject(value)) {
+			const entries = Object.entries(value).map(
+				([key, item]) => `${stringLiteral(key)}: ${inline(item, seen)}`,
+			);
+			return `{ ${entries.join(', ')} }`;
+		}
+		if (value instanceof SdkDateTime) {
+			return `d${JSON.stringify(dateTimeToString(value))}`;
+		}
+		if (
+			value instanceof RecordId ||
+			value instanceof StringRecordId ||
+			value instanceof RecordIdRange ||
+			value instanceof Range
+		) {
+			if (value instanceof StringRecordId)
+				stringLiteral(value.toString());
+			else assertKey(value, new Set());
+			return toSurqlString(value);
+		}
+		if (
+			value instanceof SdkUuid ||
+			value instanceof SdkDecimal ||
+			value instanceof SdkDuration ||
+			value instanceof Table ||
+			value instanceof FileRef ||
+			value instanceof Future ||
+			value instanceof Geometry ||
+			value instanceof Date
+		) {
+			return toSurqlString(value);
+		}
+		throw noLiteral(describe(value));
+	} finally {
+		seen.delete(value);
 	}
 };
 
@@ -242,11 +367,15 @@ const primitiveCodec = (value: Primitive): Codec => {
 
 /**
  * A constant written into the statement text. The constant is part of the
- * statement, not input: it is fixed when the statement is defined, and the
- * SDK's own SurrealQL printer spells it (`s"…"`, `d"…"`, `r"…"`).
+ * statement, not input: it is fixed when the statement is defined, and is
+ * spelt as SurrealQL spells it (`s"…"`, `d"…"`, `r"…"`).
  *
  * With a codec, the value is encoded through it first, so SDK values
  * (`DateTime`, `RecordId`, `Duration`, …) and nested data can be inlined.
+ * Every part is then checked as a binding of its kind would be: a string
+ * must be well-formed and an integer must fit a signed 64-bit int. A
+ * datetime is written with `dateTimeToString`. A `Set`, a `Map`, bytes and
+ * other values without a faithful literal are refused.
  * Never pass request input here: bind it with {@link param}.
  */
 export function literal<const V extends Primitive>(
@@ -263,15 +392,11 @@ export function literal(value: unknown, codec?: Codec): Expr<Codec, NoParams> {
 		);
 	}
 	const encoded =
-		codec === undefined
-			? typeof value === 'string'
-				? Schema.encodeUnknownSync(SurrealString)(value)
-				: value
-			: Schema.encodeUnknownSync(codec)(value);
-	assertInlinable(encoded);
+		codec === undefined ? value : Schema.encodeUnknownSync(codec)(value);
+	const sql = inline(encoded, new Set());
 	return makeExpr(
 		codec ?? primitiveCodec(value as Primitive),
-		toSurqlString(encoded),
+		sql,
 		{},
 		Level.atom,
 	);
@@ -430,8 +555,16 @@ export type Collection = Expr | ReadonlyArray<ListItem>;
 
 type CollectionEncoded<V> = V extends Expr<infer S, Params> ? S['Encoded'] : V;
 
+/** An inline list: every item goes through its own {@link literal}. */
 const liftCollection = (value: Collection): Expr =>
-	isExpr(value) ? value : literal([...value], Schema.Array(Schema.Unknown));
+	isExpr(value)
+		? value
+		: makeExpr(
+				Schema.Array(Schema.Unknown),
+				`[ ${value.map((item) => sqlOf(literal(item))).join(', ')} ]`,
+				{},
+				Level.atom,
+			);
 
 /** `needle INSIDE haystack`: the value is an element of the array or set. */
 export const inside = <
