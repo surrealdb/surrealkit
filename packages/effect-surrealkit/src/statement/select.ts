@@ -323,6 +323,8 @@ interface State {
 	readonly only: boolean;
 	/** The index a lookup by a unique index names in `WITH INDEX`. */
 	readonly index?: string;
+	/** `FOR UPDATE`: the record read conflicts with a concurrent write. */
+	readonly lock?: boolean;
 	readonly params: Params;
 }
 
@@ -387,6 +389,7 @@ const render = (state: State): string => {
 			: []),
 		...(limit === undefined ? [] : [`LIMIT ${limit}`]),
 		...(state.start === undefined ? [] : [`START ${state.start}`]),
+		...(state.lock === true ? ['FOR UPDATE'] : []),
 	].join(' ');
 };
 
@@ -554,6 +557,25 @@ export interface Select<
 		options?: { readonly writes?: boolean },
 	) => Statement<Simplify<P>, SelectResult<Row, Only>>;
 }
+
+/**
+ * A `SELECT` of one record by id (or of an id range), before any other
+ * method is called: it can also read the record `FOR UPDATE`.
+ */
+export interface RecordSelect<T extends PureTable, P extends Params>
+	extends Select<T, P, StoredRow<T>, false> {
+	/**
+	 * `FOR UPDATE`: a transaction that reads the record this way fails with
+	 * a conflict (`StatementConflict`) when a concurrent write changes the
+	 * record before it commits; no lock is held (SurrealDB 3.3 and 4.0). The
+	 * id must be a binding or a block's local (`$name`): SurrealDB refuses a
+	 * table, a field path or any other expression as the target, so a
+	 * {@link recordId} expression and an {@link idRange} are refused here.
+	 */
+	readonly forUpdate: () => Select<T, P, StoredRow<T>, false>;
+}
+
+const parameter = /^\$[A-Za-z_][A-Za-z0-9_]*$/u;
 
 const builder = <
 	T extends PureTable,
@@ -782,7 +804,7 @@ export const select: {
 	<T extends PureTable, P extends Params>(
 		table: T,
 		subject: IdOf<T, P> | IdRange<T['name'], P>,
-	): Select<T, P, StoredRow<T>, false>;
+	): RecordSelect<T, P>;
 	/**
 	 * `SELECT * FROM ONLY table WITH INDEX index WHERE … LIMIT 1` by a
 	 * unique index: one operand per field of the index (`{ email:
@@ -840,19 +862,39 @@ export const select: {
 				`a range of \`${id[IdRangeTypeId].table}\` is not a subject of \`${table.name}\``,
 			);
 		}
-		return builder<T, Params, StoredRow<T>, false>({
-			...state,
-			source: makeExpr(Schema.Unknown, sql, params, Level.atom),
-			range: true,
-			pure: false,
-			params,
-		}) as never;
+		return {
+			...builder<T, Params, StoredRow<T>, false>({
+				...state,
+				source: makeExpr(Schema.Unknown, sql, params, Level.atom),
+				range: true,
+				pure: false,
+				params,
+			}),
+			forUpdate: () => {
+				throw new RangeError(
+					`FOR UPDATE reads one record, and an id range of \`${table.name}\` reads many; select the record by its id`,
+				);
+			},
+		} as never;
 	}
-	return builder<T, Params, StoredRow<T>, false>(
-		id === undefined
-			? state
-			: { ...state, source: id, params: paramsOf(id) },
-	) as never;
+	if (id === undefined) {
+		return builder<T, Params, StoredRow<T>, false>(state) as never;
+	}
+	const record: State = { ...state, source: id, params: paramsOf(id) };
+	return {
+		...builder<T, Params, StoredRow<T>, false>(record),
+		forUpdate: () => {
+			if (!parameter.test(sqlOf(id))) {
+				throw new RangeError(
+					`FOR UPDATE reads one record from a binding or a local (\`$name\`), and SurrealDB refuses \`${sqlOf(id)}\` as its target; LET the id in a block first`,
+				);
+			}
+			return builder<T, Params, StoredRow<T>, false>({
+				...record,
+				lock: true,
+			});
+		},
+	} as never;
 };
 
 /** The conditions of a lookup by a unique index, checked as the types are. */

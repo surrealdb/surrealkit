@@ -121,6 +121,7 @@ export {
 	type CheckedOmit,
 	type Count,
 	type OmittedRow,
+	type RecordSelect,
 	type Select,
 	type SelectResult,
 	type Split,
