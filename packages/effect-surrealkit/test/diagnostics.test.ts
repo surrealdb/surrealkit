@@ -18,6 +18,7 @@ const fixtures = [
 	'generated-statements.ts',
 	'block-negative.ts',
 	'search-negative.ts',
+	'graph-negative.ts',
 ].map((file) => join(typesRoot, file));
 
 const directive = /^\s*\/\/ @ts-expect-error(?: \[([^\]\s]+)\])?/u;

@@ -55,8 +55,8 @@ const catalogueMarker = /string::is_email|vector::distance::euclidean/u;
 describe('bundling the statement module', () => {
 	it('leaves the analyzer out of code that only uses builders', async () => {
 		const text = await bundle(
-			`import { block, eq, make, object, param, select } from ${JSON.stringify(statement)};
-			console.log(block, eq, make, object, param, select);`,
+			`import { block, collect, eq, follow, make, object, outgoing, param, select } from ${JSON.stringify(statement)};
+			console.log(block, collect, eq, follow, make, object, outgoing, param, select);`,
 		);
 		expect(text).toContain('SELECT');
 		expect(text).not.toMatch(analyzerMarker);

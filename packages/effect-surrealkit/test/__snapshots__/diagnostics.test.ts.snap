@@ -386,6 +386,36 @@ exports[`type diagnostics > insert-relation/wrong-endpoint 1`] = `
 ]
 `;
 
+exports[`type diagnostics > link/any-table 1`] = `
+[
+  "TS2345: Argument of type 'Path<declareConstructor<_RecordId, _RecordId, readonly [], _RecordId> & Codec>' is not assignable to parameter of type '"this link can point at any table (\`record\`), so its target has no known fields; declare it \`record<table>\`"'.",
+]
+`;
+
+exports[`type diagnostics > link/destructure-constant 1`] = `
+[
+  "TS2322: Type '1' is not assignable to type '"a destructured field is an expression: inline a constant with \`literal\`"'.",
+]
+`;
+
+exports[`type diagnostics > link/no-such-field 1`] = `
+[
+  "TS2339: Property 'nope' does not exist on type 'FollowedOf<{ readonly name: "corpus"; readonly tables: { readonly anything: { readonly name: "anything"; readonly type: "any"; readonly schemafull: false; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"anything">, _RecordId<...>, readonly [...], _RecordId<...>>, "corpus/anything">; ... 9 more...'.",
+]
+`;
+
+exports[`type diagnostics > link/not-a-link 1`] = `
+[
+  "TS2345: Argument of type 'Path<declareConstructor<string, string, readonly [], string> & Codec>' is not assignable to parameter of type '"this expression is not a record link: follow a field typed \`record<table>\`, a list of them, or a graph step"'.",
+]
+`;
+
+exports[`type diagnostics > link/union-uncommon-field 1`] = `
+[
+  "TS2339: Property 'members' does not exist on type 'FollowedOf<{ readonly name: "corpus"; readonly tables: { readonly anything: { readonly name: "anything"; readonly type: "any"; readonly schemafull: false; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"anything">, _RecordId<...>, readonly [...], _RecordId<...>>, "corpus/anything">; ... 9 more...'.",
+]
+`;
+
 exports[`type diagnostics > merge/element-extra-field 1`] = `
 [
   "TS2345: Argument of type 'Expr<Struct<{ readonly phones: $Array<Struct<{ readonly kind: Literals<readonly ["home", "mobile", "work"]>; readonly bogus: declareConstructor<number, number, readonly [], number>; }>>; }>, { ...; }>' is not assignable to parameter of type '"\`phones[*].bogus\` is not a field \`person\` accepts in MERGE"'.",
@@ -598,6 +628,30 @@ exports[`type diagnostics > record/other-table 1`] = `
 exports[`type diagnostics > record/wrong-key 1`] = `
 [
   "TS2345: Argument of type 'Expr<declareConstructor<string, string, readonly [], string>, { readonly key: declareConstructor<string, string, readonly [], string>; }>' is not assignable to parameter of type '"this is not a key of \`id_int\`"'.",
+]
+`;
+
+exports[`type diagnostics > recurse/from-a-list 1`] = `
+[
+  "TS2345: Argument of type 'Step<{ readonly name: "corpus"; readonly tables: { readonly anything: { readonly name: "anything"; readonly type: "any"; readonly schemafull: false; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"anything">, _RecordId<...>, readonly [...], _RecordId<...>>, "corpus/anything">; ... 9 more ...; ...' is not assignable to parameter of type '"a recursive path starts from one record: \`row.id\`, a record link or a binding"'.",
+]
+`;
+
+exports[`type diagnostics > recurse/not-a-step 1`] = `
+[
+  "TS2322: Type 'Path<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person"> & Codec>' is not assignable to type '"a recursive path repeats a graph step from the node it is given, like \`(node) => outgoing(store, node, \\"knows\\")\`"'.",
+]
+`;
+
+exports[`type diagnostics > recurse/not-back-to-start 1`] = `
+[
+  "TS2322: Type 'Step<{ readonly name: "corpus"; readonly tables: { readonly anything: { readonly name: "anything"; readonly type: "any"; readonly schemafull: false; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"anything">, _RecordId<...>, readonly [...], _RecordId<...>>, "corpus/anything">; ... 9 more ...; ...' is not assignable to type '"a recursive path repeats a step that leads back to the table it starts from"'.",
+]
+`;
+
+exports[`type diagnostics > recurse/shortest-to-other-table 1`] = `
+[
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to parameter of type '"a shortest path leads to a record of the table it starts from"'.",
 ]
 `;
 
@@ -1072,6 +1126,60 @@ exports[`type diagnostics > split/where-after 1`] = `
 [
   "TS2339: Property 'where' does not exist on type 'Split<Omit<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, "select"> & { ...; }, NoPa...'.",
   "TS7006: Parameter 'row' implicitly has an 'any' type.",
+]
+`;
+
+exports[`type diagnostics > step/after-recursion 1`] = `
+[
+  "TS2345: Argument of type 'RecursionResult<Path<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person"> & Codec>, Step<...>, false, NoParams>' is not assignable to parameter of type '"a graph step chains only from another step: from the records of a recursive path or the edges of a step SurrealDB yields one list per record"'.",
+]
+`;
+
+exports[`type diagnostics > step/edges-of-recursion 1`] = `
+[
+  "TS2345: Argument of type 'RecursionResult<Path<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person"> & Codec>, Step<...>, false, NoParams>' is not assignable to parameter of type '"only a graph step walks edges; a recursive path has none to read"'.",
+]
+`;
+
+exports[`type diagnostics > step/filter-no-such-field 1`] = `
+[
+  "TS2339: Property 'nope' does not exist on type 'RowExprs<{ readonly name: "member_of"; readonly type: "relation"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"member_of">, _RecordId<"member_of">, readonly [...], _RecordId<...>>, "corpus/member_of">; ... 10 more ...; readonly edge: { ...; }; }>'.",
+]
+`;
+
+exports[`type diagnostics > step/filter-wrong-type 1`] = `
+[
+  "TS2345: Argument of type '5' is not assignable to parameter of type '"these operands never compare: their stored types do not overlap"'.",
+]
+`;
+
+exports[`type diagnostics > step/from-list-of-links 1`] = `
+[
+  "TS2345: Argument of type 'Path<$Array<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person">> & Codec>' is not assignable to parameter of type '"a graph step starts from one record or from another step: from a list of record links SurrealDB yields one list per link"'.",
+]
+`;
+
+exports[`type diagnostics > step/from-non-id 1`] = `
+[
+  "TS2345: Argument of type 'Path<declareConstructor<string, string, readonly [], string> & Codec>' is not assignable to parameter of type '"a graph step starts from a record id: \`row.id\`, a record link, a binding of a record id, or another step"'.",
+]
+`;
+
+exports[`type diagnostics > step/into-wrong-table 1`] = `
+[
+  "TS2345: Argument of type 'Path<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person"> & Codec>' is not assignable to parameter of type '"\`member_of\` has no edges into \`person\`"'.",
+]
+`;
+
+exports[`type diagnostics > step/not-a-relation 1`] = `
+[
+  "TS2345: Argument of type '"team"' is not assignable to parameter of type '"follows" | "knows" | "likes" | "member_of" | "rates"'.",
+]
+`;
+
+exports[`type diagnostics > step/out-of-wrong-table 1`] = `
+[
+  "TS2345: Argument of type 'Path<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team"> & Codec>' is not assignable to parameter of type '"\`member_of\` has no edges out of \`team\`"'.",
 ]
 `;
 
