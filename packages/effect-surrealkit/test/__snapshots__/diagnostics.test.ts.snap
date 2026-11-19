@@ -1,5 +1,23 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`type diagnostics > arithmetic/none-operand 1`] = `
+[
+  "TS2345: Argument of type 'Path<UndefinedOr<declareConstructor<number, number, readonly [], number> & Codec>>' is not assignable to parameter of type '"this operand may be NONE, and SurrealDB refuses NONE in arithmetic (\`1 + NONE\` fails the statement): read it where it is set"'.",
+]
+`;
+
+exports[`type diagnostics > arithmetic/string-constant 1`] = `
+[
+  "TS2345: Argument of type '"1"' is not assignable to parameter of type '"arithmetic takes numbers: SurrealDB refuses a string, a boolean, an array or another value as an operand of + - * /"'.",
+]
+`;
+
+exports[`type diagnostics > arithmetic/string-operand 1`] = `
+[
+  "TS2345: Argument of type 'Path<declareConstructor<string, string, readonly [], string> & Codec>' is not assignable to parameter of type '"arithmetic takes numbers: SurrealDB refuses a string, a boolean, an array or another value as an operand of + - * /"'.",
+]
+`;
+
 exports[`type diagnostics > bind/extra-value 1`] = `
 [
   "TS2353: Object literal may only specify known properties, and 'extra' does not exist in type '{ readonly email: string; }'.",

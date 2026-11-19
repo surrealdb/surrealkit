@@ -322,6 +322,7 @@ may be NONE.
 | `isNone(x)` `isNotNone(x)` | `x = NONE`, `x != NONE` |
 | `inside(x, xs)` `contains(xs, x)` | `INSIDE`, `CONTAINS`; `xs` may be an array of primitives |
 | `at(array, i)` | `array[i]`, or NONE past the end; an element of a field path is a field path |
+| `add` `sub` `mul` `div` | `+` `-` `*` `/` on numbers; the right side may be a number |
 | `cast(kind, x)` | `<kind>x` |
 | `call(fn, …args)` | a `DEFINE FUNCTION`, through its generated descriptor |
 | `select(…).toExpr()` | a subquery |
@@ -333,6 +334,19 @@ written with `dateTimeToString`, because the SDK's formatter is a second
 late before 1970 with a fractional second; a record id whose key holds a
 datetime, a `Set`, a `Map`, bytes and class instances have no faithful
 literal and are refused (bind them).
+
+Arithmetic follows the engine (SurrealDB 3.3 and 4.0 agree, as
+`test/conformance.test.ts` pins): two ints give an int, and an overflow of
+64 bits fails the statement; an int and a float, or two floats, a float;
+any decimal operand a decimal. `div` of two ints truncates toward zero
+(`7 / 2` is `3`), and division by zero or NONE is the float NaN or
+±Infinity whatever the operands, so a quotient decodes as its kind or a
+float. The result codec is chosen from the operands' codecs (`Int`,
+`Int64`, `Float`, `Decimal`, `SurrealNumber`, a numeric literal by its
+value); the compiler sees ints and floats as `number` alike. An operand
+that may be NONE, a string or any other value the engine refuses is a
+compile error. The SDK sends a whole JS number as an int whatever its
+codec, so a float binding is cast (`<float>$f / 2`).
 
 Operands compare when their stored types overlap: a branded or refined
 binding compares with its column, a string never compares with an int. A

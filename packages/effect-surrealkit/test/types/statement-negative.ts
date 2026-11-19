@@ -8,6 +8,7 @@ import * as SurrealSchema from 'effect-surrealkit';
 
 import { bind, run, transaction } from '../../src/client/index.js';
 import {
+	add,
 	and,
 	arrayGroup,
 	at,
@@ -17,6 +18,7 @@ import {
 	count,
 	create,
 	deleteFrom,
+	div,
 	eq,
 	gt,
 	idRange,
@@ -543,4 +545,17 @@ export const rejectedSplitAndOmit = () => {
 	split.project((row) => ({ name: row.name, pin: row.pins }));
 	// @ts-expect-error [omit/unknown-field] the table has no such field
 	select(Corpus.PersonTable).omit('nope');
+};
+
+export const rejectedArithmetic = () => {
+	select(Corpus.PersonTable).project((row) => ({
+		// @ts-expect-error [arithmetic/none-operand] `age` is optional, and SurrealDB refuses NONE in arithmetic
+		older: add(row.age, 1),
+	}));
+	select(Corpus.PersonTable).project((row) => ({
+		// @ts-expect-error [arithmetic/string-operand] SurrealDB refuses a string as an operand of /
+		half: div(row.name, 2),
+	}));
+	// @ts-expect-error [arithmetic/string-constant] a constant operand is a number
+	add(param('i', SurrealSchema.Int), '1');
 };

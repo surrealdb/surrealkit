@@ -5,7 +5,7 @@
  */
 import { type Brand, type Effect, Schema } from 'effect';
 import * as SurrealSchema from 'effect-surrealkit';
-import type { DateTime } from 'surrealdb';
+import type { DateTime, Decimal } from 'surrealdb';
 
 import {
 	type Bound,
@@ -25,6 +25,7 @@ import {
 	transaction,
 } from '../../src/client/index.js';
 import {
+	add,
 	and,
 	arrayDistinct,
 	arrayGroup,
@@ -37,6 +38,7 @@ import {
 	create,
 	type Diff,
 	deleteFrom,
+	div,
 	eq,
 	gte,
 	type Input,
@@ -49,6 +51,7 @@ import {
 	max,
 	median,
 	min,
+	mul,
 	not,
 	or,
 	type Params,
@@ -62,6 +65,7 @@ import {
 	select,
 	sequence,
 	stddev,
+	sub,
 	sum,
 	timeMax,
 	timeMin,
@@ -782,3 +786,20 @@ same<
 	'id' extends keyof Result<typeof splitWithout>[number] ? true : false,
 	false
 >(true);
+
+// ---- arithmetic: the result's kind follows its operands'.
+
+const quantity = param('quantity', SurrealSchema.Int);
+const price = param('price', SurrealSchema.Decimal);
+export const total = select(Corpus.PersonTable)
+	.project((row) => ({
+		scaled: mul(row.score, quantity),
+		cost: add(mul(price, quantity), 1),
+		share: div(quantity, 3),
+		less: sub(quantity, 1n),
+	}))
+	.build();
+type Total = Result<typeof total>[number];
+same<Total['scaled'], number>(true);
+same<Total['cost'], Decimal>(true);
+same<Total['share'], number>(true);

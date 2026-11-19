@@ -1132,6 +1132,158 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 		});
 	});
 
+	describe('arithmetic', () => {
+		it('int with int is an int, with a float a float, with a decimal a decimal; a float with a decimal is a decimal', async () => {
+			expect(
+				await query(
+					'RETURN [type::of(1 + 2), type::of(1 + 2.5), type::of(1 + 2dec), type::of(1.5 + 2dec), type::of(1.5 + 2.5), type::of(5 - 7), type::of(3 * 4), type::of(2.5 * 2), type::of(2dec * 3)];',
+				),
+			).toStrictEqual([
+				[
+					'int',
+					'float',
+					'decimal',
+					'decimal',
+					'float',
+					'int',
+					'int',
+					'float',
+					'decimal',
+				],
+			]);
+			const [values] = (await query(
+				'RETURN [1 + 2, 1 + 2.5, 5 - 7, 3 * 4, 0.1 + 0.2, 1 + 2dec, 0.1dec + 0.2dec];',
+			)) as [Array<unknown>];
+			expect(values.slice(0, 5)).toStrictEqual([
+				3,
+				3.5,
+				-2,
+				12,
+				0.1 + 0.2,
+			]);
+			expect(values.slice(5).map(String)).toStrictEqual(['3', '0.3']);
+		});
+
+		it('int division truncates toward zero; float and decimal division is exact', async () => {
+			const [values] = (await query(
+				'RETURN [7 / 2, 6 / 2, -7 / 2, 7 / -2, 1 / 3, type::of(7 / 2), 7.0 / 2, -7 / 2.0, type::of(7.0 / 2), <string>(7dec / 2), <string>(1dec / 3), type::of(7dec / 2)];',
+			)) as [Array<unknown>];
+			expect(values).toStrictEqual([
+				3,
+				3,
+				-3,
+				-3,
+				0,
+				'int',
+				3.5,
+				-3.5,
+				'float',
+				// A decimal quotient keeps a scale of its own.
+				'3.50',
+				'0.3333333333333333333333333333',
+				'decimal',
+			]);
+		});
+
+		it('division by zero or by NONE is the float NaN or ±Infinity, whatever the operands', async () => {
+			const [kinds, texts] = (await query(
+				'RETURN [type::of(1 / 0), type::of(1.0 / 0), type::of(0 / 0), type::of(1dec / 0), type::of(1 / NONE)]; RETURN [<string>(1 / 0), <string>(-1 / 0), <string>(1.0 / 0), <string>(-1.0 / 0), <string>(0.0 / 0), <string>(1dec / 0), <string>(1 / NONE)];',
+			)) as [Array<unknown>, Array<unknown>];
+			expect(kinds).toStrictEqual([
+				'float',
+				'float',
+				'float',
+				'float',
+				'float',
+			]);
+			expect(texts).toStrictEqual([
+				'NaN',
+				'NaN',
+				'Infinity',
+				'-Infinity',
+				'NaN',
+				'NaN',
+				'NaN',
+			]);
+		});
+
+		it('an int that overflows 64 bits fails the statement; a float past its range is Infinity', async () => {
+			await expect(
+				query('RETURN 9223372036854775807 + 1;'),
+			).rejects.toThrow(
+				"Cannot perform addition with '9223372036854775807' and '1'",
+			);
+			await expect(
+				query('RETURN 9223372036854775807 * 2;'),
+			).rejects.toThrow(
+				"Cannot perform multiplication with '9223372036854775807' and '2'",
+			);
+			await expect(
+				query('RETURN -9223372036854775807 - 2;'),
+			).rejects.toThrow(
+				"Cannot perform subtraction with '-9223372036854775807' and '2'",
+			);
+			expect(
+				await query(
+					'RETURN [<string>(1e308 * 10), type::of(1e308 * 10)];',
+				),
+			).toStrictEqual([['Infinity', 'float']]);
+			// An int past 2^53 comes back from the SDK as a bigint.
+			expect(await query('RETURN 9007199254740993 + 0;')).toStrictEqual([
+				9007199254740993n,
+			]);
+		});
+
+		it('a whole number bound by the SDK arrives as an int, even for a float, and divides as one; <float> casts it; a float field stores it as a float', async () => {
+			expect(
+				await query('RETURN [type::of($f), $f / 2, <float>$f / 2];', {
+					f: 7,
+				}),
+			).toStrictEqual([['int', 3, 3.5]]);
+			const [, , stored] = (await query(
+				'DEFINE TABLE ar_float SCHEMAFULL; DEFINE FIELD w ON ar_float TYPE float; SELECT VALUE [type::of(w), w / 2] FROM ONLY (CREATE ONLY ar_float:1 SET w = $f);',
+				{ f: 7 },
+			)) as Array<unknown>;
+			expect(stored).toStrictEqual(['float', 3.5]);
+		});
+
+		it('NONE, NULL, a string, a boolean or an array is refused as an operand of + - *; strings concatenate with +', async () => {
+			for (const [sql, message] of [
+				[
+					'RETURN 1 + NONE;',
+					"Cannot perform addition with 'int' and 'none'",
+				],
+				[
+					'RETURN 1 - NONE;',
+					"Cannot perform subtraction with 'int' and 'none'",
+				],
+				[
+					'RETURN 1 * NONE;',
+					"Cannot perform multiplication with 'int' and 'none'",
+				],
+				[
+					'RETURN 1 + NULL;',
+					"Cannot perform addition with 'int' and 'null'",
+				],
+				[
+					'RETURN 1 + "2";',
+					"Cannot perform addition with 'int' and 'string'",
+				],
+				[
+					'RETURN 1 + true;',
+					"Cannot perform addition with 'int' and 'bool'",
+				],
+				[
+					'RETURN 1 + [2];',
+					"Cannot perform addition with 'int' and 'array'",
+				],
+			] as const) {
+				await expect(query(sql)).rejects.toThrow(message);
+			}
+			expect(await query('RETURN "a" + "b";')).toStrictEqual(['ab']);
+		});
+	});
+
 	describe('introspection: INFO … STRUCTURE, which the drift check reads', () => {
 		beforeAll(async () => {
 			await query(`

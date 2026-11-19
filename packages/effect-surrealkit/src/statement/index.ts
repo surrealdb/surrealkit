@@ -7,6 +7,15 @@
  * statements.
  */
 export {
+	type ArithmeticCodec,
+	add,
+	div,
+	mul,
+	type Numeric,
+	type NumericOperand,
+	sub,
+} from './arithmetic.js';
+export {
 	type Arm,
 	type Block,
 	type BlockResult,
