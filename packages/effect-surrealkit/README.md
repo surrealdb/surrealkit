@@ -339,6 +339,99 @@ binding is named, so the same expression can be used twice; one name with
 two codecs is refused, as are names SurrealDB sets itself (`$auth`, `$this`,
 `$value`, …).
 
+### Built-in functions
+
+`effect-surrealkit/functions` has a typed function for each of 406 SurrealDB
+built-ins, one namespace per family. Each returns an expression, so it fits
+anywhere the builders take one:
+
+```ts
+import * as SurrealSchema from 'effect-surrealkit';
+import { array, string } from 'effect-surrealkit/functions';
+import { param, select } from 'effect-surrealkit/statement';
+
+const people = select(PersonTable)
+  .where((row) => string.isEmail(row.email))
+  .project((row) => ({
+    short: string.slice(row.name, 0, param('length', SurrealSchema.Int)),
+    first: array.first(string.words(row.name)),
+  }))
+  .build('people');
+// people.sql: SELECT string::slice(name, 0, $length) AS short,
+//             array::first(string::words(name)) AS first
+//             FROM ⟨person⟩ WHERE string::is_email(email);
+// ReadonlyArray<{ short: string; first: string | undefined }>
+```
+
+An argument is an expression whose stored type fits the argument's kind, or
+a primitive (or an array of primitives) written with `literal`; anything else
+is a compile error, and a value still enters only as a binding or a checked
+constant. Trailing optional arguments may be left out (`string.slice(s)`),
+a variadic one takes any number of values (`string.join('-', a, b)`), and a
+constant has no call (`math.pi` is `math::pi`). An argument that is not a
+single term is parenthesised.
+
+The functions are generated from one table,
+[`src/functions/signatures.json`](src/functions/signatures.json): per
+function its name, its arguments (name, kind, optional), whether the last is
+variadic, its result kind, the engine majors it exists in and sample
+arguments. Kinds are `any`, `string`, `int`, `int64`, `float`, `number`,
+`decimal`, `bool`, `datetime`, `duration`, `uuid`, `bytes`, `record`,
+`object`, `geometry`, `range`, `array`, `array<K>` and `option<K>`, each
+decoded by the package's codec of that name (`any`, and an element of
+`array`, may be NONE).
+A result `same:N` is argument `N`'s own codec, used where the result is a
+reordering or subset of an array (`array.sort`, `array.distinct`); `item:N`
+is an element of it or NONE (`array.first`, `time.max`). After changing the
+table, run:
+
+```sh
+npm run generate:functions   # node scripts/generate-functions.mjs
+```
+
+It writes `src/functions/generated/` (a file per family, `codecs.ts` and
+`index.ts`), sorted and Biome-formatted; `test/functions.test.ts` fails when
+those files differ from what the table generates. A name is its family's
+namespace and the rest of the path in camelCase: `string::is_email` is
+`string.isEmail`, `vector::distance::euclidean` is
+`vector.distanceEuclidean`, an underscore between two digits stays
+(`math::log10_2` is `math.log10_2`) and a reserved word gets a trailing `_`
+(`rand::enum` is `rand.enum_`).
+
+| Family | Functions | Family | Functions |
+| --- | --- | --- | --- |
+| `array` | 59 | `object` | 8 |
+| `bytes` | 1 | `parse` | 9 |
+| `crypto` | 14 | `rand` | 12 |
+| `duration` | 18 (1 constant) | `record` | 5 |
+| `encoding` | 6 | `search` | 1 (`analyze`) |
+| `geo` | 7 | `string` | 59 |
+| `math` | 63 (21 constants) | `time` | 45 (3 constants) |
+| `meta` | 2 | `type` | 72 |
+| | | `value` | 2 |
+| | | `vector` | 23 |
+
+`test/functions-engine.test.ts` calls every entry with its sample arguments
+on the suite's engine. On a major the entry lists, the result must decode
+with the declared codec; on one it does not, the engine must reject the call
+as an unknown function. 32 functions exist only on SurrealDB 4.0:
+`time::age`, `time::make_date`, `time::make_time`, `time::make_timestamp`,
+`time::trunc`, `vector::distance::cosine`, and `type::date`, `type::time`,
+`type::timestamp`, `type::interval`, `type::i8`, `type::i16`, `type::i32`,
+`type::u8`, `type::u16`, `type::u32`, `type::u64`, `type::f16`, `type::f32`
+with their `type::is_*` checks. None exists only on 3.3. Non-deterministic
+functions (`rand::*`, `time::now`, salted hashes) are checked by decoding
+alone.
+
+Not in the table: functions that take a closure (`array::map`,
+`array::fold`, `array::reduce`, `value::chain`, `value::expect`); the
+full-text and vector functions that need a match reference or a KNN operator
+(`search::score`, `search::highlight`, `search::offsets`, `search::rrf`,
+`search::linear`, `vector::distance::knn`); files (`type::file`, `file::*`);
+and what writes, sleeps, uses the network or reads the session (`http::*`,
+`sleep`, `session::*`, `api::*`, `sequence::*`, `ml::*`, `ext::*`). The
+`set::*` family and the aggregate `count()` are not covered yet.
+
 ### Reads and writes
 
 | Builder | Result |
