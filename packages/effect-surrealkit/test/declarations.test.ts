@@ -30,6 +30,69 @@ const link = (target: string, path: string) => {
 	symlinkSync(target, path, 'junction');
 };
 
+const statements = `import { Effect, Schema } from 'effect';
+import * as SurrealSchema from 'effect-surrealkit';
+import { bind, run, transaction } from 'effect-surrealkit/client';
+import {
+	call,
+	cast,
+	create,
+	eq,
+	param,
+	part,
+	select,
+	sequence,
+	update,
+} from 'effect-surrealkit/statement';
+
+import {
+	fn_greet,
+	PersonCreate,
+	PersonId,
+	PersonMerge,
+	PersonTable,
+} from './index.js';
+
+export const createPerson = create(PersonTable)
+	.content(param('person', PersonCreate))
+	.build();
+
+export const listing = select(PersonTable)
+	.where((row) => eq(row.email, param('email', SurrealSchema.String)))
+	.project((row) => ({
+		id: row.id,
+		key: cast('string', row.id),
+		city: row.address.city,
+		greeting: call(fn_greet, row.name),
+	}))
+	.build();
+
+export const rename = update(PersonTable, param('id', PersonId))
+	.merge(param('changes', PersonMerge))
+	.build();
+
+export const guarded = sequence(
+	part({
+		sql: "IF $name = NONE { THROW 'No name' };",
+		free: ['name'],
+		throws: ['No name'],
+	}),
+).define({
+	params: { name: SurrealSchema.String },
+	result: Schema.Undefined,
+});
+
+export const program = (person: typeof PersonCreate.Type) =>
+	Effect.gen(function* () {
+		const rows = yield* run(listing, { email: person.email });
+		const [made] = yield* transaction([
+			bind(createPerson, { person }),
+			bind(guarded, { name: person.name }),
+		]);
+		return { rows, made };
+	});
+`;
+
 describe('declaration emit in a pnpm consumer', () => {
 	let root = '';
 
@@ -99,6 +162,9 @@ describe('declaration emit in a pnpm consumer', () => {
 		}
 
 		cpSync(goldenDir('corpus'), join(root, 'src'), { recursive: true });
+		// A consumer module that exports statements and an effect built from
+		// them, through the package's `statement` and `client` subpaths.
+		writeFileSync(join(root, 'src', 'statements.ts'), statements);
 		writeFileSync(
 			join(root, 'tsconfig.json'),
 			JSON.stringify({
@@ -130,7 +196,7 @@ describe('declaration emit in a pnpm consumer', () => {
 		else console.log('kept', root);
 	});
 
-	it('the corpus modules emit declarations with no non-portable type', () => {
+	it('the corpus modules, and statements built from them, emit declarations with no non-portable type', () => {
 		const result = spawnSync(
 			process.execPath,
 			[join(modules, 'typescript', 'bin', 'tsc'), '-p', root],

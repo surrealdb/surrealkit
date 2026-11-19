@@ -1,8 +1,9 @@
 # effect-surrealkit
 
 [Effect](https://effect.website) v4 schemas for SurrealDB values exactly as
-the JavaScript SDK (`surrealdb` 2.x) decodes and encodes them, and an emitter
-that turns a SurrealKit schema document v2 into typed Effect modules.
+the JavaScript SDK (`surrealdb` 2.x) decodes and encodes them, an emitter
+that turns a SurrealKit schema document v2 into typed Effect modules, and
+typed statements built from those modules.
 
 ```sh
 npm i effect-surrealkit effect@4.0.6 surrealdb@2.1.1
@@ -13,6 +14,7 @@ runs in browsers, Workers, Bun and Node. The emitter (`effect-surrealkit/emitter
 is host-neutral too; only the `effect-surrealkit` bin touches the filesystem.
 
 - [Generating modules](#generating-modules) from a schema document
+- [Statements](#statements): typed queries and writes from the generated modules
 - [Two codec worlds](#two-codec-worlds) and the [value schemas](#values)
 - [What the codecs refuse](#what-the-codecs-refuse-and-why)
 
@@ -198,6 +200,180 @@ struct of all of them). It works mechanically but was not adopted because:
 - the module structure (an `ids.ts` imported by every table, shared
   `PersonFields`, descriptors, presence maps, edges, the manifest) is not a
   schema and would need a printer of its own anyway.
+
+## Statements
+
+`effect-surrealkit/statement` describes one request to SurrealDB as a value,
+and `effect-surrealkit/client` runs it. A statement holds static SurrealQL
+text, a codec for each named binding and a codec for its result, so the text
+never depends on input, a value its codec refuses is never sent, and the
+answer is decoded strictly. Types come from the generated descriptors alone.
+
+```ts
+import { Effect } from 'effect';
+import * as SurrealSchema from 'effect-surrealkit';
+import { layer, run } from 'effect-surrealkit/client';
+import { eq, gte, param, select } from 'effect-surrealkit/statement';
+import { Surreal } from 'surrealdb';
+import { PersonTable } from './generated/surreal/index.js';
+
+const adults = select(PersonTable)
+  .where((row) => gte(row.age, param('minimum', SurrealSchema.Int)))
+  .where((row) => eq(row.address.city, param('city', SurrealSchema.String)))
+  .orderBy((row) => row.name)
+  .project((row) => ({ id: row.id, name: row.name, nickname: row.nickname }))
+  .build('adults in a city');
+// adults.sql: SELECT id AS id, name AS name, nickname AS nickname FROM person
+//             WHERE age >= $minimum AND address.city = $city ORDER BY name ASC;
+
+const db = new Surreal();
+await db.connect(url, { namespace, database, authentication });
+
+const rows = await Effect.runPromise(
+  run(adults, { minimum: 18, city: 'Leeds' }).pipe(Effect.provide(layer(db))),
+);
+// ReadonlyArray<{ id: PersonId; name: string; nickname: string | undefined }>
+```
+
+A misspelt field, a string compared with an int, a missing or extra binding
+and a wrong binding type are compile errors. `row` has one expression per
+field of the table's select schema; an object field carries its children
+(`row.address.city`), and an optional field, or anything read through one,
+may be NONE.
+
+### Expressions
+
+| Function | SurrealQL |
+| --- | --- |
+| `param(name, codec)` | `$name`, encoded through `codec` when the statement runs |
+| `literal(value)`, `literal(value, codec)` | a constant in the text, as the SDK prints it (`s"…"`, `d"…"`, `r"…"`) |
+| `eq` `ne` `lt` `lte` `gt` `gte` | `=` `!=` `<` `<=` `>` `>=`; the right side may be a primitive |
+| `and(…)` `or(…)` `not(x)` | `AND` `OR` `!` |
+| `isNone(x)` `isNotNone(x)` | `x = NONE`, `x != NONE` |
+| `inside(x, xs)` `contains(xs, x)` | `INSIDE`, `CONTAINS`; `xs` may be an array of primitives |
+| `at(array, i)` | `array[i]`, or NONE past the end |
+| `cast(kind, x)` | `<kind>x` |
+| `call(fn, …args)` | a `DEFINE FUNCTION`, through its generated descriptor |
+| `select(…).toExpr()` | a subquery |
+| `unsafeExpr({ sql, codec, params })` | raw SurrealQL: nothing is checked, and it must never be built from input |
+
+Operands compare when their stored types overlap: a branded or refined
+binding compares with its column, a string never compares with an int. A
+binding is named, so the same expression can be used twice; one name with
+two codecs is refused, as are names SurrealDB sets itself (`$auth`, `$this`,
+`$value`, …).
+
+### Reads and writes
+
+| Builder | Result |
+| --- | --- |
+| `select(table)` | rows; `.project(…)` named expressions, `.value(…)` one expression per row |
+| `select(table).only()` | one row or `undefined` (adds `LIMIT 1`) |
+| `select(table, id).only()` | the record or `undefined` |
+| `create(table)`, `create(table, id)` | the created row (`CREATE ONLY … CONTENT`) |
+| `update(table, id).merge(x)` / `.content(x)` | the row, or `undefined` when the record is not there |
+| `update(table).merge(x).where(…)` | every changed row |
+| `deleteFrom(table, id)`, `deleteFrom(table).where(…)` | nothing; `.returning('before')` for the deleted rows |
+| `relate(edgeTable, from, to)` | the edge (`RELATE ONLY`); the endpoints must be ids the relation declares |
+
+Data is always bound, and must fit the descriptor's schema for the operation
+(`create`, `merge`, `content`). `.returning('none' | 'after' | 'before')` or a
+projection changes the result type with the `RETURN` clause. Builders are
+immutable, so a base query can be shared.
+
+### Authored SurrealQL
+
+A multi-statement script stays SurrealQL. Describe each text as a `part`
+(the `$names` it reads and does not define, the names it `LET`s, how many
+results it returns, what it can `THROW`) and run parts in one scope with
+`sequence`. The contract must name exactly the names the sequence still
+needs: a missing or extra binding is a compile error, checked again when the
+statement is defined.
+
+```ts
+import { part, sequence } from 'effect-surrealkit/statement';
+
+const bindOwner = part({
+  sql: 'LET $owner = $boundOwner; LET $principal = $auth.id;',
+  free: ['boundOwner'],
+  defines: ['owner', 'principal'],
+  slots: 2,
+});
+const requireOwner = part({
+  sql: "IF $owner != $principal { THROW 'Not the owner' };",
+  free: ['owner', 'principal'],
+  throws: ['Not the owner'],
+});
+const readProfile = part({
+  sql: 'SELECT VALUE name FROM ONLY $owner;',
+  free: ['owner'],
+});
+
+const profile = sequence(bindOwner, requireOwner, readProfile).define({
+  name: 'read own profile',
+  params: { boundOwner: PersonId }, // exactly the unbound names
+  result: SurrealSchema.String,     // the last result; earlier ones must be NONE
+});
+```
+
+SurrealDB reads a parameter nothing bound as NONE, without an error (3.3
+and 4.0), so a misspelt binding would quietly change what a script does;
+that is what the contract is for. `make({ sql, params, result })` declares a
+statement with no such check.
+
+### Running statements
+
+```ts
+import { bind, layer, run, SurrealClient, transaction } from 'effect-surrealkit/client';
+
+const program = Effect.gen(function* () {
+  const name = yield* run(profile, { boundOwner: id });
+  const [created, people] = yield* transaction([
+    bind(createPerson, { person }),
+    bind(adults, { minimum: 18, city: 'Leeds' }),
+  ]);
+  return { name, created, people };
+}).pipe(Effect.provide(layer(db)));
+```
+
+`layer(db)` takes an SDK connection or session, and statements run with that
+session's authentication. `make(db)` returns the same client as a plain
+value, for an application that names its own services, one per session.
+
+| Error | Meaning |
+| --- | --- |
+| `StatementEncodeError` | a binding failed its codec; nothing was sent |
+| `StatementThrown<Message>` | a `THROW` the statement declares |
+| `StatementConflict` | a transaction conflict; nothing changed, send it again |
+| `StatementRequestError` | any other failure, with the SDK's error as `cause` |
+| `StatementDecodeError` | the answer is not what the statement declares; a write may have applied |
+
+Interrupting the effect aborts the request (the engine may still finish it).
+Each run is a span named after the statement, carrying the static text and
+no binding values. `{ retry }` is passed to the SDK.
+
+`transaction` sends its statements as one atomic request. They share one
+variable scope, as SurrealQL has it: a binding name used by two of them must
+carry the same value. The SDK refuses a top-level `RETURN` followed by
+another statement inside a transaction.
+
+### What the statements do not know
+
+- **Permissions.** A generated `select` schema is the row a privileged
+  reader gets. For a restricted session SurrealDB returns NONE for a field
+  it may not read and leaves out a row it may not see, without an error.
+  Declare the row that session really gets and build from
+  `readAs(table, schema)`, or project the fields it may read.
+- **Authored text.** The parts of a sequence are declared, not inferred: a
+  result codec that does not match the script fails when it runs, not when
+  it compiles.
+- **Coverage.** `GROUP BY`, `SPLIT`, `FETCH`, graph traversal, full-text and
+  vector operators, `UPSERT`, `INSERT`, live queries and views have no typed
+  builder yet; use `unsafeExpr` or authored SurrealQL.
+
+The engine suite (`test/statement-engine.test.ts`) runs every builder against
+the corpus schema and the modules generated from it, and passes on SurrealDB
+3.3.4 and 4.0.1.
 
 ## Two codec worlds
 

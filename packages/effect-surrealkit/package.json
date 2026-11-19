@@ -1,7 +1,7 @@
 {
 	"name": "effect-surrealkit",
 	"version": "0.1.0",
-	"description": "Effect v4 schemas for SurrealDB values (SDK 2.x), and an Effect emitter for SurrealKit schema documents",
+	"description": "Effect v4 schemas for SurrealDB values (SDK 2.x), an Effect emitter for SurrealKit schema documents, and typed statements built from the generated modules",
 	"license": "Apache-2.0",
 	"type": "module",
 	"main": "./dist/index.js",
@@ -15,6 +15,14 @@
 		"./emitter": {
 			"types": "./dist/emitter.d.ts",
 			"import": "./dist/emitter.js"
+		},
+		"./statement": {
+			"types": "./dist/statement.d.ts",
+			"import": "./dist/statement.js"
+		},
+		"./client": {
+			"types": "./dist/client.d.ts",
+			"import": "./dist/client.js"
 		}
 	},
 	"bin": {

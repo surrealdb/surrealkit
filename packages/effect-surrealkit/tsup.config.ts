@@ -4,7 +4,12 @@ export default defineConfig([
 	{
 		// The runtime codecs and the emitter run in browsers and Workers as well
 		// as Node, so they target the language level rather than a Node release.
-		entry: { index: "src/index.ts", emitter: "src/emitter/index.ts" },
+		entry: {
+			index: "src/index.ts",
+			emitter: "src/emitter/index.ts",
+			statement: "src/statement/index.ts",
+			client: "src/client/index.ts",
+		},
 		format: ["esm"],
 		dts: true,
 		sourcemap: true,
