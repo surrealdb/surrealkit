@@ -129,6 +129,34 @@ export const rejectedTargets = () => {
 		// @ts-expect-error a string is not a person
 		param('person', SurrealSchema.String),
 	);
+	// Finding 9: a field the table does not have, which the engine refuses.
+	update(PersonTable).merge(
+		// @ts-expect-error `bogus` is not a field person accepts in MERGE
+		param(
+			'changes',
+			Schema.Struct({
+				...PersonMerge.fields,
+				bogus: SurrealSchema.String,
+			}),
+		),
+	);
+	update(PersonTable, param('id', PersonId)).content(
+		// @ts-expect-error `bogus` is not a field person accepts in CONTENT
+		param(
+			'content',
+			Schema.Struct({
+				...PersonTable.content.fields,
+				bogus: SurrealSchema.Int,
+			}),
+		),
+	);
+	create(PersonTable).content(
+		// @ts-expect-error `bogus` is not a field person accepts in CREATE
+		param(
+			'person',
+			Schema.Struct({ ...PersonCreate.fields, bogus: SurrealSchema.Int }),
+		),
+	);
 	// @ts-expect-error CREATE has no RETURN BEFORE
 	create(PersonTable).returning('before');
 };
@@ -206,4 +234,9 @@ export const rejectedRuns = () => {
 	transaction([byEmail]);
 	// @ts-expect-error the statement needs its input
 	transaction([bind(byEmail)]);
+	// Finding 9: a bound statement is made by `bind`, which types its input.
+	// @ts-expect-error a hand-built object is not a bound statement
+	transaction([{ statement: byEmail, input: {} }]);
+	// @ts-expect-error a hand-built object is not a bound statement
+	transaction([{ statement: byEmail, input: { email: 42 } }]);
 };

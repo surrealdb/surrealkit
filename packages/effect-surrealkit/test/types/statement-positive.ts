@@ -212,6 +212,11 @@ same<
 	{ readonly id: PersonId; readonly name: string }
 >(true);
 
+// A narrower value than the operation's schema still fits.
+export const mergeName = update(PersonTable, param('id', PersonId))
+	.merge(param('changes', Schema.Struct({ name: PersonMerge.fields.name })))
+	.build();
+
 export const mergeOne = update(PersonTable, param('id', PersonId))
 	.merge(param('changes', PersonMerge))
 	.build();

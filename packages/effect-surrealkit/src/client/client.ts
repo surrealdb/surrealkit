@@ -53,11 +53,18 @@ export type RunArgs<P extends Params> =
 		? readonly [input?: Input<P>, options?: RunOptions]
 		: readonly [input: Input<P>, options?: RunOptions];
 
-/** A statement together with the values of its bindings. */
+/** Only {@link bind} makes a {@link Bound}: no other code can name this. */
+declare const BoundTypeId: unique symbol;
+
+/**
+ * A statement together with the values of its bindings, made by
+ * {@link bind}, which checks the input against the statement's bindings.
+ */
 export interface Bound<
 	R extends Codec = Codec,
 	Throws extends string = string,
 > {
+	readonly [BoundTypeId]: 'made by bind';
 	readonly statement: Statement<Params, R, Throws>;
 	readonly input: Readonly<Record<string, unknown>>;
 }
@@ -66,10 +73,11 @@ export interface Bound<
 export const bind = <P extends Params, R extends Codec, Throws extends string>(
 	statement: Statement<P, R, Throws>,
 	...input: InputOf<P>
-): Bound<R, Throws> => ({
-	statement,
-	input: (input[0] ?? {}) as Readonly<Record<string, unknown>>,
-});
+): Bound<R, Throws> =>
+	({
+		statement,
+		input: (input[0] ?? {}) as Readonly<Record<string, unknown>>,
+	}) as unknown as Bound<R, Throws>;
 
 /** The decoded results of the statements of a transaction, in order. */
 export type Results<S extends ReadonlyArray<Bound>> = {

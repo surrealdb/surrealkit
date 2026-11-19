@@ -311,7 +311,8 @@ keywords there, `none` is NONE and `a.b` is a field path (SurrealDB 3.3 and
 4.0 accept both delimiters in every one of those positions).
 
 Data is always bound, and must fit the descriptor's schema for the operation
-(`create`, `merge`, `content`). `.returning('none' | 'after' | 'before')` or a
+(`create`, `merge`, `content`): a value of another shape, or with a field the
+schema does not have, is a compile error naming the field. `.returning('none' | 'after' | 'before')` or a
 projection changes the result type with the `RETURN` clause. Builders are
 immutable, so a base query can be shared.
 
@@ -469,6 +470,10 @@ const program = Effect.gen(function* () {
   return { name, created, people };
 }).pipe(Effect.provide(layer(db)));
 ```
+
+A transaction takes statements paired with their input by `bind`, which
+checks the input against the statement's bindings; a hand-built
+`{ statement, input }` does not compile.
 
 `layer(db)` takes an SDK connection or session, and statements run with that
 session's authentication. `make(db)` returns the same client as a plain

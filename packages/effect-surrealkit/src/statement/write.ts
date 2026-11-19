@@ -62,16 +62,31 @@ export type OperationOf<
 	O extends 'create' | 'merge' | 'content',
 > = T extends { readonly [K in O]: infer C extends Codec } ? C : never;
 
+/** The top-level fields `S` sends that `Target` does not have. */
+type ExtraFields<S, Target> = S extends object
+	? Exclude<keyof S, keyof Target> & string
+	: never;
+
 /**
  * `S` may be bound as the data of an operation when what it sends is what
- * the table's schema for that operation sends.
+ * the table's schema for that operation sends, with no field the schema
+ * does not have (SurrealDB refuses one, and assignability alone would let
+ * it through). An open schema (a `FLEXIBLE` object, a schemaless table)
+ * accepts any field.
  */
 export type Fits<Target extends Codec, S extends Codec> = [Target] extends [
 	never,
 ]
 	? { readonly 'this table takes no data for this operation': never }
 	: [S['Encoded']] extends [Target['Encoded']]
-		? unknown
+		? [ExtraFields<S['Encoded'], Target['Encoded']>] extends [never]
+			? unknown
+			: {
+					readonly [K in ExtraFields<
+						S['Encoded'],
+						Target['Encoded']
+					> as `\`${K}\` is not a field the table accepts for this operation`]: never;
+				}
 		: {
 				readonly 'this value is not what the table accepts for this operation': readonly [
 					S['Encoded'],
