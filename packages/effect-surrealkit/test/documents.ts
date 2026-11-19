@@ -69,6 +69,17 @@ export const membersSchemaPath = join(
 	'members.surql',
 );
 
+/**
+ * The schema of the block scripts (`test/fixtures/scripts/schema`), as
+ * `surrealkit compile` wrote it in that directory.
+ */
+export const scriptsDocumentPath = join(
+	import.meta.dirname,
+	'fixtures',
+	'scripts',
+	'schema.v2.json',
+);
+
 /** The compiled document for the presence-evidence tables (`e`, `ip`, `m`, `oa`, `p`, `up`). */
 export const presenceDocument = (): Record<string, unknown> =>
 	readJson(compiledPath('field-presence'));
@@ -166,6 +177,12 @@ export const goldens = [
 		name: 'members',
 		document: () => readJson(membersPath),
 		options: { store: 'members' },
+	},
+	{
+		// The tables and functions of the block scripts (test/block-engine.test.ts).
+		name: 'scripts',
+		document: () => readJson(scriptsDocumentPath),
+		options: { store: 'scripts' },
 	},
 ] as const;
 
