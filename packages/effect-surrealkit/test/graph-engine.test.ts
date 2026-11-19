@@ -11,7 +11,7 @@ import { Effect } from 'effect';
 import { RecordId } from 'surrealdb';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { type Client, make as makeClient } from '../src/client/index.js';
+import { bind, type Client, make as makeClient } from '../src/client/index.js';
 import * as SurrealSchema from '../src/index.js';
 import {
 	both,
@@ -477,6 +477,31 @@ describe.skipIf(!engineConfigured)(
 					undefined,
 					'Ann',
 				]);
+			});
+
+			it('fetches after OMIT, and a record read FOR UPDATE', async () => {
+				const omitted = select(PersonTable, param('who', PersonId))
+					.omit('email', 'bio')
+					.fetch(store, 'manager')
+					.build();
+				const [row] = await ok(
+					client.run(omitted, { who: bob as PersonId }),
+				);
+				expect(row?.manager?.name).toBe('Ann');
+				expect(row !== undefined && 'email' in row).toBe(false);
+				const locked = select(PersonTable, param('who', PersonId))
+					.forUpdate()
+					.fetch(store, 'manager')
+					.build();
+				expect(locked.sql).toBe(
+					'SELECT * FROM $who FETCH manager FOR UPDATE;',
+				);
+				const [read] = await ok(
+					client.transaction([
+						bind(locked, { who: dan as PersonId }),
+					]),
+				);
+				expect(read[0]?.manager?.name).toBe('Bob');
 			});
 
 			it('fetches through a fetched record, and a link to several tables', async () => {

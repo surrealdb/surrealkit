@@ -548,6 +548,36 @@ describe('FETCH', () => {
 		);
 	});
 
+	it('fetches after OMIT, from the row without the omitted fields, and before FOR UPDATE', () => {
+		const omitted = select(PalTable)
+			.omit('box')
+			.fetch(pals, 'next')
+			.build();
+		expect(omitted.sql).toBe('SELECT * OMIT box FROM ⟨pal⟩ FETCH next;');
+		expect(
+			decode(omitted.result, [{ id: a, n: 1, next: leaf, friends: [] }]),
+		).toEqual([{ id: a, n: 1, next: leaf, friends: [] }]);
+		expect(
+			select(PersonTable, param('who', PersonId))
+				.forUpdate()
+				.fetch(store, 'manager')
+				.build().sql,
+		).toBe('SELECT * FROM $who FETCH manager FOR UPDATE;');
+	});
+
+	it('refuses OMIT, SPLIT and grouping after it', () => {
+		const fetched = select(PalTable).fetch(pals, 'next');
+		expect(() => untyped(fetched.omit)('box')).toThrow(
+			/call `omit` before `fetch`/,
+		);
+		expect(() => untyped(fetched.split)('friends')).toThrow(
+			/call `split` before `fetch`/,
+		);
+		expect(() => fetched.groupAll()).toThrow(
+			/group a SELECT before projecting, ordering, limiting, fetching it/,
+		);
+	});
+
 	it('fetches a union link to the row of whichever table it names', () => {
 		const statement = select(store.tables.member_of)
 			.project((row) => ({ out: row.out }))

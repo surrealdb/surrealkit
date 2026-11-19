@@ -430,7 +430,7 @@ exports[`type diagnostics > link/destructure-constant 1`] = `
 
 exports[`type diagnostics > link/no-such-field 1`] = `
 [
-  "TS2339: Property 'nope' does not exist on type 'FollowedOf<{ readonly name: "corpus"; readonly tables: { readonly anything: { readonly name: "anything"; readonly type: "any"; readonly schemafull: false; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"anything">, _RecordId<...>, readonly [...], _RecordId<...>>, "corpus/anything">; ... 9 more...'.",
+  "TS2339: Property 'nope' does not exist on type 'FollowedOf<{ readonly name: "corpus"; readonly tables: { readonly anything: { readonly name: "anything"; readonly type: "any"; readonly schemafull: false; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"anything">, _RecordId<...>, readonly [...], _RecordId<...>>, "corpus/anything">; ... 10 mor...'.",
 ]
 `;
 
@@ -442,7 +442,7 @@ exports[`type diagnostics > link/not-a-link 1`] = `
 
 exports[`type diagnostics > link/union-uncommon-field 1`] = `
 [
-  "TS2339: Property 'members' does not exist on type 'FollowedOf<{ readonly name: "corpus"; readonly tables: { readonly anything: { readonly name: "anything"; readonly type: "any"; readonly schemafull: false; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"anything">, _RecordId<...>, readonly [...], _RecordId<...>>, "corpus/anything">; ... 9 more...'.",
+  "TS2339: Property 'members' does not exist on type 'FollowedOf<{ readonly name: "corpus"; readonly tables: { readonly anything: { readonly name: "anything"; readonly type: "any"; readonly schemafull: false; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"anything">, _RecordId<...>, readonly [...], _RecordId<...>>, "corpus/anything">; ... 10 mor...'.",
 ]
 `;
 
@@ -663,7 +663,7 @@ exports[`type diagnostics > record/wrong-key 1`] = `
 
 exports[`type diagnostics > recurse/from-a-list 1`] = `
 [
-  "TS2345: Argument of type 'Step<{ readonly name: "corpus"; readonly tables: { readonly anything: { readonly name: "anything"; readonly type: "any"; readonly schemafull: false; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"anything">, _RecordId<...>, readonly [...], _RecordId<...>>, "corpus/anything">; ... 9 more ...; ...' is not assignable to parameter of type '"a recursive path starts from one record: \`row.id\`, a record link or a binding"'.",
+  "TS2345: Argument of type 'Step<{ readonly name: "corpus"; readonly tables: { readonly anything: { readonly name: "anything"; readonly type: "any"; readonly schemafull: false; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"anything">, _RecordId<...>, readonly [...], _RecordId<...>>, "corpus/anything">; ... 10 more ...;...' is not assignable to parameter of type '"a recursive path starts from one record: \`row.id\`, a record link or a binding"'.",
 ]
 `;
 
@@ -675,7 +675,7 @@ exports[`type diagnostics > recurse/not-a-step 1`] = `
 
 exports[`type diagnostics > recurse/not-back-to-start 1`] = `
 [
-  "TS2322: Type 'Step<{ readonly name: "corpus"; readonly tables: { readonly anything: { readonly name: "anything"; readonly type: "any"; readonly schemafull: false; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"anything">, _RecordId<...>, readonly [...], _RecordId<...>>, "corpus/anything">; ... 9 more ...; ...' is not assignable to type '"a recursive path repeats a step that leads back to the table it starts from"'.",
+  "TS2322: Type 'Step<{ readonly name: "corpus"; readonly tables: { readonly anything: { readonly name: "anything"; readonly type: "any"; readonly schemafull: false; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"anything">, _RecordId<...>, readonly [...], _RecordId<...>>, "corpus/anything">; ... 10 more ...;...' is not assignable to type '"a recursive path repeats a step that leads back to the table it starts from"'.",
 ]
 `;
 
@@ -1173,7 +1173,7 @@ exports[`type diagnostics > step/edges-of-recursion 1`] = `
 
 exports[`type diagnostics > step/filter-no-such-field 1`] = `
 [
-  "TS2339: Property 'nope' does not exist on type 'RowExprs<{ readonly name: "member_of"; readonly type: "relation"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"member_of">, _RecordId<"member_of">, readonly [...], _RecordId<...>>, "corpus/member_of">; ... 10 more ...; readonly edge: { ...; }; }>'.",
+  "TS2339: Property 'nope' does not exist on type 'RowExprs<{ readonly name: "member_of"; readonly type: "relation"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"member_of">, _RecordId<"member_of">, readonly [...], _RecordId<...>>, "corpus/member_of">; ... 11 more ...; readonly edge: { ...; }; }>'.",
 ]
 `;
 
