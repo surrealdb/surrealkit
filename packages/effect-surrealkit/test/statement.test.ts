@@ -739,6 +739,41 @@ describe('authored statements', () => {
 		).toThrow(/part 1 of the sequence.*free: the text reads \$a/);
 	});
 
+	it('refuse a directly declared text that LETs a name it does not declare', () => {
+		const declare = (sql: string, defines?: ReadonlyArray<string>) =>
+			make({
+				sql,
+				params: {},
+				result: Schema.Unknown,
+				slots: 2,
+				...(defines === undefined ? {} : { defines }),
+			});
+		expect(() => declare("LET $owner = 'a'; RETURN $owner;")).toThrow(
+			/LETs `\$owner` at the top level but declares no `defines`/,
+		);
+		expect(() => declare('RETURN 1;\n  let $x = 2;')).toThrow(/`\$x`/);
+		expect(() => declare('/* c */ LET $y = 1; RETURN $y;')).toThrow(
+			/`\$y`/,
+		);
+		// Declared, it is trusted, and a transaction refuses `$owner`.
+		expect(
+			declare("LET $owner = 'a'; RETURN $owner;", ['owner']).defines,
+		).toEqual(['owner']);
+		// Not top-level: in a block, a string, a quoted identifier or a comment.
+		for (const sql of [
+			'IF true { LET $x = 1; RETURN $x };',
+			"RETURN 'LET $x = 1;';",
+			'RETURN "; LET $x";',
+			'SELECT * FROM `; LET $x`;',
+			'-- LET $x = 1;\nRETURN 1;',
+			'# LET $x = 1;\nRETURN 1;',
+			'RETURN (SELECT * FROM [1]); /* LET $x */',
+			'RETURN outlet;',
+		]) {
+			expect(declare(sql).defines).toEqual([]);
+		}
+	});
+
 	it('declare a statement directly, unchecked', () => {
 		const statement = make({
 			sql: 'RETURN $a + 1;',

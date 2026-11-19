@@ -357,7 +357,9 @@ const profile = sequence(bindOwner, requireOwner, readProfile).define({
 SurrealDB reads a parameter nothing bound as NONE, without an error (3.3
 and 4.0), so a misspelt binding would quietly change what a script does;
 that is what the contract is for. `make({ sql, params, result })` declares a
-statement with no such check. Only `part` and `sequence` import the
+statement with no such check, except that text which `LET`s a name at the
+top level must declare `defines`, so a transaction can refuse a binding the
+`LET` would shadow. Only `part` and `sequence` import the
 analyzer, so code that uses only the builders does not bundle it.
 
 ### Statements from `.surql` files

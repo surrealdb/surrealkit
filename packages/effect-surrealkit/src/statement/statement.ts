@@ -165,12 +165,111 @@ const assertStatement = (statement: AnyStatement): void => {
 	for (const name of statement.defines) assertIdentifier(name);
 };
 
+const wordChar = /[A-Za-z0-9_]/u;
+
+/** The index just past the comment at `at`, or `at` when there is none. */
+const skipComment = (sql: string, at: number): number => {
+	const two = sql.slice(at, at + 2);
+	if (two === '/*') {
+		const end = sql.indexOf('*/', at + 2);
+		return end === -1 ? sql.length : end + 2;
+	}
+	if (two === '--' || two === '//' || sql[at] === '#') {
+		const end = sql.indexOf('\n', at);
+		return end === -1 ? sql.length : end + 1;
+	}
+	return at;
+};
+
+/** The index just past the whitespace and comments at `at`. */
+const skipBlank = (sql: string, at: number): number => {
+	let index = at;
+	for (;;) {
+		while (index < sql.length && /\s/u.test(sql[index] ?? '')) index += 1;
+		const next = skipComment(sql, index);
+		if (next === index) return index;
+		index = next;
+	}
+};
+
+const closers: Readonly<Record<string, string>> = {
+	"'": "'",
+	'"': '"',
+	'`': '`',
+	'⟨': '⟩',
+};
+
+/**
+ * The names `sql` appears to `LET` at the top level: a lexical scan that
+ * skips strings, quoted identifiers, comments and anything inside brackets
+ * or blocks. It is no parser (the analyzer is, and stays out of builder-only
+ * bundles); it only lets {@link make} notice an undeclared `LET`.
+ */
+const scanTopLevelLets = (sql: string): ReadonlyArray<string> => {
+	const names: Array<string> = [];
+	let depth = 0;
+	let atStart = true;
+	let index = 0;
+	while (index < sql.length) {
+		const blank = skipBlank(sql, index);
+		if (blank !== index) {
+			index = blank;
+			continue;
+		}
+		const char = sql[index] ?? '';
+		const closer = closers[char];
+		if (closer !== undefined) {
+			index += 1;
+			while (index < sql.length && sql[index] !== closer) {
+				index += sql[index] === '\\' ? 2 : 1;
+			}
+			index += 1;
+			atStart = false;
+		} else if ('([{'.includes(char)) {
+			depth += 1;
+			index += 1;
+			atStart = false;
+		} else if (')]}'.includes(char)) {
+			depth = Math.max(0, depth - 1);
+			index += 1;
+		} else if (char === ';') {
+			if (depth === 0) atStart = true;
+			index += 1;
+		} else if (wordChar.test(char)) {
+			let end = index;
+			while (end < sql.length && wordChar.test(sql[end] ?? '')) end += 1;
+			if (
+				depth === 0 &&
+				atStart &&
+				sql.slice(index, end).toUpperCase() === 'LET'
+			) {
+				let at = skipBlank(sql, end);
+				if (sql[at] === '$') at += 1;
+				let close = at;
+				while (close < sql.length && wordChar.test(sql[close] ?? ''))
+					close += 1;
+				if (close > at) names.push(sql.slice(at, close));
+			}
+			index = end;
+			atStart = false;
+		} else {
+			index += 1;
+			atStart = false;
+		}
+	}
+	return names;
+};
+
 /**
  * Declares a statement from its parts. The text is stored with exactly one
  * final `;`. Nothing checks that `params` are the
  * names `sql` reads, nor that `defines` and `transactional` say what the text
  * does, so prefer a builder (`select`, `create`, …) or, for authored
  * SurrealQL, `part` and `sequence`, which derive all of it from the text.
+ *
+ * One cheap check runs: text that appears to `LET` a name at the top level
+ * must declare `defines`, since a transaction relies on it to refuse a
+ * binding that the `LET` would shadow.
  */
 export const make = <
 	const P extends Params,
@@ -200,5 +299,17 @@ export const make = <
 		transactional: options.transactional ?? false,
 	};
 	assertStatement(statement);
+	if (options.defines === undefined) {
+		const lets = scanTopLevelLets(statement.sql);
+		if (lets.length > 0) {
+			throw new RangeError(
+				`statement \`${statement.name}\` LETs ${[...new Set(lets)]
+					.map((name) => `\`$${name}\``)
+					.join(
+						', ',
+					)} at the top level but declares no \`defines\`, so a transaction could not refuse a binding it shadows; declare \`defines\`, or build it with \`part\` and \`sequence\``,
+			);
+		}
+	}
 	return statement;
 };

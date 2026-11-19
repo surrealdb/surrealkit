@@ -443,6 +443,34 @@ describe('transaction', () => {
 		expect(calls).toHaveLength(0);
 	});
 
+	it('refuses a binding shadowed by a LET of a directly declared statement', async () => {
+		const text = "LET $owner = 'a'; RETURN $owner;";
+		expect(() =>
+			make({ sql: text, params: {}, result: Schema.String, slots: 2 }),
+		).toThrow(/declares no `defines`/);
+		const letter = make({
+			sql: text,
+			params: {},
+			result: Schema.String,
+			slots: 2,
+			defines: ['owner'],
+		});
+		const readOwner = make({
+			sql: 'RETURN $owner;',
+			params: { owner: Schema.String },
+			result: Schema.String,
+		});
+		const { client, calls } = fake(async () => []);
+		const error = await failure(
+			client.transaction([
+				bind(letter, {}),
+				bind(readOwner, { owner: 'b' }),
+			]),
+		);
+		expect(error).toMatchObject({ binding: 'owner' });
+		expect(calls).toHaveLength(0);
+	});
+
 	it('distinguishes native binding types with the same rendered text', async () => {
 		const read = make({
 			sql: 'RETURN $x;',

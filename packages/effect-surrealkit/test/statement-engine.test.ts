@@ -610,6 +610,7 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 			params: {},
 			result: Schema.Tuple([]),
 			slots: 3,
+			defines: ['current'],
 		});
 		const read = make({
 			sql: 'SELECT VALUE n FROM ONLY tally:one;',
