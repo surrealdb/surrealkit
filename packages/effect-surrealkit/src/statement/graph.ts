@@ -55,6 +55,7 @@ import {
 	type PureTable,
 	project,
 	type RowExprs,
+	readerOf,
 } from './table.js';
 
 // ---- the store
@@ -389,6 +390,16 @@ export const union = (codecs: ReadonlyArray<Codec>): Codec => {
 const describeLink = (records: Expr): string =>
 	`\`${sqlOf(records) || '(the node)'}\``;
 
+/**
+ * The reader of the store view a link, a step or FETCH reads records
+ * through, which the statement checks against its own table's.
+ *
+ * @internal
+ */
+export const viewOf = (store: GraphStore): Context => ({
+	readers: new Set([readerOf(store)]),
+});
+
 /** The descriptors a link can point at, found in the store by name. */
 const targetsOf = (
 	store: GraphStore,
@@ -523,7 +534,7 @@ export const follow = <S extends GraphStore, const R extends Expr>(
 		false,
 		(codec) => lift(shape, present, codec),
 		paramsOf(link),
-		contextOf(link),
+		joinContexts([contextOf(link), viewOf(store)]),
 	) as unknown as FollowedOf<S, R>;
 };
 
@@ -554,11 +565,12 @@ export const rows = <S extends GraphStore, const R extends Expr>(
 	const link = records as Expr;
 	const { shape, tables } = targetsOf(store, link);
 	const present = traversalOf(link)?.present ?? false;
-	return derive(
+	return makeExpr(
 		lift(shape, present, targetRow(tables)),
 		`${operand(link)}.*`,
+		paramsOf(link),
 		Level.atom,
-		[link],
+		joinContexts([contextOf(link), viewOf(store)]),
 	) as unknown as Expr<RowsOf<S, R>, ParamsOf<R>>;
 };
 
@@ -680,7 +692,7 @@ export const destructure = <
 			.join(', ')} }`,
 		mergeParams(paramsOf(link), projected.params),
 		Level.atom,
-		joinContexts([contextOf(link), inner]),
+		joinContexts([contextOf(link), inner, viewOf(store)]),
 	) as unknown as Expr<
 		DestructuredOf<R, F>,
 		ParamsOf<R> & ParamsOfAll<F[keyof F]>
@@ -924,7 +936,7 @@ const step = (
 			`${edgesSql}${arrow}?`,
 			params,
 			Level.atom,
-			joinContexts([contextOf(from), filtered]),
+			joinContexts([contextOf(from), filtered, viewOf(store)]),
 		),
 		[TraversalTypeId]: {
 			present: edge.enforced,

@@ -10,6 +10,7 @@ import { escapeIdent } from 'surrealdb';
 
 import {
 	admit,
+	assertReader,
 	type CodecOf,
 	type Comparable,
 	type Context,
@@ -44,7 +45,7 @@ import {
 	fetchedCodec,
 	fetchPath,
 } from './fetch.js';
-import type { GraphStore } from './graph.js';
+import { type GraphStore, viewOf } from './graph.js';
 import {
 	type Base,
 	type CheckedKeys,
@@ -83,6 +84,7 @@ import {
 	type PureTable,
 	project,
 	type RowExprs,
+	readerOf,
 	rowExprs,
 	type StoredRow,
 	storedRow,
@@ -363,6 +365,18 @@ interface State {
 	 */
 	readonly context?: Context;
 }
+
+/**
+ * Refuses a select that reads its table as one reader and records through a
+ * store view of the other; returns what it reads of the rows around it,
+ * which a subquery carries out without its readers (it checked them).
+ */
+const ownReader = (state: State, what: string): Context | undefined => {
+	assertReader(readerOf(state.table), state.context?.readers, what);
+	if (state.context?.readers === undefined) return state.context;
+	const { readers: _, ...rest } = state.context;
+	return Object.keys(rest).length === 0 ? undefined : rest;
+};
 
 /** Where a select's callbacks place their results. */
 const siteOf = (state: State): Site => ({
@@ -883,8 +897,10 @@ const builder = <
 		},
 		fetch: (store, ...paths) => {
 			const fetch = [...state.fetch, ...(paths as ReadonlyArray<string>)];
+			const context = joinContexts([state.context, viewOf(store)]);
 			return builder({
 				...state,
+				...(context !== undefined && { context }),
 				fetch,
 				out: fetchedCodec(store, state.base, fetch),
 			}) as never;
@@ -994,12 +1010,15 @@ const builder = <
 				resultOf(state) as SelectResult<Row, Only>,
 				render(state),
 				state.params as P,
-				state.context,
+				ownReader(state, `the subquery of \`${state.table.name}\``),
 			),
 		build: (name, options) => {
 			const writes = options?.writes ?? (state.pure ? false : undefined);
 			const label = name ?? `select ${state.table.name}`;
-			settle(state.context, `statement \`${label}\``);
+			settle(
+				ownReader(state, `statement \`${label}\``),
+				`statement \`${label}\``,
+			);
 			return make({
 				...(writes !== undefined && { writes }),
 				name: label,

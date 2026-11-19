@@ -28,6 +28,7 @@ import { Int, Int64 } from '../int.js';
 import { Float } from '../scalars.js';
 import {
 	admit,
+	assertReader,
 	type Context,
 	type Expr,
 	isExpr,
@@ -64,7 +65,13 @@ import {
 	type Simplify,
 	type Statement,
 } from './statement.js';
-import { andAll, type PureTable, project, type RowExprs } from './table.js';
+import {
+	andAll,
+	type PureTable,
+	project,
+	type RowExprs,
+	readerOf,
+} from './table.js';
 
 export const RowValueTypeId = '~effect-surrealkit/RowValue';
 
@@ -508,7 +515,7 @@ const finishing = <
 		const all = Object.keys(state.keys).length === 0;
 		const writes = options?.writes ?? (state.pure ? false : undefined);
 		const label = name ?? `select ${state.table.name} grouped`;
-		settle(
+		const readers = settle(
 			joinContexts([
 				state.context,
 				admit(
@@ -527,6 +534,7 @@ const finishing = <
 			]),
 			`statement \`${label}\``,
 		);
+		assertReader(readerOf(state.table), readers, `statement \`${label}\``);
 		return make({
 			...(writes !== undefined && { writes }),
 			name: label,

@@ -1228,7 +1228,8 @@ What the types say, and the engine behaviour behind it (pinned in
   becomes a list of `Row | undefined`. Rows decode with the target's
   generated select schema, the row a privileged reader gets; for a
   restricted session a field its permissions hide is absent from the
-  fetched record, as from `SELECT *`.
+  fetched record, as from `SELECT *`, so fetch through `readAs(store)`
+  (see [permissions](#what-the-statements-do-not-know)).
 - **SurrealDB 3 and 4 differ** on a link to a record of a table that does
   not exist: 3.3 reads NONE, 4.0 fails the statement ("The table … does not
   exist"). A link typed from the store always names a table of the store.
@@ -1302,6 +1303,40 @@ export const bestMatch = block()
   const members = select(readAs(MemberTable)).build();
   // ReadonlyArray<{ id: MemberId; handle: string; email?: string; salary?: number; … }>
   ```
+
+  The reader is a property of the store view too. `follow`, `rows`,
+  `destructure`, the steps, recursive paths and `fetch` take the store, and
+  `readAs(store)` is the store as such a session reads it: every table
+  reads through its `visible` row, so a record reached through a link, a
+  step, a nested projection or a FETCH decodes with it, hidden fields
+  absent. A statement whose own table is read as one reader while a link,
+  step or FETCH in it reads through a store view of the other is refused
+  when it is built (each subquery answers for its own):
+
+  ```ts
+  const session = readAs(store);
+  select(readAs(DocTable))
+    .project((row) => ({
+      owner: row.owner,
+      teams: destructure(session, outgoing(session, row.owner, 'member_of'), (team) => ({
+        name: team.name,
+      })),
+    }))
+    .fetch(session, 'owner')
+    .build();
+  // SELECT owner AS owner, owner->member_of->?.{ name: name } AS teams FROM ⟨doc⟩ FETCH owner;
+  ```
+
+  Under such a session the list of a step's edges and the list of the
+  records it reaches can differ in length: the engine leaves out a record
+  the session may not read and keeps its edge (SurrealDB 3.3 and 4.0
+  alike), so the two lists do not pair by position. Pair them from the
+  edge instead: project each edge and reach its record from the edge's
+  endpoint, which reads NONE where the record is hidden
+  (`destructure(session, edges(step), (edge) => ({ role: edge.role, team:
+  follow(session, edge.out).name }))`). `test/reader-engine.test.ts`
+  proves a link, a step, a nested projection, a FETCH and this pairing on
+  both engines as a record user.
 
   Where the session's real row is narrower still, declare it and build
   from `readAs(table, schema)`, or project the fields it may read. For a

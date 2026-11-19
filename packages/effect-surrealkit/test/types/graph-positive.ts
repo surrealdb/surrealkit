@@ -20,6 +20,7 @@ import {
 	param,
 	parent,
 	type Result,
+	readAs,
 	recurse,
 	rows,
 	select,
@@ -258,3 +259,22 @@ export const notManaged = select(PersonTable)
 	}))
 	.build();
 same<Result<typeof notManaged>[number]['peers'], ReadonlyArray<PersonId>>(true);
+
+// ---- readAs(store): links, steps and FETCH through the visible rows.
+
+const session = readAs(store);
+export const sessionDocs = select(readAs(DocTable))
+	.project((row) => ({
+		owner: row.owner,
+		teams: destructure(
+			session,
+			outgoing(session, row.owner, 'member_of'),
+			(team) => ({ name: team.name }),
+		),
+	}))
+	.fetch(session, 'owner')
+	.build();
+same<
+	Result<typeof sessionDocs>[number]['teams'],
+	ReadonlyArray<{ readonly name: string }>
+>(true);

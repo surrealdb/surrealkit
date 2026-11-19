@@ -22,6 +22,7 @@ import { escapeIdent } from 'surrealdb';
 import { SurrealValue } from '../value.js';
 import {
 	admit,
+	assertReader,
 	type Context,
 	codecOf,
 	contextOf,
@@ -66,6 +67,7 @@ import {
 	type PureTable,
 	project,
 	type RowExprs,
+	readerOf,
 	rowExprs,
 	type StoredRow,
 	storedRow,
@@ -395,7 +397,11 @@ const finish = <P extends Params, R extends Codec>(
 	const label =
 		name ??
 		`${state.verb.toLowerCase()}${state.relation === true ? ' relation' : ''} ${state.table.name}`;
-	settle(state.context, `statement \`${label}\``);
+	assertReader(
+		readerOf(state.table),
+		settle(state.context, `statement \`${label}\``),
+		`statement \`${label}\``,
+	);
 	return make({
 		name: label,
 		sql: `${render(state)};`,

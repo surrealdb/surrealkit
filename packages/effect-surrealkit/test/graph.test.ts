@@ -22,6 +22,7 @@ import {
 	outgoing,
 	param,
 	paramsOf,
+	readAs,
 	recurse,
 	rowOf,
 	rows,
@@ -176,6 +177,22 @@ describe('the README example', () => {
 		expect(
 			select(PersonTable).fetch(store, 'manager', 'watchers').build().sql,
 		).toBe('SELECT * FROM ⟨person⟩ FETCH manager, watchers;');
+		const session = readAs(store);
+		expect(
+			select(readAs(DocTable))
+				.project((row) => ({
+					owner: row.owner,
+					teams: destructure(
+						session,
+						outgoing(session, row.owner, 'member_of'),
+						(team) => ({ name: team.name }),
+					),
+				}))
+				.fetch(session, 'owner')
+				.build().sql,
+		).toBe(
+			'SELECT owner AS owner, owner->member_of->?.{ name: name } AS teams FROM ⟨doc⟩ FETCH owner;',
+		);
 	});
 });
 

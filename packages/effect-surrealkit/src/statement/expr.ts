@@ -468,6 +468,27 @@ export const settle = (
 };
 
 /**
+ * Refuses a statement whose subject is read by one reader while a link, a
+ * step or a FETCH in it reads records through a store view of the other.
+ *
+ * @internal
+ */
+export const assertReader = (
+	subject: Reader,
+	readers: ReadonlySet<Reader> | undefined,
+	what: string,
+): void => {
+	for (const reader of readers ?? []) {
+		if (reader === subject) continue;
+		throw new RangeError(
+			subject === 'privileged'
+				? `${what} reads its table as a privileged reader, but a link, step or FETCH in it reads records through a restricted store view (\`readAs(store)\`); read both as one reader: the table through \`readAs(table)\` too, or the store without \`readAs\``
+				: `${what} reads its table through \`readAs\`, but a link, step or FETCH in it reads records through the privileged store; read those through \`readAs(store)\` too, so every record decodes with its \`visible\` row`,
+		);
+	}
+};
+
+/**
  * `$parent.field`: a field of the row of the select a step sits directly
  * under, read from the step's `where`, whose own field paths read the edge.
  * `field` is a field path of that select's row.

@@ -71,6 +71,7 @@ export {
 	param,
 	paramsOf,
 	parent,
+	type Reader,
 	sqlOf,
 	unsafeExpr,
 } from './expr.js';
@@ -267,9 +268,13 @@ export {
 	type Condition,
 	type IdOf,
 	type PureTable,
+	type ReadAs,
+	type ReadableStore,
 	type RowExprs,
 	readAs,
 	type StoredRow,
+	type VisibleStore,
+	type VisibleTable,
 	type WithVisible,
 } from './table.js';
 export {

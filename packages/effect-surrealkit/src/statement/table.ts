@@ -16,6 +16,7 @@ import {
 	mergeParams,
 	type ParamsOfAll,
 	paramsOf,
+	type Reader,
 	type RowScope,
 	sqlOf,
 } from './expr.js';
@@ -124,8 +125,59 @@ export type WithVisible<T> = T extends { readonly visible: RowCodecIn }
 	? T
 	: 'this descriptor has no generated `visible` row: regenerate it, or pass the row the session reads as the second argument';
 
+const readerKey: unique symbol = Symbol.for('effect-surrealkit/Reader');
+
 /**
- * `table` as a session with narrower permissions reads it.
+ * The reader a table descriptor or a store view reads as: `restricted` for
+ * one `readAs` returned, `privileged` otherwise. The mark is an enumerable
+ * symbol property, so a descriptor rebuilt by spreading keeps it.
+ *
+ * @internal
+ */
+export const readerOf = (value: object): Reader =>
+	(value as { readonly [readerKey]?: Reader })[readerKey] ?? 'privileged';
+
+/** What `readAs` needs of a store registry: its tables, by name. */
+export interface ReadableStore {
+	readonly tables: { readonly [name: string]: PureTable };
+	readonly edges: object;
+}
+
+/** A table as a restricted session reads it: its `visible` row, when it has one. */
+export type VisibleTable<T> = T extends {
+	readonly visible: infer V extends RowCodecIn;
+}
+	? Omit<T, 'select'> & { readonly select: V }
+	: T;
+
+/** A store as a restricted session reads it: every table through {@link VisibleTable}. */
+export type VisibleStore<S extends ReadableStore> = Omit<S, 'tables'> & {
+	readonly tables: {
+		readonly [K in keyof S['tables']]: VisibleTable<S['tables'][K]>;
+	};
+};
+
+/** What `readAs` returns for a table with a `visible` row, or a whole store. */
+export type ReadAs<T> = T extends ReadableStore
+	? VisibleStore<T>
+	: T extends PureTable
+		? Omit<T, 'select'> & { readonly select: NonNullable<T['visible']> }
+		: never;
+
+/** `value`, copied and marked as read by a restricted session. */
+const restricted = <T extends object>(value: T): T =>
+	({ ...value, [readerKey]: 'restricted' }) as T;
+
+const isStore = (value: object): value is ReadableStore =>
+	'tables' in value &&
+	'edges' in value &&
+	typeof value.tables === 'object' &&
+	value.tables !== null &&
+	!('select' in value);
+
+/**
+ * `table` as a session with narrower permissions reads it, or a whole
+ * `store`.
  *
  * A generated `select` schema describes a privileged reader. SurrealDB does
  * not report what permissions hide: a field the session may not read comes
@@ -137,25 +189,50 @@ export type WithVisible<T> = T extends { readonly visible: RowCodecIn }
  * gets (usually the same fields, optional where a permission can hide them),
  * so the rows decode instead of failing on the missing fields.
  *
+ * Given a store registry, it returns the store as such a session reads it:
+ * every table that has a `visible` row reads through it, so a record reached
+ * through a link, a step or FETCH of that store (`follow`, `rows`,
+ * `destructure`, the steps, recursive paths and `fetch` take the store)
+ * decodes with its `visible` row. A statement that reads its own table as
+ * one reader and records through a store view of the other is refused when
+ * it is built.
+ *
  * @example
  * const visible = select(readAs(MemberTable)).build();
  * // ReadonlyArray<{ …; email?: string; salary?: number }>
+ * const session = readAs(store);
+ * select(readAs(DocTable)).project((row) => ({ owner: rows(session, row.owner) }));
  */
-export function readAs<T extends PureTable>(
-	table: WithVisible<T>,
-): Omit<T, 'select'> & { readonly select: NonNullable<T['visible']> };
+export function readAs<T extends PureTable | ReadableStore>(
+	table: T extends ReadableStore ? T : WithVisible<T>,
+): ReadAs<T>;
 export function readAs<T extends PureTable, S extends RowCodecIn>(
 	table: T,
 	select: S & KnownReadFields<NoInfer<T>, NoInfer<S>>,
 ): Omit<T, 'select'> & { readonly select: S };
-export function readAs(table: PureTable, declared?: RowCodecIn): PureTable {
+export function readAs(
+	value: PureTable | ReadableStore,
+	declared?: RowCodecIn,
+): unknown {
+	if (isStore(value)) {
+		const tables: Record<string, PureTable> = {};
+		for (const [name, table] of Object.entries(value.tables)) {
+			tables[name] = restricted(
+				table.visible === undefined
+					? table
+					: { ...table, select: table.visible },
+			);
+		}
+		return restricted({ ...value, tables });
+	}
+	const table = value as PureTable;
 	if (declared === undefined) {
 		if (table.visible === undefined) {
 			throw new TypeError(
 				`readAs: the descriptor of \`${table.name}\` has no generated \`visible\` row; regenerate it, or pass the row the session reads`,
 			);
 		}
-		return { ...table, select: table.visible };
+		return restricted({ ...table, select: table.visible });
 	}
 	const select = declared;
 	if (table.schemafull) {
@@ -172,7 +249,7 @@ export function readAs(table: PureTable, declared?: RowCodecIn): PureTable {
 				);
 		}
 	}
-	return { ...table, select };
+	return restricted({ ...table, select });
 }
 
 /**
