@@ -68,6 +68,26 @@ describe('input documents', () => {
 			);
 		});
 	}
+
+	it('accepts and generates from structure-4.0 documents', async () => {
+		const original = readJson(examplePath);
+		const document = {
+			...original,
+			provenance: {
+				...(original.provenance as Record<string, unknown>),
+				adapter: 'structure-4.0',
+			},
+		};
+		expect((await run(decodeDocument(document))).provenance.adapter).toBe(
+			'structure-4.0',
+		);
+		const generated = await run(
+			generate(document, corpusOptions, { sha256 }),
+		);
+		expect(generated.files.some((file) => file.path === 'person.ts')).toBe(
+			true,
+		);
+	});
 });
 
 describe('access authentication policy', () => {
@@ -262,6 +282,133 @@ describe('generation rules', () => {
 	const withDigest = (document: Record<string, unknown>) => ({
 		...document,
 		semanticDigest: semanticDigest(document, sha256),
+	});
+
+	it('prints open values and declared elements in the native and JSON worlds', async () => {
+		const document = example();
+		const team = document.tables.find((table) => table.name === 'team') as {
+			schemafull: boolean;
+			fields: Array<Record<string, unknown>>;
+		};
+		team.schemafull = false;
+		const template = team.fields.find(
+			(field) => (field.path as string[])[0] === 'name',
+		);
+		const field = (
+			path: string[],
+			kind: Record<string, unknown>,
+			extra = {},
+		) => ({ ...template, path, kind, ...extra });
+		const any = { kind: 'any' };
+		const string = { kind: 'string' };
+		team.fields.push(
+			field(['id'], string),
+			field(['open'], any),
+			field(['ratio'], { kind: 'float' }),
+			field(['items'], { kind: 'array', item: any }),
+			field(['members_set'], { kind: 'set', item: any, length: 3 }),
+			field(['labels'], { kind: 'array', item: any, length: 2 }),
+			field(['labels', '*'], string),
+			field(['scores'], { kind: 'set', item: any }),
+			field(['scores', '*'], { kind: 'float' }),
+			field(['typed'], { kind: 'array', item: string }),
+			field(['typed', '*'], { kind: 'float' }),
+			field(['details'], { kind: 'object' }, { flexible: true }),
+			field(['details', 'name'], string),
+		);
+		const result = await run(generate(withDigest(document), corpusOptions));
+		const module =
+			result.files.find((file) => file.path === 'team.ts')?.content ?? '';
+		const [native, json] = module.split('export const TeamJsonFields = {');
+		for (const [output, value, float] of [
+			[native, 'SurrealSchema.SurrealValue', 'SurrealSchema.Float'],
+			[json, 'SurrealSchema.SurrealJsonValue', 'Schema.Finite'],
+		] as const) {
+			expect(output).toContain(`ratio: ${float}`);
+			expect(output).toContain(`items: Schema.Array(${value})`);
+			expect(output).toContain(
+				'labels: Schema.Array(SurrealSchema.String).check(Schema.isBetweenLength(2, 2))',
+			);
+			expect(output).toContain(
+				'typed: Schema.Array(SurrealSchema.String)',
+			);
+			expect(output).toContain(
+				`meta: Schema.Record(Schema.String, ${value})`,
+			);
+			expect(
+				output?.split(`[Schema.Record(Schema.String, ${value})]`)
+					.length,
+			).toBeGreaterThanOrEqual(3);
+		}
+		expect(native).toContain(
+			'open: Schema.UndefinedOr(SurrealSchema.SurrealValue)',
+		);
+		expect(native).toContain(
+			'members_set: SurrealSchema.SetOf(SurrealSchema.SurrealValue, { length: 3 })',
+		);
+		expect(native).toContain(
+			'scores: SurrealSchema.SetOf(SurrealSchema.Float)',
+		);
+		expect(json).toContain('open: SurrealSchema.SurrealJsonValue');
+		expect(json).toContain(
+			'members_set: SurrealSchema.SetFromJson(SurrealSchema.SurrealJsonValue, { length: 3 })',
+		);
+		expect(json).toContain(
+			'scores: SurrealSchema.SetFromJson(Schema.Finite)',
+		);
+		expect(native?.match(/^\tid: TeamId,$/gm)).toHaveLength(2); // Select and descriptor
+		expect(
+			json?.match(
+				/^\tid: SurrealSchema.RecordIdFromJsonAs\(TeamId\),$/gm,
+			),
+		).toHaveLength(1);
+		expect(module).not.toMatch(
+			/id: (?:SurrealSchema.String|TeamFields.id|TeamJsonFields.id)/,
+		);
+	});
+
+	it('keeps declared id, in and out fields out of the relation field schemas', async () => {
+		const document = example();
+		const relation = document.tables.find(
+			(table) => table.name === 'member_of',
+		) as {
+			fields: Array<Record<string, unknown>>;
+		};
+		const template = at(
+			document.tables.find((table) => table.name === 'team')
+				?.fields as Array<Record<string, unknown>>,
+			0,
+		);
+		relation.fields.push(
+			...['id', 'in', 'out'].map((key) => ({
+				...template,
+				path: [key],
+				kind: { kind: 'string' },
+			})),
+		);
+		const result = await run(generate(withDigest(document), corpusOptions));
+		const module =
+			result.files.find((file) => file.path === 'member-of.ts')
+				?.content ?? '';
+		expect(module).toContain(
+			'id: MemberOfId,\n\tin: PersonId,\n\tout: OrgOrTeamId,',
+		);
+		expect(module).toContain(
+			'id: SurrealSchema.RecordIdFromJsonAs(MemberOfId),\n\tin: SurrealSchema.RecordIdFromJsonAs(PersonId),\n\tout: SurrealSchema.RecordIdFromJsonAs(OrgOrTeamId),',
+		);
+		expect(module).not.toMatch(/\b(?:id|in|out): SurrealSchema.String/);
+	});
+
+	it('reports producer VALUE as excluded from all writes', async () => {
+		const result = await run(
+			generate(readJson(compiledPath('field-presence')), corpusOptions),
+		);
+		const module =
+			result.files.find((file) => file.path === 'm.ts')?.content ?? '';
+		expect(module).toContain(
+			'vout: { select: "required", create: "excluded", merge: "excluded", content: "excluded" }',
+		);
+		expect(module.match(/^\tvout: MFields.vout,$/gm)).toHaveLength(1);
 	});
 
 	it('rejects unknown properties anywhere in the document', async () => {
@@ -598,8 +745,25 @@ describe('generation rules', () => {
 	});
 
 	it('`.ts` imports typecheck with allowImportingTsExtensions and load under Node type stripping', async () => {
+		const document = readJson(compiledPath('corpus'));
+		const tables = document.tables as Array<Record<string, unknown>>;
+		const person = tables.find((table) => table.name === 'person');
+		tables.push({
+			...person,
+			name: 'binding',
+			fields: [],
+			indexes: [],
+			events: [],
+			idKey: {
+				kind: 'tuple',
+				items: [
+					{ kind: 'string' },
+					{ kind: 'record', tables: ['person'] },
+				],
+			},
+		});
 		const result = await run(
-			generate(readJson(compiledPath('corpus')), {
+			generate(withDigest(document), {
 				...corpusOptions,
 				importExtension: '.ts',
 			}),
@@ -679,9 +843,10 @@ describe('generation rules', () => {
 				[
 					"import { Schema } from 'effect';",
 					"import { RecordId } from 'surrealdb';",
-					"import { PersonId, manifest } from './generated/index.ts';",
+					"import { BindingId, PersonId, manifest } from './generated/index.ts';",
 					"const id: unknown = new RecordId('person', 'ann');",
 					'Schema.decodeUnknownSync(PersonId)(id);',
+					"Schema.decodeUnknownSync(BindingId)(new RecordId('binding', ['admin', id]));",
 					'console.log(manifest.store);',
 				].join('\n'),
 			);
@@ -745,13 +910,13 @@ describe('generation rules', () => {
 			/\tbare: Schema\.Record\(Schema\.String, Schema\.Never\),/,
 		);
 		expect(module('team.ts')).toMatch(
-			/\tflex: Schema\.Record\(Schema\.String, Schema\.Unknown\),/,
+			/\tflex: Schema\.Record\(Schema\.String, SurrealSchema\.SurrealValue\),/,
 		);
 		expect(module('team.ts')).not.toMatch(
-			/bare: Schema\.Record\(Schema\.String, Schema\.Unknown\)/,
+			/bare: Schema\.Record\(Schema\.String, SurrealSchema\.SurrealValue\)/,
 		);
 		expect(module('team-loose.ts')).toMatch(
-			/\tbare: Schema\.Record\(Schema\.String, Schema\.Unknown\),/,
+			/\tbare: Schema\.Record\(Schema\.String, SurrealSchema\.SurrealValue\),/,
 		);
 		// The JSON world follows the same rule.
 		expect(module('team.ts')).toMatch(

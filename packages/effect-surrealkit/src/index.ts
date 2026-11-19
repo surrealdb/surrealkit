@@ -79,6 +79,7 @@ export {
 export { NoneAsAbsent, stripNone } from './row.js';
 export {
 	Bytes,
+	Float,
 	SurrealString as String,
 	toWellFormed,
 	Unsupported,
@@ -121,3 +122,4 @@ export {
 	dateTimeFromString,
 	dateTimeToString,
 } from './temporal.js';
+export { SurrealJsonValue, SurrealValue } from './value.js';

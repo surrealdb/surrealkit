@@ -36,7 +36,7 @@ export const M = Schema.Struct({
 	dflt: MFields.dflt,
 	flex: Schema.optionalKey(Schema.StructWithRest(Schema.Struct({
 		a: Schema.optionalKey(SurrealSchema.Int),
-	}), [Schema.Record(Schema.String, Schema.Unknown)])),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)])),
 	nul: MFields.nul,
 	obj: Schema.optionalKey(Schema.Struct({
 		a: Schema.optionalKey(SurrealSchema.Int),
@@ -64,7 +64,7 @@ export const MCreate = Schema.Struct({
 	dflt: Schema.optionalKey(MFields.dflt),
 	flex: Schema.optionalKey(Schema.StructWithRest(Schema.Struct({
 		a: Schema.optionalKey(SurrealSchema.Int),
-	}), [Schema.Record(Schema.String, Schema.Unknown)])),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)])),
 	nul: MFields.nul,
 	obj: Schema.optionalKey(Schema.Struct({
 		a: Schema.optionalKey(SurrealSchema.Int),
@@ -76,7 +76,6 @@ export const MCreate = Schema.Struct({
 	roopt: Schema.optionalKey(MFields.roopt),
 	vfall: MFields.vfall,
 	vin: MFields.vin,
-	vout: Schema.optionalKey(MFields.vout),
 });
 export type MCreate = typeof MCreate.Type;
 export type MCreateEncoded = typeof MCreate.Encoded;
@@ -87,7 +86,7 @@ export const MMerge = Schema.Struct({
 	dflt: Schema.optionalKey(MFields.dflt),
 	flex: Schema.optional(Schema.StructWithRest(Schema.Struct({
 		a: Schema.optional(SurrealSchema.Int),
-	}), [Schema.Record(Schema.String, Schema.Unknown)])),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)])),
 	nul: Schema.optionalKey(MFields.nul),
 	obj: Schema.optional(Schema.Struct({
 		a: Schema.optional(SurrealSchema.Int),
@@ -97,7 +96,6 @@ export const MMerge = Schema.Struct({
 	req: Schema.optionalKey(MFields.req),
 	vfall: Schema.optionalKey(MFields.vfall),
 	vin: Schema.optionalKey(MFields.vin),
-	vout: Schema.optionalKey(MFields.vout),
 });
 export type MMerge = typeof MMerge.Type;
 export type MMergeEncoded = typeof MMerge.Encoded;
@@ -108,7 +106,7 @@ export const MContent = Schema.Struct({
 	dflt: MFields.dflt,
 	flex: Schema.optionalKey(Schema.StructWithRest(Schema.Struct({
 		a: Schema.optionalKey(SurrealSchema.Int),
-	}), [Schema.Record(Schema.String, Schema.Unknown)])),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)])),
 	nul: MFields.nul,
 	obj: Schema.optionalKey(Schema.Struct({
 		a: Schema.optionalKey(SurrealSchema.Int),
@@ -118,7 +116,6 @@ export const MContent = Schema.Struct({
 	req: MFields.req,
 	vfall: MFields.vfall,
 	vin: MFields.vin,
-	vout: Schema.optionalKey(MFields.vout),
 });
 export type MContent = typeof MContent.Type;
 export type MContentEncoded = typeof MContent.Encoded;
@@ -150,7 +147,7 @@ export const MTable = SurrealSchema.table({
 		roopt: { select: "optional", create: "optional", merge: "excluded", content: "excluded" },
 		vfall: { select: "required", create: "required", merge: "optional", content: "required" },
 		vin: { select: "required", create: "required", merge: "optional", content: "required" },
-		vout: { select: "required", create: "optional", merge: "optional", content: "optional" },
+		vout: { select: "required", create: "excluded", merge: "excluded", content: "excluded" },
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
@@ -163,7 +160,7 @@ export const MJsonFields = {
 	dflt: SurrealSchema.String,
 	flex: Schema.StructWithRest(Schema.Struct({
 		a: Schema.optionalKey(SurrealSchema.Int),
-	}), [Schema.Record(Schema.String, Schema.Unknown)]),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealJsonValue)]),
 	nul: Schema.NullOr(SurrealSchema.String),
 	obj: Schema.Struct({
 		a: Schema.optionalKey(SurrealSchema.Int),

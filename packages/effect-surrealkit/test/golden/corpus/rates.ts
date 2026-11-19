@@ -9,7 +9,7 @@ export { RatesId } from "./ids.js";
 
 /** Field schemas of `rates` that are the same in every operation using them; `refine` and `replaceField` accept these keys. */
 export const RatesFields = {
-	weight: Schema.Number,
+	weight: SurrealSchema.Float,
 } as const;
 
 /** A stored `rates` row as a privileged reader selects it (all fields). */
@@ -82,7 +82,7 @@ export const RatesTable = SurrealSchema.table({
 
 /** JSON world: the field schemas of a selected `rates` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */
 export const RatesJsonFields = {
-	weight: Schema.Number,
+	weight: Schema.Finite,
 } as const;
 
 /** A selected `rates` row from SurrealDB JSON. Not the default: rows the SDK returned decode with `RatesRow`. */

@@ -125,6 +125,18 @@ export const printRecord = (
 
 const isLiteral = (kind: Kind): kind is LiteralKind => kind.kind === 'literal';
 
+const openValue = (world: PrintContext['world']): string =>
+	world === 'json'
+		? 'SurrealSchema.SurrealJsonValue'
+		: 'SurrealSchema.SurrealValue';
+
+export const printOpenRecord = (world: PrintContext['world']): string =>
+	`Schema.Record(Schema.String, ${openValue(world)})`;
+
+// Collection items can be open values, but cannot be NONE.
+const printItem = (item: Kind, ctx: PrintContext): string =>
+	item.kind === 'any' ? openValue(ctx.world) : printKind(item, ctx);
+
 /**
  * The JSON world's codec for a kind whose SurrealDB JSON rendering differs
  * from its SDK value; `undefined` where the native codec already reads the
@@ -169,7 +181,7 @@ const printJsonKind = (
 		case 'geometry':
 			return `SurrealSchema.GeometryFromJson(${printKind(kind, { ...ctx, world: 'native' })})`;
 		case 'set': {
-			const item = hooks.item ?? printKind(kind.item, ctx);
+			const item = hooks.item ?? printItem(kind.item, ctx);
 			return kind.length === undefined
 				? `SurrealSchema.SetFromJson(${item})`
 				: `SurrealSchema.SetFromJson(${item}, { length: ${kind.length} })`;
@@ -212,7 +224,9 @@ export const printKind = (
 	}
 	switch (kind.kind) {
 		case 'any':
-			return 'Schema.Unknown';
+			return ctx.world === 'json'
+				? openValue(ctx.world)
+				: 'Schema.UndefinedOr(SurrealSchema.SurrealValue)';
 		case 'none':
 			return 'Schema.Undefined';
 		case 'null':
@@ -224,7 +238,9 @@ export const printKind = (
 				? 'SurrealSchema.Int64'
 				: 'SurrealSchema.Int';
 		case 'float':
-			return 'Schema.Number';
+			return ctx.world === 'json'
+				? 'Schema.Finite'
+				: 'SurrealSchema.Float';
 		case 'decimal':
 			return 'SurrealSchema.Decimal';
 		case 'number':
@@ -251,7 +267,7 @@ export const printKind = (
 				hooks.object ??
 				(ctx.closedObjects === true
 					? 'Schema.Record(Schema.String, Schema.Never)'
-					: 'Schema.Record(Schema.String, Schema.Unknown)')
+					: printOpenRecord(ctx.world))
 			);
 		case 'record':
 			return printRecord(kind.tables, ctx);
@@ -267,14 +283,14 @@ export const printKind = (
 			return `SurrealSchema.GeometryOf(${list(kind.types)})`;
 		}
 		case 'array': {
-			const item = hooks.item ?? printKind(kind.item, ctx);
+			const item = hooks.item ?? printItem(kind.item, ctx);
 			const array = `Schema.Array(${item})`;
 			return kind.length === undefined
 				? array
 				: `${array}.check(Schema.isBetweenLength(${kind.length}, ${kind.length}))`;
 		}
 		case 'set': {
-			const item = hooks.item ?? printKind(kind.item, ctx);
+			const item = hooks.item ?? printItem(kind.item, ctx);
 			return kind.length === undefined
 				? `SurrealSchema.SetOf(${item})`
 				: `SurrealSchema.SetOf(${item}, { length: ${kind.length} })`;

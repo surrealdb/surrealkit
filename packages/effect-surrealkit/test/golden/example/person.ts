@@ -29,7 +29,7 @@ export const PersonFields = {
 		kind: Schema.Literals(["home", "mobile", "work"]),
 	})),
 	role: Schema.Literals(["admin", "member", "owner"]),
-	score: Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThan(100)),
+	score: SurrealSchema.Float.check(Schema.isGreaterThan(0), Schema.isLessThan(100)),
 	ssn: SurrealSchema.String,
 	tags: SurrealSchema.SetOf(SurrealSchema.String),
 	touched_at: SurrealSchema.DateTime,
@@ -41,7 +41,7 @@ export const Person = Schema.Struct({
 	id: PersonId,
 	address: Schema.StructWithRest(Schema.Struct({
 		city: SurrealSchema.String,
-	}), [Schema.Record(Schema.String, Schema.Unknown)]),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]),
 	age: Schema.optionalKey(PersonFields.age),
 	bio: PersonFields.bio,
 	created_at: PersonFields.created_at,
@@ -73,7 +73,7 @@ export type PersonRowEncoded = typeof PersonRow.Encoded;
 export const PersonCreate = Schema.Struct({
 	address: Schema.StructWithRest(Schema.Struct({
 		city: SurrealSchema.String,
-	}), [Schema.Record(Schema.String, Schema.Unknown)]),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]),
 	age: Schema.optionalKey(PersonFields.age),
 	bio: PersonFields.bio,
 	created_at: Schema.optionalKey(PersonFields.created_at),
@@ -89,7 +89,6 @@ export const PersonCreate = Schema.Struct({
 	score: PersonFields.score,
 	ssn: Schema.optionalKey(PersonFields.ssn),
 	tags: Schema.optionalKey(PersonFields.tags),
-	touched_at: Schema.optionalKey(PersonFields.touched_at),
 	updated_at: Schema.optionalKey(PersonFields.updated_at),
 });
 export type PersonCreate = typeof PersonCreate.Type;
@@ -99,7 +98,7 @@ export type PersonCreateEncoded = typeof PersonCreate.Encoded;
 export const PersonMerge = Schema.Struct({
 	address: Schema.optionalKey(Schema.StructWithRest(Schema.Struct({
 		city: Schema.optionalKey(SurrealSchema.String),
-	}), [Schema.Record(Schema.String, Schema.Unknown)])),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)])),
 	age: Schema.optional(PersonFields.age),
 	bio: Schema.optionalKey(PersonFields.bio),
 	email: Schema.optionalKey(PersonFields.email),
@@ -114,7 +113,6 @@ export const PersonMerge = Schema.Struct({
 	score: Schema.optionalKey(PersonFields.score),
 	ssn: Schema.optional(PersonFields.ssn),
 	tags: Schema.optionalKey(PersonFields.tags),
-	touched_at: Schema.optionalKey(PersonFields.touched_at),
 	updated_at: Schema.optional(PersonFields.updated_at),
 });
 export type PersonMerge = typeof PersonMerge.Type;
@@ -124,7 +122,7 @@ export type PersonMergeEncoded = typeof PersonMerge.Encoded;
 export const PersonContent = Schema.Struct({
 	address: Schema.StructWithRest(Schema.Struct({
 		city: SurrealSchema.String,
-	}), [Schema.Record(Schema.String, Schema.Unknown)]),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]),
 	age: Schema.optionalKey(PersonFields.age),
 	bio: PersonFields.bio,
 	email: PersonFields.email,
@@ -139,7 +137,6 @@ export const PersonContent = Schema.Struct({
 	score: PersonFields.score,
 	ssn: Schema.optionalKey(PersonFields.ssn),
 	tags: PersonFields.tags,
-	touched_at: Schema.optionalKey(PersonFields.touched_at),
 	updated_at: Schema.optionalKey(PersonFields.updated_at),
 });
 export type PersonContent = typeof PersonContent.Type;
@@ -176,7 +173,7 @@ export const PersonTable = SurrealSchema.table({
 		score: { select: "required", create: "required", merge: "optional", content: "required" },
 		ssn: { select: "optional", create: "optional", merge: "removable", content: "optional" },
 		tags: { select: "required", create: "optional", merge: "optional", content: "required" },
-		touched_at: { select: "required", create: "optional", merge: "optional", content: "optional" },
+		touched_at: { select: "required", create: "excluded", merge: "excluded", content: "excluded" },
 		updated_at: { select: "required", create: "optional", merge: "resettable", content: "optional" },
 	},
 	relations: { in: ["member_of"], out: [] },
@@ -187,7 +184,7 @@ export const PersonTable = SurrealSchema.table({
 export const PersonJsonFields = {
 	address: Schema.StructWithRest(Schema.Struct({
 		city: SurrealSchema.String,
-	}), [Schema.Record(Schema.String, Schema.Unknown)]),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealJsonValue)]),
 	age: SurrealSchema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(150)),
 	bio: Schema.NullOr(SurrealSchema.String),
 	created_at: SurrealSchema.DateTimeFromJson,
@@ -203,7 +200,7 @@ export const PersonJsonFields = {
 		kind: Schema.Literals(["home", "mobile", "work"]),
 	})),
 	role: Schema.Literals(["admin", "member", "owner"]),
-	score: Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThan(100)),
+	score: Schema.Finite.check(Schema.isGreaterThan(0), Schema.isLessThan(100)),
 	ssn: SurrealSchema.String,
 	tags: SurrealSchema.SetFromJson(SurrealSchema.String),
 	touched_at: SurrealSchema.DateTimeFromJson,

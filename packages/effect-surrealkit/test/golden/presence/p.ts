@@ -13,7 +13,7 @@ export const PFields = {} as const;
 /** A stored `p` row as a privileged reader selects it (all fields). */
 export const P = Schema.StructWithRest(Schema.Struct({
 	id: PId,
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type P = typeof P.Type;
 export type PEncoded = typeof P.Encoded;
 
@@ -23,17 +23,17 @@ export type PRow = typeof PRow.Type;
 export type PRowEncoded = typeof PRow.Encoded;
 
 /** Input for `CREATE p CONTENT` / `INSERT`. The record id is an operation argument. */
-export const PCreate = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, Schema.Unknown)]);
+export const PCreate = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type PCreate = typeof PCreate.Type;
 export type PCreateEncoded = typeof PCreate.Encoded;
 
 /** Input for `UPDATE p MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
-export const PMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, Schema.Unknown)]);
+export const PMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type PMerge = typeof PMerge.Type;
 export type PMergeEncoded = typeof PMerge.Encoded;
 
 /** Input for `UPDATE p CONTENT`: a full replacement of the writable fields. */
-export const PContent = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, Schema.Unknown)]);
+export const PContent = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type PContent = typeof PContent.Type;
 export type PContentEncoded = typeof PContent.Encoded;
 
@@ -63,5 +63,5 @@ export const PJsonFields = {
 /** A selected `p` row from SurrealDB JSON. Not the default: rows the SDK returned decode with `PRow`. */
 export const PFromJson = Schema.StructWithRest(Schema.Struct({
 	id: SurrealSchema.RecordIdFromJsonAs(PId),
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealJsonValue)]);
 export type PJsonEncoded = typeof PFromJson.Encoded;

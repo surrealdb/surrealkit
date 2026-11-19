@@ -11,7 +11,7 @@ export { DocId } from "./ids.js";
 export const DocFields = {
 	body: SurrealSchema.String,
 	code: SurrealSchema.String,
-	embedding: Schema.Array(Schema.Number).check(Schema.isBetweenLength(4, 4)),
+	embedding: Schema.Array(SurrealSchema.Float).check(Schema.isBetweenLength(4, 4)),
 	owner: PersonId,
 	status: Schema.Literals(["closed", "open"]),
 	title: SurrealSchema.String,
@@ -106,7 +106,7 @@ export const DocTable = SurrealSchema.table({
 export const DocJsonFields = {
 	body: SurrealSchema.String,
 	code: SurrealSchema.String,
-	embedding: Schema.Array(Schema.Number).check(Schema.isBetweenLength(4, 4)),
+	embedding: Schema.Array(Schema.Finite).check(Schema.isBetweenLength(4, 4)),
 	owner: SurrealSchema.RecordIdFromJsonAs(PersonId),
 	status: Schema.Literals(["closed", "open"]),
 	title: SurrealSchema.String,

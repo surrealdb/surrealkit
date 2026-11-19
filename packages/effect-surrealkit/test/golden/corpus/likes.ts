@@ -15,7 +15,7 @@ export const Likes = Schema.StructWithRest(Schema.Struct({
 	id: LikesId,
 	in: SurrealSchema.RecordIdAny,
 	out: SurrealSchema.RecordIdAny,
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type Likes = typeof Likes.Type;
 export type LikesEncoded = typeof Likes.Encoded;
 
@@ -25,17 +25,17 @@ export type LikesRow = typeof LikesRow.Type;
 export type LikesRowEncoded = typeof LikesRow.Encoded;
 
 /** Input for `CREATE likes CONTENT` / `INSERT`. The record id is an operation argument. */
-export const LikesCreate = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, Schema.Unknown)]);
+export const LikesCreate = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type LikesCreate = typeof LikesCreate.Type;
 export type LikesCreateEncoded = typeof LikesCreate.Encoded;
 
 /** Input for `UPDATE likes MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
-export const LikesMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, Schema.Unknown)]);
+export const LikesMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type LikesMerge = typeof LikesMerge.Type;
 export type LikesMergeEncoded = typeof LikesMerge.Encoded;
 
 /** Input for `UPDATE likes CONTENT`: a full replacement of the writable fields. */
-export const LikesContent = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, Schema.Unknown)]);
+export const LikesContent = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type LikesContent = typeof LikesContent.Type;
 export type LikesContentEncoded = typeof LikesContent.Encoded;
 
@@ -79,5 +79,5 @@ export const LikesFromJson = Schema.StructWithRest(Schema.Struct({
 	id: SurrealSchema.RecordIdFromJsonAs(LikesId),
 	in: SurrealSchema.RecordIdFromJsonAs(SurrealSchema.RecordIdAny),
 	out: SurrealSchema.RecordIdFromJsonAs(SurrealSchema.RecordIdAny),
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealJsonValue)]);
 export type LikesJsonEncoded = typeof LikesFromJson.Encoded;

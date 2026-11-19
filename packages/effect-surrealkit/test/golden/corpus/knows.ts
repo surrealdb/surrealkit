@@ -15,7 +15,7 @@ export const Knows = Schema.StructWithRest(Schema.Struct({
 	id: KnowsId,
 	in: PersonId,
 	out: PersonId,
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type Knows = typeof Knows.Type;
 export type KnowsEncoded = typeof Knows.Encoded;
 
@@ -61,5 +61,5 @@ export const KnowsFromJson = Schema.StructWithRest(Schema.Struct({
 	id: SurrealSchema.RecordIdFromJsonAs(KnowsId),
 	in: SurrealSchema.RecordIdFromJsonAs(PersonId),
 	out: SurrealSchema.RecordIdFromJsonAs(PersonId),
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealJsonValue)]);
 export type KnowsJsonEncoded = typeof KnowsFromJson.Encoded;

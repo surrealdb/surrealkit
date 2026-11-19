@@ -5,6 +5,12 @@ import { describe, expect, it } from 'vitest';
 
 import * as SurrealSchema from '../src/index.js';
 import {
+	AnythingFromJson,
+	AnythingRow,
+	KindsFields,
+	KindsJsonFields,
+} from './golden/corpus/index.js';
+import {
 	fn_double,
 	fn_greet,
 	fn_optional_first,
@@ -53,6 +59,34 @@ describe('generated table modules', () => {
 		});
 		expect('nickname' in row).toBe(false);
 		expect(row.id.table.name).toBe('person');
+	});
+
+	it('decode open row fields according to the representation', () => {
+		const id = new RecordId('anything', 'ann');
+		const datetime = new DateTime('2024-01-01T00:00:00Z');
+		expect(decodes(AnythingRow, { id, extra: { datetime } })).toBe(true);
+		expect(decodes(AnythingRow, { id, extra: Symbol() })).toBe(false);
+		expect(
+			decodes(AnythingFromJson, {
+				id: 'anything:ann',
+				extra: { datetime: datetime.toString() },
+			}),
+		).toBe(true);
+		expect(
+			decodes(AnythingFromJson, {
+				id: 'anything:ann',
+				extra: { datetime },
+			}),
+		).toBe(false);
+	});
+
+	it('distinguish NONE in an any field from values in open collections', () => {
+		expect(decodes(KindsFields.k_any, undefined)).toBe(true);
+		expect(decodes(KindsFields.k_array, [undefined])).toBe(false);
+		expect(decodes(KindsFields.k_set, new Set([undefined]))).toBe(false);
+		expect(decodes(KindsJsonFields.k_any, undefined)).toBe(false);
+		expect(decodes(KindsJsonFields.k_array, [null])).toBe(true);
+		expect(decodes(KindsJsonFields.k_set, [null])).toBe(true);
 	});
 
 	it('reject a record id of another table where a table id is expected', () => {

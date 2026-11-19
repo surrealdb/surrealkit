@@ -17,7 +17,12 @@ import type {
 	Table,
 	TablePermissions,
 } from './document.js';
-import { applyRefinements, printKind, printRecord } from './kinds.js';
+import {
+	applyRefinements,
+	printKind,
+	printOpenRecord,
+	printRecord,
+} from './kinds.js';
 import { propertyAccess, propertyKey } from './names.js';
 import type { EmitterOptions } from './options.js';
 
@@ -146,24 +151,31 @@ const derivePresence = (
 		case 'select':
 			return none ? 'optional' : 'required';
 		case 'create':
-			if (writeExcluded || info.computed) return 'excluded';
-			return none ||
-				info.defaultMode !== undefined ||
-				info.valueIgnoresInput
+			if (writeExcluded || info.computed || info.valueIgnoresInput)
+				return 'excluded';
+			return none || info.defaultMode !== undefined
 				? 'optional'
 				: 'required';
 		case 'merge':
-			if (writeExcluded || info.computed || info.readonly)
+			if (
+				writeExcluded ||
+				info.computed ||
+				info.readonly ||
+				info.valueIgnoresInput
+			)
 				return 'excluded';
 			// Before `none`: NONE re-applies a DEFAULT ALWAYS, even on option<T>.
 			if (info.defaultMode === 'always') return 'resettable';
 			return none ? 'removable' : 'optional';
 		case 'content':
-			if (writeExcluded || info.computed || info.readonly)
-				return 'excluded';
-			return none ||
-				info.defaultMode === 'always' ||
+			if (
+				writeExcluded ||
+				info.computed ||
+				info.readonly ||
 				info.valueIgnoresInput
+			)
+				return 'excluded';
+			return none || info.defaultMode === 'always'
 				? 'optional'
 				: 'required';
 	}
@@ -185,13 +197,12 @@ const wrap = (code: string, presence: Presence): string => {
 
 const tabs = (indent: number): string => '\t'.repeat(indent);
 
-const OPEN_RECORD = 'Schema.Record(Schema.String, Schema.Unknown)';
-
 /** A struct literal over printed entries, multi-line. */
 const struct = (
 	entries: ReadonlyArray<readonly [string, string]>,
 	indent: number,
 	open: boolean,
+	world: PrintContext['world'] = 'native',
 ): string => {
 	const body =
 		entries.length === 0
@@ -202,7 +213,9 @@ const struct = (
 							`${tabs(indent + 1)}${propertyKey(key)}: ${value},`,
 					)
 					.join('\n')}\n${tabs(indent)}})`;
-	return open ? `Schema.StructWithRest(${body}, [${OPEN_RECORD}])` : body;
+	return open
+		? `Schema.StructWithRest(${body}, [${printOpenRecord(world)}])`
+		: body;
 };
 
 class TablePrinter {
@@ -273,8 +286,13 @@ class TablePrinter {
 			named.length === 0
 				? undefined
 				: this.object(named, operation, indent, element, info.flexible);
+		const openCollection =
+			(info.kind?.kind === 'array' || info.kind?.kind === 'set') &&
+			info.kind.item.kind === 'any';
 		const item =
-			elementNode !== undefined && elementNode.children.size > 0
+			elementNode !== undefined &&
+			(elementNode.children.size > 0 ||
+				(openCollection && infoOf(elementNode).kind !== undefined))
 				? this.field(elementNode, operation, indent, true)
 				: undefined;
 		if (info.kind === undefined) {
@@ -312,11 +330,11 @@ class TablePrinter {
 				),
 			]);
 		}
-		return struct(entries, indent, open);
+		return struct(entries, indent, open, this.world);
 	}
 
 	topLevel(): FieldNode[] {
-		const reserved = this.isRelation ? ['in', 'out'] : [];
+		const reserved = this.isRelation ? ['id', 'in', 'out'] : ['id'];
 		return namedChildren(this.root).filter(
 			(child) => !reserved.includes(child.key),
 		);
@@ -699,7 +717,7 @@ const printJsonWorld = (
 		'} as const;',
 		'',
 		`/** A selected \`${table.name}\` row from SurrealDB JSON. Not the default: rows the SDK returned decode with \`${pascal}Row\`. */`,
-		`export const ${pascal}FromJson = ${struct(entries, 0, !table.schemafull)};`,
+		`export const ${pascal}FromJson = ${struct(entries, 0, !table.schemafull, 'json')};`,
 		`export type ${pascal}JsonEncoded = typeof ${pascal}FromJson.Encoded;`,
 	];
 };
