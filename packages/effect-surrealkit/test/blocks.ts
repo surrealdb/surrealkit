@@ -13,18 +13,25 @@ import {
 	count,
 	create,
 	eq,
+	follow,
 	gte,
 	insert,
 	lt,
 	ne,
 	not,
 	object,
+	outgoing,
 	param,
 	select,
 	sum,
 	update,
 	upsert,
 } from '../src/statement/index.js';
+import {
+	store as corpus,
+	PersonId,
+	PersonTable,
+} from './golden/corpus/index.js';
 import {
 	AccountId,
 	fn_debit,
@@ -358,3 +365,27 @@ export const topUp = block()
 		first: array.first($.receipts),
 	}))
 	.build('top up');
+
+/**
+ * Selects that follow a record link and take a graph step as locals, over
+ * the corpus schema (`test/graph-engine.test.ts` runs it).
+ */
+export const personAndTeams = block()
+	.let('person', () =>
+		select(PersonTable, param('who', PersonId))
+			.only()
+			.project((row) => ({
+				id: row.id,
+				boss: follow(corpus, row.manager).name,
+			}))
+			.build(),
+	)
+	.throwIfNone('person', 'Person not found')
+	.let('teams', ($) =>
+		select(PersonTable, $.person.id)
+			.only()
+			.value((row) => outgoing(corpus, row.id, 'member_of'))
+			.build(),
+	)
+	.return(($) => ({ boss: $.person.boss, teams: $.teams }))
+	.build('person and teams', { writes: false });

@@ -29,6 +29,7 @@ import {
 	select,
 	shortest,
 } from '../src/statement/index.js';
+import { personAndTeams } from './blocks.js';
 import { corpusPath, readJson } from './documents.js';
 import {
 	type Engine,
@@ -362,6 +363,28 @@ describe.skipIf(!engineConfigured)(
 				const result = await ok(client.run(statement, from(dan)));
 				expect(keys(result?.ids)).toEqual(['person:ghost']);
 				expect(result?.rows).toEqual([undefined]);
+			});
+		});
+
+		describe('in a block', () => {
+			it('binds the result of a select that follows a link and one that takes a graph step', async () => {
+				const statement = personAndTeams;
+				const result = await ok(
+					client.run(statement, { who: bob as PersonId }),
+				);
+				expect(result.boss).toBe('Ann');
+				expect(keys(result.teams)).toEqual(['team:red']);
+				const missing = await within(
+					Effect.runPromise(
+						Effect.flip(
+							client.run(statement, {
+								who: id('person', 'ghost') as PersonId,
+							}),
+						),
+					),
+					20_000,
+				);
+				expect(missing).toMatchObject({ message: 'Person not found' });
 			});
 		});
 
