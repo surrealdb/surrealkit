@@ -4,7 +4,7 @@
  * generates fits.
  */
 import type { Schema } from 'effect';
-import { escapeIdent } from 'surrealdb';
+import { escapeIdent, type RecordId } from 'surrealdb';
 
 import {
 	codecOf,
@@ -19,6 +19,7 @@ import {
 } from './expr.js';
 import {
 	type FieldsOf,
+	fieldsOf,
 	type ProjectedCodec,
 	type Projection,
 	projectedCodec,
@@ -33,6 +34,7 @@ import type { Codec, Params } from './statement.js';
 /** A generated table descriptor, as far as the builders read it. */
 export interface PureTable {
 	readonly name: string;
+	readonly schemafull?: boolean;
 	readonly id: Codec;
 	readonly select: RowCodecIn;
 	readonly create?: RowCodecIn;
@@ -63,6 +65,45 @@ export type IdOf<T extends PureTable, P extends Params = Params> = Expr<
 	P
 >;
 
+type ExtraReadFields<T extends PureTable, S extends RowCodecIn> = Exclude<
+	keyof FieldsOf<S>,
+	keyof FieldsOf<T['select']>
+>;
+type Encoded<F> = F extends Codec ? F['Encoded'] : never;
+
+// A view may decode a link to a domain brand. Its encoded value still addresses
+// the stored table and uses an accepted key, allowing NONE for a hidden field.
+type IncompatibleReadLinks<Stored, View> = {
+	[K in keyof Stored & keyof View]: [
+		NonNullable<Encoded<Stored[K]>>,
+	] extends [never]
+		? never
+		: [NonNullable<Encoded<Stored[K]>>] extends [RecordId]
+			? [Exclude<Encoded<View[K]>, undefined>] extends [
+					Exclude<Encoded<Stored[K]>, undefined>,
+				]
+				? never
+				: K
+			: never;
+}[keyof Stored & keyof View];
+
+type KnownReadFields<T extends PureTable, S extends RowCodecIn> = T extends {
+	readonly schemafull: true;
+}
+	? [ExtraReadFields<T, S>] extends [never]
+		? [IncompatibleReadLinks<FieldsOf<T['select']>, FieldsOf<S>>] extends [
+				never,
+			]
+			? unknown
+			: {
+					readonly incompatibleRecordLinks: IncompatibleReadLinks<
+						FieldsOf<T['select']>,
+						FieldsOf<S>
+					>;
+				}
+		: { readonly unknownReadFields: ExtraReadFields<T, S> }
+	: unknown;
+
 /**
  * `table` as a session with narrower permissions reads it.
  *
@@ -75,8 +116,24 @@ export type IdOf<T extends PureTable, P extends Params = Params> = Expr<
  */
 export const readAs = <T extends PureTable, S extends RowCodecIn>(
 	table: T,
-	select: S,
-): Omit<T, 'select'> & { readonly select: S } => ({ ...table, select });
+	select: S & KnownReadFields<NoInfer<T>, NoInfer<S>>,
+): Omit<T, 'select'> & { readonly select: S } => {
+	if (table.schemafull) {
+		const stored = fieldsOf(table.select);
+		const view = fieldsOf(select);
+		if (!stored || !view)
+			throw new TypeError(
+				'readAs requires row schemas with declared fields',
+			);
+		for (const key of Object.keys(view)) {
+			if (!Object.hasOwn(stored, key))
+				throw new TypeError(
+					`readAs: ${table.name} has no declared field ${key}`,
+				);
+		}
+	}
+	return { ...table, select };
+};
 
 /**
  * A table name as SurrealQL reads it in subject position (`FROM`,

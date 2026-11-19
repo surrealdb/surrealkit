@@ -39,7 +39,12 @@ const cases: ReadonlyArray<Case> = fixtures.flatMap((file) =>
 );
 
 const normalised = (text: string): string =>
-	text.split(packageRoot).join('<package>');
+	// TypeScript truncates qualified generic arguments before paths are normalised.
+	// Keep the outer symbol and the subsequent diagnostic chain for those excerpts.
+	text
+		.split(packageRoot)
+		.join('<package>')
+		.replace(/('import\("[^"]+"\)\.\w+)<[^'\n]*?\.\.\.'/gu, "$1<...>'");
 
 /**
  * The directive a diagnostic belongs to, found as the compiler finds it:

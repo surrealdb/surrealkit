@@ -37,10 +37,12 @@ import { bind, run, transaction } from 'effect-surrealkit/client';
 import {
 	call,
 	cast,
+	codecOf,
 	create,
 	eq,
 	param,
 	part,
+	readAs,
 	select,
 	sequence,
 	update,
@@ -67,6 +69,18 @@ export const listing = select(PersonTable)
 		greeting: call(fn_greet, row.name),
 	}))
 	.build();
+
+const Email = SurrealSchema.String.pipe(Schema.brand('DirectoryEmail'));
+const directory = readAs(PersonTable, Schema.Struct({ id: PersonId, email: Email }));
+export const directoryLookup = select(directory)
+    .where((row) => eq(row.email, param('email', codecOf(row.email))))
+    .project((row) => ({ person: row.id, contact: row.email }))
+    .build();
+
+type Exact<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+const exactBindings: Exact<typeof directoryLookup.params.email.Type, typeof Email.Type> = true;
+const exactRows: Exact<typeof directoryLookup.result.Type, ReadonlyArray<{readonly person: typeof PersonId.Type; readonly contact: typeof Email.Type}>> = true;
+void [exactBindings, exactRows];
 
 export const rename = update(PersonTable, param('id', PersonId))
 	.merge(param('changes', PersonMerge))

@@ -167,7 +167,7 @@ exports[`type diagnostics > create/merge-value-missing-fields 1`] = `
 
 exports[`type diagnostics > create/missing-field 1`] = `
 [
-  "TS2345: Argument of type 'import("<package>/src/statement/expr").Expr<import("<package>/node_modules/effect/dist/Schema").Struct<{ readonly address: import("<package>/node_modules/e...' is not assignable to parameter of type 'import("<package>/src/statement/expr").Expr<import("<package>/node_modules/effect/dist/Schema").Struct<{ readonly address: import("<package>/node_modules/e...'.
+  "TS2345: Argument of type 'import("<package>/src/statement/expr").Expr<...>' is not assignable to parameter of type 'import("<package>/src/statement/expr").Expr<...>'.
   Property ''this value is not what the table accepts for this operation'' is missing in type 'Expr<Struct<{ readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [$Record<String, Codec<SurrealValue, SurrealValue, never, never>>]>; readonly bio: NullOr<...>; readonly email: declareConstructor<...>; readonly score: declareConstructor<...>...' but required in type '{ readonly 'this value is not what the table accepts for this operation': readonly [{ readonly address: { readonly [x: string]: SurrealValue; readonly city: string; }; readonly bio: string | null; readonly email: string; readonly score: number; }, { ...; }]; }'.",
 ]
 `;
@@ -332,6 +332,20 @@ exports[`type diagnostics > project/alias-number 1`] = `
 exports[`type diagnostics > project/alias-string 1`] = `
 [
   "TS2322: Type 'string' is not assignable to type 'Expr<Codec, Params>'.",
+]
+`;
+
+exports[`type diagnostics > read-view/unknown-stored-field 1`] = `
+[
+  "TS2345: Argument of type 'Struct<{ readonly emial: String; }>' is not assignable to parameter of type 'Struct<{ readonly emial: String; }> & { readonly unknownReadFields: "emial"; }'.
+  Property 'unknownReadFields' is missing in type 'Struct<{ readonly emial: String; }>' but required in type '{ readonly unknownReadFields: "emial"; }'.",
+]
+`;
+
+exports[`type diagnostics > read-view/wrong-record-table 1`] = `
+[
+  "TS2345: Argument of type 'Struct<{ readonly id: brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">; }>' is not assignable to parameter of type 'Struct<{ readonly id: brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">; }> & { ...; }'.
+  Property 'incompatibleRecordLinks' is missing in type 'Struct<{ readonly id: brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">; }>' but required in type '{ readonly incompatibleRecordLinks: "id"; }'.",
 ]
 `;
 

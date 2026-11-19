@@ -521,6 +521,18 @@ describe('select', () => {
 	});
 });
 
+it('checks schemafull views even when the table type was widened', () => {
+	const view = Schema.Struct({ emial: Schema.String });
+	const table = {
+		...PersonTable,
+		schemafull: Boolean(PersonTable.schemafull),
+	};
+	expect(() => readAs(table, view)).toThrow(
+		/person has no declared field emial/,
+	);
+	expect(() => readAs({ ...table, schemafull: false }, view)).not.toThrow();
+});
+
 describe('writes', () => {
 	const person = param('person', PersonCreate);
 	const id = param('id', PersonId);
