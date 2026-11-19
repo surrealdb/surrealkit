@@ -91,7 +91,7 @@ const assertOrder = (state: State): void => {
 		const source = state.aliases.get(path.root);
 		if (source !== undefined && source !== path.rootSql) {
 			throw new RangeError(
-				`the projection alias \`${path.root}\` stands for \`${source}\`, not the stored field \`${path.root}\` that ORDER BY ${sql} reads, and SurrealDB would order by the alias; rename the alias`,
+				`the projection alias \`${path.root}\` stands for \`${source}\` and shadows the stored field \`${path.root}\` that ORDER BY ${sql} reads, so SurrealDB would order by the alias; rename the alias`,
 			);
 		}
 	}

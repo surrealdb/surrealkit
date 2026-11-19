@@ -300,6 +300,25 @@ describe('select', () => {
 		expect(names(statement)).toEqual([]);
 	});
 
+	it('rejects computed sort keys and aliases that hide a stored sort field', () => {
+		expect(() =>
+			// @ts-expect-error a parameter is not a field path; this checks the run-time guard
+			select(PersonTable).orderBy(() => param('sort', Schema.String)),
+		).toThrow(/field path/);
+		expect(() =>
+			select(PersonTable)
+				.orderBy((r) => r.name)
+				.project((r) => ({ name: r.role }))
+				.build(),
+		).toThrow(/shadows/);
+		expect(() =>
+			select(PersonTable)
+				.project((r) => ({ name: r.role }))
+				.orderBy((r) => r.name)
+				.build(),
+		).toThrow(/shadows/);
+	});
+
 	it('renders every clause in SurrealQL order', () => {
 		const statement = select(PersonTable)
 			.where((row) => gte(row.age, param('minimum', SurrealSchema.Int)))

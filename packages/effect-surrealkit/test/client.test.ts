@@ -426,6 +426,46 @@ describe('transaction', () => {
 		expect(different.calls).toHaveLength(0);
 	});
 
+	it('refuses a later input shadowed by an earlier LET', async () => {
+		const { client, calls } = fake(async () => []);
+		const readOwner = make({
+			sql: 'RETURN $owner;',
+			params: { owner: Schema.String },
+			result: Schema.String,
+		});
+		const error = await failure(
+			client.transaction([
+				bind(guarded, { boundOwner: 'first' }),
+				bind(readOwner, { owner: 'second' }),
+			]),
+		);
+		expect(error).toMatchObject({ binding: 'owner' });
+		expect(calls).toHaveLength(0);
+	});
+
+	it('distinguishes native binding types with the same rendered text', async () => {
+		const read = make({
+			sql: 'RETURN $x;',
+			params: { x: Schema.Unknown },
+			result: Schema.Unknown,
+		});
+		for (const [a, b] of [
+			[[1], new Set([1])],
+			[1, new Uint8Array([1])],
+		]) {
+			const { client, calls } = fake(async () => []);
+			expect(
+				await failure(
+					client.transaction([
+						bind(read, { x: a }),
+						bind(read, { x: b }),
+					]),
+				),
+			).toMatchObject({ binding: 'x' });
+			expect(calls).toHaveLength(0);
+		}
+	});
+
 	it('maps a THROW declared by any of its statements', async () => {
 		const thrown = serverError('An error occurred: Not the owner', {
 			kind: 'Thrown',
