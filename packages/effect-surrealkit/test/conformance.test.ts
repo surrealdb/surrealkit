@@ -1603,4 +1603,240 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 			).not.toContain('"index"');
 		});
 	});
+
+	describe('record links, graph steps, FETCH and recursive paths', () => {
+		let user: SurrealSession;
+		const asUser = (sql: string) => query(sql, undefined, user);
+		/** Record ids as text, sorted: the engine does not promise an order. */
+		const ids = (value: unknown): unknown =>
+			Array.isArray(value)
+				? value
+						.map((item) =>
+							item instanceof RecordId
+								? `${item.table.name}:${String(item.id)}`
+								: ids(item),
+						)
+						.sort()
+				: value;
+
+		beforeAll(async () => {
+			await query(`
+				DEFINE TABLE g_person SCHEMAFULL PERMISSIONS FULL;
+				DEFINE FIELD name ON g_person TYPE string;
+				DEFINE FIELD boss ON g_person TYPE option<record<g_person>>;
+				DEFINE FIELD watchers ON g_person TYPE array<record<g_person>> DEFAULT [];
+				DEFINE TABLE g_team SCHEMAFULL PERMISSIONS FULL;
+				DEFINE FIELD name ON g_team TYPE string;
+				DEFINE FIELD size ON g_team TYPE int;
+				DEFINE TABLE g_secret SCHEMAFULL PERMISSIONS NONE;
+				DEFINE FIELD name ON g_secret TYPE string;
+				DEFINE FIELD pin ON g_person TYPE option<record<g_person | g_team>>;
+				DEFINE FIELD secret ON g_person TYPE option<record<g_secret>>;
+				DEFINE TABLE g_knows TYPE RELATION IN g_person OUT g_person ENFORCED;
+				DEFINE TABLE g_in TYPE RELATION IN g_person OUT g_team | g_secret ENFORCED SCHEMAFULL PERMISSIONS FULL;
+				DEFINE FIELD role ON g_in TYPE string;
+				DEFINE TABLE g_loose TYPE RELATION IN g_person OUT g_person;
+				DEFINE ACCESS g_user ON DATABASE TYPE RECORD
+					SIGNUP (CREATE g_person SET name = $name)
+					SIGNIN (SELECT * FROM g_person WHERE name = $name);
+				CREATE g_team:t SET name = 'T', size = 3;
+				CREATE g_secret:s SET name = 'S';
+				CREATE g_person:a SET name = 'A', pin = g_team:t, secret = g_secret:s;
+				CREATE g_person:b SET name = 'B', boss = g_person:a, pin = g_person:a;
+				CREATE g_person:c SET name = 'C', boss = g_person:ghost, watchers = [g_person:ghost, g_person:a];
+				CREATE g_person:d SET name = 'D', boss = g_person:b;
+				RELATE g_person:a->g_knows->g_person:b;
+				RELATE g_person:a->g_knows->g_person:c;
+				RELATE g_person:b->g_knows->g_person:d;
+				RELATE g_person:c->g_knows->g_person:d;
+				RELATE g_person:a->g_in->g_team:t SET role = 'lead';
+				RELATE g_person:a->g_in->g_secret:s SET role = 'hidden';
+				RELATE g_person:a->g_loose->g_person:ghost;
+				CREATE g_holder:one SET l = r"g_nosuch:1";
+			`);
+			user = await within(db.newSession());
+			const scope = {
+				namespace: engine.namespace,
+				database: engine.namespace,
+			};
+			await within(user.use(scope));
+			await within(
+				user.signup({
+					...scope,
+					access: 'g_user',
+					variables: { name: 'u' },
+				}),
+			);
+		});
+		afterAll(async () => {
+			await user?.closeSession();
+		});
+
+		it('a field read through a link is NONE when the link is absent or its record missing, in a list too', async () => {
+			expect(
+				await query(
+					'RETURN [g_person:a.boss.name, g_person:b.boss.name, g_person:c.boss.name, g_person:c.watchers.name];',
+				),
+			).toStrictEqual([[undefined, 'A', undefined, [undefined, 'A']]]);
+		});
+
+		it('a link to several tables reads NONE for a field its record does not have', async () => {
+			expect(
+				await query(
+					'RETURN [g_person:a.pin.size, g_person:b.pin.size];',
+				),
+			).toStrictEqual([[3, undefined]]);
+		});
+
+		it('a link to a record the session may not read is NONE followed or fetched; a step leaves the record out and keeps its edge', async () => {
+			const [followed, fetched, roles] = (await asUser(
+				'SELECT VALUE secret.name FROM ONLY g_person:a; SELECT secret FROM ONLY g_person:a FETCH secret; SELECT VALUE ->g_in.role FROM ONLY g_person:a;',
+			)) as [unknown, unknown, Array<string>];
+			expect(followed).toBeUndefined();
+			expect(fetched).toStrictEqual({ secret: undefined });
+			expect([...roles].sort()).toStrictEqual(['hidden', 'lead']);
+			expect(
+				ids(
+					await asUser(
+						'SELECT VALUE ->g_in->? FROM ONLY g_person:a;',
+					),
+				),
+			).toStrictEqual([['g_team:t']]);
+			expect(
+				ids(
+					await query('SELECT VALUE ->g_in->? FROM ONLY g_person:a;'),
+				),
+			).toStrictEqual([['g_secret:s', 'g_team:t']]);
+		});
+
+		it('chained steps flatten, duplicates kept; from a list of links or after a recursive path they nest; from NONE they are NONE', async () => {
+			const [chained, fromList, afterRecursion, fromNone] = (await query(
+				'RETURN g_person:a->g_knows->?->g_knows->?; RETURN g_person:c.watchers->g_knows->?; RETURN g_person:a.{..+collect}(->g_knows->?)->g_knows->?; RETURN g_person:a.boss->g_knows->?;',
+			)) as [unknown, Array<unknown>, Array<unknown>, unknown];
+			expect(ids(chained)).toStrictEqual(['g_person:d', 'g_person:d']);
+			expect(fromList.map(ids)).toStrictEqual([
+				[],
+				['g_person:b', 'g_person:c'],
+			]);
+			expect(afterRecursion.every(Array.isArray)).toBe(true);
+			expect(fromNone).toBeUndefined();
+		});
+
+		it('`<->` yields both endpoints of every edge, the start once per edge', async () => {
+			expect(
+				ids(await query('RETURN g_person:b<->g_knows<->?;')),
+			).toStrictEqual([
+				['g_person:a', 'g_person:b', 'g_person:b', 'g_person:d'],
+			]);
+		});
+
+		it('a relation that is not enforced keeps an edge to a missing record, which reads as NONE; an enforced one refuses it, and deleting a record deletes its edges', async () => {
+			expect(
+				await query(
+					'RETURN [g_person:a->g_loose->?.name, g_person:a->g_loose->?.*, g_person:a->g_loose->?.{ n: name }];',
+				),
+			).toStrictEqual([[[undefined], [undefined], [undefined]]]);
+			await expect(
+				query('RELATE g_person:a->g_knows->g_person:ghost;'),
+			).rejects.toThrow("The record 'g_person:ghost' does not exist");
+			const deleted = await query(
+				'CREATE g_person:z SET name = "Z"; RELATE g_person:d->g_knows->g_person:z RETURN NONE; DELETE g_person:z; RETURN g_person:d->g_knows->?;',
+			);
+			expect(deleted.at(-1)).toStrictEqual([]);
+		});
+
+		it('an edge filter, destructuring and `.*` apply under a step', async () => {
+			const [filtered, picked, materialised] = (await query(
+				'RETURN g_person:a->(g_in WHERE role = $role)->?; RETURN g_person:a->g_knows->?.{ n: name }; RETURN g_person:a->g_knows->?.*;',
+				{ role: 'lead' },
+			)) as [
+				unknown,
+				Array<{ n: string }>,
+				Array<Record<string, unknown>>,
+			];
+			expect(ids(filtered)).toStrictEqual(['g_team:t']);
+			expect(picked.map((row) => row.n).sort()).toStrictEqual(['B', 'C']);
+			expect(materialised.map((row) => row.name).sort()).toStrictEqual([
+				'B',
+				'C',
+			]);
+		});
+
+		it('FETCH replaces a link with its record, NONE for a missing one and in a list, names the projected alias, and fetches the prefix of a nested path', async () => {
+			const [found, missing, list, alias, unfetched, nested] =
+				(await query(
+					[
+						'SELECT boss FROM ONLY g_person:b FETCH boss;',
+						'SELECT boss FROM ONLY g_person:c FETCH boss;',
+						'SELECT watchers FROM ONLY g_person:c FETCH watchers;',
+						'SELECT boss AS chief FROM ONLY g_person:b FETCH chief;',
+						'SELECT boss AS chief FROM ONLY g_person:b FETCH boss;',
+						'SELECT boss FROM ONLY g_person:d FETCH boss.boss;',
+					].join(' '),
+				)) as Array<Record<string, unknown>>;
+			expect(found).toMatchObject({ boss: { name: 'A' } });
+			expect(missing).toStrictEqual({ boss: undefined });
+			expect(list).toMatchObject({
+				watchers: [undefined, { name: 'A' }],
+			});
+			expect(alias).toMatchObject({ chief: { name: 'A' } });
+			expect(unfetched?.chief).toBeInstanceOf(RecordId);
+			expect(nested).toMatchObject({
+				boss: { name: 'B', boss: { name: 'A' } },
+			});
+		});
+
+		it('a recursive path keeps the records of the last repetition that reached any, collects each once, and finds a shortest path or NONE', async () => {
+			const results = await query(
+				[
+					'RETURN g_person:a.{1..3}(->g_knows->?);',
+					'RETURN g_person:a.{1..1}(->g_knows->?);',
+					'RETURN g_person:a.{3..4}(->g_knows->?);',
+					'RETURN g_person:a.{..+collect}(->g_knows->?);',
+					'RETURN g_person:a.{..+collect+inclusive}(->g_knows->?);',
+					'RETURN g_person:a.{..+shortest=g_person:d}(->g_knows->?);',
+					'RETURN g_person:d.{..+shortest=g_person:a}(->g_knows->?);',
+					'RETURN g_person:a.{2..1}(->g_knows->?);',
+				].join(' '),
+			);
+			expect(results.slice(0, 5).map(ids)).toStrictEqual([
+				['g_person:d', 'g_person:d'],
+				['g_person:b', 'g_person:c'],
+				[],
+				['g_person:b', 'g_person:c', 'g_person:d'],
+				['g_person:a', 'g_person:b', 'g_person:c', 'g_person:d'],
+			]);
+			const [path, none, reversed] = results.slice(5) as [
+				Array<RecordId>,
+				unknown,
+				unknown,
+			];
+			expect(path).toHaveLength(2);
+			expect(ids(path.slice(1))).toStrictEqual(['g_person:d']);
+			expect(none).toBeUndefined();
+			expect(reversed).toBeUndefined();
+		});
+
+		it('a recursion depth outside 1 to 256 is refused', async () => {
+			await expect(
+				query('RETURN g_person:a.{0..2}(->g_knows->?);'),
+			).rejects.toThrow('Found 0 for bound but expected at least 1.');
+			await expect(
+				query('RETURN g_person:a.{1..257}(->g_knows->?);'),
+			).rejects.toThrow('Found 257 for bound but expected 256 at most.');
+		});
+
+		it('a link to a record of a table that does not exist reads NONE on SurrealDB 3 and is an error on 4', async () => {
+			const read = query(
+				'SELECT VALUE l.x FROM ONLY g_holder:one; SELECT l FROM ONLY g_holder:one FETCH l;',
+			);
+			if (engine.majorVersion >= 4) {
+				await expect(read).rejects.toThrow(
+					"The table 'g_nosuch' does not exist",
+				);
+			} else {
+				expect(await read).toStrictEqual([undefined, { l: undefined }]);
+			}
+		});
+	});
 });
