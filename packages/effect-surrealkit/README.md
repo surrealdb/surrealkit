@@ -359,7 +359,11 @@ and 4.0), so a misspelt binding would quietly change what a script does;
 that is what the contract is for. `make({ sql, params, result })` declares a
 statement with no such check, except that text which `LET`s a name at the
 top level must declare `defines`, so a transaction can refuse a binding the
-`LET` would shadow. Only `part` and `sequence` import the
+`LET` would shadow. `make` also takes `writes` (the text changes data, so
+an undecodable result is reported as committed) and `nonEmpty` (the last
+result is a row whenever the statement applies, so an empty one is
+reported as `StatementEmptyResult`), both false unless declared; builders
+set both themselves. Only `part` and `sequence` import the
 analyzer, so code that uses only the builders does not bundle it.
 
 ### Statements from `.surql` files
@@ -415,7 +419,7 @@ generation with its file, line and column; warnings are printed.
 
 The analyzer is `effect-surrealkit/analyze`, pure and host-neutral:
 `analyze(sql, { holes? })` returns `{ kind, sql, free, defines, slots,
-throws, throwsAt, holes, provisional, transactional, diagnostics }` or fails
+throws, throwsAt, holes, provisional, transactional, writes, diagnostics }` or fails
 with an `AnalyzeError` carrying a line and column.
 
 - **Lexing.** `--`, `//`, `#` and `/* */` comments; `'…'` and `"…"` strings
@@ -441,7 +445,12 @@ with an `AnalyzeError` carrying a line and column.
   another statement is an error: SurrealDB 3 skips what follows, 4 runs it.
 - **THROW.** `throws` holds every string-literal message, at any depth;
   any other `THROW` is a `dynamicThrow` warning and reaches the client as a
-  request error.
+  `StatementUnexpectedThrow`.
+- **Writes.** `writes` is true when `CREATE`, `INSERT`, `UPDATE`, `UPSERT`,
+  `DELETE`, `RELATE`, `DEFINE`, `REMOVE` or `ALTER` starts a statement or a
+  subquery anywhere in the text, outside strings and comments. `part` and
+  `sequence` carry it to the statement, so a client that cannot decode the
+  result says the writes are committed.
 - **Fragments.** A single expression or block without a final `;` is a
   `fragment`: no results, generated as a `text(…)` value, usable only to fill
   a hole. Several statements with an unterminated last one are an error.
@@ -485,17 +494,52 @@ checks the input against the statement's bindings; a hand-built
 session's authentication. `make(db)` returns the same client as a plain
 value, for an application that names its own services, one per session.
 
-| Error | Meaning |
-| --- | --- |
-| `StatementEncodeError` | a binding failed its codec, or clashes with another statement of the transaction; nothing was sent |
-| `StatementThrown<Message>` | a `THROW` the statement declares; in a transaction, `statement` names the one that declares it (`one of …` when several do) |
-| `StatementConflict` | a transaction conflict; nothing changed, send it again |
-| `StatementRequestError` | any other failure, with the SDK's error as `cause`, or a statement `transaction` refuses to send |
-| `StatementDecodeError` | the answer is not what the statement declares; a write may have applied |
+| Error | When | Was anything written? |
+| --- | --- | --- |
+| `StatementEncodeError` | a binding failed its codec, or its encoded value is not one the SDK sends without loss (`path` says where inside it) | no, nothing was sent |
+| `StatementScopeError` | `transaction` refused its statements: a binding another statement `LET`s, one name bound to two different values, or a statement with its own `BEGIN`, `COMMIT` or `CANCEL` | no, nothing was sent |
+| `StatementThrown<Message>` | a `THROW` the statement declares; in a transaction, `statement` names the one that declares it (`one of …` when several do); `source` and `lines` say where, when the part records them | not by a transaction; a single statement's earlier statements commit on their own |
+| `StatementUnexpectedThrow` | a `THROW` whose message the statement does not declare (a dynamic message), with the thrown text as `reason` and the SDK's error as `cause` | as for `StatementThrown` |
+| `StatementConflict` | a transaction conflict that `retry` did not resolve | no; send it again |
+| `StatementRequestError` | any other failure of the request: transport, authentication, a SurrealQL error, or the SDK refusing to send (a `RETURN` followed by another statement in a transaction), with the SDK's error as `cause` | unknown for a transport failure; otherwise no |
+| `StatementEmptyResult` | a `create` or `relate` that returns rows (`nonEmpty`) returned NONE or an empty list: SurrealDB reports a write the session may not make as an empty result, without an error, so the session may lack permission | not by that statement |
+| `StatementDecodeError` | the answer is not what the statement declares: the number of results, a value where NONE belongs, or a last result its codec refuses | when `committed` is true (the statement `writes`), yes: the request succeeded and its writes are committed, so do not resend it |
 
-Interrupting the effect aborts the request (the engine may still finish it).
-Each run is a span named after the statement, carrying the static text and
-no binding values. `{ retry }` is passed to the SDK.
+An `update` or `delete` by condition may match nothing, so its empty list is
+a result, not an error; so is a denied one (the conformance suite pins
+both).
+
+**An interrupted or timed-out write may have been applied.** Interrupting
+the effect (a timeout included) aborts the request on the client, but the
+engine may already have run it, or may still finish it. Read the data back
+before sending a write again.
+
+Before sending, every encoded binding is checked to be a value the SDK
+sends without loss: the package's `SurrealValue` shape (plus `undefined`
+for NONE, `ArrayBuffer` for bytes and the SDK's record id and range
+values), with well-formed strings and integers the SDK can encode. The SDK
+would otherwise send a class instance as its own fields, a `Map` as a
+document, or a lone surrogate as U+FFFD. The check never throws; `{
+unsafeSkipValueCheck: true }` turns it off.
+
+`{ retry: schedule }` takes an Effect `Schedule` and sends the same,
+already encoded request again while the engine reports a
+`StatementConflict`; no other error is retried. SurrealDB 4 already retries
+a single conflicting statement on the server, so this matters most for
+transactions and for SurrealDB 3.
+
+```ts
+yield* transaction([bind(bump)], { retry: Schedule.recurs(3) });
+```
+
+Each run is a span named after the statement, carrying the static text,
+the part sources (`code.file.path`), the number of rows when the result is
+a list (`db.response.returned_rows`) and the error tag on failure
+(`error.type`); never a binding value. `metrics` updates three Effect
+metrics: `effect_surrealkit_statement_runs` (a counter by `statement` and
+`outcome`, which is `success`, the error tag or `interrupted`),
+`effect_surrealkit_statement_duration` (a timer by `statement`) and
+`effect_surrealkit_statement_retries` (a counter by `statement`).
 
 `transaction` sends its statements as one atomic request, joined one after
 another (`make` stores every text with exactly one final `;`, so they always
