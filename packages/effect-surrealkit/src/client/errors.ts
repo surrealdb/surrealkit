@@ -67,10 +67,19 @@ export class StatementDecodeError extends Data.TaggedError(
 	readonly message: string;
 }> {}
 
+/** The request succeeded but its result failed validation. Reconcile before replaying. */
+export class StatementWriteOutcomeError extends Data.TaggedError(
+	'StatementWriteOutcomeError',
+)<{
+	readonly request: string;
+	readonly cause: StatementDecodeError;
+}> {}
+
 /** Every error of running a statement that can `THROW` the messages `T`. */
 export type StatementError<Throws extends string = never> =
 	| StatementEncodeError
 	| StatementRequestError
 	| StatementConflict
 	| StatementDecodeError
+	| StatementWriteOutcomeError
 	| ([Throws] extends [never] ? never : StatementThrown<Throws>);

@@ -59,6 +59,7 @@ export interface Statement<
 	Throws extends string = never,
 > {
 	readonly [StatementTypeId]: typeof StatementTypeId;
+	readonly readOnly?: boolean;
 	readonly name: string;
 	readonly sql: string;
 	readonly params: P;
@@ -277,6 +278,7 @@ export const make = <
 	const Throws extends string = never,
 >(options: {
 	readonly name?: string;
+	readonly readOnly?: boolean;
 	readonly sql: string;
 	readonly params: P;
 	readonly result: R;
@@ -289,6 +291,7 @@ export const make = <
 }): Statement<P, R, Throws> => {
 	const statement: Statement<P, R, Throws> = {
 		[StatementTypeId]: StatementTypeId,
+		readOnly: options.readOnly ?? false,
 		name: options.name ?? 'statement',
 		sql: terminated(options.sql),
 		params: options.params,

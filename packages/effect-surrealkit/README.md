@@ -514,6 +514,19 @@ anything is sent it refuses:
 The SDK refuses a top-level `RETURN` followed by another statement inside a
 transaction, so put such a statement last.
 
+If a write request succeeds but decoding fails, the client returns
+`StatementWriteOutcomeError`. Its `request` names the statement or atomic batch,
+and its `cause` identifies the failing statement and result slot. Read back the
+receipt or record before deciding to replay. This outcome does not prove that
+a row changed: permissions and conditional writes can yield empty results.
+A simple field-only table select is classified as read-only. For SELECTs that
+accept arbitrary expressions (including predicates and stored function calls),
+the builder conservatively assumes they may write. A caller that knows the
+complete query is read-only can use `.build(name, { readOnly: true })`.
+Authored statements and sequences default to potentially writing. Specify
+`readOnly: true` only for known reads to retain `StatementDecodeError`.
+
+
 ### What the statements do not know
 
 - **Permissions.** A generated `select` schema is the row a privileged

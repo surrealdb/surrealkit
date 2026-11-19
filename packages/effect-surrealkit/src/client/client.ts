@@ -24,6 +24,7 @@ import {
 	type StatementError,
 	StatementRequestError,
 	StatementThrown,
+	StatementWriteOutcomeError,
 } from './errors.js';
 
 /**
@@ -244,6 +245,10 @@ const countOf = (
 				}),
 			);
 
+const decodeOutcome =
+	(request: string, readOnly: boolean) => (cause: StatementDecodeError) =>
+		readOnly ? cause : new StatementWriteOutcomeError({ request, cause });
+
 const traced = <A, E>(
 	name: string,
 	sql: string,
@@ -355,12 +360,18 @@ export const make = (db: Queryable): Client => ({
 							cause,
 						),
 				});
+				const outcome = decodeOutcome(
+					statement.name,
+					statement.readOnly === true,
+				);
 				const slots = yield* countOf(
 					statement.name,
 					results,
 					statement.slots,
+				).pipe(Effect.mapError(outcome));
+				return yield* decode(statement, slots, 0).pipe(
+					Effect.mapError(outcome),
 				);
-				return yield* decode(statement, slots, 0);
 			}),
 		) as Effect.Effect<R['Type'], StatementError<Throws>>;
 	},
@@ -418,6 +429,12 @@ export const make = (db: Queryable): Client => ({
 							cause,
 						),
 				});
+				const outcome = decodeOutcome(
+					name,
+					statements.every(
+						({ statement }) => statement.readOnly === true,
+					),
+				);
 				const slots = yield* countOf(
 					name,
 					results,
@@ -425,11 +442,15 @@ export const make = (db: Queryable): Client => ({
 						(total, { statement }) => total + statement.slots,
 						0,
 					),
-				);
+				).pipe(Effect.mapError(outcome));
 				const decoded: Array<unknown> = [];
 				let offset = 0;
 				for (const { statement } of statements) {
-					decoded.push(yield* decode(statement, slots, offset));
+					decoded.push(
+						yield* decode(statement, slots, offset).pipe(
+							Effect.mapError(outcome),
+						),
+					);
 					offset += statement.slots;
 				}
 				return decoded;

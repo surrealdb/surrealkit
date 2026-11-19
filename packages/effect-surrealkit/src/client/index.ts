@@ -25,4 +25,5 @@ export {
 	type StatementError,
 	StatementRequestError,
 	StatementThrown,
+	StatementWriteOutcomeError,
 } from './errors.js';

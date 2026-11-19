@@ -19,6 +19,7 @@ import {
 	StatementEncodeError,
 	StatementRequestError,
 	StatementThrown,
+	StatementWriteOutcomeError,
 	transaction,
 } from '../src/client/index.js';
 import * as SurrealSchema from '../src/index.js';
@@ -153,6 +154,7 @@ const serverError = (message: string, fields: Record<string, unknown>) =>
 
 const add = make({
 	name: 'add',
+	readOnly: true,
 	sql: 'RETURN $a + $b;',
 	params: { a: SurrealSchema.Int, b: SurrealSchema.Int },
 	result: SurrealSchema.Int,
@@ -172,6 +174,7 @@ const guarded = sequence(
 	part({ sql: 'RETURN $owner;', free: ['owner'] }),
 ).define({
 	name: 'guarded',
+	readOnly: true,
 	params: { boundOwner: SurrealSchema.String },
 	result: SurrealSchema.String,
 });
@@ -251,6 +254,7 @@ describe('run', () => {
 
 		const strict = make({
 			sql: 'RETURN {};',
+			readOnly: true,
 			params: {},
 			result: Schema.Struct({ a: SurrealSchema.Int }),
 		});
@@ -372,6 +376,7 @@ describe('run', () => {
 describe('transaction', () => {
 	const double = make({
 		name: 'double',
+		readOnly: true,
 		sql: 'SELECT VALUE $n * 2 FROM ONLY $n;',
 		params: { n: SurrealSchema.Int },
 		result: SurrealSchema.Int,
@@ -710,6 +715,24 @@ describe('transaction', () => {
 		});
 	});
 
+	it('reports an acknowledged mixed batch when only its read result fails', async () => {
+		const write = make({
+			name: 'change',
+			sql: 'UPDATE tally SET n += 1 RETURN NONE;',
+			params: {},
+			result: Schema.Undefined,
+		});
+		const { client, calls } = fake(async () => [undefined, 'invalid']);
+		const error = await failure(
+			client.transaction([bind(write), bind(double, { n: 2 })]),
+		);
+		expect(error).toBeInstanceOf(StatementWriteOutcomeError);
+		expect(error).toMatchObject({
+			request: 'transaction(change, double)',
+			cause: { statement: 'double', slot: 1 },
+		});
+		expect(calls).toHaveLength(1);
+	});
 	it('refuses an answer with the wrong number of results', async () => {
 		const error = await failure(
 			fake(async () => [4]).client.transaction([

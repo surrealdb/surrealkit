@@ -16,6 +16,7 @@ import {
 	type StatementError,
 	type StatementRequestError,
 	type StatementThrown,
+	type StatementWriteOutcomeError,
 	type SurrealClient,
 	transaction,
 } from '../../src/client/index.js';
@@ -312,6 +313,7 @@ same<
 		| StatementRequestError
 		| StatementConflict
 		| StatementDecodeError
+		| StatementWriteOutcomeError
 		| StatementThrown<'Not the owner'>,
 		SurrealClient
 	>
