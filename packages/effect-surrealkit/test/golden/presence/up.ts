@@ -75,6 +75,12 @@ export const UpTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		obj: { select: true, create: true, update: true, fields: {
+			a: { select: true, create: true, update: true },
+		} },
+	},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `up` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

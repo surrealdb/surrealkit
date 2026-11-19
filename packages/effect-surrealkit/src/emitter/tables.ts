@@ -360,6 +360,51 @@ const jsonList = (values: ReadonlyArray<string>): string =>
 const printPermissions = (permissions: TablePermissions): string =>
 	`{ select: ${json(permissions.select)}, create: ${json(permissions.create)}, update: ${json(permissions.update)}, delete: ${json(permissions.delete)} }`;
 
+/** One field's permissions, and those of its declared children, nested. */
+const printFieldPermissions = (
+	fieldNode: FieldNode,
+	indent: number,
+): string => {
+	const own = fieldNode.field?.permissions ?? {
+		select: true,
+		create: true,
+		update: true,
+	};
+	const head = `select: ${json(own.select)}, create: ${json(own.create)}, update: ${json(own.update)}`;
+	const children = sortedChildren(fieldNode);
+	if (children.length === 0) return `{ ${head} }`;
+	return [
+		`{ ${head}, fields: {`,
+		...children.map(
+			(child) =>
+				`${tabs(indent + 1)}${propertyKey(child.key)}: ${printFieldPermissions(child, indent + 1)},`,
+		),
+		`${tabs(indent)}} }`,
+	].join('\n');
+};
+
+type Index = Table['indexes'][number];
+
+/** One index: its kind, its columns as literal paths, and its details. */
+const printIndex = (index: Index): string => {
+	const parts = [
+		`type: ${json(index.type)}`,
+		`columns: [${index.columns.map((path) => jsonList(path)).join(', ')}]`,
+	];
+	if (index.fulltext !== undefined) {
+		parts.push(
+			`fulltext: { analyzer: ${json(index.fulltext.analyzer)}, highlights: ${index.fulltext.highlights} }`,
+		);
+	}
+	if (index.vector !== undefined) {
+		parts.push(
+			`vector: { dimension: ${index.vector.dimension}, distance: ${json(index.vector.distance)}, elementType: ${json(index.vector.elementType)} }`,
+		);
+	}
+	if (index.where !== undefined) parts.push(`where: ${json(index.where)}`);
+	return `{ ${parts.join(', ')} }`;
+};
+
 const presenceLiteral = (presence: FieldPresence): string =>
 	`{ select: ${json(presence.select)}, create: ${json(presence.create)}, merge: ${json(presence.merge)}, content: ${json(presence.content)} }`;
 
@@ -669,6 +714,26 @@ export const printTable = (input: TableInput): string => {
 		'\t},',
 		`\trelations: { in: ${jsonList(input.relations.in)}, out: ${jsonList(input.relations.out)} },`,
 		`\tpermissions: ${printPermissions(table.permissions)},`,
+		...(fields.length === 0
+			? ['\tfieldPermissions: {},']
+			: [
+					'\tfieldPermissions: {',
+					...fields.map(
+						(field) =>
+							`\t\t${propertyKey(field.key)}: ${printFieldPermissions(field, 2)},`,
+					),
+					'\t},',
+				]),
+		...(table.indexes.length === 0
+			? ['\tindexes: {},']
+			: [
+					'\tindexes: {',
+					...table.indexes.map(
+						(index) =>
+							`\t\t${propertyKey(index.name)}: ${printIndex(index)},`,
+					),
+					'\t},',
+				]),
 		...(relationType === undefined ? [] : [`\tedge: ${pascal}Edge,`]),
 		'});',
 	);

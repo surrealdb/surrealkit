@@ -70,6 +70,11 @@ export const TeamTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: ["member_of"] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		meta: { select: true, create: true, update: true },
+		name: { select: true, create: true, update: true },
+	},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `team` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

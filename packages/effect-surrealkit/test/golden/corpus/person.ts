@@ -306,6 +306,69 @@ export const PersonTable = SurrealSchema.table({
 	},
 	relations: { in: ["follows", "knows", "member_of", "rates"], out: ["follows", "knows"] },
 	permissions: { select: true, create: "$auth.id = id", update: "$auth.id = id", delete: false },
+	fieldPermissions: {
+		address: { select: true, create: true, update: true, fields: {
+			city: { select: true, create: true, update: true },
+			geo: { select: true, create: true, update: true },
+			zip: { select: true, create: true, update: true },
+		} },
+		age: { select: true, create: true, update: true },
+		bio: { select: true, create: true, update: true },
+		buddy: { select: true, create: true, update: true },
+		created_at: { select: true, create: true, update: true },
+		display: { select: true, create: true, update: true },
+		display_typed: { select: true, create: true, update: true },
+		email: { select: true, create: true, update: true },
+		flagged: { select: true, create: true, update: true },
+		handle: { select: true, create: true, update: true },
+		manager: { select: true, create: true, update: true },
+		mentor: { select: true, create: true, update: true },
+		motto: { select: true, create: true, update: true },
+		name: { select: true, create: true, update: true },
+		nickname: { select: true, create: true, update: true },
+		notes: { select: true, create: true, update: true },
+		"odd.name": { select: true, create: true, update: true },
+		org: { select: true, create: true, update: true },
+		pattern: { select: true, create: true, update: true },
+		phones: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true, fields: {
+				kind: { select: true, create: true, update: true },
+				number: { select: true, create: true, update: true },
+			} },
+		} },
+		pins: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true },
+		} },
+		prefs: { select: true, create: true, update: true, fields: {
+			locale: { select: true, create: true, update: true },
+		} },
+		referenced_by: { select: true, create: true, update: true },
+		role: { select: true, create: true, update: true },
+		score: { select: true, create: true, update: true },
+		session_ttl: { select: true, create: true, update: true },
+		settings: { select: true, create: true, update: true, fields: {
+			notify: { select: true, create: true, update: true, fields: {
+				email: { select: true, create: true, update: true },
+			} },
+			theme: { select: true, create: true, update: true },
+		} },
+		shout: { select: true, create: true, update: true },
+		slug: { select: true, create: true, update: true },
+		ssn: { select: "$auth.admin = true", create: true, update: false },
+		tags: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true },
+		} },
+		team: { select: true, create: true, update: true },
+		tier: { select: true, create: true, update: true },
+		touched_at: { select: true, create: true, update: true },
+		updated_at: { select: true, create: true, update: true },
+		watchers: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true },
+		} },
+	},
+	indexes: {
+		uniq_email: { type: "unique", columns: [["email"]] },
+	},
 });
 
 /** JSON world: the field schemas of a selected `person` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

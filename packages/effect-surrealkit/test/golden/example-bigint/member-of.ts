@@ -88,6 +88,11 @@ export const MemberOfTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		role: { select: true, create: true, update: true },
+		since: { select: true, create: true, update: true },
+	},
+	indexes: {},
 	edge: MemberOfEdge,
 });
 

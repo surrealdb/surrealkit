@@ -67,6 +67,8 @@ export const LikesTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {},
+	indexes: {},
 	edge: LikesEdge,
 });
 

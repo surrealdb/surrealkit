@@ -85,6 +85,15 @@ export const DocTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		body: { select: true, create: true, update: true },
+		status: { select: true, create: true, update: true },
+		title: { select: true, create: true, update: true },
+	},
+	indexes: {
+		cnt_open: { type: "count", columns: [], where: "status = 'open'" },
+		ft_body: { type: "fulltext", columns: [["body"]], fulltext: { analyzer: "simple", highlights: true } },
+	},
 });
 
 /** JSON world: the field schemas of a selected `doc` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

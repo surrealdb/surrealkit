@@ -64,6 +64,10 @@ export const OaTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		x: { select: true, create: true, update: true },
+	},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `oa` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

@@ -106,8 +106,16 @@ member-of.ts    … plus MemberOfEdge (relation endpoints)
 team-size.ts    TeamSizeTable (a view: id and query only)
 functions.ts    fn_greet = { name, args: Schema.Tuple([...]), returns }
 manifest.ts     store, semanticDigest, emitter version, codec profile, peer versions, source
+_store.ts       store = { name, tables, views, edges, functions }, each by its SurrealDB name
 index.ts        re-exports everything
 ```
+
+`store` registers every table, view, relation endpoint and function of the
+store under its SurrealDB name (`store.tables.person`,
+`store.edges.member_of`, `store.functions["fn::greet"]`), so a record link
+(`RecordId<"person">`) or a graph step resolves to the descriptor of its
+target. Its file name has a leading underscore because table modules are
+kebab-case words, so no table can be written there.
 
 Each table gets one schema per operation, derived from the field-presence
 matrix of the contract (section 7):
@@ -119,8 +127,17 @@ matrix of the contract (section 7):
 | `PersonCreate` | `CREATE … CONTENT` / `INSERT`; the id is an operation argument. |
 | `PersonMerge` | `UPDATE … MERGE`: omission keeps a value, `undefined` (NONE) removes an `option<T>` field and re-applies a `DEFAULT ALWAYS` one (an `option<T>` included). |
 | `PersonContent` | `UPDATE … CONTENT`: a full replacement. |
-| `PersonTable` | The descriptor: `{ name, type, id, select, create, merge, content, fields, presence, relations, permissions, edge? }`. |
+| `PersonTable` | The descriptor: `{ name, type, id, select, create, merge, content, fields, presence, relations, permissions, fieldPermissions, indexes, edge? }`. |
 | `PersonFromJson` | The same selected row as SurrealDB's HTTP `/sql` renders it, decoding to the same types as `Person`; `PersonJsonFields` holds its field schemas for `Struct.pick` and field maps, and `PersonJsonEncoded` its JSON shape. Never the default; see [Two codec worlds](#two-codec-worlds). |
+
+A descriptor's `indexes` holds every `DEFINE INDEX` of the table by name,
+with its kind and the field paths it covers kept as literal types
+(`indexes.idx_owner_status` is `{ type: "standard", columns: [["owner"],
+["status"]] }`), plus the analyzer of a `FULLTEXT` index, the vector shape
+of an `HNSW` or `DISKANN` one and the condition of a `COUNT … WHERE` one.
+`fieldPermissions` holds each top-level field's `select`, `create` and
+`update` permission (`true` for FULL, `false` for NONE, or the `WHERE`
+expression), with those of its declared children under `fields`.
 
 `Merge` is never `Partial<Create>`: READONLY, COMPUTED, `id` and relation
 endpoints are excluded, and NONE is only accepted where the matrix allows it.
@@ -132,6 +149,20 @@ literal membership narrows the type, int and float ranges become
 `isGreaterThan…`/`isLessThan…`, and `string::len` / `array::len` become
 code-point and array length checks. `string::is_email`, decimal and duration
 ranges stay server-side.
+
+### What changes for existing users of the emitter
+
+Regenerating with this version only adds to the output; every existing
+export keeps its name, its schema and its type:
+
+- every table descriptor gains `fieldPermissions` and `indexes`;
+- a new module, `_store.ts`, exports `store`, and `index.ts` re-exports it.
+  A SurrealKit-run emitter records the new file in `.surrealkit-emit.json`
+  as it does every generated file.
+
+Code that spells out a descriptor's full type, or compares one with
+`toEqual`, sees the new keys. Hand-written descriptors without them keep
+working with every builder.
 
 ### Refinements
 

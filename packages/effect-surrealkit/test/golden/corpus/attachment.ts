@@ -76,6 +76,14 @@ export const AttachmentTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		any_file: { select: true, create: true, update: true },
+		avatar: { select: true, create: true, update: true },
+		files: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true },
+		} },
+	},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `attachment` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

@@ -7,7 +7,12 @@ import * as SurrealSchema from '../src/index.js';
 import {
 	AnythingFromJson,
 	AnythingRow,
+	DocTable as CorpusDocTable,
+	MemberOfEdge as CorpusMemberOfEdge,
 	PersonMerge as CorpusPersonMerge,
+	PersonTable as CorpusPersonTable,
+	TeamSizeTable as CorpusTeamSizeTable,
+	store as corpusStore,
 	KindsFields,
 	KindsJsonFields,
 } from './golden/corpus/index.js';
@@ -136,6 +141,54 @@ describe('generated table modules', () => {
 			content: 'optional',
 		});
 		expect(PersonTable.relations).toEqual({ in: ['member_of'], out: [] });
+	});
+
+	it('expose each index and each field permission in the descriptor', () => {
+		expect(PersonTable.indexes).toEqual({
+			uniq_email: { type: 'unique', columns: [['email']] },
+		});
+		expect(CorpusDocTable.indexes.idx_owner_status).toEqual({
+			type: 'standard',
+			columns: [['owner'], ['status']],
+		});
+		expect(CorpusDocTable.indexes.ft_body).toEqual({
+			type: 'fulltext',
+			columns: [['body']],
+			fulltext: { analyzer: 'simple', highlights: true },
+		});
+		expect(CorpusDocTable.indexes.cnt_open).toEqual({
+			type: 'count',
+			columns: [],
+			where: "status = 'open'",
+		});
+		expect(PersonTable.fieldPermissions.ssn).toEqual({
+			select: '$auth.admin = true',
+			create: true,
+			update: false,
+		});
+		expect(Object.keys(PersonTable.fieldPermissions)).toEqual(
+			Object.keys(PersonTable.presence).filter((key) => key !== 'id'),
+		);
+		expect(CorpusPersonTable.fieldPermissions.address.fields?.city).toEqual(
+			{ select: true, create: true, update: true },
+		);
+	});
+
+	it('register every table, view, relation endpoint and function of the store by name', () => {
+		expect(corpusStore.name).toBe('corpus');
+		expect(corpusStore.tables.person).toBe(CorpusPersonTable);
+		expect(corpusStore.views.team_size).toBe(CorpusTeamSizeTable);
+		expect(corpusStore.edges.member_of).toBe(CorpusMemberOfEdge);
+		expect(corpusStore.functions['fn::greet'].name).toBe('fn::greet');
+		for (const [name, table] of Object.entries(corpusStore.tables)) {
+			expect(table.name).toBe(name);
+		}
+		for (const [name, edge] of Object.entries(corpusStore.edges)) {
+			expect(edge.table).toBe(name);
+			expect(corpusStore.tables[name as 'member_of']?.type).toBe(
+				'relation',
+			);
+		}
 	});
 });
 

@@ -94,7 +94,7 @@ exports[`type diagnostics > condition/no-such-child 1`] = `
 
 exports[`type diagnostics > condition/no-such-field 1`] = `
 [
-  "TS2339: Property 'nope' does not exist on type 'RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 7 more ...; readonly permissions: { ...; }; }>'.",
+  "TS2339: Property 'nope' does not exist on type 'RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 9 more ...; readonly indexes: { ...; }; }>'.",
 ]
 `;
 
@@ -171,12 +171,12 @@ exports[`type diagnostics > create/not-an-object 1`] = `
 exports[`type diagnostics > create/return-before 1`] = `
 [
   "TS2769: No overload matches this call.
-  Overload 1 of 3, '(mode: "none"): Create<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 7 more ...; readonly permissions: { ...; }; }, NoParams, Undefined>', gave the following error.
+  Overload 1 of 3, '(mode: "none"): Create<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 9 more ...; readonly indexes: { ...; }; }, NoParams, Undefined>', gave the following error.
     Argument of type '"before"' is not assignable to parameter of type '"none"'.
-  Overload 2 of 3, '(mode: "after"): Create<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 7 more ...; readonly permissions: { ...; }; }, NoParams, declareConstructor<...>>', gave the following error.
+  Overload 2 of 3, '(mode: "after"): Create<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 9 more ...; readonly indexes: { ...; }; }, NoParams, declareConstructor<...>>', gave the following error.
     Argument of type '"before"' is not assignable to parameter of type '"after"'.
-  Overload 3 of 3, '(fields: (row: RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 7 more ...; readonly permissions: { ...; }; }>) => CheckedProjection<...>): Create<...>', gave the following error.
-    Argument of type 'string' is not assignable to parameter of type '(row: RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 7 more ...; readonly permissions: { ...; }; }>) => CheckedProjecti...'.",
+  Overload 3 of 3, '(fields: (row: RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 9 more ...; readonly indexes: { ...; }; }>) => CheckedProjection<...>): Create<...>', gave the following error.
+    Argument of type 'string' is not assignable to parameter of type '(row: RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 9 more ...; readonly indexes: { ...; }; }>) => CheckedProjection<....'.",
 ]
 `;
 
@@ -570,7 +570,7 @@ exports[`type diagnostics > schema/refine-changes-type 1`] = `
 
 exports[`type diagnostics > schema/refine-unknown-key 1`] = `
 [
-  "TS2353: Object literal may only specify known properties, and 'nope' does not exist in type 'NoExtraKeys<Refinements<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 7 more ...; readonly permissions: { ...; }; }>, { ...; }>'.",
+  "TS2353: Object literal may only specify known properties, and 'nope' does not exist in type 'NoExtraKeys<Refinements<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 9 more ...; readonly indexes: { ...; }; }>, { ...; }>'.",
   "TS7006: Parameter 's' implicitly has an 'any' type.",
 ]
 `;
@@ -621,7 +621,7 @@ exports[`type diagnostics > schema/unbranded-sdk-id 1`] = `
 
 exports[`type diagnostics > select/id-of-other-table 1`] = `
 [
-  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to parameter of type 'IdOf<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 7 more ...; readonly permissions: { ...; }; }, { ...; }>'.
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to parameter of type 'IdOf<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 9 more ...; readonly indexes: { ...; }; }, { ...; }>'.
   Type 'brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">' is not assignable to type 'Codec<unknown, _RecordId<"person">, never, never>'.
     Types of property '"Encoded"' are incompatible.
       Type '_RecordId<"team">' is not assignable to type '_RecordId<"person">'.
@@ -665,7 +665,7 @@ exports[`type diagnostics > transaction/unbound-statement 1`] = `
 
 exports[`type diagnostics > update/id-of-other-table 1`] = `
 [
-  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to parameter of type 'IdOf<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 7 more ...; readonly permissions: { ...; }; }, { ...; }>'.
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to parameter of type 'IdOf<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 9 more ...; readonly indexes: { ...; }; }, { ...; }>'.
   Type 'brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">' is not assignable to type 'Codec<unknown, _RecordId<"person">, never, never>'.
     Types of property '"Encoded"' are incompatible.
       Type '_RecordId<"team">' is not assignable to type '_RecordId<"person">'.

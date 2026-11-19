@@ -119,6 +119,22 @@ export const PersonTable = SurrealSchema.table({
 	},
 	relations: { in: ["member_of"], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		age: { select: true, create: true, update: true },
+		balance: { select: true, create: true, update: true },
+		bio: { select: true, create: true, update: true },
+		created_at: { select: true, create: true, update: true },
+		display: { select: true, create: true, update: true },
+		email: { select: true, create: true, update: true },
+		name: { select: true, create: true, update: true },
+		nickname: { select: true, create: true, update: true },
+		role: { select: true, create: true, update: true },
+		tags: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true },
+		} },
+		updated_at: { select: true, create: true, update: true },
+	},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `person` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

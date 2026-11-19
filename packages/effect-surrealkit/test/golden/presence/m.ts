@@ -151,6 +151,27 @@ export const MTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		comp: { select: true, create: true, update: true },
+		dalw: { select: true, create: true, update: true },
+		dflt: { select: true, create: true, update: true },
+		flex: { select: true, create: true, update: true, fields: {
+			a: { select: true, create: true, update: true },
+		} },
+		nul: { select: true, create: true, update: true },
+		obj: { select: true, create: true, update: true, fields: {
+			a: { select: true, create: true, update: true },
+		} },
+		opt: { select: true, create: true, update: true },
+		optd: { select: true, create: true, update: true },
+		req: { select: true, create: true, update: true },
+		ro: { select: true, create: true, update: true },
+		roopt: { select: true, create: true, update: true },
+		vfall: { select: true, create: true, update: true },
+		vin: { select: true, create: true, update: true },
+		vout: { select: true, create: true, update: true },
+	},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `m` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

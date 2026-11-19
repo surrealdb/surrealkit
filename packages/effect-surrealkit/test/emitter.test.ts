@@ -707,6 +707,27 @@ describe('generation rules', () => {
 		expect(modules).toMatch(/DateTimeEffect/);
 	});
 
+	it('writes the store registry where no table module can be, so a table named `store` keeps its name', async () => {
+		const document = example();
+		const tables = document.tables as Array<Record<string, unknown>>;
+		const team = tables.find((table) => table.name === 'team');
+		tables.push({ ...team, name: 'store' });
+		const result = await run(
+			generate(withDigest(document), { store: 'shop' }),
+		);
+		const paths = result.files.map((f) => f.path);
+		expect(paths).toContain('store.ts');
+		expect(paths).toContain('_store.ts');
+		const registry =
+			result.files.find((f) => f.path === '_store.ts')?.content ?? '';
+		expect(registry).toContain('\t\tstore: StoreTable,');
+		expect(registry).toContain('import { StoreTable } from "./store.js";');
+		expect(registry).toContain('\tname: "shop",');
+		const index =
+			result.files.find((f) => f.path === 'index.ts')?.content ?? '';
+		expect(index).toContain('export { store } from "./_store.js";');
+	});
+
 	it('generates a module set that type-checks for a schema without tables', async () => {
 		const document = example();
 		document.tables = [];

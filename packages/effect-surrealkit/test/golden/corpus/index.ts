@@ -29,3 +29,4 @@ export * from "./team.js";
 export * from "./team-size.js";
 export * from "./functions.js";
 export { manifest } from "./manifest.js";
+export { store } from "./_store.js";

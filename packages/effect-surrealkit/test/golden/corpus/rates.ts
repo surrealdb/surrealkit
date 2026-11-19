@@ -77,6 +77,10 @@ export const RatesTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		weight: { select: true, create: true, update: true },
+	},
+	indexes: {},
 	edge: RatesEdge,
 });
 

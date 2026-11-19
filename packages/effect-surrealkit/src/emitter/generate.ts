@@ -379,6 +379,78 @@ const printManifest = (
 	].join('\n');
 };
 
+/**
+ * The store registry: every table, view, relation endpoint and function by
+ * its SurrealDB name. Its file name cannot be a table's (table modules are
+ * kebab-case words), so no schema loses a table name to it.
+ */
+const printStore = (
+	tables: ReadonlyArray<Table>,
+	functions: ReadonlyArray<SurrealFunction>,
+	registry: IdRegistry,
+	options: EmitterOptions,
+	ext: string,
+): string => {
+	const imported = new Map<string, Array<string>>();
+	const use = (module: string, name: string): string => {
+		imported.set(module, [...(imported.get(module) ?? []), name]);
+		return name;
+	};
+	const entries = (
+		pairs: ReadonlyArray<readonly [string, string]>,
+	): string =>
+		pairs.length === 0
+			? '{}'
+			: `{\n${pairs.map(([key, value]) => `\t\t${propertyKey(key)}: ${value},`).join('\n')}\n\t}`;
+	const tableEntries: Array<readonly [string, string]> = [];
+	const viewEntries: Array<readonly [string, string]> = [];
+	const edgeEntries: Array<readonly [string, string]> = [];
+	for (const table of tables) {
+		const module = `./${registry.file(table.name)}${ext}`;
+		const pascal = registry.pascal(table.name);
+		const descriptor = use(module, `${pascal}Table`);
+		if (table.view !== undefined) {
+			viewEntries.push([table.name, descriptor]);
+			continue;
+		}
+		tableEntries.push([table.name, descriptor]);
+		if (table.type.kind === 'relation') {
+			edgeEntries.push([table.name, use(module, `${pascal}Edge`)]);
+		}
+	}
+	const functionEntries = functions.map(
+		(fn) =>
+			[
+				fn.name,
+				use(`./functions${ext}`, functionIdentifier(fn.name)),
+			] as const,
+	);
+	const importLines = [...imported.entries()]
+		.sort(([a], [b]) => compare(a, b))
+		.map(
+			([module, names]) =>
+				`import { ${[...names].sort(compare).join(', ')} } from "${module}";`,
+		);
+	const body = [
+		`/** Every table, view, relation endpoint and function of store \`${options.store}\`, by its SurrealDB name. */`,
+		'export const store = SurrealSchema.store({',
+		`\tname: ${json(options.store)},`,
+		`\ttables: ${entries(tableEntries)},`,
+		`\tviews: ${entries(viewEntries)},`,
+		`\tedges: ${entries(edgeEntries)},`,
+		`\tfunctions: ${entries(functionEntries)},`,
+		'});',
+	].join('\n');
+	return assemble(
+		[
+			'import * as SurrealSchema from "effect-surrealkit";',
+			'import type {} from "surrealdb";',
+			...importLines,
+		].join('\n'),
+		body,
+	);
+};
+
 /** Generates the module set from an already decoded document and options. */
 export const emit = (
 	document: SchemaDocument,
@@ -501,6 +573,10 @@ export const emit = (
 		path: 'manifest.ts',
 		content: assemble('', manifestBody),
 	});
+	files.push({
+		path: '_store.ts',
+		content: printStore(tables, functions, registry, options, ext),
+	});
 
 	const barrel = [
 		`export * from "./ids${ext}";`,
@@ -509,6 +585,7 @@ export const emit = (
 		),
 		`export * from "./functions${ext}";`,
 		`export { manifest } from "./manifest${ext}";`,
+		`export { store } from "./_store${ext}";`,
 	].join('\n');
 	files.push({ path: 'index.ts', content: assemble('', barrel) });
 
