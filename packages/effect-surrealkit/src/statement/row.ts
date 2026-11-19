@@ -19,6 +19,7 @@ import {
 	type OrNone,
 	orNone,
 	type Path,
+	type RowScope,
 } from './expr.js';
 import type { Codec } from './statement.js';
 
@@ -113,6 +114,7 @@ const build = (
 	prefix: string,
 	optional: boolean,
 	root: { readonly root: string; readonly rootSql: string } | undefined,
+	scope: RowScope | undefined,
 ): Record<string, Expr> => {
 	const row: Record<string, Expr> = {};
 	for (const [key, declared] of Object.entries(fields)) {
@@ -124,8 +126,8 @@ const build = (
 		row[key] = Object.assign(
 			nested === undefined
 				? {}
-				: build(nested, `${path}.`, mayBeNone, start),
-			makePath(mayBeNone ? orNone(codec) : codec, path, start),
+				: build(nested, `${path}.`, mayBeNone, start, scope),
+			makePath(mayBeNone ? orNone(codec) : codec, path, start, scope),
 		);
 	}
 	return row;
@@ -133,14 +135,27 @@ const build = (
 
 /**
  * The row object of a generated row schema: one expression per field, the
- * path quoted where SurrealQL needs it.
+ * path quoted where SurrealQL needs it. Its paths read whichever row is
+ * current where they are placed; the builders' own row objects say which
+ * row they were written for, and refuse a path of another.
  */
-export const rowOf = <R extends RowCodecIn>(schema: R): RowOf<FieldsOf<R>> => {
+export const rowOf = <R extends RowCodecIn>(schema: R): RowOf<FieldsOf<R>> =>
+	rowIn(schema, undefined);
+
+/**
+ * {@link rowOf}, its paths reading the row `scope` names.
+ *
+ * @internal
+ */
+export const rowIn = <R extends RowCodecIn>(
+	schema: R,
+	scope: RowScope | undefined,
+): RowOf<FieldsOf<R>> => {
 	const fields = fieldsOf(schema);
 	if (fields === undefined) {
 		throw new TypeError('rowOf takes a generated row schema (a struct)');
 	}
-	return build(fields, '', false, undefined) as RowOf<FieldsOf<R>>;
+	return build(fields, '', false, undefined, scope) as RowOf<FieldsOf<R>>;
 };
 
 /**
@@ -158,7 +173,9 @@ export const rowAt = <R extends RowCodecIn>(
 	if (fields === undefined) {
 		throw new TypeError('rowAt takes a generated row schema (a struct)');
 	}
-	return build(fields, prefix, false, undefined) as RowOf<FieldsOf<R>>;
+	return build(fields, prefix, false, undefined, undefined) as RowOf<
+		FieldsOf<R>
+	>;
 };
 
 /** The codec stored rows decode with: NONE reads as an absent key. */

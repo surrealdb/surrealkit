@@ -15,8 +15,10 @@ import {
 	follow,
 	type Input,
 	incoming,
+	ne,
 	outgoing,
 	param,
+	parent,
 	type Result,
 	recurse,
 	rows,
@@ -241,3 +243,18 @@ export const fetchedUnion = select(MemberOfTable)
 same<Result<typeof fetchedUnion>[number]['out'], OrgRow | TeamRow | undefined>(
 	true,
 );
+
+// ---- parent(row.field): the select's row, read from a step's `where`.
+
+export const notManaged = select(PersonTable)
+	.project((row) => ({
+		peers: outgoing(store, row.id, 'knows', {
+			where: (edge) =>
+				ne(follow(store, edge.out).manager, parent(row.id)),
+		}),
+		boss: outgoing(store, row.id, 'knows', {
+			where: (edge) => eq(edge.out, parent(row.manager)),
+		}),
+	}))
+	.build();
+same<Result<typeof notManaged>[number]['peers'], ReadonlyArray<PersonId>>(true);

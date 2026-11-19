@@ -1826,6 +1826,135 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 			).rejects.toThrow('Found 257 for bound but expected 256 at most.');
 		});
 
+		describe('$parent in a step’s where', () => {
+			/** One `{ id, r }` row per record, `r` as sorted record ids. */
+			const pairs = (value: unknown) =>
+				(value as Array<{ id: RecordId; r: unknown }>).map((row) => [
+					`${row.id.table.name}:${String(row.id.id)}`,
+					ids(row.r),
+				]);
+
+			beforeAll(async () => {
+				await query(`
+					DEFINE TABLE pa_p SCHEMALESS;
+					DEFINE TABLE pa_e TYPE RELATION IN pa_p OUT pa_p;
+					DEFINE TABLE pa_a TYPE RELATION IN pa_p OUT pa_p;
+					CREATE pa_p:1 SET y = 'k1', link = pa_p:2;
+					CREATE pa_p:2 SET y = 'k2', link = pa_p:3;
+					CREATE pa_p:3 SET y = 'k3';
+					RELATE pa_p:1->pa_e->pa_p:2 SET x = 'k1';
+					RELATE pa_p:1->pa_e->pa_p:3 SET x = 'k2';
+					RELATE pa_p:2->pa_e->pa_p:3 SET x = 'k2';
+					RELATE pa_p:2->pa_e->pa_p:1 SET x = 'k1';
+					RELATE pa_p:3->pa_e->pa_p:1 SET x = 'k3';
+					RELATE pa_p:1->pa_a->pa_p:2;
+				`);
+			});
+
+			it('is the select’s row directly under it: from the row, from a binding, chained, in WHERE, and with the step destructured', async () => {
+				const [direct, binding, second, first, where, nested, picked] =
+					(await query(
+						[
+							'SELECT id, id->(pa_e WHERE x = $parent.y)->? AS r FROM pa_p ORDER BY id;',
+							'SELECT id, $s->(pa_e WHERE x = $parent.y)->? AS r FROM pa_p ORDER BY id;',
+							'SELECT id, id->pa_a->?->(pa_e WHERE x = $parent.y)->? AS r FROM pa_p ORDER BY id;',
+							'SELECT id, id->(pa_e WHERE x = $parent.y)->?->pa_e->? AS r FROM pa_p ORDER BY id;',
+							'SELECT VALUE id FROM pa_p WHERE id->(pa_e WHERE x = $parent.y)->? CONTAINS pa_p:1 ORDER BY id;',
+							'SELECT id, id->(pa_e WHERE x = $parent.link.y)->? AS r FROM pa_p ORDER BY id;',
+							'SELECT id, id->(pa_e WHERE x = $parent.y)->?.{ n: y } AS r FROM pa_p ORDER BY id;',
+						].join(' '),
+						{ s: new RecordId('pa_p', 1) },
+					)) as Array<unknown>;
+				expect(pairs(direct)).toStrictEqual([
+					['pa_p:1', ['pa_p:2']],
+					['pa_p:2', ['pa_p:3']],
+					['pa_p:3', ['pa_p:1']],
+				]);
+				// From the binding `pa_p:1`, each row's own `y` picks the edge.
+				expect(pairs(binding)).toStrictEqual([
+					['pa_p:1', ['pa_p:2']],
+					['pa_p:2', ['pa_p:3']],
+					['pa_p:3', []],
+				]);
+				// pa_p:1->pa_a->pa_p:2, whose edges are filtered by pa_p:1's `y`.
+				expect(pairs(second)).toStrictEqual([
+					['pa_p:1', ['pa_p:1']],
+					['pa_p:2', []],
+					['pa_p:3', []],
+				]);
+				expect(pairs(first)).toStrictEqual([
+					['pa_p:1', ['pa_p:1', 'pa_p:3']],
+					['pa_p:2', ['pa_p:1']],
+					['pa_p:3', ['pa_p:2', 'pa_p:3']],
+				]);
+				expect(ids(where)).toStrictEqual(['pa_p:3']);
+				expect(pairs(nested)).toStrictEqual([
+					['pa_p:1', ['pa_p:3']],
+					['pa_p:2', []],
+					['pa_p:3', []],
+				]);
+				expect(picked).toStrictEqual([
+					{ id: new RecordId('pa_p', 1), r: [{ n: 'k2' }] },
+					{ id: new RecordId('pa_p', 2), r: [{ n: 'k3' }] },
+					{ id: new RecordId('pa_p', 3), r: [{ n: 'k1' }] },
+				]);
+			});
+
+			it('inside a destructuring is the outer row on SurrealDB 3 and the destructured record on 4', async () => {
+				const [ofLink, ofStep] = (await query(
+					[
+						'SELECT VALUE link.{ r: ->(pa_e WHERE x = $parent.y)->? }.r FROM ONLY pa_p:1;',
+						'SELECT VALUE id->pa_a->?.{ r: ->(pa_e WHERE x = $parent.y)->? }.r FROM ONLY pa_p:1;',
+					].join(' '),
+				)) as Array<unknown>;
+				// pa_p:1 (y = k1) links to pa_p:2 (y = k2): pa_p:2's edges are
+				// pa_e x = k2 to pa_p:3 and x = k1 to pa_p:1.
+				if (engine.majorVersion >= 4) {
+					expect(ids(ofLink)).toStrictEqual(['pa_p:3']);
+					expect((ofStep as Array<unknown>).map(ids)).toStrictEqual([
+						['pa_p:3'],
+					]);
+				} else {
+					expect(ids(ofLink)).toStrictEqual(['pa_p:1']);
+					expect((ofStep as Array<unknown>).map(ids)).toStrictEqual([
+						['pa_p:1'],
+					]);
+				}
+			});
+
+			it('under a recursive path is the select’s row on SurrealDB 4 and matches nothing on 3', async () => {
+				const [recursive] = (await query(
+					'SELECT id, id.{1..2}(->(pa_e WHERE x = $parent.y)->?) AS r FROM pa_p ORDER BY id;',
+				)) as Array<unknown>;
+				expect(pairs(recursive)).toStrictEqual(
+					engine.majorVersion >= 4
+						? [
+								['pa_p:1', ['pa_p:2']],
+								['pa_p:2', ['pa_p:3']],
+								['pa_p:3', ['pa_p:1']],
+							]
+						: [
+								['pa_p:1', []],
+								['pa_p:2', []],
+								['pa_p:3', []],
+							],
+				);
+			});
+
+			it('under a bare RETURN or a block, with no select, binds something on SurrealDB 4 and nothing on 3', async () => {
+				const [bare, inBlock] = (await query(
+					'RETURN pa_p:1->(pa_e WHERE x = $parent.y)->?; { LET $s = pa_p:1; $s->(pa_e WHERE x = $parent.y)->? };',
+				)) as Array<unknown>;
+				if (engine.majorVersion >= 4) {
+					expect(ids(bare)).toStrictEqual(['pa_p:2']);
+					expect(ids(inBlock)).toStrictEqual(['pa_p:2']);
+				} else {
+					expect(bare).toStrictEqual([]);
+					expect(inBlock).toStrictEqual([]);
+				}
+			});
+		});
+
 		it('a link to a record of a table that does not exist reads NONE on SurrealDB 3 and is an error on 4', async () => {
 			const read = query(
 				'SELECT VALUE l.x FROM ONLY g_holder:one; SELECT l FROM ONLY g_holder:one FETCH l;',

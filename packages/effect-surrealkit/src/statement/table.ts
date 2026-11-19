@@ -7,6 +7,7 @@ import type { Schema } from 'effect';
 import { escapeIdent, type RecordId } from 'surrealdb';
 
 import {
+	type Context,
 	codecOf,
 	conjunct,
 	type Expr,
@@ -15,6 +16,7 @@ import {
 	mergeParams,
 	type ParamsOfAll,
 	paramsOf,
+	type RowScope,
 	sqlOf,
 } from './expr.js';
 import { assertResolved, withoutRefs } from './refs.js';
@@ -28,7 +30,7 @@ import {
 	type RowCodecIn,
 	type RowOf,
 	rowCodec,
-	rowOf,
+	rowIn,
 } from './row.js';
 import type { Codec, Params } from './statement.js';
 
@@ -192,8 +194,10 @@ export const storedRow = <T extends PureTable>(table: T): StoredRow<T> =>
 	rowCodec<T['select']>(table.select);
 
 /** @internal */
-export const rowExprs = <T extends PureTable>(table: T): RowExprs<T> =>
-	rowOf<T['select']>(table.select);
+export const rowExprs = <T extends PureTable>(
+	table: T,
+	scope?: RowScope,
+): RowExprs<T> => rowIn<T['select']>(table.select, scope);
 
 /** @internal */
 export interface Projected {
@@ -249,8 +253,15 @@ export const subquery = <S extends Codec, P extends Params>(
 	codec: S,
 	sql: string,
 	params: P,
+	context?: Context,
 ): Expr<S, P> => {
 	// A subquery's search references are its own.
 	assertResolved(params, `the subquery \`${sql}\``);
-	return makeExpr(codec, `(${sql})`, withoutRefs(params), Level.atom);
+	return makeExpr(
+		codec,
+		`(${sql})`,
+		withoutRefs(params),
+		Level.atom,
+		context,
+	);
 };

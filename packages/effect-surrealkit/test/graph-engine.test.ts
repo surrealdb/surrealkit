@@ -22,8 +22,10 @@ import {
 	eq,
 	follow,
 	incoming,
+	ne,
 	outgoing,
 	param,
+	parent,
 	recurse,
 	rows,
 	select,
@@ -547,6 +549,40 @@ describe.skipIf(!engineConfigured)(
 				expect(
 					keys(result.map((row) => row.out?.id as RecordId)),
 				).toEqual(['org:acme', 'team:red', 'team:red']);
+			});
+		});
+
+		describe('the outer row in a step’s where', () => {
+			it('reads the select’s row through parent(row.field)', async () => {
+				// The people each person knows whose manager is not that person.
+				const statement = select(PersonTable)
+					.project((row) => ({
+						id: row.id,
+						peers: outgoing(store, row.id, 'knows', {
+							where: (edge) =>
+								ne(
+									follow(store, edge.out).manager,
+									parent(row.id),
+								),
+						}),
+					}))
+					.orderBy((row) => row.id)
+					.build();
+				expect(statement.sql).toBe(
+					'SELECT id AS id, id->(knows WHERE out.manager != $parent.id)->? AS peers FROM ⟨person⟩ ORDER BY id ASC;',
+				);
+				const result = await ok(client.run(statement));
+				expect(
+					result.map((row) => [
+						`${row.id.table.name}:${String(row.id.id)}`,
+						keys(row.peers),
+					]),
+				).toEqual([
+					['person:ann', ['person:cy']],
+					['person:bob', []],
+					['person:cy', ['person:dan']],
+					['person:dan', []],
+				]);
 			});
 		});
 	},

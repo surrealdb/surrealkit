@@ -12,6 +12,7 @@ import {
 	incoming,
 	outgoing,
 	param,
+	parent,
 	recurse,
 	rowOf,
 	select,
@@ -23,6 +24,7 @@ import {
 	KindsTable,
 	MemberOfTable,
 	Person,
+	PersonId,
 	PersonTable,
 	store,
 	TeamId,
@@ -94,6 +96,12 @@ export const rejectedSteps = () => {
 		x: outgoing(store, row.id, 'member_of', {
 			// @ts-expect-error [step/filter-wrong-type] `role` is a literal union
 			where: (edge) => eq(edge.role, 5),
+		}),
+	}));
+	select(PersonTable).project((row) => ({
+		x: outgoing(store, row.id, 'knows', {
+			// @ts-expect-error [step/parent-not-a-path] `parent` reads a field path of the select's row
+			where: (edge) => eq(edge.out, parent(param('who', PersonId))),
 		}),
 	}));
 	select(PersonTable).project((row) => ({

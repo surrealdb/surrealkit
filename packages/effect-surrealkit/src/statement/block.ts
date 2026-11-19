@@ -26,6 +26,8 @@ import { escapeIdent } from 'surrealdb';
 
 import { isPlainObject } from '../internal/declare.js';
 import {
+	admit,
+	derive,
 	type Expr,
 	ExprTypeId,
 	isExpr,
@@ -276,15 +278,15 @@ export const object = <const F extends ObjectFields>(
 			);
 		}
 	}
-	return makeExpr(
+	return derive(
 		projectedCodec(
 			Object.fromEntries(
 				entries.map(([name, value]) => [name, value[ExprTypeId].codec]),
 			),
 		),
 		`{ ${entries.map(([name, value]) => `${name}: ${operand(value)}`).join(', ')} }`,
-		mergeParams(...entries.map(([, value]) => paramsOf(value))),
 		Level.atom,
+		entries.map(([, value]) => value),
 	) as Expr<ObjectCodec<F>, ParamsOfAll<Extract<F[keyof F], Expr>>>;
 };
 
@@ -350,7 +352,7 @@ const armText = (body: Body): string => {
 };
 
 const conditionText = (condition: Expr): string =>
-	condition[ExprTypeId].level === Level.raw
+	assertInBlock(condition)[ExprTypeId].level === Level.raw
 		? `(${sqlOf(condition)})`
 		: sqlOf(condition);
 
@@ -425,6 +427,25 @@ const hasReturn = (sql: string): boolean => {
 	return false;
 };
 
+/**
+ * Refuses what a block's step reads that a block has none of: a field of a
+ * row (a block has no current row; read a select's result through a local),
+ * and `parent(row.field)`.
+ */
+const assertInBlock = (expr: Expr): Expr => {
+	admit(
+		{
+			own: undefined,
+			what: 'a block',
+			parents: 'refuse',
+			refused:
+				'SurrealDB 3.3 and 4.0 bind `$parent` differently in a block with no enclosing select',
+		},
+		[expr],
+	);
+	return expr;
+};
+
 /** The value of a local or a step: an expression or a one-result statement. */
 const valueText = (
 	value: unknown,
@@ -437,6 +458,7 @@ const valueText = (
 	readonly writes: boolean;
 } => {
 	if (isExpr(value)) {
+		assertInBlock(value);
 		return {
 			sql: operand(value),
 			codec: value[ExprTypeId].codec,
@@ -905,9 +927,9 @@ const open = (body: Body): unknown => {
 					'a block returns an expression or an object of expressions; inline a constant with `literal`',
 				);
 			}
-			const expr = isExpr(returned)
-				? returned
-				: object(returned as ObjectFields);
+			const expr = assertInBlock(
+				isExpr(returned) ? returned : object(returned as ObjectFields),
+			);
 			return ended({
 				...body,
 				terminal: {

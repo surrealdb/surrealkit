@@ -9,16 +9,20 @@ import { Schema } from 'effect';
 import { escapeIdent } from 'surrealdb';
 
 import {
+	admit,
 	type CodecOf,
 	type Comparable,
+	type Context,
 	codecOf,
+	contextOf,
+	derive,
 	type Expr,
 	eq,
 	type ItemOf,
 	isExpr,
 	isPath,
+	joinContexts,
 	Level,
-	makeExpr,
 	mergeParams,
 	type Operand,
 	type OperandEncoded,
@@ -28,6 +32,9 @@ import {
 	type PathData,
 	paramsOf,
 	pathOf,
+	RowScope,
+	type Site,
+	settle,
 	sqlOf,
 } from './expr.js';
 import {
@@ -318,6 +325,8 @@ export type SelectResult<
 
 interface State {
 	readonly table: PureTable;
+	/** The row the select's callbacks read. */
+	readonly scope: RowScope;
 	readonly row: RowExprs<PureTable>;
 	readonly source: Expr | undefined;
 	/** The source is an id range, which reads many rows as a table does. */
@@ -348,7 +357,37 @@ interface State {
 	/** What the select returns, which FETCH paths name fields of. */
 	readonly base: FetchBase;
 	readonly fetch: ReadonlyArray<string>;
+	/**
+	 * What its expressions read besides their bindings and its own row:
+	 * what a subquery reads of the rows around it.
+	 */
+	readonly context?: Context;
 }
+
+/** Where a select's callbacks place their results. */
+const siteOf = (state: State): Site => ({
+	own: state.scope,
+	what: `a select of \`${state.table.name}\``,
+	parents: 'select',
+});
+
+/** `state`, reading what `exprs` read too; `callback` when a callback returned them. */
+const reading = (
+	state: State,
+	exprs: ReadonlyArray<Expr>,
+	callback = true,
+): State => {
+	const context = joinContexts([
+		state.context,
+		callback
+			? admit(siteOf(state), exprs)
+			: joinContexts(exprs.map(contextOf)),
+	]);
+	return {
+		...state,
+		...(context !== undefined && { context }),
+	};
+};
 
 interface Order {
 	readonly sql: string;
@@ -463,6 +502,8 @@ const baseOf = (state: State): Base => {
 	}
 	return {
 		table: state.table,
+		scope: state.scope,
+		...(state.context !== undefined && { context: state.context }),
 		row: state.row,
 		from:
 			state.source === undefined
@@ -665,7 +706,7 @@ const builder = <
 			}
 			const condition = predicate(row);
 			return builder({
-				...state,
+				...reading(state, [condition]),
 				where: [...state.where, condition],
 				pure: false,
 				params: mergeParams(state.params, paramsOf(condition)),
@@ -680,7 +721,7 @@ const builder = <
 				);
 			}
 			return builder({
-				...state,
+				...reading(state, [by as Path]),
 				order: [
 					...state.order,
 					{ sql: sqlOf(by as Path), direction, path },
@@ -711,7 +752,7 @@ const builder = <
 				);
 			}
 			return builder({
-				...state,
+				...reading(state, isExpr(rows) ? [rows] : [], false),
 				limit: count(rows, 'LIMIT'),
 				params: bounded(rows),
 				pure: state.pure && !isExpr(rows),
@@ -719,7 +760,7 @@ const builder = <
 		},
 		start: (rows) =>
 			builder({
-				...state,
+				...reading(state, isExpr(rows) ? [rows] : [], false),
 				start: count(rows, 'START'),
 				params: bounded(rows),
 				pure: state.pure && !isExpr(rows),
@@ -734,7 +775,7 @@ const builder = <
 			const projected = project(projection);
 			assertNoFetch(state, 'project');
 			return builder({
-				...state,
+				...reading(state, Object.values(projection)),
 				base: {
 					kind: 'projection',
 					fields: Object.fromEntries(
@@ -760,7 +801,7 @@ const builder = <
 			const picked = pick(row);
 			assertNoFetch(state, 'value');
 			return builder({
-				...state,
+				...reading(state, [picked]),
 				base: { kind: 'value' },
 				fields: `VALUE ${sqlOf(picked)}`,
 				aliases: new Map(),
@@ -865,7 +906,7 @@ const builder = <
 			return builder({
 				...state,
 				table,
-				row: rowExprs(table),
+				row: rowExprs(table, state.scope),
 				out: storedRow(table),
 				base: { kind: 'row', table },
 				split: name,
@@ -882,12 +923,15 @@ const builder = <
 				resultOf(state) as SelectResult<Row, Only>,
 				render(state),
 				state.params as P,
+				state.context,
 			),
 		build: (name, options) => {
 			const writes = options?.writes ?? (state.pure ? false : undefined);
+			const label = name ?? `select ${state.table.name}`;
+			settle(state.context, `statement \`${label}\``);
 			return make({
 				...(writes !== undefined && { writes }),
-				name: name ?? `select ${state.table.name}`,
+				name: label,
 				sql: `${render(state)};`,
 				params: state.params as Simplify<P>,
 				result: resultOf(state) as SelectResult<Row, Only>,
@@ -939,9 +983,11 @@ export const select: {
 	id?: Expr | IdRange | string,
 	values?: { readonly [field: string]: Operand },
 ): never => {
+	const scope = new RowScope('select', table.name);
 	const state: State = {
 		table,
-		row: rowExprs(table),
+		scope,
+		row: rowExprs(table, scope),
 		source: undefined,
 		out: storedRow(table),
 		fields: '*',
@@ -959,7 +1005,7 @@ export const select: {
 	if (typeof id === 'string') {
 		const where = uniqueLookup(table, state.row, id, values ?? {});
 		return builder<T, Params, StoredRow<T>, true>({
-			...state,
+			...reading(state, where),
 			where,
 			pure: false,
 			only: true,
@@ -968,16 +1014,17 @@ export const select: {
 		}) as never;
 	}
 	if (isIdRange(id)) {
-		const { sql, params } = id[IdRangeTypeId];
+		const { sql, params, parts = [] } = id[IdRangeTypeId];
 		if (id[IdRangeTypeId].table !== table.name) {
 			throw new RangeError(
 				`a range of \`${id[IdRangeTypeId].table}\` is not a subject of \`${table.name}\``,
 			);
 		}
+		const source = derive(Schema.Unknown, sql, Level.atom, parts, params);
 		return {
 			...builder<T, Params, StoredRow<T>, false>({
-				...state,
-				source: makeExpr(Schema.Unknown, sql, params, Level.atom),
+				...reading(state, [source], false),
+				source,
 				range: true,
 				pure: false,
 				params,
@@ -992,7 +1039,11 @@ export const select: {
 	if (id === undefined) {
 		return builder<T, Params, StoredRow<T>, false>(state) as never;
 	}
-	const record: State = { ...state, source: id, params: paramsOf(id) };
+	const record: State = {
+		...reading(state, [id], false),
+		source: id,
+		params: paramsOf(id),
+	};
 	return {
 		...builder<T, Params, StoredRow<T>, false>(record),
 		forUpdate: () => {

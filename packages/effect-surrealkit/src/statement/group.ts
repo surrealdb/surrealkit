@@ -27,9 +27,12 @@ import { Decimal, SurrealNumber } from '../decimal.js';
 import { Int, Int64 } from '../int.js';
 import { Float } from '../scalars.js';
 import {
+	admit,
+	type Context,
 	type Expr,
 	isExpr,
 	isPath,
+	joinContexts,
 	Level,
 	makeExpr,
 	mergeParams,
@@ -38,6 +41,8 @@ import {
 	type ParamsOfAll,
 	type Path,
 	paramsOf,
+	type RowScope,
+	settle,
 	sqlOf,
 } from './expr.js';
 import {
@@ -380,6 +385,10 @@ export type GroupResult<
 /** @internal */
 export interface Base {
 	readonly table: PureTable;
+	/** The row the select's callbacks read. */
+	readonly scope: RowScope;
+	/** What its conditions read besides their bindings and its own row. */
+	readonly context?: Context;
 	readonly row: RowExprs<PureTable>;
 	/** The text after `FROM`. */
 	readonly from: string;
@@ -498,9 +507,29 @@ const finishing = <
 		const output = outputOf(state);
 		const all = Object.keys(state.keys).length === 0;
 		const writes = options?.writes ?? (state.pure ? false : undefined);
+		const label = name ?? `select ${state.table.name} grouped`;
+		settle(
+			joinContexts([
+				state.context,
+				admit(
+					{
+						own: state.scope,
+						what: `a grouped select of \`${state.table.name}\``,
+						parents: 'refuse',
+						refused:
+							"it reads the row of a select from a step's `where` directly under that select, and a grouped select's rows are groups",
+					},
+					[
+						...Object.values(state.keys),
+						...Object.values(state.aggregates),
+					],
+				),
+			]),
+			`statement \`${label}\``,
+		);
 		return make({
 			...(writes !== undefined && { writes }),
-			name: name ?? `select ${state.table.name} grouped`,
+			name: label,
 			sql: `${render(state)};`,
 			params: mergeParams(state.params, output.params) as Simplify<P>,
 			result: (all

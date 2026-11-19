@@ -315,6 +315,7 @@ may be NONE.
 | Function | SurrealQL |
 | --- | --- |
 | `param(name, codec)` | `$name`, encoded through `codec` when the statement runs |
+| `parent(row.field)` | `$parent.field`: the select's row, read from a step's `where` ([details](#record-links-and-graph-traversal)) |
 | `literal(value)`, `literal(value, codec)` | a constant in the text (`s"…"`, `d"…"`, `r"…"`), every part checked as its codec checks a binding |
 | `eq` `ne` `lt` `lte` `gt` `gte` | `=` `!=` `<` `<=` `>` `>=`; the right side may be a primitive |
 | `and(…)` `or(…)` `not(x)` | `AND` `OR` `!` |
@@ -1181,9 +1182,35 @@ What the types say, and the engine behaviour behind it (pinned in
   Deleting a record deletes its edges.
 - **Filters and destructuring read the edge or the target.** Inside a step's
   `where` and a `destructure` callback, field paths are relative to the edge
-  or target. A field of the outer row would read the edge's or target's
-  field of the same name, which the types cannot see: bind such a value with
-  `param`.
+  or target, so a field of the outer row would read the edge's or target's
+  field of the same name (`ne(edge.out, row.id)` would be `out != id` on the
+  edge). Every row object knows which row it was written for, and a path of
+  another row is refused when the step, the destructuring, the recursive
+  path or the select around it is built, with a message naming the field;
+  so is a field of a row in a block or a bare `RETURN`, which have none.
+  Bindings, constants and a block's locals read no row and are always legal.
+  Read the select's row from a step's `where` with `parent(row.field)`
+  (`$parent.field`):
+
+  ```ts
+  select(PersonTable).project((row) => ({
+    peers: outgoing(store, row.id, 'knows', {
+      where: (edge) => ne(follow(store, edge.out).manager, parent(row.id)),
+    }),
+  }));
+  // SELECT id->(knows WHERE out.manager != $parent.id)->? AS peers FROM ⟨person⟩
+  ```
+
+  SurrealDB 3.3 and 4.0 agree on `$parent` in a step's `where` directly
+  under a select's row: from the row, from a binding, in either step of a
+  chain, in `WHERE`, and with the step then followed or destructured. They
+  disagree elsewhere, so `parent` is refused there when the statement is
+  built: inside a destructuring (3.3 binds the outer row, 4.0 the
+  destructured record), under a recursive path (4.0 binds the select's row,
+  3.3 matches nothing), under a bare `RETURN` or a block with no select
+  (4.0 binds something, 3.3 nothing), in a step inside another step's
+  `where`, in a subquery of another select, a write or a grouped select.
+  Elsewhere, bind the value with `param`.
 - **Recursion.** A recursive path repeats a step that leads back to the table
   it starts from, at depths 1 to 256 (the engine refuses 0 and 257 and
   answers NONE for a reversed range, so the builder refuses all three).

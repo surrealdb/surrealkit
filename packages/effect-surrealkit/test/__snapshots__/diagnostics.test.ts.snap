@@ -1225,6 +1225,12 @@ exports[`type diagnostics > step/out-of-wrong-table 1`] = `
 ]
 `;
 
+exports[`type diagnostics > step/parent-not-a-path 1`] = `
+[
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person">, { ...; }>' is not assignable to parameter of type '"\`parent\` takes a field path of a select’s row, like \`parent(row.name)\`"'.",
+]
+`;
+
 exports[`type diagnostics > transaction/unbound-statement 1`] = `
 [
   "TS2322: Type 'Statement<{ readonly email: declareConstructor<string, string, readonly [], string>; }, $Array<declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 18 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { ...; }>>, never>' is not assignable to type '"a transaction takes statements paired with their input by \`bind\`"'.",

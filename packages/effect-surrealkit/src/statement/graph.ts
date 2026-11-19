@@ -18,9 +18,14 @@ import { Schema, SchemaAST } from 'effect';
 import { escapeIdent, type RecordId } from 'surrealdb';
 
 import {
+	admit,
 	type CodecOf,
+	type Context,
 	codecOf,
+	contextOf,
+	derive,
 	type Expr,
+	joinContexts,
 	Level,
 	makeExpr,
 	makePath,
@@ -31,6 +36,7 @@ import {
 	type ParamsOf,
 	type ParamsOfAll,
 	paramsOf,
+	RowScope,
 	sqlOf,
 } from './expr.js';
 import {
@@ -345,6 +351,11 @@ export const shapeTables = (shape: LinkShape): ReadonlyArray<string> | 'any' =>
 
 const optionalOf = (shape: LinkShape): boolean => shape.kind === 'optional';
 
+const shapeTablesText = (shape: LinkShape): string => {
+	const tables = shapeTables(shape);
+	return tables === 'any' ? 'any table' : tables.join(' | ');
+};
+
 const lift = (shape: LinkShape, present: boolean, leaf: Codec): Codec => {
 	switch (shape.kind) {
 		case 'id':
@@ -434,6 +445,7 @@ const buildLinked = (
 	optional: boolean,
 	wrap: (codec: Codec) => Codec,
 	params: Params,
+	context: Context | undefined,
 ): Record<string, Expr> => {
 	const linked: Record<string, Expr> = {};
 	for (const key of commonKeys(maps)) {
@@ -450,6 +462,7 @@ const buildLinked = (
 					mayBeNone,
 					wrap,
 					params,
+					context,
 				)
 			: {};
 		linked[key] = Object.assign(
@@ -459,6 +472,7 @@ const buildLinked = (
 				sql,
 				params,
 				Level.atom,
+				context,
 			),
 		);
 	}
@@ -509,6 +523,7 @@ export const follow = <S extends GraphStore, const R extends Expr>(
 		false,
 		(codec) => lift(shape, present, codec),
 		paramsOf(link),
+		contextOf(link),
 	) as unknown as FollowedOf<S, R>;
 };
 
@@ -539,18 +554,21 @@ export const rows = <S extends GraphStore, const R extends Expr>(
 	const link = records as Expr;
 	const { shape, tables } = targetsOf(store, link);
 	const present = traversalOf(link)?.present ?? false;
-	return makeExpr(
+	return derive(
 		lift(shape, present, targetRow(tables)),
 		`${operand(link)}.*`,
-		paramsOf(link),
 		Level.atom,
+		[link],
 	) as unknown as Expr<RowsOf<S, R>, ParamsOf<R>>;
 };
 
 /** The row object a destructuring callback receives for the link `R`. */
 export type TargetRow<S, R> = RowOf<TargetFields<S, EncodedOf<R>>>;
 
-const targetRowExprs = (tables: ReadonlyArray<PureTable>): RowOf<Fields> => {
+const targetRowExprs = (
+	tables: ReadonlyArray<PureTable>,
+	scope: RowScope,
+): RowOf<Fields> => {
 	const build = (
 		maps: ReadonlyArray<Fields>,
 		prefix: string,
@@ -575,7 +593,7 @@ const targetRowExprs = (tables: ReadonlyArray<PureTable>): RowOf<Fields> => {
 							start,
 						)
 					: {},
-				makePath(mayBeNone ? orNone(codec) : codec, path, start),
+				makePath(mayBeNone ? orNone(codec) : codec, path, start, scope),
 			);
 		}
 		return row;
@@ -608,9 +626,12 @@ export type DestructuredOf<R, F> = AsCodec<
  * paths relative to it; any expression may be projected, a step from the
  * target included.
  *
- * Inside the callback, a field path always reads the target. A field of the
- * outer row would read the target's field of that name instead, so bind
- * such a value with `param`.
+ * Inside the callback, a field path always reads the target, so a field of
+ * the outer row (which would read the target's field of that name) is
+ * refused when the destructuring is built: project it beside the
+ * destructured object, or bind the value with `param`. `parent(row.field)`
+ * is refused here too, because SurrealDB 3.3 binds `$parent` inside a
+ * destructuring to the outer row and 4.0 to the destructured record.
  *
  * @example
  * select(PersonTable).project((row) => ({
@@ -633,11 +654,25 @@ export const destructure = <
 	const link = records as Expr;
 	const targets = targetsOf(store, link);
 	const present = traversalOf(link)?.present ?? false;
+	const scope = new RowScope(
+		'target',
+		targets.tables.map((table) => table.name).join(' | '),
+	);
 	const fields = shape(
-		targetRowExprs(targets.tables) as unknown as TargetRow<S, R>,
+		targetRowExprs(targets.tables, scope) as unknown as TargetRow<S, R>,
 	) as Projection;
 	const entries = Object.entries(fields);
 	const projected = project(fields);
+	const inner = admit(
+		{
+			own: scope,
+			what: 'a destructuring callback',
+			parents: 'refuse',
+			refused:
+				'SurrealDB 3.3 binds `$parent` inside a destructuring to the outer row and 4.0 to the destructured record; project the step beside the destructured object',
+		},
+		Object.values(fields),
+	);
 	return makeExpr(
 		lift(targets.shape, present, projected.codec),
 		`${operand(link)}.{ ${entries
@@ -645,6 +680,7 @@ export const destructure = <
 			.join(', ')} }`,
 		mergeParams(paramsOf(link), projected.params),
 		Level.atom,
+		joinContexts([contextOf(link), inner]),
 	) as unknown as Expr<
 		DestructuredOf<R, F>,
 		ParamsOf<R> & ParamsOfAll<F[keyof F]>
@@ -771,7 +807,10 @@ export type Step<S, R, N, D extends Direction, P extends Params> = Traversal<
 export interface StepOptions<T extends PureTable, P extends Params> {
 	/**
 	 * Walks only the edges that satisfy this condition, which reads the
-	 * edge's fields: `->(member_of WHERE role = $role)->?`.
+	 * edge's fields: `->(member_of WHERE role = $role)->?`. A field path of
+	 * another row would read the edge's field of that name, so it is
+	 * refused when the step is built; read the row of the select the step
+	 * sits directly under with `parent(row.field)`, or bind the value.
 	 */
 	readonly where?: (edge: RowExprs<T>) => Condition<P>;
 }
@@ -849,7 +888,17 @@ const step = (
 			);
 		}
 	}
-	const condition = options?.where?.(makeRow(table) as RowExprs<PureTable>);
+	const scope = new RowScope('edge', name);
+	const condition = options?.where?.(
+		makeRow(table, scope) as RowExprs<PureTable>,
+	);
+	const filtered =
+		condition === undefined
+			? undefined
+			: admit(
+					{ own: scope, what: "a step's `where`", parents: 'place' },
+					[condition],
+				);
 	const arrow = arrows[direction];
 	const through =
 		condition === undefined
@@ -870,7 +919,13 @@ const step = (
 		condition === undefined ? {} : paramsOf(condition),
 	);
 	return {
-		...makeExpr(list(item), `${edgesSql}${arrow}?`, params, Level.atom),
+		...makeExpr(
+			list(item),
+			`${edgesSql}${arrow}?`,
+			params,
+			Level.atom,
+			joinContexts([contextOf(from), filtered]),
+		),
 		[TraversalTypeId]: {
 			present: edge.enforced,
 			item,
@@ -879,7 +934,8 @@ const step = (
 	};
 };
 
-const makeRow = (table: PureTable): RowOf<Fields> => targetRowExprs([table]);
+const makeRow = (table: PureTable, scope: RowScope): RowOf<Fields> =>
+	targetRowExprs([table], scope);
 
 type StepFunction<D extends Direction> = <
 	S extends GraphStore,
@@ -970,12 +1026,9 @@ export const edges = <const R extends Traversal<Codec, Params, boolean, Codec>>(
 		);
 	}
 	return {
-		...makeExpr(
-			data.edges.codec,
-			data.edges.sql,
-			paramsOf(traversal as Expr),
-			Level.atom,
-		),
+		...derive(data.edges.codec, data.edges.sql, Level.atom, [
+			traversal as Expr,
+		]),
 		[TraversalTypeId]: { present: true, item: data.edges.item },
 	} as unknown as Traversal<EdgesCodec<R>, ParamsOf<R>, true>;
 };
@@ -1057,7 +1110,8 @@ const recursion = (
 	repeat: (node: Expr) => unknown,
 	instruction: (inner: Traversal<Codec>) => {
 		readonly depth: string;
-		readonly params?: Params;
+		/** An expression the depth reads (a shortest path's target). */
+		readonly reads?: Expr;
 		readonly optional?: boolean;
 	},
 ): Traversal<Codec, Params, boolean> => {
@@ -1079,6 +1133,16 @@ const recursion = (
 		);
 	}
 	const traversal = inner as Traversal<Codec>;
+	const repeated = admit(
+		{
+			own: new RowScope('node', shapeTablesText(start.shape)),
+			what: 'the step a recursive path repeats',
+			parents: 'refuse',
+			refused:
+				'SurrealDB 3.3 and 4.0 bind `$parent` differently under a recursive path; bind the value with `param`',
+		},
+		[traversal],
+	);
 	const nodeTables = shapeTables(start.shape);
 	const itemShape = linkShape(data.item);
 	const itemTables = itemShape === undefined ? 'any' : shapeTables(itemShape);
@@ -1091,14 +1155,23 @@ const recursion = (
 			'a recursive path repeats a step that leads back to the table it starts from',
 		);
 	}
-	const { depth, params, optional } = instruction(traversal);
+	const { depth, reads, optional } = instruction(traversal);
 	const list = Schema.Array(data.item);
 	return {
 		...makeExpr(
 			optional === true || start.optional ? orNone(list) : list,
 			`${operand(from)}.{${depth}}(${sqlOf(traversal)})`,
-			mergeParams(paramsOf(from), paramsOf(traversal), params ?? {}),
+			mergeParams(
+				paramsOf(from),
+				paramsOf(traversal),
+				reads === undefined ? {} : paramsOf(reads),
+			),
 			Level.atom,
+			joinContexts([
+				contextOf(from),
+				repeated,
+				reads === undefined ? undefined : contextOf(reads),
+			]),
 		),
 		[TraversalTypeId]: { present: data.present, item: data.item },
 	};
@@ -1226,7 +1299,7 @@ export const shortest = <const R extends Expr, const To extends Expr, const T>(
 	}
 	return recursion(from as Expr, repeat as (node: Expr) => unknown, () => ({
 		depth: `..+shortest=${operand(target)}${options.inclusive === true ? '+inclusive' : ''}`,
-		params: paramsOf(target),
+		reads: target,
 		optional: true,
 	})) as unknown as RecursionResult<R, T, true, ParamsOf<To>>;
 };

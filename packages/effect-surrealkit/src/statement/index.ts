@@ -70,6 +70,7 @@ export {
 	type PureFunction,
 	param,
 	paramsOf,
+	parent,
 	sqlOf,
 	unsafeExpr,
 } from './expr.js';

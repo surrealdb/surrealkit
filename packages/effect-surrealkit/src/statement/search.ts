@@ -17,8 +17,10 @@ import { Int } from '../int.js';
 import { NoneAsAbsent } from '../row.js';
 import { Float } from '../scalars.js';
 import {
+	admit,
 	type CodecOf,
 	codecOf,
+	derive,
 	type Expr,
 	isExpr,
 	isPath,
@@ -293,7 +295,13 @@ export const match = <
 			: { matches: new Map([[ref, sqlOf(target)]]) },
 	);
 	return {
-		...makeExpr(Schema.Boolean, sql, params, Level.comparison),
+		...derive(
+			Schema.Boolean,
+			sql,
+			Level.comparison,
+			[target, query],
+			params,
+		),
 		[MatchTypeId]: {
 			ref,
 			field: codecOf(target),
@@ -385,13 +393,14 @@ export const highlight = <
 	const marks = [open, close].map((mark) =>
 		isExpr(mark) ? mark : literal(mark as string),
 	);
-	return makeExpr(
+	return derive(
 		data.field,
 		`search::highlight(${marks.map(operand).join(', ')}, ${ref})`,
+		Level.atom,
+		marks,
 		withRefs(mergeParams(...marks.map(paramsOf)), {
 			reads: new Set([ref]),
 		}),
-		Level.atom,
 	) as Expr<
 		M[typeof MatchTypeId]['field'],
 		OperandParams<O> & OperandParams<C>
@@ -641,11 +650,12 @@ export const knn = <
 	}
 	const sql = `${sqlOf(target)} <|${k},${how}|> ${operand(bound)}`;
 	return {
-		...makeExpr(
+		...derive(
 			Schema.Boolean,
 			sql,
-			withRefs(mergeParams(paramsOf(bound)), { knn: new Set([sql]) }),
 			Level.comparison,
+			[target, bound],
+			withRefs(mergeParams(paramsOf(bound)), { knn: new Set([sql]) }),
 		),
 		[KnnTypeId]: { sql },
 	} as unknown as Knn<VectorParams<V>>;
@@ -808,11 +818,11 @@ export const rrf = <
 	const all = lists as unknown as ReadonlyArray<Expr>;
 	const limit = countText(options.limit, 'the fused limit', 1);
 	const k = countText(options.k ?? 60, 'the rank constant', 0);
-	return makeExpr(
+	return derive(
 		fusedCodec(all, 'rrf_score'),
 		`search::rrf(${listsText(all)}, ${operand(limit)}, ${operand(k)})`,
-		mergeParams(...all.map(paramsOf), paramsOf(limit), paramsOf(k)),
 		Level.atom,
+		[...all, limit, k],
 	) as never;
 };
 
@@ -874,11 +884,11 @@ export const linear = <
 		);
 	}
 	const limit = countText(options.limit, 'the fused limit', 1);
-	return makeExpr(
+	return derive(
 		fusedCodec(all, 'linear_score'),
 		`search::linear(${listsText(all)}, ${operand(weights)}, ${operand(limit)}, ${sqlOf(literal(options.normalisation))})`,
-		mergeParams(...all.map(paramsOf), paramsOf(weights), paramsOf(limit)),
 		Level.atom,
+		[...all, weights, limit],
 	) as never;
 };
 
@@ -891,11 +901,22 @@ export const evaluate = <S extends Codec, P extends Params>(
 	expr: Expr<S, P>,
 	name = 'evaluate',
 	options?: { readonly writes?: boolean },
-): Statement<Simplify<P>, S> =>
-	make({
+): Statement<Simplify<P>, S> => {
+	admit(
+		{
+			own: undefined,
+			what: 'a bare `RETURN`',
+			parents: 'refuse',
+			refused:
+				'SurrealDB 3.3 and 4.0 bind `$parent` differently under a bare `RETURN`, which has no enclosing select',
+		},
+		[expr],
+	);
+	return make({
 		...(options?.writes !== undefined && { writes: options.writes }),
 		name,
 		sql: `RETURN ${sqlOf(expr)};`,
 		params: paramsOf(expr) as Simplify<P>,
 		result: codecOf(expr),
 	});
+};

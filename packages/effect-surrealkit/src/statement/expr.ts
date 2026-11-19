@@ -47,6 +47,49 @@ interface ExprData<S extends Codec, P extends Params> {
 	readonly level: Level;
 	/** Set when the text is a field path of the row. */
 	readonly path?: PathData;
+	/** What the text reads besides its bindings; absent when nothing. */
+	readonly context?: Context;
+}
+
+/**
+ * The row a row object's field paths read: a select's or a write's row, the
+ * edge a step's `where` reads, the record a destructuring reads, or the node
+ * a recursive path repeats its step from. A path's text is relative, so it
+ * reads whichever row is current where it is placed; the scope says which
+ * row it was written for.
+ *
+ * @internal
+ */
+export class RowScope {
+	constructor(
+		readonly kind: 'select' | 'write' | 'edge' | 'target' | 'node',
+		readonly table: string,
+	) {}
+}
+
+/**
+ * Which row of each table a statement reads: the generated `select` row of
+ * a privileged reader, or the `visible` row of a session whose field
+ * permissions may hide fields (`readAs`).
+ */
+export type Reader = 'privileged' | 'restricted';
+
+/**
+ * What an expression reads besides its bindings, merged wherever expressions
+ * are combined ({@link derive}) and checked where a callback's result is
+ * placed ({@link admit}) and where a statement is built.
+ *
+ * @internal
+ */
+export interface Context {
+	/** Each row whose field paths the text reads, with the first field read. */
+	readonly reads?: ReadonlyMap<RowScope, string>;
+	/** `parent(row.field)` reads not yet inside a step's `where`. */
+	readonly loose?: ReadonlyMap<RowScope, string>;
+	/** `parent(row.field)` reads inside a step's `where`, awaiting their select. */
+	readonly placed?: ReadonlyMap<RowScope, string>;
+	/** The readers of the store views the text reads records through. */
+	readonly readers?: ReadonlySet<Reader>;
 }
 
 /**
@@ -133,26 +176,342 @@ export const sqlOf = (expr: Expr): string => expr[ExprTypeId].sql;
 export const paramsOf = <P extends Params>(expr: Expr<Codec, P>): P =>
 	expr[ExprTypeId].params;
 
-/** @internal */
+/**
+ * An expression that combines no other: a binding, a constant, a local, raw
+ * text. A combinator builds with {@link derive}, which carries what its
+ * operands read.
+ *
+ * @internal
+ */
 export const makeExpr = <S extends Codec, P extends Params>(
 	codec: S,
 	sql: string,
 	params: P,
 	level: Level,
-): Expr<S, P> => ({ [ExprTypeId]: { codec, sql, params, level } });
+	context?: Context,
+): Expr<S, P> => ({
+	[ExprTypeId]: {
+		codec,
+		sql,
+		params,
+		level,
+		...(context !== undefined && { context }),
+	},
+});
+
+/** What `expr` reads besides its bindings. @internal */
+export const contextOf = (expr: Expr): Context | undefined =>
+	expr[ExprTypeId].context;
+
+const joinMaps = <K, V>(
+	maps: ReadonlyArray<ReadonlyMap<K, V> | undefined>,
+): ReadonlyMap<K, V> | undefined => {
+	let joined: Map<K, V> | undefined;
+	let only: ReadonlyMap<K, V> | undefined;
+	for (const map of maps) {
+		if (map === undefined || map.size === 0) continue;
+		if (only === undefined && joined === undefined) {
+			only = map;
+			continue;
+		}
+		joined ??= new Map(only);
+		for (const [key, value] of map) {
+			if (!joined.has(key)) joined.set(key, value);
+		}
+	}
+	return joined ?? only;
+};
+
+const joinSets = <V>(
+	sets: ReadonlyArray<ReadonlySet<V> | undefined>,
+): ReadonlySet<V> | undefined => {
+	const present = sets.filter(
+		(set): set is ReadonlySet<V> => set !== undefined && set.size > 0,
+	);
+	if (present.length <= 1) return present[0];
+	return new Set(present.flatMap((set) => [...set]));
+};
+
+/**
+ * One context from several: what each reads, together.
+ *
+ * @internal
+ */
+export const joinContexts = (
+	contexts: ReadonlyArray<Context | undefined>,
+): Context | undefined => {
+	const present = contexts.filter(
+		(context): context is Context => context !== undefined,
+	);
+	if (present.length <= 1) return present[0];
+	const reads = joinMaps(present.map((context) => context.reads));
+	const loose = joinMaps(present.map((context) => context.loose));
+	const placed = joinMaps(present.map((context) => context.placed));
+	const readers = joinSets(present.map((context) => context.readers));
+	return reads === undefined &&
+		loose === undefined &&
+		placed === undefined &&
+		readers === undefined
+		? undefined
+		: {
+				...(reads !== undefined && { reads }),
+				...(loose !== undefined && { loose }),
+				...(placed !== undefined && { placed }),
+				...(readers !== undefined && { readers }),
+			};
+};
+
+/**
+ * An expression whose text combines `operands`: it reads their bindings
+ * (`params`, when given, is those bindings with search references added)
+ * and everything else they read. Every combinator builds with this, so none
+ * can drop what an operand reads.
+ *
+ * @internal
+ */
+export const derive = <S extends Codec, P extends Params = Params>(
+	codec: S,
+	sql: string,
+	level: Level,
+	operands: ReadonlyArray<Expr>,
+	params?: Params,
+): Expr<S, P> =>
+	makeExpr(
+		codec,
+		sql,
+		(params ?? mergeParams(...operands.map(paramsOf))) as P,
+		level,
+		joinContexts(operands.map(contextOf)),
+	);
+
+/** A copy of `expr` reading `context` instead. @internal */
+export const withContext = <E extends Expr>(
+	expr: E,
+	context: Context | undefined,
+): E => {
+	const { context: _, ...data } = expr[ExprTypeId];
+	return {
+		...expr,
+		[ExprTypeId]: { ...data, ...(context !== undefined && { context }) },
+	};
+};
 
 /** @internal */
 export const makePath = <S extends Codec>(
 	codec: S,
 	sql: string,
 	path: PathData,
+	scope?: RowScope,
 ): Path<S> => ({
-	[ExprTypeId]: { codec, sql, params: {}, level: Level.atom, path },
+	[ExprTypeId]: {
+		codec,
+		sql,
+		params: {},
+		level: Level.atom,
+		path,
+		...(scope !== undefined && {
+			context: { reads: new Map([[scope, path.root]]) },
+		}),
+	},
 });
 
 /** The path data of `expr`, when it is a field path. @internal */
 export const pathOf = (expr: Expr): PathData | undefined =>
 	expr[ExprTypeId].path;
+
+// ---- scopes: which row a callback's field paths read
+
+/** What a callback's own row is, for messages. */
+const ownRow = (scope: RowScope): string => {
+	switch (scope.kind) {
+		case 'edge':
+			return `the edge (\`${scope.table}\`)`;
+		case 'target':
+			return `the record it destructures (\`${scope.table}\`)`;
+		case 'node':
+			return 'each record the path reaches';
+		default:
+			return `the row of \`${scope.table}\``;
+	}
+};
+
+const otherRow = (scope: RowScope): string => {
+	switch (scope.kind) {
+		case 'edge':
+			return `the edge \`${scope.table}\` of a step`;
+		case 'target':
+			return `the record of \`${scope.table}\` a destructuring reads`;
+		case 'node':
+			return 'the node of a recursive path';
+		case 'select':
+			return `the row of a select of \`${scope.table}\``;
+		default:
+			return `the row of a write to \`${scope.table}\``;
+	}
+};
+
+/**
+ * Where a callback's result is placed, and what it may read there:
+ *
+ * - `own`: the row its field paths read (none for a block or a bare
+ *   `RETURN`, which have no row);
+ * - `what`: the callback, for messages;
+ * - `parents`: what becomes of a `parent(row.field)`: a step's `where`
+ *   places it (`place`), a select's callback keeps one its step placed for
+ *   that select's own row (`select`), and anywhere else it is refused, for
+ *   the reason `refused` gives.
+ *
+ * @internal
+ */
+export interface Site {
+	readonly own: RowScope | undefined;
+	readonly what: string;
+	readonly parents: 'place' | 'select' | 'refuse';
+	readonly refused?: string;
+}
+
+const outerAdvice = (site: Site, field: string, from: RowScope): string => {
+	const via =
+		from.kind === 'select'
+			? ` To read the select's row from a step's \`where\` directly under it, use \`parent(row.${field})\`; anywhere else, bind`
+			: ' Bind';
+	switch (site.own?.kind) {
+		case 'target':
+			return `${via} the value with \`param\`, or project the outer field beside the destructured object.`;
+		default:
+			return `${via} the value with \`param\`.`;
+	}
+};
+
+/**
+ * Checks what a callback returned against the row it may read, and returns
+ * what its result reads outside: every field path must read `site.own`
+ * (bindings, constants and locals read no row and are always legal), and a
+ * `parent(row.field)` is placed, kept or refused as `site.parents` says.
+ *
+ * @internal
+ */
+export const admit = (
+	site: Site,
+	exprs: ReadonlyArray<Expr>,
+): Context | undefined => {
+	const context = joinContexts(exprs.map(contextOf));
+	if (context === undefined) return undefined;
+	for (const [scope, field] of context.reads ?? []) {
+		if (scope === site.own) continue;
+		throw new RangeError(
+			site.own === undefined
+				? `\`${field}\` is a field of ${otherRow(scope)}, and ${site.what} has no row to read it from.${outerAdvice(site, field, scope)}`
+				: `\`${field}\` is a field of ${otherRow(scope)}, but in ${site.what} a field path reads ${ownRow(site.own)}, so it would read that row's \`${field}\` instead.${outerAdvice(site, field, scope)}`,
+		);
+	}
+	const loose = context.loose ?? new Map<RowScope, string>();
+	const placed = context.placed ?? new Map<RowScope, string>();
+	if (site.parents === 'place') {
+		const [nested] = placed.values();
+		if (nested !== undefined) {
+			throw new RangeError(
+				`\`parent(row.${nested})\` is in a step inside ${site.what}; \`parent\` reads the select's row only from a step directly under it`,
+			);
+		}
+	} else {
+		const [field] = loose.values();
+		if (field !== undefined) {
+			throw new RangeError(
+				site.parents === 'select'
+					? `\`parent(row.${field})\` reads the select's row from inside a step's \`where\` (\`outgoing(store, row.id, 'edge', { where: (edge) => eq(edge.${field}, parent(row.${field})) })\`); in ${site.what}, read \`row.${field}\` itself`
+					: `\`parent(row.${field})\` is refused in ${site.what}: ${site.refused ?? 'it reads the row of a select only from a step directly under it'}`,
+			);
+		}
+		for (const [scope, field] of placed) {
+			if (site.parents === 'select' && scope === site.own) continue;
+			throw new RangeError(
+				site.parents === 'select'
+					? `\`parent(row.${field})\` reads ${otherRow(scope)}, and this step is in ${site.what}; place the step directly under that select`
+					: `\`parent(row.${field})\` is refused in ${site.what}: ${site.refused ?? 'it reads the row of a select only from a step directly under it'}`,
+			);
+		}
+	}
+	const reads = new Map(context.reads);
+	if (site.own !== undefined) reads.delete(site.own);
+	const kept = new Map(placed);
+	if (site.parents === 'place') for (const entry of loose) kept.set(...entry);
+	if (site.parents === 'select' && site.own !== undefined) {
+		kept.delete(site.own);
+	}
+	return reads.size === 0 && kept.size === 0 && context.readers === undefined
+		? undefined
+		: {
+				...(reads.size > 0 && { reads }),
+				...(kept.size > 0 && { placed: kept }),
+				...(context.readers !== undefined && {
+					readers: context.readers,
+				}),
+			};
+};
+
+/**
+ * Refuses a statement whose text still reads a row it has none of, or a
+ * `parent(row.field)` no select took; returns the readers it reads through.
+ *
+ * @internal
+ */
+export const settle = (
+	context: Context | undefined,
+	what: string,
+): ReadonlySet<Reader> | undefined => {
+	if (context === undefined) return undefined;
+	admit({ own: undefined, what, parents: 'refuse' }, [
+		makeExpr(Schema.Unknown, '', {}, Level.atom, context),
+	]);
+	return context.readers;
+};
+
+/**
+ * `$parent.field`: a field of the row of the select a step sits directly
+ * under, read from the step's `where`, whose own field paths read the edge.
+ * `field` is a field path of that select's row.
+ *
+ * It is accepted only there: SurrealDB 3.3 and 4.0 agree on `$parent` in a
+ * step's `where` directly under a select's row (chained steps and a step
+ * from a binding included), and disagree inside a destructuring (3.3 binds
+ * the outer row, 4.0 the destructured record), under a recursive path and
+ * under a bare `RETURN` or a block, so each of those refuses it when the
+ * statement is built.
+ *
+ * @example
+ * select(PersonTable).project((row) => ({
+ *   peers: outgoing(store, row.id, 'knows', {
+ *     where: (edge) => ne(edge.out, parent(row.id)),
+ *   }),
+ * }));
+ * // SELECT id->(knows WHERE out != $parent.id)->? AS peers FROM ⟨person⟩
+ */
+export const parent = <const F extends Expr>(
+	field: F extends Path
+		? F
+		: '`parent` takes a field path of a select’s row, like `parent(row.name)`',
+): Expr<CodecOf<F>, NoParams> => {
+	const data = isExpr(field) ? field[ExprTypeId] : undefined;
+	const [scope] = data?.context?.reads?.keys() ?? [];
+	if (data?.path === undefined || scope === undefined) {
+		throw new TypeError(
+			'`parent` takes a field path of a select’s row, like `parent(row.name)`',
+		);
+	}
+	if (scope.kind !== 'select') {
+		throw new TypeError(
+			`\`parent(${data.sql})\` reads a field of ${otherRow(scope)}; \`parent\` reads only a select's row`,
+		);
+	}
+	return makeExpr(
+		data.codec as CodecOf<F>,
+		`$parent.${data.sql}`,
+		{},
+		Level.atom,
+		{ loose: new Map([[scope, data.path.root]]) },
+	);
+};
 
 /**
  * The text of `expr` as an operand of a comparison, call or clause: anything
@@ -463,12 +822,11 @@ const binary =
 		right: Comparable<A['Encoded'], OperandEncoded<B>, B>,
 	): Expr<Schema.Boolean, PA & OperandParams<B>> => {
 		const other = lift(right as Operand);
-		return makeExpr(
+		return derive(
 			Schema.Boolean,
 			`${operand(left)} ${operator} ${operand(other)}`,
-			mergeParams(paramsOf(left), paramsOf(other)) as PA &
-				OperandParams<B>,
 			Level.comparison,
+			[left, other],
 		);
 	};
 
@@ -497,11 +855,11 @@ const logical =
 	): Expr<Schema.Boolean, ParamsOfAll<A[number]>> => {
 		const level = operator === 'AND' ? Level.and : Level.or;
 		if (operator === 'OR') assertNotNested(operands.map(paramsOf), 'OR');
-		return makeExpr(
+		return derive(
 			Schema.Boolean,
 			operands.map((item) => conjunct(item, level)).join(` ${operator} `),
-			mergeParams(...operands.map(paramsOf)) as ParamsOfAll<A[number]>,
 			operands.length === 1 ? operands[0][ExprTypeId].level : level,
+			operands,
 		);
 	};
 
@@ -515,35 +873,24 @@ export const not = <P extends Params>(
 	value: Expr<BooleanCodec, P>,
 ): Expr<Schema.Boolean, P> => {
 	assertNotNested([paramsOf(value)], 'NOT');
-	return makeExpr(
-		Schema.Boolean,
-		`!${operand(value)}`,
-		paramsOf(value),
-		Level.atom,
-	);
+	return derive(Schema.Boolean, `!${operand(value)}`, Level.atom, [value]);
 };
 
 /** `value = NONE`: the field is absent, or the expression yields nothing. */
 export const isNone = <P extends Params>(
 	value: Expr<Codec, P>,
 ): Expr<Schema.Boolean, P> =>
-	makeExpr(
-		Schema.Boolean,
-		`${operand(value)} = NONE`,
-		paramsOf(value),
-		Level.comparison,
-	);
+	derive(Schema.Boolean, `${operand(value)} = NONE`, Level.comparison, [
+		value,
+	]);
 
 /** `value != NONE` */
 export const isNotNone = <P extends Params>(
 	value: Expr<Codec, P>,
 ): Expr<Schema.Boolean, P> =>
-	makeExpr(
-		Schema.Boolean,
-		`${operand(value)} != NONE`,
-		paramsOf(value),
-		Level.comparison,
-	);
+	derive(Schema.Boolean, `${operand(value)} != NONE`, Level.comparison, [
+		value,
+	]);
 
 /** The element type of a stored array or set. */
 export type ElementOf<E> =
@@ -581,12 +928,11 @@ export const inside = <
 	haystack: Comparable<A['Encoded'], ElementOf<CollectionEncoded<B>>, B>,
 ): Expr<Schema.Boolean, PA & OperandParams<B>> => {
 	const collection = liftCollection(haystack as Collection);
-	return makeExpr(
+	return derive(
 		Schema.Boolean,
 		`${operand(needle)} INSIDE ${operand(collection)}`,
-		mergeParams(paramsOf(needle), paramsOf(collection)) as PA &
-			OperandParams<B>,
 		Level.comparison,
+		[needle, collection],
 	);
 };
 
@@ -600,12 +946,11 @@ export const contains = <
 	needle: Comparable<ElementOf<A['Encoded']>, OperandEncoded<B>, B>,
 ): Expr<Schema.Boolean, PA & OperandParams<B>> => {
 	const value = lift(needle as Operand);
-	return makeExpr(
+	return derive(
 		Schema.Boolean,
 		`${operand(haystack)} CONTAINS ${operand(value)}`,
-		mergeParams(paramsOf(haystack), paramsOf(value)) as PA &
-			OperandParams<B>,
 		Level.comparison,
+		[haystack, value],
 	);
 };
 
@@ -663,8 +1008,8 @@ export function at(array: Expr, index: number): Expr {
 	const sql = `${operand(array)}[${index}]`;
 	const path = pathOf(array);
 	return path === undefined
-		? makeExpr(element, sql, paramsOf(array), Level.atom)
-		: makePath(element, sql, path);
+		? derive(element, sql, Level.atom, [array])
+		: withContext(makePath(element, sql, path), contextOf(array));
 }
 
 const casts = {
@@ -690,12 +1035,7 @@ export const cast = <K extends CastKind, P extends Params>(
 	kind: K,
 	value: Expr<Codec, P>,
 ): Expr<(typeof casts)[K], P> =>
-	makeExpr(
-		casts[kind],
-		`<${kind}>${operand(value)}`,
-		paramsOf(value),
-		Level.atom,
-	);
+	derive(casts[kind], `<${kind}>${operand(value)}`, Level.atom, [value]);
 
 /** A function descriptor whose codecs need no services. */
 export type PureFunction = FunctionDescriptor & {
@@ -775,10 +1115,10 @@ export const call = <
 ): Expr<F['returns'], ParamsOfAll<A[number]>> => {
 	const values = (args as ReadonlyArray<Operand>).map(lift);
 	const target = fn as F;
-	return makeExpr(
+	return derive(
 		target.returns as F['returns'],
 		`${target.name}(${values.map(sqlOf).join(', ')})`,
-		mergeParams(...values.map(paramsOf)) as ParamsOfAll<A[number]>,
 		Level.atom,
+		values,
 	);
 };

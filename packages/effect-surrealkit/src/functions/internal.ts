@@ -20,17 +20,16 @@ import type {
 
 import {
 	codecOf,
+	derive,
 	type Expr,
 	isExpr,
 	Level,
 	literal,
 	makeExpr,
-	mergeParams,
 	type OrNone,
 	operand,
 	orNone,
 	type Primitive,
-	paramsOf,
 	sqlOf,
 } from '../statement/expr.js';
 import type { Codec, NoParams, Params } from '../statement/statement.js';
@@ -157,11 +156,11 @@ export const apply = <R>(
 	while (count > required && args[count - 1] === undefined) count--;
 	const given = [...args.slice(0, count), ...rest];
 	const values = given.map(lift);
-	return makeExpr(
+	return derive(
 		result instanceof Derived ? result.derive(given) : result,
 		`${name}(${values.map(operand).join(', ')})`,
-		mergeParams(...values.map(paramsOf)),
 		Level.atom,
+		values,
 	) as R;
 };
 

@@ -21,9 +21,13 @@ import { escapeIdent } from 'surrealdb';
 
 import { SurrealValue } from '../value.js';
 import {
+	admit,
+	type Context,
 	codecOf,
+	contextOf,
 	type Expr,
 	isExpr,
+	joinContexts,
 	literal,
 	mergeParams,
 	type Operand,
@@ -32,6 +36,9 @@ import {
 	type ParamsOfAll,
 	type Primitive,
 	paramsOf,
+	RowScope,
+	type Site,
+	settle,
 	sqlOf,
 } from './expr.js';
 import {
@@ -279,7 +286,29 @@ interface State {
 		  }
 		| undefined;
 	readonly params: Params;
+	/** The row the statement's callbacks read. */
+	readonly scope: RowScope;
+	/** What its expressions read besides their bindings. */
+	readonly context?: Context;
 }
+
+/** Where a write's callbacks place their results. */
+const siteOf = (state: State): Site => ({
+	own: state.scope,
+	what: `${/^[AEIOU]/u.test(state.verb) ? 'an' : 'a'} ${state.verb}`,
+	parents: 'refuse',
+	refused:
+		"it reads the row of a select from a step's `where` directly under that select",
+});
+
+/** `state`, reading what the callback results `exprs` read too. */
+const reading = (state: State, exprs: ReadonlyArray<Expr>): State => {
+	const context = joinContexts([state.context, admit(siteOf(state), exprs)]);
+	return {
+		...state,
+		...(context !== undefined && { context }),
+	};
+};
 
 /**
  * The `RETURN` clause. An `UPSERT` of one record says `RETURN VALUE NONE`
@@ -362,17 +391,20 @@ const nonEmpty = (state: State): boolean => {
 const finish = <P extends Params, R extends Codec>(
 	state: State,
 	name: string | undefined,
-): Statement<Simplify<P>, R> =>
-	make({
-		name:
-			name ??
-			`${state.verb.toLowerCase()}${state.relation === true ? ' relation' : ''} ${state.table.name}`,
+): Statement<Simplify<P>, R> => {
+	const label =
+		name ??
+		`${state.verb.toLowerCase()}${state.relation === true ? ' relation' : ''} ${state.table.name}`;
+	settle(state.context, `statement \`${label}\``);
+	return make({
+		name: label,
 		sql: `${render(state)};`,
 		params: state.params as Simplify<P>,
 		result: resultOf(state) as R,
 		writes: true,
 		nonEmpty: nonEmpty(state),
 	});
+};
 
 const start = (
 	verb: Verb,
@@ -383,29 +415,37 @@ const start = (
 		readonly params: Params;
 		readonly returning: 'AFTER' | 'NONE';
 		readonly relation?: boolean;
+		/** The expressions the target reads: a record id, endpoints. */
+		readonly subject?: ReadonlyArray<Expr>;
 	},
-): State => ({
-	verb,
-	table,
-	row: rowExprs(table),
-	target: options.target,
-	shape: options.shape,
-	...(options.relation === true && { relation: true }),
-	data: undefined,
-	where: [],
-	returning:
-		options.returning === 'NONE'
-			? undefined
-			: { mode: 'after', sql: 'AFTER', codec: storedRow(table) },
-	params: options.params,
-});
+): State => {
+	const scope = new RowScope('write', table.name);
+	const context = joinContexts((options.subject ?? []).map(contextOf));
+	return {
+		verb,
+		table,
+		scope,
+		...(context !== undefined && { context }),
+		row: rowExprs(table, scope),
+		target: options.target,
+		shape: options.shape,
+		...(options.relation === true && { relation: true }),
+		data: undefined,
+		where: [],
+		returning:
+			options.returning === 'NONE'
+				? undefined
+				: { mode: 'after', sql: 'AFTER', codec: storedRow(table) },
+		params: options.params,
+	};
+};
 
 const withData = (
 	state: State,
 	keyword: 'CONTENT' | 'MERGE' | undefined,
 	data: Expr,
 ): State => ({
-	...state,
+	...reading(state, [data]),
 	data: keyword === undefined ? operand(data) : `${keyword} ${operand(data)}`,
 	params: mergeParams(state.params, paramsOf(data)),
 });
@@ -416,7 +456,7 @@ const withWhere = (
 ): State => {
 	const condition = predicate(state.row);
 	return {
-		...state,
+		...reading(state, [condition]),
 		where: [...state.where, condition],
 		params: mergeParams(state.params, paramsOf(condition)),
 	};
@@ -468,13 +508,12 @@ const withReturning = (state: State, returning: Returning): State => {
 			},
 		};
 	}
-	const projected = project(
-		(returning as (row: RowExprs<PureTable>) => Projection)(
-			returnedRow(state),
-		),
+	const projection = (returning as (row: RowExprs<PureTable>) => Projection)(
+		returnedRow(state),
 	);
+	const projected = project(projection);
 	return {
-		...state,
+		...reading(state, Object.values(projection)),
 		returning: {
 			mode: 'fields',
 			sql: projected.sql,
@@ -490,7 +529,7 @@ const withValue = (
 ): State => {
 	const picked = pick(returnedRow(state));
 	return {
-		...state,
+		...reading(state, [picked]),
 		returning: {
 			mode: 'value',
 			sql: `VALUE ${sqlOf(picked)}`,
@@ -579,6 +618,7 @@ export const create: {
 			target: id === undefined ? tableName(table) : operand(id),
 			shape: 'one',
 			params: id === undefined ? {} : paramsOf(id),
+			subject: id === undefined ? [] : [id],
 			returning: 'AFTER',
 		}),
 	);
@@ -699,6 +739,7 @@ export const update: {
 		target: id === undefined ? tableName(table) : operand(id),
 		shape: id === undefined ? 'many' : 'maybe',
 		params: id === undefined ? {} : paramsOf(id),
+		subject: id === undefined ? [] : [id],
 		returning: 'AFTER',
 	});
 	return {
@@ -871,6 +912,7 @@ export const upsert: {
 		target: id === undefined ? tableName(table) : operand(id),
 		shape: id === undefined ? 'many' : 'one',
 		params: id === undefined ? {} : paramsOf(id),
+		subject: id === undefined ? [] : [id],
 		returning: 'AFTER',
 	});
 	return {
@@ -972,6 +1014,7 @@ export const deleteFrom: {
 			target: id === undefined ? tableName(table) : operand(id),
 			shape: id === undefined ? 'many' : 'maybe',
 			params: id === undefined ? {} : paramsOf(id),
+			subject: id === undefined ? [] : [id],
 			returning: 'NONE',
 		}),
 	);
@@ -1081,6 +1124,7 @@ export const relate = <
 			target: `${endpoint(source)}->${tableName(table)}->${endpoint(target)}`,
 			shape: 'one',
 			params: mergeParams(paramsOf(source), paramsOf(target)),
+			subject: [source, target],
 			returning: 'AFTER',
 		}),
 	);
@@ -1219,7 +1263,10 @@ const inserting = <T extends PureTable, P extends Params, R extends Codec>(
 			return [field, isExpr(value) ? value : literal(value)] as const;
 		});
 		return inserting({
-			...state,
+			...reading(
+				state,
+				values.map(([, value]) => value),
+			),
 			duplicate: values
 				.map(
 					([field, value]) =>

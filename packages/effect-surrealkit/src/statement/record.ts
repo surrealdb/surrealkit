@@ -12,11 +12,11 @@
  * key the table's id codec declares, so a returned id decodes with it.
  */
 import {
+	derive,
 	type Expr,
 	isExpr,
 	Level,
 	literal,
-	makeExpr,
 	mergeParams,
 	type OperandEncoded,
 	operand,
@@ -172,10 +172,14 @@ const part = (value: unknown): Expr => {
 /** The text and bindings of a key built from its parts. */
 const keyOf = (
 	key: KeyParts,
-): { readonly sql: string; readonly params: Params } => {
+): {
+	readonly sql: string;
+	readonly params: Params;
+	readonly parts: ReadonlyArray<Expr>;
+} => {
 	if (isExpr(key) || typeof key !== 'object' || key === null) {
 		const value = part(key);
-		return { sql: operand(value), params: paramsOf(value) };
+		return { sql: operand(value), params: paramsOf(value), parts: [value] };
 	}
 	if (Array.isArray(key)) {
 		if (key.length === 0) {
@@ -185,6 +189,7 @@ const keyOf = (
 		return {
 			sql: `[${parts.map(operand).join(', ')}]`,
 			params: mergeParams(...parts.map(paramsOf)),
+			parts,
 		};
 	}
 	const entries = Object.entries(key).map(
@@ -200,6 +205,7 @@ const keyOf = (
 			)
 			.join(', ')} }`,
 		params: mergeParams(...entries.map(([, value]) => paramsOf(value))),
+		parts: entries.map(([, value]) => value),
 	};
 };
 
@@ -228,12 +234,13 @@ export const recordId = <T extends PureTable, const V extends KeyParts>(
 	key: CheckedKey<T, V>,
 ): Expr<T['id'], KeyParams<V>> => {
 	const built = keyOf(key as KeyParts);
-	return makeExpr(
+	return derive(
 		table.id,
 		typeRecord(table, built.sql),
-		built.params as KeyParams<V>,
 		Level.atom,
-	);
+		built.parts,
+		built.params,
+	) as Expr<T['id'], KeyParams<V>>;
 };
 
 export const IdRangeTypeId = '~effect-surrealkit/IdRange';
@@ -250,6 +257,8 @@ export interface IdRange<
 		readonly table: Name;
 		readonly sql: string;
 		readonly params: P;
+		/** The expressions its bounds are built from. @internal */
+		readonly parts?: ReadonlyArray<Expr>;
 	};
 }
 
@@ -358,6 +367,7 @@ export const idRange = <T extends PureTable, const R extends RangeBounds>(
 				low?.params ?? {},
 				high?.params ?? {},
 			) as RangeParams<R>,
+			parts: [...(low?.parts ?? []), ...(high?.parts ?? [])],
 		},
 	};
 };
