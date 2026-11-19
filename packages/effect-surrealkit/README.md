@@ -832,7 +832,7 @@ const fused = evaluate(rrf([byMeaning.toExpr(), byWords.toExpr()], { limit: 10 }
 | Function | SurrealQL |
 | --- | --- |
 | `match(table, field, terms, { ref?, operator? })` | `field @ref@ terms`, `@ref,AND@`, `@OR@`, `@@`; a compile error unless a `FULLTEXT` index covers `field`; `ref` is a literal 0 to 255 |
-| `score(m)`, `highlight(m, open, close)`, `offsets(m)` | `search::score(ref)` (a float), `search::highlight(open, close, ref)` (the field's type; the index must keep `HIGHLIGHTS`), `search::offsets(ref)` (`{ [element]: [{ s, e }] }` or NONE) |
+| `score(m)`, `highlight(m, open, close)`, `offsets(m)` | `search::score(ref)` (a float), `search::highlight(open, close, ref)` (marked text; a list of it for a list field; the index must keep `HIGHLIGHTS`), `search::offsets(ref)` (`{ [element]: [{ s, e }] }` in characters, or NONE) |
 | `knn(table, field, vector, { k, ef })` | `field <|k,ef|> $vector` through the field's `HNSW` or `DISKANN` index (a compile error without one) |
 | `knn(table, field, vector, { k, distance })` | `field <|k,DISTANCE|> $vector` by brute force: `EUCLIDEAN`, `COSINE`, `MANHATTAN`, `CHEBYSHEV`, `HAMMING`, `INNER_PRODUCT`, `COSINE_NORMALIZED` or `['MINKOWSKI', p]`, each computed the same by SurrealDB 3.3 and 4.0; `JACCARD` and `PEARSON` are refused (see below) |
 | `knnDistance(hit)` | `vector::distance::knn()`, the distance of each hit |
@@ -892,6 +892,17 @@ has no offsets; and the plan of each form. `test/search-engine.test.ts` runs
 the builders on the corpus `doc` table and proves with `expectIndex` that the
 match reads `ft_body` and `<|k, ef|>` one of its vector indexes, and with
 `expectNoIndex` that the brute-force form reads neither.
+
+A highlight is text with the marks in it, not a value of the field's own
+type: it need not be one of the field's literals, nor within its length, so
+it decodes as a string whatever the field's schema says. For a field that
+may be NONE or NULL it is a string or NONE (SurrealDB answers NONE for
+both). For a list field it is the list of the marked elements: SurrealDB
+answers a list of one element as that element alone and a list of none, or
+a field that is NONE, as NONE, and each decodes as the list it stands for.
+Offsets are keyed by the index of each element that holds a match (`"0"`
+for text) and count characters, not bytes. `test/highlight-engine.test.ts`
+runs every one of these on both engines.
 
 ### Authored SurrealQL
 

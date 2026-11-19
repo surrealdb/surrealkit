@@ -13,6 +13,7 @@ import {
 	knn,
 	knnDistance,
 	linear,
+	type Marked,
 	match,
 	offsets,
 	param,
@@ -155,3 +156,50 @@ const hybridRow: Exact<
 	}
 > = true;
 void hybridRow;
+
+/**
+ * A highlight is marked text whatever its field stores: text that may be
+ * NONE for a field that may be NONE or NULL, and a list for a list field.
+ */
+const Text = SurrealSchema.String;
+const markedText: Exact<Marked<typeof Text>['Type'], string> = true;
+const markedLiteral: Exact<
+	Marked<Schema.Literals<readonly ['open', 'closed']>>['Type'],
+	string
+> = true;
+const markedOptional: Exact<
+	Marked<Schema.UndefinedOr<typeof Text>>['Type'],
+	string | undefined
+> = true;
+const markedNullable: Exact<
+	Marked<Schema.NullOr<typeof Text>>['Type'],
+	string | undefined
+> = true;
+const markedList: Exact<
+	Marked<Schema.$Array<typeof Text>>['Type'],
+	ReadonlyArray<string>
+> = true;
+const markedOptionalList: Exact<
+	Marked<Schema.UndefinedOr<Schema.$Array<typeof Text>>>['Type'],
+	ReadonlyArray<string>
+> = true;
+const markedEither: Exact<
+	Marked<
+		Schema.Union<readonly [typeof Text, Schema.$Array<typeof Text>]>
+	>['Type'],
+	string | ReadonlyArray<string> | undefined
+> = true;
+const markedAny: Exact<
+	Marked<typeof SurrealSchema.SurrealValue>['Type'],
+	string | ReadonlyArray<string> | undefined
+> = true;
+void [
+	markedText,
+	markedLiteral,
+	markedOptional,
+	markedNullable,
+	markedList,
+	markedOptionalList,
+	markedEither,
+	markedAny,
+];

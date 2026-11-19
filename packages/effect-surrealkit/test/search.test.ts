@@ -18,6 +18,9 @@ import {
 	knn,
 	knnDistance,
 	linear,
+	MarkedList,
+	MarkedOptionalText,
+	MarkedText,
 	match,
 	not,
 	offsets,
@@ -48,6 +51,35 @@ describe('full-text match', () => {
 			'SELECT id AS id, search::score(1) AS score, search::highlight(s"<b>", s"</b>", 1) AS marked, search::offsets(1) AS spans FROM ⟨doc⟩ WHERE body @1@ $terms;',
 		);
 		expect(Object.keys(statement.params)).toEqual(['terms']);
+	});
+
+	it('a highlight decodes what SurrealDB answers, not the field’s own type', () => {
+		const decode = <S extends Schema.Top>(codec: S) =>
+			Schema.decodeUnknownSync(codec as never) as (
+				answer: unknown,
+			) => unknown;
+		// A list field: the list, one element alone, or NONE for no element.
+		expect(decode(MarkedList)(['a [b]', 'c'])).toEqual(['a [b]', 'c']);
+		expect(decode(MarkedList)('[b]')).toEqual(['[b]']);
+		expect(decode(MarkedList)(undefined)).toEqual([]);
+		expect(() => decode(MarkedList)(null)).toThrow();
+		expect(() => decode(MarkedList)([1])).toThrow();
+		expect(decode(MarkedOptionalText)(undefined)).toBe(undefined);
+		expect(() => decode(MarkedText)(undefined)).toThrow();
+		// `doc.body` is text; `person.name` has a length the marks may pass.
+		const marked = select(DocTable)
+			.where(() => words)
+			.value(() => highlight(words, '<mark>', '</mark>'))
+			.build();
+		expect(
+			Schema.decodeUnknownSync(marked.result)([
+				'<mark>fox</mark>',
+				`<mark>${'x'.repeat(4096)}</mark>`,
+			]),
+		).toHaveLength(2);
+		expect(() =>
+			Schema.decodeUnknownSync(marked.result)([undefined]),
+		).toThrow();
 	});
 
 	it('renders an operator, inline terms and a match without a reference', () => {

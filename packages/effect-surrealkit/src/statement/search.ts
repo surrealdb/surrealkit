@@ -11,11 +11,11 @@
  * search effort, the distance) is a validated literal; the search terms and
  * the query vector are bindings.
  */
-import { Schema, SchemaAST } from 'effect';
+import { Schema, SchemaAST, SchemaTransformation } from 'effect';
 
 import { Int } from '../int.js';
 import { NoneAsAbsent } from '../row.js';
-import { Float } from '../scalars.js';
+import { Float, SurrealString } from '../scalars.js';
 import {
 	admit,
 	type CodecOf,
@@ -365,11 +365,117 @@ export type Highlighted<M> =
 			: 'this match has no reference number, so search::highlight cannot name it: give it one, as in `match(table, field, terms, { ref: 1 })`'
 		: never;
 
+/** Marked text: the highlight of a field that always holds text. */
+export const MarkedText = SurrealString;
+
+/**
+ * Marked text, or NONE: the highlight of a text field that may hold none.
+ * SurrealDB answers NONE for a field that is NONE, and for one that is NULL.
+ */
+export const MarkedOptionalText = Schema.UndefinedOr(SurrealString);
+
+/**
+ * The marked elements of a list field. SurrealDB answers a list of one
+ * element as that element alone, and a list of none, like a field that is
+ * NONE, as NONE; each is read as the list it stands for.
+ */
+export const MarkedList = Schema.Union([
+	Schema.Array(SurrealString),
+	SurrealString,
+	Schema.Undefined,
+]).pipe(
+	Schema.decodeTo(
+		Schema.Array(SurrealString),
+		SchemaTransformation.transform<
+			ReadonlyArray<string>,
+			ReadonlyArray<string> | string | undefined
+		>({
+			decode: (answer) =>
+				answer === undefined
+					? []
+					: typeof answer === 'string'
+						? [answer]
+						: answer,
+			encode: (list) => list,
+		}),
+	),
+);
+
+/**
+ * Marked text, a list of it, or NONE: the highlight of a field that may
+ * hold text or a list (`any`, `string | array<string>`), as SurrealDB
+ * answers it.
+ */
+export const MarkedAny = Schema.UndefinedOr(
+	Schema.Union([SurrealString, Schema.Array(SurrealString)]),
+);
+
+type Held<F extends Codec> = Exclude<F['Encoded'], undefined | null>;
+
+/**
+ * What `search::highlight` answers for a matched field of codec `F`: text
+ * with the marks in it, which is not the field's own type any more (it need
+ * not be one of the field's literals, nor within its length).
+ */
+export type Marked<F extends Codec> = unknown extends F['Encoded']
+	? typeof MarkedAny
+	: [Held<F>] extends [never]
+		? typeof MarkedAny
+		: [Held<F>] extends [ReadonlyArray<unknown>]
+			? typeof MarkedList
+			: [Extract<Held<F>, ReadonlyArray<unknown>>] extends [never]
+				? [F['Encoded']] extends [Held<F>]
+					? typeof MarkedText
+					: typeof MarkedOptionalText
+				: typeof MarkedAny;
+
+/** Whether a field `ast` describes may hold a list, text, and neither. */
+const textShape = (
+	ast: SchemaAST.AST,
+	seen: Set<SchemaAST.AST> = new Set(),
+): {
+	readonly list: boolean;
+	readonly text: boolean;
+	readonly none: boolean;
+} => {
+	const nothing = { list: false, text: false, none: false };
+	if (seen.has(ast)) return nothing;
+	seen.add(ast);
+	if (SchemaAST.isUndefined(ast) || SchemaAST.isNull(ast)) {
+		return { ...nothing, none: true };
+	}
+	if (SchemaAST.isUnknown(ast) || SchemaAST.isAny(ast)) {
+		return { list: true, text: true, none: true };
+	}
+	if (SchemaAST.isArrays(ast)) return { ...nothing, list: true };
+	if (SchemaAST.isSuspend(ast)) return textShape(ast.thunk(), seen);
+	if (SchemaAST.isUnion(ast)) {
+		const members = ast.types.map((member) => textShape(member, seen));
+		return {
+			list: members.some((member) => member.list),
+			text: members.some((member) => member.text),
+			none: members.some((member) => member.none),
+		};
+	}
+	return { ...nothing, text: true };
+};
+
+/** The codec of a highlight of a field of codec `field`, as `Marked` types it. */
+const markedCodec = (field: Codec): Codec => {
+	const shape = textShape(field.ast);
+	if (shape.list && !shape.text) return MarkedList;
+	if (shape.text && !shape.list) {
+		return shape.none ? MarkedOptionalText : MarkedText;
+	}
+	return MarkedAny;
+};
+
 /**
  * `search::highlight(open, close, ref)`: the matched field with every
- * matched term between `open` and `close` (each element of an array field).
- * A row the condition admits through another branch is unmarked. The index
- * must keep highlights (`HIGHLIGHTS`).
+ * matched term between `open` and `close`. A text field is marked text, or
+ * NONE when the field holds none; a list field is the list of its marked
+ * elements. A row the condition admits through another branch is unmarked.
+ * The index must keep highlights (`HIGHLIGHTS`).
  */
 export const highlight = <
 	M extends AnyMatch,
@@ -380,7 +486,7 @@ export const highlight = <
 	open: O,
 	close: C,
 ): Expr<
-	M[typeof MatchTypeId]['field'],
+	Marked<M[typeof MatchTypeId]['field']>,
 	OperandParams<O> & OperandParams<C>
 > => {
 	const ref = refOf(target);
@@ -394,7 +500,7 @@ export const highlight = <
 		isExpr(mark) ? mark : literal(mark as string),
 	);
 	return derive(
-		data.field,
+		markedCodec(data.field),
 		`search::highlight(${marks.map(operand).join(', ')}, ${ref})`,
 		Level.atom,
 		marks,
@@ -402,12 +508,15 @@ export const highlight = <
 			reads: new Set([ref]),
 		}),
 	) as Expr<
-		M[typeof MatchTypeId]['field'],
+		Marked<M[typeof MatchTypeId]['field']>,
 		OperandParams<O> & OperandParams<C>
 	>;
 };
 
-/** Where each matched term is: start and end offsets per field element. */
+/**
+ * Where each matched term is: its start and end, counted in characters,
+ * under the index of the field's element it is in (`"0"` for text).
+ */
 export const Offsets = Schema.UndefinedOr(
 	Schema.Record(
 		Schema.String,
@@ -416,9 +525,10 @@ export const Offsets = Schema.UndefinedOr(
 );
 
 /**
- * `search::offsets(ref)`: for each element of the matched field (`"0"` for
- * a string), the start (`s`) and end (`e`) of every matched term; NONE for
- * a row the condition admits through another branch.
+ * `search::offsets(ref)`: for each element of the matched field that holds
+ * a match (`"0"` for text), the start (`s`) and end (`e`) of every matched
+ * term, in characters; NONE for a row the condition admits through another
+ * branch.
  */
 export const offsets = <M extends AnyMatch>(
 	target: Referenced<M, 'search::offsets'>,
