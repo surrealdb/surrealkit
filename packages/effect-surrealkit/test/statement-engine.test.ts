@@ -510,7 +510,56 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 			]),
 		);
 		expect(thrown).toBeInstanceOf(StatementThrown);
+		// The statement that declares the message, not the transaction.
+		expect(thrown).toMatchObject({ statement: 'find by email' });
 		expect(await ok(client.run(teams, { name: 'ghost' }))).toEqual([]);
+	});
+
+	it('joins statements without a terminator of their own', async () => {
+		const one = make({
+			sql: 'RETURN 1',
+			params: {},
+			result: SurrealSchema.Int,
+		});
+		const two = make({ sql: '2', params: {}, result: SurrealSchema.Int });
+		expect(await ok(client.transaction([bind(two), bind(one)]))).toEqual([
+			2, 1,
+		]);
+	});
+
+	it('refuses a binding another statement of the transaction defines', async () => {
+		const letter = sequence(
+			part({ sql: 'LET $n = 1;', defines: ['n'] }),
+			part({ sql: '$n;', free: ['n'] }),
+		).define({ name: 'letter', params: {}, result: SurrealSchema.Int });
+		const reader = make({
+			name: 'reader',
+			sql: '$n;',
+			params: { n: SurrealSchema.Int },
+			result: SurrealSchema.Int,
+		});
+		expect(await ok(client.run(letter))).toBe(1);
+		expect(await ok(client.run(reader, { n: 2 }))).toBe(2);
+		const error = await failure(
+			client.transaction([bind(letter), bind(reader, { n: 2 })]),
+		);
+		expect(error).toBeInstanceOf(StatementEncodeError);
+		expect(error).toMatchObject({ statement: 'reader', binding: 'n' });
+	});
+
+	it('refuses a statement with its own BEGIN … COMMIT inside a transaction', async () => {
+		const own = sequence(
+			part({
+				sql: 'BEGIN; LET $x = 2; COMMIT;',
+				defines: ['x'],
+				slots: 3,
+			}),
+		).define({ name: 'own', params: {}, result: Schema.Undefined });
+		// It runs on its own (the COMMIT is the last result, NONE).
+		expect(await ok(client.run(own))).toBeUndefined();
+		const error = await failure(client.transaction([bind(own)]));
+		expect(error).toBeInstanceOf(StatementRequestError);
+		expect(error).toMatchObject({ statement: 'own' });
 	});
 
 	it('reports a transaction conflict, which a retry resolves', async () => {

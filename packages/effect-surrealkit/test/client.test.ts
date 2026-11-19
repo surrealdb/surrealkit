@@ -3,8 +3,10 @@
  * before sending, and how answers and failures are mapped.
  */
 import { Effect, Fiber, Result, Schema, Tracer } from 'effect';
-import { DateTime } from 'surrealdb';
+import { DateTime, ExpressionError, RecordId } from 'surrealdb';
 import { describe, expect, it } from 'vitest';
+
+import { holeMatcher, lex } from '../src/analyze/lexer.js';
 
 import {
 	bind,
@@ -29,6 +31,56 @@ interface Call {
 	readonly retry: unknown;
 	readonly signal: AbortSignal | undefined;
 }
+
+/**
+ * The first keyword of each top-level statement, as the SDK's own scanner
+ * reports it: strings, identifiers and comments skipped, a `;` ending a
+ * statement only outside brackets.
+ */
+const topLevelKeywords = (sql: string): ReadonlyArray<string> => {
+	const keywords: Array<string> = [];
+	let depth = 0;
+	let first: string | undefined;
+	for (const token of lex(sql, holeMatcher(undefined)).tokens) {
+		if (token.kind === 'punct' && token.value === ';' && depth === 0) {
+			if (first !== undefined) keywords.push(first);
+			first = undefined;
+			continue;
+		}
+		if (depth === 0 && first === undefined) {
+			first = token.kind === 'word' ? token.value.toUpperCase() : '';
+		}
+		if (token.kind === 'punct' && '([{'.includes(token.value)) depth++;
+		if (token.kind === 'punct' && ')]}'.includes(token.value)) {
+			depth = Math.max(0, depth - 1);
+		}
+	}
+	if (first !== undefined) keywords.push(first);
+	return keywords;
+};
+
+/**
+ * What the SDK's `transaction` refuses before sending (surrealdb 2.1.1,
+ * `assertTransactionSafe`): its own transaction control, and a `RETURN`
+ * followed by another statement, which would end the transaction early.
+ */
+const transactionRefusal = (sql: string): string | undefined => {
+	let returned = false;
+	for (const keyword of topLevelKeywords(sql)) {
+		if (
+			keyword === 'BEGIN' ||
+			keyword === 'COMMIT' ||
+			keyword === 'CANCEL'
+		) {
+			return `queries[0] contains a ${keyword} statement. transaction() wraps the queries in BEGIN and COMMIT itself, so they must not contain any`;
+		}
+		if (returned) {
+			return 'queries[0] contains a RETURN statement which is followed by another statement (in queries[0])';
+		}
+		if (keyword === 'RETURN') returned = true;
+	}
+	return undefined;
+};
 
 /** An SDK stand-in that records each request and answers with `answer`. */
 const fake = (answer: (call: Call) => Promise<unknown>) => {
@@ -75,6 +127,10 @@ const fake = (answer: (call: Call) => Promise<unknown>) => {
 			},
 		) => {
 			const [first] = queries;
+			const refusal = transactionRefusal(first?.query ?? '');
+			if (refusal !== undefined) {
+				return Promise.reject(new ExpressionError(refusal));
+			}
 			const call = {
 				sql: first?.query ?? '',
 				bindings: first?.bindings ?? {},
@@ -322,25 +378,27 @@ describe('transaction', () => {
 	});
 
 	it('sends every statement as one atomic request and decodes each', async () => {
+		// `guarded` ends in a top-level RETURN, which the SDK accepts only
+		// as the last statement of a transaction.
 		const { calls, client } = fake(async () => [
+			4,
 			undefined,
 			undefined,
 			'owner',
-			4,
 		]);
 		const results = await Effect.runPromise(
 			client.transaction(
 				[
-					bind(guarded, { boundOwner: 'owner' }),
 					bind(double, { n: 2 }),
+					bind(guarded, { boundOwner: 'owner' }),
 				],
 				{ retry: true },
 			),
 		);
-		expect(results).toEqual(['owner', 4]);
+		expect(results).toEqual([4, 'owner']);
 		expect(calls).toHaveLength(1);
 		expect(calls[0]?.atomic).toBe(true);
-		expect(calls[0]?.sql).toBe(`${guarded.sql}\n${double.sql}`);
+		expect(calls[0]?.sql).toBe(`${double.sql}\n${guarded.sql}`);
 		expect(calls[0]?.bindings).toEqual({ boundOwner: 'owner', n: 2 });
 		expect(calls[0]?.retry).toBe(true);
 		expect(calls[0]?.signal).toBeInstanceOf(AbortSignal);
@@ -380,6 +438,208 @@ describe('transaction', () => {
 		);
 		expect(error).toBeInstanceOf(StatementThrown);
 		expect(error).toMatchObject({ reason: 'Not the owner' });
+		// Finding 9: the error names the statement that declares the
+		// message, not the transaction.
+		expect(error).toMatchObject({ statement: 'guarded' });
+
+		const alsoGuarded = make({
+			name: 'also guarded',
+			sql: "IF $who = NONE { THROW 'Not the owner' };",
+			params: { who: Schema.UndefinedOr(SurrealSchema.String) },
+			result: Schema.Undefined,
+			throws: ['Not the owner'],
+		});
+		const either = await failure(
+			fake(() => Promise.reject(thrown)).client.transaction([
+				bind(alsoGuarded, {}),
+				bind(guarded, { boundOwner: 'x' }),
+			]),
+		);
+		expect(either).toBeInstanceOf(StatementThrown);
+		expect(either).toMatchObject({
+			statement: 'one of `also guarded`, `guarded`',
+			reason: 'Not the owner',
+		});
+	});
+
+	it('refuses a binding that another statement defines, before sending', async () => {
+		// Finding 1: `letter` LETs `$n`, and `reader` would read that
+		// instead of its own binding.
+		const letter = sequence(
+			part({ sql: 'LET $n = 1;', defines: ['n'] }),
+			part({ sql: '$n;', free: ['n'] }),
+		).define({ name: 'letter', params: {}, result: SurrealSchema.Int });
+		const reader = make({
+			name: 'reader',
+			sql: 'RETURN $n;',
+			params: { n: SurrealSchema.Int },
+			result: SurrealSchema.Int,
+		});
+		expect(letter.defines).toEqual(['n']);
+		expect(reader.defines).toEqual([]);
+		for (const order of [
+			[bind(letter), bind(reader, { n: 2 })],
+			[bind(reader, { n: 2 }), bind(letter)],
+		] as const) {
+			const { calls, client } = fake(async () => [undefined, 1, 2]);
+			const error = await failure(client.transaction(order));
+			expect(error).toBeInstanceOf(StatementEncodeError);
+			expect(error).toMatchObject({ statement: 'reader', binding: 'n' });
+			expect(error.message).toMatch(
+				/`\$n` is bound by `reader` and defined with LET by `letter`.*rename/,
+			);
+			expect(calls).toHaveLength(0);
+		}
+	});
+
+	it('refuses a statement that opens its own transaction, before sending', async () => {
+		const own = sequence(
+			part({ sql: 'BEGIN; CREATE slot:one; COMMIT;', slots: 3 }),
+		).define({ name: 'own', params: {}, result: Schema.Unknown });
+		expect(own.transactional).toBe(true);
+		const { calls, client } = fake(async () => []);
+		const error = await failure(client.transaction([bind(own)]));
+		expect(error).toBeInstanceOf(StatementRequestError);
+		expect(error).toMatchObject({ statement: 'own' });
+		expect(error.message).toMatch(/BEGIN, COMMIT or CANCEL/);
+		expect(calls).toHaveLength(0);
+	});
+
+	describe('binds one name twice only to one value', () => {
+		const statementOf = (
+			name: string,
+			codec: Schema.Codec<unknown, unknown>,
+		) =>
+			make({
+				name,
+				sql: '$v;',
+				params: { v: codec },
+				result: Schema.Unknown,
+			});
+		const pair = (
+			first: readonly [Schema.Codec<unknown, unknown>, unknown],
+			second: readonly [Schema.Codec<unknown, unknown>, unknown],
+		) => {
+			const { calls, client } = fake(async () => [first[1], second[1]]);
+			return {
+				calls,
+				outcome: Effect.runPromise(
+					Effect.result(
+						client.transaction([
+							bind(statementOf('a', first[0]), { v: first[1] }),
+							bind(statementOf('b', second[0]), { v: second[1] }),
+						]),
+					),
+				),
+			};
+		};
+		const refused = async (
+			first: readonly [Schema.Codec<unknown, unknown>, unknown],
+			second: readonly [Schema.Codec<unknown, unknown>, unknown],
+		) => {
+			const { calls, outcome } = pair(first, second);
+			const result = await outcome;
+			expect(Result.isFailure(result)).toBe(true);
+			const error = Result.isFailure(result) ? result.failure : undefined;
+			expect(error).toBeInstanceOf(StatementEncodeError);
+			expect(error).toMatchObject({ statement: 'b', binding: 'v' });
+			expect(error?.message).toMatch(
+				/`\$v` is bound by `a` and by `b`.*rename/,
+			);
+			expect(calls).toHaveLength(0);
+		};
+		const accepted = async (
+			first: readonly [Schema.Codec<unknown, unknown>, unknown],
+			second: readonly [Schema.Codec<unknown, unknown>, unknown],
+		) => {
+			const { calls, outcome } = pair(first, second);
+			expect(Result.isSuccess(await outcome)).toBe(true);
+			expect(calls).toHaveLength(1);
+		};
+		const unknown = Schema.Unknown;
+
+		it('refuses values of different kinds that print alike', async () => {
+			// Finding 2: each of these printed as the same SurrealQL text.
+			await refused(
+				[Schema.Array(SurrealSchema.String), ['a']],
+				[SurrealSchema.SetOf(SurrealSchema.String), new Set(['a'])],
+			);
+			await refused(
+				[SurrealSchema.Int, 5],
+				[SurrealSchema.Bytes, new Uint8Array([5])],
+			);
+			await refused(
+				[unknown, new Uint8Array([1, 2]).buffer],
+				[unknown, new Uint8Array([3, 4]).buffer],
+			);
+			await refused([unknown, 1], [unknown, 1n]);
+			await refused([unknown, 0], [unknown, -0]);
+			await refused([unknown, '1'], [unknown, 1]);
+			await refused([unknown, null], [unknown, undefined]);
+			await refused(
+				[unknown, new Uint8Array([1])],
+				[unknown, new Uint8Array([1]).buffer],
+			);
+			await refused(
+				[unknown, new RecordId('t', 1)],
+				[unknown, new RecordId('t', 1n)],
+			);
+			await refused(
+				[unknown, { a: 1 }],
+				[unknown, { a: 1, b: undefined }],
+			);
+			await refused(
+				[unknown, new Map([['a', 1]])],
+				[unknown, new Map([['a', 1]])],
+			);
+		});
+
+		it('accepts structurally equal values, whatever their key order', async () => {
+			await accepted(
+				[unknown, { a: 1, b: [2, { c: 3 }] }],
+				[unknown, { b: [2, { c: 3 }], a: 1 }],
+			);
+			await accepted(
+				[unknown, new Set([1, 2])],
+				[unknown, new Set([2, 1])],
+			);
+			await accepted(
+				[unknown, new Uint8Array([1, 2]).buffer],
+				[unknown, new Uint8Array([1, 2]).buffer],
+			);
+			await accepted(
+				[unknown, new Uint8Array([1, 2])],
+				[unknown, new Uint8Array([1, 2])],
+			);
+			await accepted(
+				[unknown, new RecordId('t', ['a', 1])],
+				[unknown, new RecordId('t', ['a', 1])],
+			);
+			await accepted(
+				[unknown, new DateTime('1969-12-31T23:59:59.5Z')],
+				[unknown, new DateTime('1969-12-31T23:59:59.5Z')],
+			);
+			await accepted([unknown, Number.NaN], [unknown, Number.NaN]);
+		});
+
+		it('never fails with a defect, whatever the value', async () => {
+			const bare = Object.assign(Object.create(null), { a: 1 });
+			await accepted([unknown, bare], [unknown, { a: 1 }]);
+			const other = Object.assign(Object.create(null), { a: 2 });
+			await refused([unknown, bare], [unknown, other]);
+			const cyclic: Record<string, unknown> = { a: 1 };
+			cyclic.self = cyclic;
+			const twin: Record<string, unknown> = { a: 1 };
+			twin.self = twin;
+			await refused([unknown, cyclic], [unknown, twin]);
+			const throwing = {
+				get a(): never {
+					throw new Error('boom');
+				},
+			};
+			await refused([unknown, throwing], [unknown, { a: 1 }]);
+			await refused([unknown, Symbol('a')], [unknown, Symbol('a')]);
+		});
 	});
 
 	it('refuses an answer with the wrong number of results', async () => {
@@ -393,6 +653,26 @@ describe('transaction', () => {
 		expect(error).toMatchObject({ slot: 0 });
 	});
 
+	it('is refused by the SDK stand-in as the SDK refuses it', async () => {
+		// Finding 10: the real SDK refuses a RETURN another statement follows
+		// (test/conformance.test.ts); the stand-in must too.
+		const { calls, client } = fake(async () => [
+			undefined,
+			undefined,
+			'x',
+			4,
+		]);
+		const error = await failure(
+			client.transaction([
+				bind(guarded, { boundOwner: 'owner' }),
+				bind(double, { n: 2 }),
+			]),
+		);
+		expect(error).toBeInstanceOf(StatementRequestError);
+		expect(error.message).toMatch(/RETURN statement which is followed/);
+		expect(calls).toHaveLength(0);
+	});
+
 	it('answers an empty list without a request', async () => {
 		const { calls, client } = fake(async () => []);
 		expect(await Effect.runPromise(client.transaction([]))).toEqual([]);
@@ -403,10 +683,17 @@ describe('transaction', () => {
 describe('service', () => {
 	it('runs statements through the client in context', async () => {
 		const { db } = fake(async (call) => (call.atomic ? [3, 3] : [3]));
+		// `add` ends in RETURN, which a transaction takes only last.
+		const sum = make({
+			name: 'sum',
+			sql: '$a + $b;',
+			params: { a: SurrealSchema.Int, b: SurrealSchema.Int },
+			result: SurrealSchema.Int,
+		});
 		const program = Effect.gen(function* () {
 			const one = yield* run(add, { a: 1, b: 2 });
 			const [first, second] = yield* transaction([
-				bind(add, { a: 1, b: 2 }),
+				bind(sum, { a: 1, b: 2 }),
 				bind(add, { a: 1, b: 2 }),
 			]);
 			return one + first + second;

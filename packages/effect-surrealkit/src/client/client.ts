@@ -7,12 +7,7 @@
  * the statement's codec accepts. Interrupting the effect aborts the request.
  */
 import { Context, Effect, Layer, Schema } from 'effect';
-import {
-	BoundQuery,
-	type RetryValue,
-	type SurrealSession,
-	toSurqlString,
-} from 'surrealdb';
+import { BoundQuery, type RetryValue, type SurrealSession } from 'surrealdb';
 
 import type {
 	AnyStatement,
@@ -21,6 +16,7 @@ import type {
 	Params,
 	Statement,
 } from '../statement/statement.js';
+import { sameValue } from './equal.js';
 import {
 	StatementConflict,
 	StatementDecodeError,
@@ -103,12 +99,16 @@ export interface Client {
 	 * Runs several statements as one atomic request and decodes each result:
 	 * all of them take effect, or none does.
 	 *
-	 * The statements share one variable scope, as SurrealQL has it: a
-	 * binding name used by two of them must carry the same value, and a
-	 * `LET` in one is visible to the next. The SDK refuses a top-level
-	 * `RETURN` that is followed by another statement, because some engines
-	 * end the transaction there. Statements whose own text opens a
-	 * transaction cannot be nested in this one.
+	 * The statements share one variable scope, as SurrealQL has it, so
+	 * before anything is sent a binding name is refused when two
+	 * statements bind it to values that are not certainly equal, or when
+	 * one statement binds a name another `LET`s (a `StatementEncodeError`
+	 * naming both). A statement whose own text writes `BEGIN`, `COMMIT` or
+	 * `CANCEL` cannot be nested in this one and is refused as a
+	 * `StatementRequestError`. The SDK refuses a top-level `RETURN` that
+	 * is followed by another statement, because some engines end the
+	 * transaction there. A declared `THROW` names the statement that
+	 * declares it.
 	 */
 	readonly transaction: <const S extends ReadonlyArray<Bound>>(
 		statements: S,
@@ -132,7 +132,8 @@ const messageOf = (error: unknown): string =>
  */
 const classify = <Throws extends string>(
 	name: string,
-	throws: ReadonlyArray<Throws>,
+	/** The statement that declares `reason`, or `undefined` when none does. */
+	declaredBy: (reason: string) => string | undefined,
 	cause: unknown,
 ): StatementRequestError | StatementConflict | StatementThrown<Throws> => {
 	for (
@@ -148,12 +149,9 @@ const classify = <Throws extends string>(
 			const reason = error.message.startsWith(thrownPrefix)
 				? error.message.slice(thrownPrefix.length)
 				: error.message;
-			const declared = throws.find((known) => known === reason);
-			if (declared !== undefined) {
-				return new StatementThrown<Throws>({
-					statement: name,
-					reason: declared,
-				});
+			const statement = declaredBy(reason);
+			if (statement !== undefined) {
+				return new StatementThrown<Throws>({ statement, reason });
 			}
 		}
 		if (isTransactionConflict === true) {
@@ -256,6 +254,64 @@ const traced = <A, E>(
 	);
 
 /**
+ * What a transaction refuses before encoding anything: a statement that
+ * writes its own transaction control, and a name one statement binds and
+ * another `LET`s, which would make one of them read the other's value.
+ */
+const refuseInTransaction = (
+	statements: ReadonlyArray<Bound>,
+): StatementEncodeError | StatementRequestError | undefined => {
+	for (const { statement } of statements) {
+		if (statement.transactional) {
+			return new StatementRequestError({
+				statement: statement.name,
+				message: `\`${statement.name}\` writes its own BEGIN, COMMIT or CANCEL, so it cannot run inside a transaction; run it on its own`,
+				cause: undefined,
+			});
+		}
+	}
+	for (const [index, { statement }] of statements.entries()) {
+		for (const binding of Object.keys(statement.params)) {
+			const definer = statements.find(
+				(other, at) =>
+					at !== index && other.statement.defines.includes(binding),
+			);
+			if (definer !== undefined) {
+				return new StatementEncodeError({
+					statement: statement.name,
+					binding,
+					message: `\`$${binding}\` is bound by \`${statement.name}\` and defined with LET by \`${definer.statement.name}\`, and statements in one transaction share one variable scope, so one would read the other's value; rename one of them`,
+				});
+			}
+		}
+	}
+	return undefined;
+};
+
+/**
+ * The statement that declares the `THROW` message `reason`: its name, which
+ * ones when several do, or `undefined` when none does.
+ */
+const declarer = (
+	statements: ReadonlyArray<AnyStatement>,
+	reason: string,
+): string | undefined => {
+	const names = [
+		...new Set(
+			statements
+				.filter((statement) =>
+					(statement.throws as ReadonlyArray<string>).includes(
+						reason,
+					),
+				)
+				.map((statement) => statement.name),
+		),
+	];
+	if (names.length <= 1) return names[0];
+	return `one of ${names.map((name) => `\`${name}\``).join(', ')}`;
+};
+
+/**
  * A client over an SDK connection or session.
  *
  * @example
@@ -285,7 +341,11 @@ export const make = (db: Queryable): Client => ({
 							: query.retry(options.retry);
 					},
 					catch: (cause) =>
-						classify(statement.name, statement.throws, cause),
+						classify(
+							statement.name,
+							(reason) => declarer([statement], reason),
+							cause,
+						),
 				});
 				const slots = yield* countOf(
 					statement.name,
@@ -309,29 +369,28 @@ export const make = (db: Queryable): Client => ({
 			sql,
 			Effect.gen(function* () {
 				if (statements.length === 0) return [];
+				const refused = refuseInTransaction(statements);
+				if (refused !== undefined) return yield* Effect.fail(refused);
 				const bindings: Record<string, unknown> = {};
+				const boundBy = new Map<string, string>();
 				for (const { input, statement } of statements) {
 					const encoded = yield* encode(statement, input);
 					for (const [key, value] of Object.entries(encoded)) {
-						if (
-							key in bindings &&
-							toSurqlString(bindings[key]) !==
-								toSurqlString(value)
-						) {
+						const first = boundBy.get(key);
+						if (first === undefined) {
+							boundBy.set(key, statement.name);
+						} else if (!sameValue(bindings[key], value)) {
 							return yield* Effect.fail(
 								new StatementEncodeError({
 									statement: statement.name,
 									binding: key,
-									message: `\`$${key}\` is bound to two different values in one transaction, where statements share one variable scope; rename one of the bindings`,
+									message: `\`$${key}\` is bound by \`${first}\` and by \`${statement.name}\` to values that are not certainly equal, and statements in one transaction share one variable scope; rename the binding in one of them`,
 								}),
 							);
 						}
 						bindings[key] = value;
 					}
 				}
-				const throws = statements.flatMap(
-					({ statement }) => statement.throws,
-				);
 				const results = yield* Effect.tryPromise({
 					try: (signal) =>
 						db.transaction([new BoundQuery(sql, bindings)], {
@@ -340,7 +399,16 @@ export const make = (db: Queryable): Client => ({
 								? {}
 								: { retry: options.retry }),
 						}),
-					catch: (cause) => classify(name, throws, cause),
+					catch: (cause) =>
+						classify(
+							name,
+							(reason) =>
+								declarer(
+									statements.map((item) => item.statement),
+									reason,
+								),
+							cause,
+						),
 				});
 				const slots = yield* countOf(
 					name,

@@ -455,20 +455,36 @@ value, for an application that names its own services, one per session.
 
 | Error | Meaning |
 | --- | --- |
-| `StatementEncodeError` | a binding failed its codec; nothing was sent |
-| `StatementThrown<Message>` | a `THROW` the statement declares |
+| `StatementEncodeError` | a binding failed its codec, or clashes with another statement of the transaction; nothing was sent |
+| `StatementThrown<Message>` | a `THROW` the statement declares; in a transaction, `statement` names the one that declares it (`one of …` when several do) |
 | `StatementConflict` | a transaction conflict; nothing changed, send it again |
-| `StatementRequestError` | any other failure, with the SDK's error as `cause` |
+| `StatementRequestError` | any other failure, with the SDK's error as `cause`, or a statement `transaction` refuses to send |
 | `StatementDecodeError` | the answer is not what the statement declares; a write may have applied |
 
 Interrupting the effect aborts the request (the engine may still finish it).
 Each run is a span named after the statement, carrying the static text and
 no binding values. `{ retry }` is passed to the SDK.
 
-`transaction` sends its statements as one atomic request. They share one
-variable scope, as SurrealQL has it: a binding name used by two of them must
-carry the same value. The SDK refuses a top-level `RETURN` followed by
-another statement inside a transaction.
+`transaction` sends its statements as one atomic request, joined one after
+another (`make` stores every text with exactly one final `;`, so they always
+parse). They share one variable scope, as SurrealQL has it, so before
+anything is sent it refuses:
+
+- a binding name two statements bind to values that are not certainly
+  equal. Values compare structurally by kind: arrays, sets in any order,
+  byte arrays, plain objects in any key order, SDK values by class and
+  value, and primitives only with their own kind (`1` is not `1n`). What it
+  cannot compare with certainty (a `Map`, a class instance, a cycle) is
+  refused; the error names the binding and both statements, so rename one.
+- a name one statement binds and another `LET`s at the top level, which one
+  of them would read instead of its own value. A statement records the
+  names it defines: `sequence` takes them from its parts, builders define
+  none, and `make` takes them as declared (`defines`).
+- a statement whose own text writes `BEGIN`, `COMMIT` or `CANCEL`
+  (`transactional`; `make` takes it as declared).
+
+The SDK refuses a top-level `RETURN` followed by another statement inside a
+transaction, so put such a statement last.
 
 ### What the statements do not know
 

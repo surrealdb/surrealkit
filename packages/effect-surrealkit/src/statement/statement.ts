@@ -141,6 +141,17 @@ export const assertBindingName = (name: string): void => {
 	}
 };
 
+/**
+ * The text with exactly one terminator: trailing whitespace and `;` are
+ * dropped and one `;` is added, so statements joined one after another (a
+ * transaction) never run into each other.
+ */
+const terminated = (sql: string): string => {
+	let text = sql.trimEnd();
+	while (text.endsWith(';')) text = text.slice(0, -1).trimEnd();
+	return text.length === 0 ? '' : `${text};`;
+};
+
 const assertStatement = (statement: AnyStatement): void => {
 	if (statement.sql.trim().length === 0) {
 		throw new RangeError(`statement \`${statement.name}\` has no text`);
@@ -155,7 +166,8 @@ const assertStatement = (statement: AnyStatement): void => {
 };
 
 /**
- * Declares a statement from its parts. Nothing checks that `params` are the
+ * Declares a statement from its parts. The text is stored with exactly one
+ * final `;`. Nothing checks that `params` are the
  * names `sql` reads, nor that `defines` and `transactional` say what the text
  * does, so prefer a builder (`select`, `create`, …) or, for authored
  * SurrealQL, `part` and `sequence`, which derive all of it from the text.
@@ -179,7 +191,7 @@ export const make = <
 	const statement: Statement<P, R, Throws> = {
 		[StatementTypeId]: StatementTypeId,
 		name: options.name ?? 'statement',
-		sql: options.sql,
+		sql: terminated(options.sql),
 		params: options.params,
 		result: options.result,
 		slots: options.slots ?? 1,

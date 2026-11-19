@@ -624,6 +624,14 @@ describe('authored statements', () => {
 		expect(() =>
 			make({ sql: ' ', params: {}, result: Schema.Undefined }),
 		).toThrow(/has no text/);
+		// Finding 10: every text ends with exactly one terminator, so texts
+		// joined in a transaction always parse.
+		const text = (sql: string) =>
+			make({ sql, params: {}, result: Schema.Unknown }).sql;
+		expect(text('RETURN 1')).toBe('RETURN 1;');
+		expect(text('RETURN 1;')).toBe('RETURN 1;');
+		expect(text('RETURN 1 ; ;\n')).toBe('RETURN 1;');
+		expect(() => text(' ; ')).toThrow(/has no text/);
 		expect(() =>
 			make({
 				sql: 'RETURN 1;',
