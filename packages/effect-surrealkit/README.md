@@ -11,11 +11,14 @@ npm i effect-surrealkit effect@4.0.6 surrealdb@2.1.1
 
 Every runtime export imports only `effect` and `surrealdb` value classes, so it
 runs in browsers, Workers, Bun and Node. The emitter (`effect-surrealkit/emitter`)
-is host-neutral too; only the `effect-surrealkit` bin touches the filesystem.
+is host-neutral too; only the `effect-surrealkit` bin touches the filesystem, and
+only [`effect-surrealkit/testing`](#testing) can load `@surrealdb/node`.
 
 - [Generating modules](#generating-modules) from a schema document
 - [Statements](#statements): typed queries and writes from the generated modules,
   and [statements from `.surql` files](#statements-from-surql-files)
+- [Testing](#testing) with an in-memory database, record users, index
+  expectations and a scripted client
 - [Two codec worlds](#two-codec-worlds) and the [value schemas](#values)
 - [What the codecs refuse](#what-the-codecs-refuse-and-why)
 
@@ -640,6 +643,56 @@ empty results.
 The engine suite (`test/statement-engine.test.ts`) runs every builder against
 the corpus schema and the modules generated from it, and passes on SurrealDB
 3.3.4 and 4.0.1.
+
+## Testing
+
+`effect-surrealkit/testing` helps test code built on statements. Its memory
+database needs `@surrealdb/node`, an optional peer dependency, with its own
+peer `@surrealdb/node-native`; it is imported only when a memory database
+starts, so nothing else in the package needs it installed:
+
+```sh
+npm i -D @surrealdb/node @surrealdb/node-native
+```
+
+```ts
+import { Effect } from 'effect';
+import { run } from 'effect-surrealkit/client';
+import { expectIndex, memoryLayer, recordUser } from 'effect-surrealkit/testing';
+
+const test = Effect.gen(function* () {
+  const rows = yield* run(adults, { minimum: 18, city: 'Leeds' });
+  yield* expectIndex(byEmail, { email: 'ann@example.com' }, 'person_email');
+  const ann = yield* recordUser({ access: 'user', variables: { name: 'ann' } });
+  const visible = yield* ann.client.run(visibleToUsers);
+  return { rows, visible };
+}).pipe(Effect.scoped, Effect.provide(memoryLayer({ schema })));
+```
+
+| Export | What it does |
+| --- | --- |
+| `memoryLayer({ schema?, namespace?, database? })` | `SurrealClient` and `TestDatabase` over a fresh in-memory engine in this process, with `schema` (SurrealQL text) loaded; closed with the layer. `memory(options)` is the same as a scoped effect. |
+| `layerFrom(connection, { namespace, database })` | The same over a connection a test already has (a server, the suite's engine). |
+| `loadSchema(text)` | Runs more schema text in the `TestDatabase`. |
+| `recordUser({ access, variables? })` | Signs a new record user up through a `DEFINE ACCESS … TYPE RECORD` and returns `{ session, client }`, a client running as that session, closed with the scope: what a restricted session sees, row and field permissions included. |
+| `expectIndex(statement, input, index)`, `expectNoIndex(…)` | Succeed when the engine's plan of a `SELECT` does (does not) read `index`; otherwise an `IndexExpectationError` naming the indexes it does read. `explain(statement, input)` returns the plan and its indexes. |
+| `fake(script)`, `fakeLayer(script)` | A client with no engine that answers each statement by name: a value (the last result, as the SDK returns it), `result(value)`, `thrown(message)`, `conflict()`, `failure(message)`, or a function of the encoded bindings returning one. `calls` records every request. |
+
+`expectIndex` runs the statement with `EXPLAIN` appended, which plans it
+without running it. SurrealDB 3.3 and 4.0 answer with the same plan format, a
+tree of `{ operator, attributes, children }` nodes in which a node that reads
+an index names it as `attributes.index` (an `IndexScan` for `=`, a range, and
+`ORDER BY` with `LIMIT`) and a table scan names none; `test/testing.test.ts`
+pins the plan of each builder shape on both engines.
+
+The scripted client is the real client over a scripted transport, so it
+refuses what the real one refuses before anything would be sent: a binding
+its codec or the value check refuses, the scope rules of a transaction, and,
+with the SDK's own message, a transaction whose text has `BEGIN`, `COMMIT` or
+`CANCEL` or a `RETURN` followed by another statement. A canned result is
+decoded by the statement's codec, so a result of the wrong shape fails as it
+would against an engine; a statement the script does not name fails as a
+request.
 
 ## Two codec worlds
 

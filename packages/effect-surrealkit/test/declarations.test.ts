@@ -34,6 +34,7 @@ const statements = `import { Effect, Schema } from 'effect';
 import * as SurrealSchema from 'effect-surrealkit';
 import { analyze, fill, text } from 'effect-surrealkit/analyze';
 import { bind, run, transaction } from 'effect-surrealkit/client';
+import { expectIndex, fake, fakeLayer, memoryLayer, result } from 'effect-surrealkit/testing';
 import {
 	call,
 	cast,
@@ -111,6 +112,12 @@ export const filter = text({
 export const filtered = fill(filter, { __FILTER__: 'name = $name' }).pipe(
 	Effect.flatMap((sql) => analyze(sql)),
 );
+
+// The testing subpath declares without \`@surrealdb/node\` installed.
+export const scripted = fake({ 'select person': result([]) });
+export const scriptedLayer = fakeLayer({});
+export const memoryDatabase = memoryLayer({ schema: 'DEFINE TABLE person;' });
+export const indexed = expectIndex(listing, { email: 'a@example.com' }, 'person_email');
 
 export const program = (person: typeof PersonCreate.Type) =>
 	Effect.gen(function* () {
@@ -193,8 +200,8 @@ describe('declaration emit in a pnpm consumer', () => {
 
 		cpSync(goldenDir('corpus'), join(root, 'src'), { recursive: true });
 		// A consumer module that exports statements and an effect built from
-		// them, through the package's `statement`, `client` and `analyze`
-		// subpaths.
+		// them, through the package's `statement`, `client`, `analyze` and
+		// `testing` subpaths (with no `@surrealdb/node` installed).
 		writeFileSync(join(root, 'src', 'statements.ts'), statements);
 		writeFileSync(
 			join(root, 'tsconfig.json'),

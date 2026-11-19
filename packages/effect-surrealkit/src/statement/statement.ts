@@ -256,13 +256,23 @@ const closers: Readonly<Record<string, string>> = {
 };
 
 /**
- * The names `sql` appears to `LET` at the top level: a lexical scan that
- * skips strings, quoted identifiers, comments and anything inside brackets
- * or blocks. It is no parser (the analyzer is, and stays out of builder-only
- * bundles); it only lets {@link make} notice an undeclared `LET`.
+ * The first word of each top-level statement of `sql` (upper case), and the
+ * names it appears to `LET` there: a lexical scan that skips strings,
+ * quoted identifiers, comments and anything inside brackets or blocks. It
+ * is no parser (the analyzer is, and stays out of builder-only bundles); it
+ * lets {@link make} notice an undeclared `LET`, and the scripted client of
+ * `effect-surrealkit/testing` refuse a transaction as the SDK does.
+ *
+ * @internal
  */
-const scanTopLevelLets = (sql: string): ReadonlyArray<string> => {
+export const scanTopLevel = (
+	sql: string,
+): {
+	readonly keywords: ReadonlyArray<string>;
+	readonly lets: ReadonlyArray<string>;
+} => {
 	const names: Array<string> = [];
+	const keywords: Array<string> = [];
 	let depth = 0;
 	let atStart = true;
 	let index = 0;
@@ -294,11 +304,9 @@ const scanTopLevelLets = (sql: string): ReadonlyArray<string> => {
 		} else if (wordChar.test(char)) {
 			let end = index;
 			while (end < sql.length && wordChar.test(sql[end] ?? '')) end += 1;
-			if (
-				depth === 0 &&
-				atStart &&
-				sql.slice(index, end).toUpperCase() === 'LET'
-			) {
+			const word = sql.slice(index, end).toUpperCase();
+			if (depth === 0 && atStart) keywords.push(word);
+			if (depth === 0 && atStart && word === 'LET') {
 				let at = skipBlank(sql, end);
 				if (sql[at] === '$') at += 1;
 				let close = at;
@@ -313,7 +321,7 @@ const scanTopLevelLets = (sql: string): ReadonlyArray<string> => {
 			atStart = false;
 		}
 	}
-	return names;
+	return { keywords, lets: names };
 };
 
 /**
@@ -374,7 +382,7 @@ export const make = <
 	};
 	assertStatement(statement);
 	if (options.defines === undefined) {
-		const lets = scanTopLevelLets(statement.sql);
+		const { lets } = scanTopLevel(statement.sql);
 		if (lets.length > 0) {
 			throw new RangeError(
 				`statement \`${statement.name}\` LETs ${[...new Set(lets)]

@@ -1,0 +1,37 @@
+/**
+ * Helpers for testing code built on `effect-surrealkit/statement` and
+ * `effect-surrealkit/client`: an in-memory database (from `@surrealdb/node`,
+ * an optional peer dependency imported only when one starts), record users,
+ * index expectations read from the engine's plan, and a scripted client.
+ *
+ * Nothing else in the package imports this module, so the main entry points
+ * stay host-neutral and installable without `@surrealdb/node`.
+ */
+export {
+	type Connection,
+	type Database,
+	fromConnection,
+	layerFrom,
+	loadSchema,
+	type MemoryOptions,
+	memory,
+	memoryLayer,
+	type RecordUser,
+	type RecordUserOptions,
+	recordUser,
+	TestDatabase,
+} from './database.js';
+export { IndexExpectationError, TestingError } from './errors.js';
+export { expectIndex, expectNoIndex, explain, indexesOf } from './explain.js';
+export {
+	type Call,
+	conflict,
+	type FakeClient,
+	failure,
+	fake,
+	fakeLayer,
+	type Reply,
+	result,
+	type Script,
+	thrown,
+} from './fake.js';

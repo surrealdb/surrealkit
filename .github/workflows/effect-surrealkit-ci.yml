@@ -88,7 +88,7 @@ jobs:
                   # the build to stdout, so inspect the packed tarball, not `pack --json`.
                   npm pack --ignore-scripts --pack-destination /tmp/pack > /dev/null
                   listing="$(tar -tzf /tmp/pack/effect-surrealkit-*.tgz)"
-                  for f in dist/index.js dist/emitter.js dist/statement.js dist/client.js dist/analyze.js dist/cli.js; do
+                  for f in dist/index.js dist/emitter.js dist/statement.js dist/client.js dist/analyze.js dist/testing.js dist/cli.js; do
                       grep -qx "package/$f" <<<"$listing" || { echo "::error::$f is not in the package"; exit 1; }
                   done
                   # npm 11 refuses even a dry run over a version already on the

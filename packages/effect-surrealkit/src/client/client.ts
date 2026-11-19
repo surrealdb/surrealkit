@@ -567,6 +567,59 @@ const declarer = (
 		: { statement: first.name, source: site.source, lines: site.lines };
 };
 
+/** The abort signal a request takes, as the SDK names it. */
+type Signal = NonNullable<
+	Parameters<ReturnType<Queryable['query']>['signal']>[0]
+>;
+
+/**
+ * What a client sends its requests through: one statement's text with its
+ * encoded bindings, or a transaction's joined text with the bindings of all
+ * its statements. Each resolves to the list of results, one per SurrealQL
+ * statement, or rejects as the SDK does (`classify` reads the rejection).
+ *
+ * @internal The SDK is the only transport the package offers; the scripted
+ * client of `effect-surrealkit/testing` is the other.
+ */
+export interface Transport {
+	readonly query: (
+		statement: AnyStatement,
+		bindings: Readonly<Record<string, unknown>>,
+		signal: Signal,
+	) => PromiseLike<unknown>;
+	readonly transaction: (
+		statements: ReadonlyArray<AnyStatement>,
+		request: {
+			readonly sql: string;
+			readonly bindings: Readonly<Record<string, unknown>>;
+		},
+		signal: Signal,
+	) => PromiseLike<unknown>;
+}
+
+const sdkTransport = (db: Queryable): Transport => {
+	// One request per transaction, encoded once and sent again as it is on a
+	// retry: the same bindings object makes the same `BoundQuery`.
+	const requests = new WeakMap<object, BoundQuery>();
+	return {
+		query: (statement, bindings, signal) =>
+			db
+				.query(statement.sql, bindings as Record<string, unknown>)
+				.signal(signal),
+		transaction: (_, { sql, bindings }, signal) => {
+			let request = requests.get(bindings);
+			if (request === undefined) {
+				request = new BoundQuery(
+					sql,
+					bindings as Record<string, unknown>,
+				);
+				requests.set(bindings, request);
+			}
+			return db.transaction([request], { signal });
+		},
+	};
+};
+
 /**
  * A client over an SDK connection or session.
  *
@@ -575,7 +628,10 @@ const declarer = (
  * await db.connect(url, { namespace, database, authentication });
  * const client = make(db);
  */
-export const make = (db: Queryable): Client => ({
+export const make = (db: Queryable): Client => makeWith(sdkTransport(db));
+
+/** A client over a {@link Transport}. @internal */
+export const makeWith = (transport: Transport): Client => ({
 	run: <P extends Params, R extends Codec, Throws extends string, I>(
 		statement: Statement<P, R, Throws>,
 		...args: RunArgs<P, I>
@@ -597,9 +653,7 @@ export const make = (db: Queryable): Client => ({
 					Effect.tryPromise({
 						try: (signal) => {
 							sent.count++;
-							return db
-								.query(statement.sql, bindings)
-								.signal(signal);
+							return transport.query(statement, bindings, signal);
 						},
 						catch: (cause) =>
 							classify(
@@ -673,13 +727,16 @@ export const make = (db: Queryable): Client => ({
 					(binding) => boundBy.get(binding) ?? name,
 					options,
 				);
-				// One request, encoded once, sent again as it is on a retry.
-				const request = new BoundQuery(sql, bindings);
+				const request = { sql, bindings };
 				const results = yield* sending(
 					Effect.tryPromise({
 						try: (signal) => {
 							sent.count++;
-							return db.transaction([request], { signal });
+							return transport.transaction(
+								statements.map((item) => item.statement),
+								request,
+								signal,
+							);
 						},
 						catch: (cause) =>
 							classify(
