@@ -1149,4 +1149,205 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 			expect(star.map((row) => Object.keys(row))).toStrictEqual([['a']]);
 		});
 	});
+
+	describe('what blocks rely on', () => {
+		it('a branch yields its last expression, an object literal included, and NONE when no branch is taken', async () => {
+			expect(
+				await query(
+					[
+						'IF true { LET $x = 1; { a: $x, b: NONE } } ELSE { 2 };',
+						'IF false { 1 };',
+						'IF true { IF false { 1 } ELSE { 2 } } ELSE { 3 };',
+						"IF false { 1 } ELSE IF true { THROW 'never' ; 2 } ELSE { 3 };",
+					].join('\n'),
+				).catch((error: unknown) => error),
+			).toMatchObject({
+				kind: 'Thrown',
+				message: 'An error occurred: never',
+			});
+			expect(
+				await query(
+					[
+						'IF true { LET $x = 1; { a: $x, b: NONE } } ELSE { 2 };',
+						'IF false { 1 };',
+						'IF true { IF false { 1 } ELSE { 2 } } ELSE { 3 };',
+						'IF true { CREATE ONLY blk:one SET n = 1 RETURN NONE; 7 };',
+						'IF true { NONE };',
+					].join('\n'),
+				),
+			).toStrictEqual([
+				{ a: 1, b: undefined },
+				undefined,
+				2,
+				7,
+				undefined,
+			]);
+		});
+
+		it('outside a transaction, a THROW fails only its own statement: the statements after it run', async () => {
+			await query('DEFINE TABLE after_throw;');
+			await expect(
+				query(
+					"IF true { THROW 'stop' }; CREATE after_throw:one SET n = 1;",
+				),
+			).rejects.toMatchObject({ kind: 'Thrown' });
+			expect(
+				await query('SELECT VALUE id FROM after_throw;'),
+			).toStrictEqual([[new RecordId('after_throw', 'one')]]);
+		});
+
+		it('a block statement is all or nothing: a THROW inside it stops the rest and undoes what it wrote, even outside a transaction', async () => {
+			await query('DEFINE TABLE in_block;');
+			await expect(
+				query(
+					"{ CREATE in_block:a SET n = 1; IF true { THROW 'stop' }; CREATE in_block:b SET n = 1; 7 }; CREATE in_block:c SET n = 1;",
+				),
+			).rejects.toMatchObject({
+				kind: 'Thrown',
+				message: 'An error occurred: stop',
+			});
+			expect(await query('SELECT VALUE id FROM in_block;')).toStrictEqual(
+				[[new RecordId('in_block', 'c')]],
+			);
+		});
+
+		it('a LET inside a top-level block is local to it, in a transaction too', async () => {
+			expect(
+				await query('{ LET $inner = 1; $inner + 1 }; $inner;'),
+			).toStrictEqual([2, undefined]);
+			expect(
+				await within(
+					db.transaction<unknown[]>([
+						'{ LET $inner = 1; $inner + 1 };',
+						'$inner;',
+					]),
+				),
+			).toStrictEqual([2, undefined]);
+		});
+
+		it('a RETURN in the value of a LET: at the top level the LET yields it and binds nothing; in a block SurrealDB 4 ends the block with it and 3 binds it', async () => {
+			expect(await query('LET $x = (RETURN 1); $x;')).toStrictEqual([
+				1,
+				undefined,
+			]);
+			const inBlock = await query(
+				'{ LET $x = (RETURN 2); $x + 10 }; { LET $x = (IF true { RETURN 2 }); $x + 10 };',
+			);
+			if (engine.majorVersion >= 4) {
+				expect(inBlock).toStrictEqual([2, 2]);
+			} else {
+				expect(inBlock).toStrictEqual([12, 12]);
+			}
+		});
+
+		it('a block and an IF are values: either can be the value of a LET', async () => {
+			expect(
+				await query(
+					'LET $x = ({\n\tLET $a = 1;\n\t$a + 1\n}); LET $y = (IF $x = 2 { 3 } ELSE { 4 }); [$x, $y];',
+				),
+			).toStrictEqual([undefined, undefined, [2, 3]]);
+		});
+
+		it('a LET inside a branch is local to it and shadows an outer name only there', async () => {
+			expect(
+				await query(
+					'LET $x = 1; IF true { LET $x = 2; LET $y = 3; $x + $y }; $x; $y;',
+				),
+			).toStrictEqual([undefined, 5, 1, undefined]);
+		});
+
+		it('a RETURN inside an IF ends the request on neither engine, but ends a transaction on SurrealDB 3 and not on 4', async () => {
+			expect(await query('IF true { RETURN 1 }; 2;')).toStrictEqual([
+				1, 2,
+			]);
+			// The SDK refuses only a top-level RETURN, so it sends this.
+			const results = await within(
+				db.transaction<unknown[]>(['IF true { RETURN 1 };', '2;']),
+			);
+			if (engine.majorVersion >= 4) {
+				expect(results).toStrictEqual([1, 2]);
+			} else {
+				// What follows is skipped, and its result is missing.
+				expect(results).toStrictEqual([1]);
+			}
+			// A branch's last expression is its value on both, in a transaction too.
+			expect(
+				await within(
+					db.transaction<unknown[]>(['IF true { 1 };', '2;']),
+				),
+			).toStrictEqual([1, 2]);
+		});
+
+		it('a LET inside a block of a name SurrealDB sets is refused on SurrealDB 4 and shadows it on 3', async () => {
+			const shadowed = query('IF true { LET $value = 1; $value };');
+			if (engine.majorVersion >= 4) {
+				await expect(shadowed).rejects.toMatchObject({
+					kind: 'Validation',
+					message:
+						"'value' is a protected variable and cannot be set",
+				});
+			} else {
+				expect(await shadowed).toStrictEqual([1]);
+			}
+		});
+
+		it('FOR UPDATE reads one record from a bound or LET id, and is refused for a table or a field path (SurrealDB 3.3 and 4)', async () => {
+			await query('DEFINE TABLE lock; CREATE lock:one SET n = 1;');
+			expect(
+				await query('SELECT VALUE n FROM ONLY $id FOR UPDATE;', {
+					id: new RecordId('lock', 'one'),
+				}),
+			).toStrictEqual([1]);
+			expect(
+				await query(
+					'LET $id = lock:one; LET $row = (SELECT * FROM ONLY $id WHERE n = 1 FOR UPDATE); $row.n;',
+				),
+			).toStrictEqual([undefined, undefined, 1]);
+			expect(
+				await query('SELECT * FROM ONLY lock:missing FOR UPDATE;'),
+			).toStrictEqual([undefined]);
+			const refused =
+				/SELECT \.\.\. FOR UPDATE requires record ids as targets/;
+			await expect(
+				query('SELECT * FROM lock WHERE n = 1 FOR UPDATE;'),
+			).rejects.toThrow(refused);
+			await expect(
+				query(
+					'LET $row = (SELECT * FROM ONLY lock:one); SELECT * FROM ONLY $row.id FOR UPDATE;',
+				),
+			).rejects.toThrow(refused);
+		});
+
+		it('a transaction that read a record FOR UPDATE conflicts at commit with a concurrent write to it; without, it commits', async () => {
+			await query(
+				'DEFINE TABLE held; CREATE held:a SET n = 1; CREATE held:b SET n = 1;',
+			);
+			const attempt = async (lock: string, written: string) => {
+				const tx = await within(db.beginTransaction());
+				try {
+					await within(
+						Promise.resolve(
+							tx.query(`SELECT * FROM ONLY held:a${lock};`),
+						),
+					);
+					await query(`UPDATE ${written} SET n += 1;`);
+					await within(
+						Promise.resolve(
+							tx.query('CREATE held_log SET at = time::now();'),
+						),
+					);
+					await within(tx.commit());
+					return 'committed';
+				} catch (error) {
+					return (error as { isTransactionConflict?: boolean })
+						.isTransactionConflict === true
+						? 'conflict'
+						: error;
+				}
+			};
+			expect(await attempt('', 'held:a')).toBe('committed');
+			expect(await attempt(' FOR UPDATE', 'held:a')).toBe('conflict');
+			expect(await attempt(' FOR UPDATE', 'held:b')).toBe('committed');
+		});
+	});
 });
