@@ -14,6 +14,7 @@ import {
 	type SurrealSession,
 } from 'surrealdb';
 
+import { analyzeSync } from '../analyze/analyze.js';
 import type {
 	AnyStatement,
 	Codec,
@@ -345,8 +346,16 @@ export const make = (db: Queryable): Client => ({
 						}
 						bindings[key] = value;
 					}
-					for (const name of statement.defines ?? [])
-						locals.add(name);
+					const analysis = yield* Effect.try({
+						try: () => analyzeSync(statement.sql),
+						catch: (error) =>
+							new StatementEncodeError({
+								statement: statement.name,
+								binding: '',
+								message: messageOf(error),
+							}),
+					});
+					for (const name of analysis.defines) locals.add(name);
 				}
 				const throws = statements.flatMap(
 					({ statement }) => statement.throws,

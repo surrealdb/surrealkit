@@ -59,7 +59,6 @@ export interface Statement<
 	readonly params: P;
 	readonly result: R;
 	readonly slots: number;
-	readonly defines?: ReadonlyArray<string>;
 	readonly throws: ReadonlyArray<Throws>;
 }
 
@@ -157,7 +156,6 @@ export const make = <
 	readonly params: P;
 	readonly result: R;
 	readonly slots?: number;
-	readonly defines?: ReadonlyArray<string>;
 	readonly throws?: ReadonlyArray<Throws>;
 }): Statement<P, R, Throws> => {
 	const statement: Statement<P, R, Throws> = {
@@ -166,7 +164,6 @@ export const make = <
 		sql: options.sql,
 		params: options.params,
 		result: options.result,
-		defines: options.defines ?? [],
 		slots: options.slots ?? 1,
 		throws: options.throws ?? [],
 	};
@@ -361,7 +358,6 @@ export const sequence = <const Parts extends ReadonlyArray<Part>>(
 		}
 		return make({
 			name: contract.name ?? 'sequence',
-			defines: parts.flatMap((item) => item.defines),
 			sql: parts.map((item) => item.sql.trim()).join('\n'),
 			params: contract.params as P,
 			result: contract.result,
