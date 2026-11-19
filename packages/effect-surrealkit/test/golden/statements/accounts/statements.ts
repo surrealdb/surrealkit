@@ -15,6 +15,8 @@ LET $principal = $auth.id;`,
 	slots: 2,
 	throws: [],
 	throwsAt: {},
+	tables: { read: [], written: [] },
+	functions: [],
 } as const);
 
 /** `accounts/listWhere.surql`: a template. */
@@ -57,6 +59,9 @@ export const readProfile = $statement.part({
 	slots: 1,
 	throws: [],
 	throwsAt: {},
+	tables: { read: [], written: [] },
+	functions: [],
+	openTargets: true,
 } as const);
 
 /** `accounts/requireOwner.surql`: a part. */
@@ -69,4 +74,6 @@ export const requireOwner = $statement.part({
 	slots: 1,
 	throws: ["Not the owner"],
 	throwsAt: { "Not the owner": [1] },
+	tables: { read: [], written: [] },
+	functions: [],
 } as const);

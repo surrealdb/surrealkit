@@ -522,6 +522,20 @@ export const SchemaDocument = Schema.Struct({
 });
 export type SchemaDocument = typeof SchemaDocument.Type;
 
+/**
+ * The tables (edge tables included) and custom functions a schema document
+ * declares, each sorted: the `declared` names of a statement scope.
+ */
+export const declaredNames = (
+	document: SchemaDocument,
+): {
+	readonly tables: ReadonlyArray<string>;
+	readonly functions: ReadonlyArray<string>;
+} => ({
+	tables: [...new Set(document.tables.map((table) => table.name))].sort(),
+	functions: [...new Set(document.functions.map((fn) => fn.name))].sort(),
+});
+
 /** A document that failed strict decoding. */
 export class DocumentError extends Data.TaggedError('DocumentError')<{
 	readonly message: string;

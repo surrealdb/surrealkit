@@ -992,6 +992,8 @@ export const bindOwner = $statement.part({
 	slots: 2,
 	throws: [],
 	throwsAt: {},
+	tables: { read: [], written: [] },
+	functions: [],
 } as const);
 ```
 
@@ -1013,7 +1015,11 @@ generated header never touched (nor overwritten), and `--check` writes
 nothing and exits 1 when anything is missing, stale or edited. `--watch`
 regenerates on change; `--import-extension .ts` changes the index's imports;
 `--hole-open <text>` and `--hole-close <text>` change the delimiters of a
-hole (default `__` and `__`). Any error stops
+hole (default `__` and `__`); `--schema <file>` takes a SurrealKit schema
+document v2 (the JSON the emitter reads) and fails generation, with the file
+and the line of the first use, on any table or `fn::` function a file names
+that the document does not declare (edge tables included) and that the same
+file does not create with `DEFINE TABLE` or `DEFINE FUNCTION`. Any error stops
 generation with its file, line and column; warnings are printed.
 
 #### Rendering in process
@@ -1039,11 +1045,20 @@ const program = renderStatementModules({
 // warnings: [{ scope, file, line, column, code, message, text }] }, the same
 // bytes the command writes; fails with a StatementModulesError whose
 // `problems` hold every rejected file, invalid, reserved or case-colliding
-// name and invalid scope.
+// name, invalid scope and, for a scope with `declared`, undeclared name.
 const { files, warnings } = await Effect.runPromise(program);
 ```
 
-`renderStatementModulesSync` is the same, throwing the error.
+`renderStatementModulesSync` is the same, throwing the error. A scope may
+carry `declared: { tables, functions }`: every table or custom function a
+file of that scope names that is not in it, nor created by the same text
+with `DEFINE TABLE` or `DEFINE FUNCTION`, is a problem of kind `undeclared`
+(`shop/q.surql:2: reads table \`shipmnt\`, which the schema does not
+declare`). `declaredNames(document)` from `effect-surrealkit/emitter` returns
+those names from a decoded schema document (`decodeDocument`), edge tables
+included; `--schema` applies it to every scope. Names behind an open target
+are not checked: a text with `openTargets` can use tables the check never
+sees.
 
 #### Pinning built statements
 
@@ -1081,7 +1096,8 @@ if (problems.length > 0) throw new Error(problems.map((p) => `${p.kind} ${p.path
 
 The analyzer is `effect-surrealkit/analyze`, pure and host-neutral:
 `analyze(sql, { holes? })` returns `{ kind, sql, free, defines, slots,
-throws, throwsAt, holes, provisional, transactional, writes, diagnostics }` or fails
+throws, throwsAt, holes, provisional, transactional, writes, tables,
+functions, openTargets, diagnostics }` or fails
 with an `AnalyzeError` carrying a line and column.
 
 - **Lexing.** `--`, `//`, `#` and `/* */` comments; `'…'` and `"…"` strings
@@ -1115,6 +1131,25 @@ with an `AnalyzeError` carrying a line and column.
   cannot decode the result says the writes are committed. No write found
   does not prove the text read-only (a function it calls may write), so a
   part is `writes: false` only when declared so.
+- **Tables and functions.** `tables.read` and `tables.written` are the
+  static tables the text names, each sorted and without duplicates (a
+  table both read and written is in both); `functions` are the custom
+  functions it calls, as written (`fn::a::b`). Written: the target of
+  `CREATE`, `UPDATE`, `UPSERT`, `DELETE [FROM]`, `INSERT [IGNORE]
+  [RELATION] INTO` and the edge of `RELATE a->edge->b`, after an optional
+  `ONLY`. Read: each target of a `SELECT`'s `FROM` list, graph steps
+  written as names (`->edge->table`, `<-`, `<->`, also `->(edge WHERE …)`)
+  and any other `type::record('t', …)`, `type::thing('t', …)` or
+  `type::table('t')`. A static target is a name (also quoted), a record id
+  `t:key` or `type::record`/`type::thing` with a string literal; a
+  parenthesised subquery in `FROM` is read where it stands. Any other target
+  (`$ids`, a function call, `type::table($t)`), or one the lexer cannot read
+  with certainty, sets `openTargets`, so the lists may be incomplete.
+  `DEFINE`, `REMOVE`, `ALTER`, `INFO`, `USE`, `SHOW` and `REBUILD`
+  contribute nothing. `part` takes `tables`, `functions` and `openTargets`,
+  checks them against the text when given and always exposes what the text
+  does; a `sequence`'s statement carries the union over its parts (builders
+  leave them out).
 - **Fragments.** A single expression or block without a final `;` is a
   `fragment`: no results, generated as a `text(…)` value, usable only to fill
   a hole. Several statements with an unterminated last one are an error.

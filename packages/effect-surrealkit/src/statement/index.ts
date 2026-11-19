@@ -172,6 +172,7 @@ export {
 	type Part,
 	part,
 	sequence,
+	type Tables,
 	type ThrownBy,
 	type Unbound,
 } from './part.js';

@@ -12,6 +12,7 @@ import {
 	lex,
 	type Token,
 } from './lexer.js';
+import { analyzeTargets } from './targets.js';
 
 export interface Diagnostic {
 	readonly severity: 'error' | 'warning';
@@ -71,6 +72,22 @@ export interface Analysis {
 	 * statement or a subquery somewhere in it, outside strings and comments.
 	 */
 	readonly writes: boolean;
+	/**
+	 * The static tables the text reads and writes, each sorted and without
+	 * duplicates; a table both read and written is in both.
+	 */
+	readonly tables: {
+		readonly read: ReadonlyArray<string>;
+		readonly written: ReadonlyArray<string>;
+	};
+	/** The custom functions (`fn::…`) the text calls, as written, sorted. */
+	readonly functions: ReadonlyArray<string>;
+	/**
+	 * Some statement's target is not a static table name (a parameter, a
+	 * function call, a construct the lexer cannot read with certainty), so
+	 * `tables` may be incomplete.
+	 */
+	readonly openTargets: boolean;
 	readonly diagnostics: ReadonlyArray<Diagnostic>;
 }
 
@@ -552,6 +569,7 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 		);
 	}
 	diagnostics.sort((a, b) => a.offset - b.offset);
+	const targets = analyzeTargets(tokens);
 	return {
 		kind,
 		sql: sql.slice(0, last.end),
@@ -565,6 +583,9 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 		provisional: holes.size > 0,
 		transactional,
 		writes,
+		tables: { read: targets.read, written: targets.written },
+		functions: targets.functions,
+		openTargets: targets.openTargets,
 		diagnostics,
 	};
 };

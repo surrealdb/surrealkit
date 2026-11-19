@@ -31,6 +31,11 @@ import {
  *   can call a function that writes). {@link part} sets `true` when the
  *   analyzer finds a write; only a declaration makes it `false`, and a
  *   declared value is checked against the text.
+ * - `tables`, `functions` and `openTargets`: the static tables the text
+ *   reads and writes, the custom functions it calls, and whether some
+ *   target is not a static name (so the lists may be incomplete). Optional
+ *   in a declaration and checked against the text when given; {@link part}
+ *   always sets them to what the analyzer derives.
  *
  * `effect-surrealkit statements` derives these from `.surql` files
  * (`effect-surrealkit/analyze`). Written by hand they are checked against
@@ -57,6 +62,15 @@ export interface Part<
 	readonly throws: ReadonlyArray<Throws>;
 	readonly throwsAt?: Readonly<Record<string, ReadonlyArray<number>>>;
 	readonly writes?: boolean;
+	readonly tables?: Tables;
+	readonly functions?: ReadonlyArray<string>;
+	readonly openTargets?: boolean;
+}
+
+/** The static tables a text reads and writes. */
+export interface Tables {
+	readonly read: ReadonlyArray<string>;
+	readonly written: ReadonlyArray<string>;
 }
 
 /** What each checked part's text does. */
@@ -73,6 +87,31 @@ const missingFrom = (
 	other: ReadonlyArray<string>,
 ): ReadonlyArray<string> =>
 	[...new Set(values)].filter((value) => !other.includes(value)).sort();
+
+const quoted = (values: ReadonlyArray<string>): string =>
+	values.map((value) => `\`${value}\``).join(', ');
+
+/** The differences between a declared and a derived list of names. */
+const listDifferences = (
+	field: string,
+	declared: ReadonlyArray<string> | undefined,
+	derived: ReadonlyArray<string>,
+	verb: string,
+): ReadonlyArray<string> => {
+	if (declared === undefined) return [];
+	const out: Array<string> = [];
+	const undeclared = missingFrom(derived, declared);
+	if (undeclared.length > 0)
+		out.push(
+			`${field}: the text ${verb} ${quoted(undeclared)}, which is not declared`,
+		);
+	const absent = missingFrom(declared, derived);
+	if (absent.length > 0)
+		out.push(
+			`${field}: declared ${quoted(absent)}, which the text never ${verb}`,
+		);
+	return out;
+};
 
 const isWordChar = (c: string | undefined): boolean =>
 	c !== undefined &&
@@ -182,6 +221,36 @@ const verify = (item: Part, label: string): Analysis => {
 				: 'writes: declared true, the text does not write',
 		);
 	}
+	differences.push(
+		...listDifferences(
+			'tables.read',
+			item.tables?.read,
+			analysis.tables.read,
+			'reads',
+		),
+		...listDifferences(
+			'tables.written',
+			item.tables?.written,
+			analysis.tables.written,
+			'writes',
+		),
+		...listDifferences(
+			'functions',
+			item.functions,
+			analysis.functions,
+			'calls',
+		),
+	);
+	if (
+		item.openTargets !== undefined &&
+		item.openTargets !== analysis.openTargets
+	) {
+		differences.push(
+			analysis.openTargets
+				? 'openTargets: declared false, a target of the text is not a static table name'
+				: 'openTargets: declared true, every target of the text is a static table name',
+		);
+	}
 	if (differences.length > 0) {
 		throw new RangeError(
 			`${label} does not declare what its text does: ${differences.join('; ')}`,
@@ -226,6 +295,12 @@ export const part = <
 	 * otherwise.
 	 */
 	readonly writes?: boolean;
+	/** Checked against the text when given; see {@link Part}. */
+	readonly tables?: Tables;
+	/** Checked against the text when given; see {@link Part}. */
+	readonly functions?: ReadonlyArray<string>;
+	/** Checked against the text when given; see {@link Part}. */
+	readonly openTargets?: boolean;
 }): Part<Free, Defines, Throws> => {
 	const declared: Part<Free, Defines, Throws> = {
 		...(options.name !== undefined && { name: options.name }),
@@ -240,11 +315,22 @@ export const part = <
 		throws: options.throws ?? [],
 		...(options.throwsAt !== undefined && { throwsAt: options.throwsAt }),
 		...(options.writes !== undefined && { writes: options.writes }),
+		...(options.tables !== undefined && { tables: options.tables }),
+		...(options.functions !== undefined && {
+			functions: options.functions,
+		}),
+		...(options.openTargets !== undefined && {
+			openTargets: options.openTargets,
+		}),
 	};
 	const analysis = verify(declared, nameOf(options.name, 'part'));
-	const result: Part<Free, Defines, Throws> = analysis.writes
-		? { ...declared, writes: true }
-		: declared;
+	const result: Part<Free, Defines, Throws> = {
+		...declared,
+		...(analysis.writes && { writes: true }),
+		tables: analysis.tables,
+		functions: analysis.functions,
+		openTargets: analysis.openTargets,
+	};
 	checked.set(result, analysis);
 	return result;
 };
@@ -434,6 +520,18 @@ export const sequence = <const Parts extends ReadonlyArray<Part>>(
 			] as ReadonlyArray<ThrownBy<Parts>>,
 			defines: [...new Set(parts.flatMap((item) => item.defines))].sort(),
 			transactional: analyses.some((analysis) => analysis.transactional),
+			tables: {
+				read: [
+					...new Set(analyses.flatMap((a) => a.tables.read)),
+				].sort(),
+				written: [
+					...new Set(analyses.flatMap((a) => a.tables.written)),
+				].sort(),
+			},
+			functions: [
+				...new Set(analyses.flatMap((a) => a.functions)),
+			].sort(),
+			openTargets: analyses.some((analysis) => analysis.openTargets),
 			...(writes !== undefined && { writes }),
 			sources: [
 				...new Set(

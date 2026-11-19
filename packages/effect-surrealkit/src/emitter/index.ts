@@ -9,6 +9,7 @@ export {
 } from './canonical.js';
 export {
 	DocumentError,
+	declaredNames,
 	decodeDocument,
 	type Field,
 	type Kind,

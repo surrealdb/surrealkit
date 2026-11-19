@@ -16,4 +16,6 @@ RETURN $next * 2;`,
 	slots: 5,
 	throws: ["Too large"],
 	throwsAt: { "Too large": [3] },
+	tables: { read: [], written: [] },
+	functions: [],
 } as const);

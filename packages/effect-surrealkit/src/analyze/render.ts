@@ -6,7 +6,13 @@
 import { Data, Effect } from 'effect';
 
 import { type Analysis, analyzeSync } from './analyze.js';
-import { AnalyzeError, type HoleDelimiters } from './lexer.js';
+import {
+	AnalyzeError,
+	type HoleDelimiters,
+	holeDelimiters,
+	lex,
+} from './lexer.js';
+import { analyzeTargets } from './targets.js';
 
 /** First line of every module {@link renderStatementModules} renders. */
 export const STATEMENTS_MARK =
@@ -34,6 +40,19 @@ export interface StatementSourceFile {
 export interface StatementScope {
 	readonly name: string;
 	readonly files: ReadonlyArray<StatementSourceFile>;
+	/**
+	 * The tables and custom functions the schema declares. When given, a
+	 * table or function a file of this scope names that is not declared, and
+	 * that the same text does not create with `DEFINE TABLE` or `DEFINE
+	 * FUNCTION`, is a problem. Names behind an open target are not checked.
+	 */
+	readonly declared?: DeclaredNames;
+}
+
+/** The tables and custom functions (`fn::…`) a schema declares. */
+export interface DeclaredNames {
+	readonly tables: ReadonlyArray<string>;
+	readonly functions: ReadonlyArray<string>;
 }
 
 export interface RenderStatementModulesInput {
@@ -67,9 +86,11 @@ export interface StatementWarning {
  * file (`line`, `column` and `code` set). `name`: the file name is not an
  * identifier, is a reserved word, or differs only in case from another in
  * its scope. `scope`: the same for the scope name (`file` absent).
+ * `undeclared`: the file names a table or function its scope's `declared`
+ * names do not include (`line` of the first use set).
  */
 export interface StatementProblem {
-	readonly kind: 'analysis' | 'name' | 'scope';
+	readonly kind: 'analysis' | 'name' | 'scope' | 'undeclared';
 	readonly scope: string;
 	readonly file?: string;
 	readonly line?: number;
@@ -153,6 +174,13 @@ const renderConstant = (
 		`slots: ${analysis.slots}`,
 		`throws: ${list(analysis.throws)}`,
 		`throwsAt: ${lines(analysis.throwsAt)}`,
+		...(complete
+			? [
+					`tables: { read: ${list(analysis.tables.read)}, written: ${list(analysis.tables.written)} }`,
+					`functions: ${list(analysis.functions)}`,
+					...(analysis.openTargets ? ['openTargets: true'] : []),
+				]
+			: []),
 	];
 	return [
 		`/** \`${file}\`: a ${what}. */`,
@@ -160,6 +188,40 @@ const renderConstant = (
 		...fields.map((field) => `\t${field},`),
 		'} as const);',
 	].join('\n');
+};
+
+/**
+ * The tables and functions `sql` names that `declared` does not include and
+ * the text does not define itself, each at the line of its first use.
+ */
+const undeclared = (
+	sql: string,
+	declared: DeclaredNames,
+	holes: HoleDelimiters | undefined,
+): ReadonlyArray<{ readonly line: number; readonly message: string }> => {
+	const targets = analyzeTargets(lex(sql, holeDelimiters(holes)).tokens);
+	const tables = new Set([...declared.tables, ...targets.definedTables]);
+	const functions = new Set([
+		...declared.functions,
+		...targets.definedFunctions,
+	]);
+	const found: Array<{ line: number; message: string }> = [];
+	const check = (
+		at: ReadonlyMap<string, number>,
+		known: ReadonlySet<string>,
+		what: string,
+	) => {
+		for (const [name, line] of at)
+			if (!known.has(name))
+				found.push({
+					line,
+					message: `${what} \`${name}\`, which the schema does not declare`,
+				});
+	};
+	check(targets.readAt, tables, 'reads table');
+	check(targets.writtenAt, tables, 'writes table');
+	check(targets.functionsAt, functions, 'calls function');
+	return found.sort((a, b) => a.line - b.line);
 };
 
 /**
@@ -176,7 +238,12 @@ export const renderStatementModulesSync = (
 	const scopes = new Map<string, string>();
 	const names = new Map<string, Map<string, string>>();
 	const sources = input.scopes.flatMap((scope) =>
-		scope.files.map((file) => ({ scope: scope.name, ...file })),
+		scope.files.map((file) => ({
+			scope: scope.name,
+			declared: scope.declared,
+			name: file.name,
+			sql: file.sql,
+		})),
 	);
 	for (const source of sources.sort((a, b) =>
 		a.scope === b.scope
@@ -242,6 +309,21 @@ export const renderStatementModulesSync = (
 				continue;
 			}
 			throw error;
+		}
+		if (source.declared !== undefined) {
+			for (const problem of undeclared(
+				source.sql,
+				source.declared,
+				input.holes,
+			))
+				problems.push({
+					kind: 'undeclared',
+					scope: source.scope,
+					file: source.name,
+					line: problem.line,
+					message: problem.message,
+					text: `${file}:${problem.line}: ${problem.message}`,
+				});
 		}
 		for (const diagnostic of analysis.diagnostics) {
 			const at = {
@@ -320,7 +402,8 @@ export const renderStatementModulesSync = (
  * for each scope, then `index.ts`, exactly as `effect-surrealkit statements`
  * writes them, with the analyzer's warnings. Fails with every problem: a
  * file the analyzer rejects, an invalid, reserved or case-colliding file
- * name, an invalid scope name. Reads and writes nothing.
+ * name, an invalid scope name, and, for a scope with `declared` names, a
+ * table or function the schema does not declare. Reads and writes nothing.
  */
 export const renderStatementModules = (
 	input: RenderStatementModulesInput,

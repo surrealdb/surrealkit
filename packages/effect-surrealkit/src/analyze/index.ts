@@ -26,6 +26,7 @@ export {
 	renderPinnedStatements,
 } from './pin.js';
 export {
+	type DeclaredNames,
 	type RenderStatementModulesInput,
 	renderStatementModules,
 	renderStatementModulesSync,

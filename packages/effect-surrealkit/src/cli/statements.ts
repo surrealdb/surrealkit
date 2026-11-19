@@ -11,12 +11,16 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import { join, relative, resolve, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 
+import { Effect } from 'effect';
+
 import { type HoleDelimiters, holeDelimiters } from '../analyze/lexer.js';
 import {
+	type DeclaredNames,
 	renderStatementModulesSync,
 	STATEMENTS_MARK,
 	StatementModulesError,
 } from '../analyze/render.js';
+import { declaredNames, decodeDocument } from '../emitter/document.js';
 import { apply, compareWith, type OutputFile, problemsOf } from './files.js';
 import { type CliIo, UsageError } from './io.js';
 
@@ -37,6 +41,9 @@ Options:
   --hole-close <text>        The text that closes a template hole (default __);
                              a hole is open, a name matching [A-Z][A-Z0-9_]*,
                              then close
+  --schema <file>            A SurrealKit schema document v2 (JSON): every table
+                             and fn:: function a file names must be declared
+                             in it or defined by the same file
   --help                     Show this help
 
 Exit codes: 0 success, 1 generation failed or output out of date, 2 bad arguments.
@@ -111,6 +118,8 @@ export interface StatementsOptions {
 	readonly importExtension: '.js' | '.ts';
 	/** The literal delimiters of a hole; default `__` and `__`. */
 	readonly holes?: HoleDelimiters;
+	/** The names every scope's files may use; see `StatementScope`. */
+	readonly declared?: DeclaredNames;
 }
 
 /**
@@ -131,10 +140,15 @@ export const renderStatements = (
 		files.push({ name, sql });
 		scopes.set(scope, files);
 	}
+	const { declared, ...rest } = options;
 	try {
 		const { files, warnings } = renderStatementModulesSync({
-			scopes: [...scopes].map(([name, files]) => ({ name, files })),
-			...options,
+			scopes: [...scopes].map(([name, files]) => ({
+				name,
+				files,
+				...(declared !== undefined && { declared }),
+			})),
+			...rest,
 		});
 		return { files, warnings: warnings.map((warning) => warning.text) };
 	} catch (error) {
@@ -200,6 +214,7 @@ export const statements = async (
 			'import-extension': { type: 'string' },
 			'hole-open': { type: 'string' },
 			'hole-close': { type: 'string' },
+			schema: { type: 'string' },
 			help: { type: 'boolean' },
 		},
 		strict: true,
@@ -237,9 +252,30 @@ export const statements = async (
 	const out = resolve(io.cwd, values.out);
 	if (inside(input, out))
 		throw new UsageError('--out must be outside --input');
+	let declared: DeclaredNames | undefined;
+	if (values.schema !== undefined) {
+		const path = resolve(io.cwd, values.schema);
+		let json: unknown;
+		try {
+			json = JSON.parse(await readFile(path, 'utf8'));
+		} catch (error) {
+			throw new UsageError(
+				`--schema ${values.schema}: ${(error as Error).message}`,
+			);
+		}
+		const decoded = await Effect.runPromise(
+			Effect.result(decodeDocument(json)),
+		);
+		if (decoded._tag === 'Failure')
+			throw new UsageError(
+				`--schema ${values.schema}: ${decoded.failure.message}`,
+			);
+		declared = declaredNames(decoded.success);
+	}
 	const options: StatementsOptions = {
 		importExtension,
 		...(holes !== undefined && { holes }),
+		...(declared !== undefined && { declared }),
 	};
 
 	const once = async (): Promise<number> => {
