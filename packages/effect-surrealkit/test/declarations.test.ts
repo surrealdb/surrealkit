@@ -34,6 +34,7 @@ const statements = `import { Effect, Schema } from 'effect';
 import * as SurrealSchema from 'effect-surrealkit';
 import { analyze, fill, text } from 'effect-surrealkit/analyze';
 import { bind, run, transaction } from 'effect-surrealkit/client';
+import { math, string } from 'effect-surrealkit/functions';
 import { expectIndex, fake, fakeLayer, memoryLayer, result } from 'effect-surrealkit/testing';
 import {
 	call,
@@ -96,6 +97,15 @@ export const searched = search.evaluate(
 		{ limit: 10 },
 	),
 );
+
+export const shouting = select(PersonTable)
+	.where((row) => string.isEmail(row.email))
+	.project((row) => ({
+		loud: string.uppercase(row.name),
+		size: string.len(row.name),
+		tau: math.tau,
+	}))
+	.build();
 
 export const rename = update(PersonTable, param('id', PersonId))
 	.merge(param('changes', PersonMerge))
@@ -214,8 +224,8 @@ describe('declaration emit in a pnpm consumer', () => {
 
 		cpSync(goldenDir('corpus'), join(root, 'src'), { recursive: true });
 		// A consumer module that exports statements and an effect built from
-		// them, through the package's `statement`, `client`, `analyze` and
-		// `testing` subpaths (with no `@surrealdb/node` installed).
+		// them, through the package's `statement`, `functions`, `client`,
+		// `analyze` and `testing` subpaths (with no `@surrealdb/node` installed).
 		writeFileSync(join(root, 'src', 'statements.ts'), statements);
 		writeFileSync(
 			join(root, 'tsconfig.json'),

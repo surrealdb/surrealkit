@@ -20,6 +20,10 @@
 			"types": "./dist/statement.d.ts",
 			"import": "./dist/statement.js"
 		},
+		"./functions": {
+			"types": "./dist/functions.d.ts",
+			"import": "./dist/functions.js"
+		},
 		"./client": {
 			"types": "./dist/client.d.ts",
 			"import": "./dist/client.js"

@@ -3,7 +3,8 @@
  * text with the analyzer, and code that only uses the builders must not
  * carry the analyzer with it. Builder and client code never carries the
  * testing helpers, which import `@surrealdb/node` only when a memory
- * database starts.
+ * database starts, nor the built-in function catalogue, of which code
+ * keeps only the families it imports.
  */
 import { createRequire } from 'node:module';
 import { join } from 'node:path';
@@ -27,6 +28,7 @@ const source = (...path: ReadonlyArray<string>) =>
 const statement = source('statement', 'index.ts');
 const client = source('client', 'index.ts');
 const testing = source('testing', 'index.ts');
+const functions = source('functions', 'index.ts');
 
 const bundle = async (contents: string): Promise<string> => {
 	const result = await build({
@@ -47,6 +49,8 @@ const bundle = async (contents: string): Promise<string> => {
 const analyzerMarker = /returnInTransaction|unterminatedStatement/u;
 // Text only the testing helpers have, and the engine they import.
 const testingMarker = /the scripted client has no reply|@surrealdb\/node/u;
+// Text only the built-in function catalogue has.
+const catalogueMarker = /string::is_email|vector::distance::euclidean/u;
 
 describe('bundling the statement module', () => {
 	it('leaves the analyzer out of code that only uses builders', async () => {
@@ -76,6 +80,26 @@ describe('bundling the statement module', () => {
 		);
 		expect(text).toMatch(/import\(\s*"@surrealdb\/node"\s*\)/u);
 		expect(text).not.toMatch(/^\s*import[^(]*["']@surrealdb\/node["']/mu);
+	});
+
+	it('leaves the built-in function catalogue out of builder-only code', async () => {
+		const text = await bundle(
+			`import { eq, make, param, select } from ${JSON.stringify(statement)};
+			import { layer, run } from ${JSON.stringify(client)};
+			console.log(eq, make, param, select, layer, run);`,
+		);
+		expect(text).toContain('SELECT');
+		expect(text).not.toMatch(catalogueMarker);
+		expect(text).not.toContain('generate-functions');
+	});
+
+	it('keeps only the families code imports from the catalogue', async () => {
+		const text = await bundle(
+			`import { string } from ${JSON.stringify(functions)};
+			console.log(string.isEmail);`,
+		);
+		expect(text).toContain('string::is_email');
+		expect(text).not.toContain('vector::distance::euclidean');
 	});
 
 	it('keeps it for code that declares parts', async () => {
