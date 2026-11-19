@@ -1088,6 +1088,106 @@ not prove that a row changed: permissions and conditional writes can yield
 empty results.
 
 
+### Record links and graph traversal
+
+Links, graph steps, recursive paths and `FETCH` are typed from the store
+registry the emitter writes (`_store.ts`): a link's target and a step's
+relation are found there by name, and nothing else describes them.
+
+```ts
+import * as SurrealSchema from 'effect-surrealkit';
+import { collect, edges, eq, follow, outgoing, param, select } from 'effect-surrealkit/statement';
+import { DocTable, MemberOfTable, PersonTable, store } from './generated/surreal/index.js';
+
+const byOwner = select(DocTable)
+  .where((row) => eq(follow(store, row.owner).name, param('owner', SurrealSchema.String)))
+  .project((row) => ({
+    title: row.title,
+    teams: outgoing(store, row.owner, 'member_of', {
+      where: (edge) => eq(edge.role, param('role', MemberOfTable.fields.role)),
+    }),
+    roles: follow(store, edges(outgoing(store, row.owner, 'member_of'))).role,
+    reach: follow(store, collect(row.owner, (node) => outgoing(store, node, 'knows'))).name,
+  }))
+  .build();
+// SELECT title AS title, owner->(member_of WHERE role = $role)->? AS teams,
+//   owner->member_of.role AS roles, owner.{..+collect}(->knows->?).name AS reach
+//   FROM ⟨doc⟩ WHERE owner.name = $owner;
+
+const withManager = select(PersonTable).fetch(store, 'manager', 'watchers').build();
+// SELECT * FROM ⟨person⟩ FETCH manager, watchers;
+```
+
+| Function | SurrealQL | Yields |
+| --- | --- | --- |
+| `follow(store, link).field` | `manager.name`, `watchers.name` | each field of the target, possibly NONE; a list through a list of links |
+| `rows(store, link)` | `manager.*` | the target's row (its table's select schema), or a list of them |
+| `destructure(store, link, (target) => ({ … }))` | `manager.{ n: name }` | the projected object, or a list of them |
+| `outgoing(store, from, 'member_of', { where? })` | `id->member_of->?`, `id->(member_of WHERE …)->?` | the ids on the relation's `out` side, as a list |
+| `incoming(store, from, 'member_of', { where? })` | `id<-member_of<-?` | the ids on its `in` side |
+| `both(store, from, 'knows', { where? })` | `id<->knows<->?` | both endpoints of each edge, `from` included once per edge |
+| `edges(step)` | `id->member_of` | the ids of the edges the step walks, for `follow` and `rows` |
+| `recurse(from, { min, max }, (node) => step)` | `id.{1..3}(->knows->?)` | the records the last repetition that reached any record reached |
+| `collect(from, step, { min?, max?, inclusive? })` | `id.{..+collect}(->knows->?)` | every distinct record reached (`+inclusive` adds `from`) |
+| `shortest(from, to, step, { inclusive? })` | `id.{..+shortest=$to}(->knows->?)` | the records of a shortest path to `to`, or NONE |
+| `select(table).fetch(store, ...paths)` | `… FETCH manager, owner.team` | each named link replaced by its target's row |
+
+What the types say, and the engine behaviour behind it (pinned in
+`test/conformance.test.ts` on SurrealDB 3.3.4 and 4.0.1):
+
+- **A link may not lead anywhere.** SurrealDB answers NONE for a field read
+  through a link whose record is missing or the session may not read, and
+  nothing stops a `record<t>` field holding such a link, so every field
+  `follow` yields may be NONE; through a list of links each element may be.
+  `rows` and `destructure` of one link may be NONE for the same reason.
+- **Several tables, no table.** A link to several tables (`record<org | team>`)
+  exposes the fields every target has, with the codecs of all of them (a
+  field only some have reads NONE on the others); a link to any table
+  (`record`) exposes none and is a compile error.
+- **Steps.** A step is legal only from a record of a table the relation
+  accepts on that side; any other start is a compile error naming the table.
+  A step yields a list; chained steps (`id->knows->?->knows->?`) flatten into
+  one list with duplicates kept. From a list of links, or from the records
+  of a recursive path, SurrealDB yields one list per record instead, so a
+  step refuses to start there. From an optional link the list itself may be
+  NONE.
+- **Edges and missing records.** The engine leaves out of a step's list the
+  records the session may not read (their edges stay readable). An
+  `ENFORCED` relation cannot point at a missing record, so its records are
+  rows, never NONE; one that is not enforced can (`RELATE` to a missing
+  record succeeds), and its records read as NONE where they are missing.
+  Deleting a record deletes its edges.
+- **Filters and destructuring read the edge or the target.** Inside a step's
+  `where` and a `destructure` callback, field paths are relative to the edge
+  or target. A field of the outer row would read the edge's or target's
+  field of the same name, which the types cannot see: bind such a value with
+  `param`.
+- **Recursion.** A recursive path repeats a step that leads back to the table
+  it starts from, at depths 1 to 256 (the engine refuses 0 and 257 and
+  answers NONE for a reversed range, so the builder refuses all three).
+  `{min..max}` keeps the records of the last repetition that reached any,
+  and is empty when fewer than `min` repetitions reach a record; `collect`
+  keeps each record once; `shortest` is NONE when `to` cannot be reached.
+- **FETCH.** A path names a field of what the select returns, the stored row
+  or the projection's aliases (`SELECT manager AS boss … FETCH manager`
+  fetches nothing), so `fetch` comes after `project`, which refuses to
+  follow it, and `SELECT VALUE` takes none. A nested path (`owner.manager`)
+  fetches its prefix too. A fetched link becomes `field?: Row | undefined`,
+  absent where the record is missing or unreadable; a fetched list of links
+  becomes a list of `Row | undefined`. Rows decode with the target's
+  generated select schema, the row a privileged reader gets; for a
+  restricted session a field its permissions hide is absent from the
+  fetched record, as from `SELECT *`.
+- **SurrealDB 3 and 4 differ** on a link to a record of a table that does
+  not exist: 3.3 reads NONE, 4.0 fails the statement ("The table … does not
+  exist"). A link typed from the store always names a table of the store.
+
+Not covered yet: a step to one table of several (`->member_of->team`),
+several relations in one step (`->(likes, follows)->`), a filter on the
+records a step reaches (`->member_of->(team WHERE …)`), `+path`, a step as
+the subject of a select (`SELECT … FROM $id->knows->?`), ordering by a
+field read through a link, and `FETCH` inside a step.
+
 ### What the statements do not know
 
 - **Permissions.** A generated `select` schema is the row a privileged
@@ -1115,11 +1215,12 @@ empty results.
 - **Authored text.** The analyzer derives a part's names, result count and
   messages, not its result type: a result codec that does not match the
   script fails when it runs, not when it compiles.
-- **Coverage.** `FETCH`, graph traversal, live queries and views have no
-  typed builder yet; use `unsafeExpr` or authored SurrealQL. `ON DUPLICATE
-  KEY UPDATE` takes plain assignments only (no `+=`), and an aggregate takes
-  a field, not an expression over fields. `ORDER BY` a score or distance
-  alias is not expressible yet ([Search](#search)).
+- **Coverage.** Live queries and views have no typed builder yet; use
+  `unsafeExpr` or authored SurrealQL. `ON DUPLICATE KEY UPDATE` takes plain
+  assignments only (no `+=`), and an aggregate takes a field, not an
+  expression over fields. `ORDER BY` a score or distance alias is not
+  expressible yet ([Search](#search)). For graph traversal, see [what is not
+  covered yet](#record-links-and-graph-traversal).
 
 The engine suite (`test/statement-engine.test.ts`) runs every builder against
 the corpus schema and the modules generated from it, and passes on SurrealDB
