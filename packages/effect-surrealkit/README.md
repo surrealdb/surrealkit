@@ -1219,8 +1219,10 @@ What the types say, and the engine behaviour behind it (pinned in
   keeps each record once; `shortest` is NONE when `to` cannot be reached.
 - **FETCH.** A path names a field of what the select returns, the stored row
   or the projection's aliases (`SELECT manager AS boss … FETCH manager`
-  fetches nothing), so `fetch` comes after `project`, which refuses to
-  follow it, and `SELECT VALUE` takes none. A nested path (`owner.manager`)
+  fetches nothing), so `fetch` comes after `project`, and `SELECT VALUE`
+  takes none: a projection, `value`, `omit`, `split` or grouping after
+  `fetch` is a compile error that says so (``call `project` before
+  `fetch` …``). A nested path (`owner.manager`)
   fetches its prefix too. A fetched link becomes `field?: Row | undefined`,
   absent where the record is missing or unreadable; a fetched list of links
   becomes a list of `Row | undefined`. Rows decode with the target's

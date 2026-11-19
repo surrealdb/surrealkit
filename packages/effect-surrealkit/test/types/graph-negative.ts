@@ -157,4 +157,15 @@ export const rejectedFetches = () => {
 		.project((row) => ({ boss: row.manager }))
 		// @ts-expect-error [fetch/projection-has-no-such-alias] FETCH names the projection's aliases
 		.fetch(store, 'manager');
+	select(PersonTable)
+		.fetch(store, 'manager')
+		// @ts-expect-error [fetch/project-after] a projection comes before FETCH
+		.project((row) => ({ name: row.name }));
+	select(PersonTable)
+		.fetch(store, 'manager')
+		.where((row) => eq(row.name, 'Ann'))
+		// @ts-expect-error [fetch/value-after] SELECT VALUE takes no FETCH, before or after a condition
+		.value((row) => row.name);
+	// @ts-expect-error [fetch/group-after] grouping comes before FETCH
+	select(PersonTable).fetch(store, 'manager').groupAll();
 };

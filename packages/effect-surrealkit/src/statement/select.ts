@@ -650,7 +650,7 @@ export interface Select<
 	>(
 		store: S,
 		...paths: CheckedFetch<Row['Type'], S, Paths>
-	) => Select<T, P, Fetched<Row, S, Paths>, Only>;
+	) => FetchedSelect<T, P, Fetched<Row, S, Paths>, Only>;
 
 	/** This query as a parenthesised subquery of another expression. */
 	readonly toExpr: () => Expr<SelectResult<Row, Only>, P>;
@@ -661,6 +661,77 @@ export interface Select<
 	 * projected expression or a bound count it may call a function that
 	 * writes, so what it writes is unknown unless `options.writes` says.
 	 */
+	readonly build: (
+		name?: string,
+		options?: { readonly writes?: boolean },
+	) => Statement<Simplify<P>, SelectResult<Row, Only>>;
+}
+
+/** Why a method that changes what a select returns cannot follow `fetch`. */
+export type AfterFetch<M extends string> =
+	`call \`${M}\` before \`fetch\`: FETCH names fields of what the select returns`;
+
+/**
+ * A `SELECT … FETCH` under construction. FETCH paths name fields of what the
+ * select returns, so what changes that (a projection, `SELECT VALUE`, OMIT,
+ * SPLIT, grouping) comes before `fetch`: here each is a compile error whose
+ * message says so.
+ */
+export interface FetchedSelect<
+	T extends PureTable,
+	P extends Params,
+	Row extends Codec,
+	Only extends boolean,
+> {
+	/** Adds a condition. Several `where` calls must all hold. */
+	readonly where: <P2 extends Params>(
+		predicate: (row: RowExprs<T>) => Condition<P2>,
+	) => FetchedSelect<T, P & P2, Row, Only>;
+	/** Adds a sort key, a field path of the stored row. */
+	readonly orderBy: <K>(
+		key: (row: RowExprs<T>) => OrderKey<K>,
+		direction?: 'ASC' | 'DESC',
+	) => FetchedSelect<T, P, Row, Only>;
+	/** Adds a sort key that is a name the result row holds. */
+	readonly orderByAlias: <const A extends string>(
+		alias: A extends OrderAlias<Row>
+			? A
+			: `\`${A}\` is not a name the result row holds`,
+		direction?: 'ASC' | 'DESC',
+	) => FetchedSelect<T, P, Row, Only>;
+	/** `LIMIT`: at most this many rows. */
+	readonly limit: <const L extends Count>(
+		rows: L,
+	) => FetchedSelect<T, P & OperandParams<L>, Row, Only>;
+	/** `START`: skip this many rows. */
+	readonly start: <const L extends Count>(
+		rows: L,
+	) => FetchedSelect<T, P & OperandParams<L>, Row, Only>;
+	/** `FROM ONLY`: one row, or NONE when there is none. */
+	readonly only: () => FetchedSelect<T, P, Row, true>;
+	/** `FETCH` more paths. */
+	readonly fetch: <
+		S extends GraphStore,
+		const Paths extends readonly [string, ...ReadonlyArray<string>],
+	>(
+		store: S,
+		...paths: CheckedFetch<Row['Type'], S, Paths>
+	) => FetchedSelect<T, P, Fetched<Row, S, Paths>, Only>;
+	/** Refused: a projection comes before `fetch`. */
+	readonly project: (fields: AfterFetch<'project'>) => never;
+	/** Refused: `SELECT VALUE` takes no FETCH. */
+	readonly value: (pick: AfterFetch<'value'>) => never;
+	/** Refused: OMIT comes before `fetch`. */
+	readonly omit: (field: AfterFetch<'omit'>) => never;
+	/** Refused: SPLIT comes before `fetch`. */
+	readonly split: (field: AfterFetch<'split'>) => never;
+	/** Refused: grouping comes before `fetch`. */
+	readonly groupBy: (keys: AfterFetch<'groupBy'>) => never;
+	/** Refused: grouping comes before `fetch`. */
+	readonly groupAll: (this: AfterFetch<'groupAll'>) => never;
+	/** This query as a parenthesised subquery of another expression. */
+	readonly toExpr: () => Expr<SelectResult<Row, Only>, P>;
+	/** The finished statement, as {@link Select.build}. */
 	readonly build: (
 		name?: string,
 		options?: { readonly writes?: boolean },
@@ -816,7 +887,7 @@ const builder = <
 				...state,
 				fetch,
 				out: fetchedCodec(store, state.base, fetch),
-			});
+			}) as never;
 		},
 		only: () => {
 			if (readsMany(state) && state.limit !== undefined) {

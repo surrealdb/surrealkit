@@ -229,9 +229,11 @@ export {
 	type VectorField,
 } from './search.js';
 export {
+	type AfterFetch,
 	type ArrayFields,
 	type CheckedOmit,
 	type Count,
+	type FetchedSelect,
 	type OmittedRow,
 	type OrderAlias,
 	type RecordSelect,

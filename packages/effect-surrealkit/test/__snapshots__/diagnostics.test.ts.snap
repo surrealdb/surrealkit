@@ -302,6 +302,12 @@ exports[`type diagnostics > fetch/any-table 1`] = `
 ]
 `;
 
+exports[`type diagnostics > fetch/group-after 1`] = `
+[
+  "TS2684: The 'this' context of type 'FetchedSelect<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, NoP...' is not assignable to method's 'this' of type '"call \`groupAll\` before \`fetch\`: FETCH names fields of what the select returns"'.",
+]
+`;
+
 exports[`type diagnostics > fetch/nested-not-a-link 1`] = `
 [
   "TS2345: Argument of type '"manager.name"' is not assignable to parameter of type '"\`manager.name\` is not a record link, so FETCH has nothing to replace"'.",
@@ -320,9 +326,23 @@ exports[`type diagnostics > fetch/not-a-link 1`] = `
 ]
 `;
 
+exports[`type diagnostics > fetch/project-after 1`] = `
+[
+  "TS2345: Argument of type '(row: any) => { name: any; }' is not assignable to parameter of type '"call \`project\` before \`fetch\`: FETCH names fields of what the select returns"'.",
+  "TS7006: Parameter 'row' implicitly has an 'any' type.",
+]
+`;
+
 exports[`type diagnostics > fetch/projection-has-no-such-alias 1`] = `
 [
   "TS2345: Argument of type '"manager"' is not assignable to parameter of type '"\`manager\` is not a field of what the select returns"'.",
+]
+`;
+
+exports[`type diagnostics > fetch/value-after 1`] = `
+[
+  "TS2345: Argument of type '(row: any) => any' is not assignable to parameter of type '"call \`value\` before \`fetch\`: FETCH names fields of what the select returns"'.",
+  "TS7006: Parameter 'row' implicitly has an 'any' type.",
 ]
 `;
 

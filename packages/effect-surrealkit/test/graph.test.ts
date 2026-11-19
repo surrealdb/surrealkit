@@ -527,9 +527,9 @@ describe('FETCH', () => {
 
 	it('refuses a projection after it, SELECT VALUE, and what is not a link', () => {
 		expect(() =>
-			select(PalTable)
-				.fetch(pals, 'next')
-				.project((row) => ({ n: row.n })),
+			untyped(select(PalTable).fetch(pals, 'next').project)(
+				(row: { readonly n: unknown }) => ({ n: row.n }),
+			),
 		).toThrow(/call `project` before `fetch`/);
 		expect(() =>
 			untyped(select(PalTable).value((row) => row.next).fetch)(
@@ -573,7 +573,7 @@ describe('FETCH', () => {
 		expect(() => untyped(fetched.split)('friends')).toThrow(
 			/call `split` before `fetch`/,
 		);
-		expect(() => fetched.groupAll()).toThrow(
+		expect(() => untyped(fetched.groupAll)()).toThrow(
 			/group a SELECT before projecting, ordering, limiting, fetching it/,
 		);
 	});
