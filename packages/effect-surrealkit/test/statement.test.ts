@@ -1552,3 +1552,60 @@ describe('SPLIT and OMIT', () => {
 		);
 	});
 });
+
+describe('valueSlot', () => {
+	const begin = part({ sql: 'BEGIN TRANSACTION;' });
+	const commit = part({ sql: 'COMMIT;' });
+	const value = part({ sql: 'RETURN 1;' });
+
+	it('is the last value-bearing result when the last part is only COMMIT', () => {
+		const statement = sequence(begin, value, commit).define({
+			params: {},
+			result: SurrealSchema.Int,
+		});
+		expect(statement.slots).toBe(3);
+		expect(statement.valueSlot).toBe(2);
+	});
+
+	it('takes the later of two value-bearing parts', () => {
+		const statement = sequence(
+			begin,
+			part({ sql: 'LET $x = 1; RETURN $x;', defines: ['x'], slots: 2 }),
+			part({ sql: 'RETURN $x + 1; COMMIT;', free: ['x'], slots: 2 }),
+		).define({ params: {}, result: SurrealSchema.Int });
+		expect(statement.slots).toBe(5);
+		expect(statement.valueSlot).toBe(4);
+	});
+
+	it('equals slots without control parts', () => {
+		const statement = sequence(
+			part({ sql: 'LET $x = 1;', defines: ['x'] }),
+			part({ sql: 'RETURN $x;', free: ['x'] }),
+		).define({ params: {}, result: SurrealSchema.Int });
+		expect(statement.valueSlot).toBe(statement.slots);
+		const only = sequence(begin, commit).define({
+			params: {},
+			result: Schema.Undefined,
+		});
+		expect(only.valueSlot).toBe(only.slots);
+	});
+
+	it('is checked against the text when a part declares it', () => {
+		expect(
+			part({ sql: 'RETURN 1; COMMIT;', slots: 2, valueSlot: 1 }),
+		).toMatchObject({ valueSlot: 1 });
+		expect(() =>
+			part({ sql: 'RETURN 1; COMMIT;', slots: 2, valueSlot: 2 }),
+		).toThrow(/valueSlot: declared 2/u);
+	});
+
+	it('is slots for builders and make by default', () => {
+		const built = make({
+			sql: 'RETURN 1; RETURN 2;',
+			params: {},
+			result: SurrealSchema.Int,
+			slots: 2,
+		});
+		expect(built.valueSlot).toBe(2);
+	});
+});

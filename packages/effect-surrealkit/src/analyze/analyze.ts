@@ -45,6 +45,13 @@ export interface Analysis {
 	readonly defines: ReadonlyArray<string>;
 	/** Results: one per terminated top-level statement. */
 	readonly slots: number;
+	/**
+	 * The 1-based position, among the results, of the last top-level
+	 * statement that is not `BEGIN`, `COMMIT` or `CANCEL`: the result a
+	 * client decodes. Equal to `slots` without transaction control; 0 for a
+	 * fragment or a text of only control statements.
+	 */
+	readonly valueSlot: number;
 	/** String-literal `THROW` messages, sorted. */
 	readonly throws: ReadonlyArray<string>;
 	/** The lines each message is thrown on. */
@@ -205,6 +212,8 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 	const skip = new Set<number>();
 
 	let slots = 0;
+	let valueSlot = 0;
+	let control = false;
 	let transactional = false;
 	let writes = false;
 	let statementFirst: Token | undefined;
@@ -249,6 +258,8 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 				}
 				returnInTransaction = undefined;
 			}
+			control =
+				word === 'BEGIN' || word === 'COMMIT' || word === 'CANCEL';
 			if (word === 'BEGIN') {
 				transactional = true;
 				inTransaction = true;
@@ -407,6 +418,7 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 							fail('emptyStatement', 'an empty statement', token);
 						}
 						slots++;
+						if (!control) valueSlot = slots;
 						statementFirst = undefined;
 						inDefinition = false;
 					} else {
@@ -546,6 +558,7 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 		free: sorted(free),
 		defines: sorted(root.vars),
 		slots,
+		valueSlot: kind === 'fragment' ? 0 : valueSlot,
 		throws: Object.keys(throwLines),
 		throwsAt: throwLines,
 		holes: sorted(holes),

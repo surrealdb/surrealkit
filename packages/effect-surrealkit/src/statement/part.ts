@@ -48,6 +48,12 @@ export interface Part<
 	readonly free: ReadonlyArray<Free>;
 	readonly defines: ReadonlyArray<Defines>;
 	readonly slots: number;
+	/**
+	 * The 1-based position of the last result that is not `BEGIN`, `COMMIT`
+	 * or `CANCEL`, 0 when there is none. Optional: derived from the text
+	 * when absent, checked against it when declared.
+	 */
+	readonly valueSlot?: number;
 	readonly throws: ReadonlyArray<Throws>;
 	readonly throwsAt?: Readonly<Record<string, ReadonlyArray<number>>>;
 	readonly writes?: boolean;
@@ -152,6 +158,11 @@ const verify = (item: Part, label: string): Analysis => {
 			`slots: declared ${item.slots}, the text returns ${analysis.slots}`,
 		);
 	}
+	if (item.valueSlot !== undefined && item.valueSlot !== analysis.valueSlot) {
+		differences.push(
+			`valueSlot: declared ${item.valueSlot}, the text's value is result ${analysis.valueSlot}`,
+		);
+	}
 	const undeclaredThrows = missingFrom(analysis.throws, item.throws);
 	if (undeclaredThrows.length > 0) {
 		differences.push(
@@ -203,6 +214,8 @@ export const part = <
 	readonly free?: ReadonlyArray<Free>;
 	readonly defines?: ReadonlyArray<Defines>;
 	readonly slots?: number;
+	/** Checked against the text when given; see {@link Part}. */
+	readonly valueSlot?: number;
 	readonly throws?: ReadonlyArray<Throws>;
 	readonly throwsAt?: Readonly<Record<string, ReadonlyArray<number>>>;
 	/**
@@ -221,6 +234,9 @@ export const part = <
 		free: options.free ?? [],
 		defines: options.defines ?? [],
 		slots: options.slots ?? 1,
+		...(options.valueSlot !== undefined && {
+			valueSlot: options.valueSlot,
+		}),
 		throws: options.throws ?? [],
 		...(options.throwsAt !== undefined && { throwsAt: options.throwsAt }),
 		...(options.writes !== undefined && { writes: options.writes }),
@@ -398,12 +414,21 @@ export const sequence = <const Parts extends ReadonlyArray<Part>>(
 			);
 		}
 		const writes = contract.writes ?? derived;
+		const slots = parts.reduce((total, item) => total + item.slots, 0);
+		// The last value-bearing result across the parts; `slots` when none.
+		let valueSlot = slots;
+		let offset = 0;
+		for (const [index, analysis] of analyses.entries()) {
+			if (analysis.valueSlot > 0) valueSlot = offset + analysis.valueSlot;
+			offset += (parts[index] as Part).slots;
+		}
 		return make({
 			name: label,
 			sql: parts.map((item) => item.sql.trim()).join('\n'),
 			params: contract.params as P,
 			result: contract.result,
-			slots: parts.reduce((total, item) => total + item.slots, 0),
+			slots,
+			valueSlot,
 			throws: [
 				...new Set(parts.flatMap((item) => item.throws)),
 			] as ReadonlyArray<ThrownBy<Parts>>,

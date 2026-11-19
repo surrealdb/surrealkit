@@ -1564,3 +1564,51 @@ describe('service', () => {
 		expect(Result.isSuccess(result) && result.success).toBe(9);
 	});
 });
+
+describe('value slot', () => {
+	const committing = make({
+		name: 'committing',
+		writes: false,
+		sql: 'BEGIN; RETURN 7; COMMIT;',
+		params: {},
+		result: SurrealSchema.Int,
+		slots: 3,
+		valueSlot: 2,
+		transactional: true,
+	});
+
+	it('decodes the result at the value slot', async () => {
+		const { client } = fake(async () => [undefined, 7, undefined]);
+		expect(await Effect.runPromise(client.run(committing))).toBe(7);
+	});
+
+	it('refuses a result other than NONE in another slot, naming it', async () => {
+		const error = await failure(
+			fake(async () => [undefined, 7, 'late']).client.run(committing),
+		);
+		expect(error).toBeInstanceOf(StatementDecodeError);
+		expect(error).toMatchObject({ slot: 3 });
+		expect(error.message).toMatch(/result 3 of 3 must be NONE/u);
+
+		const wrong = await failure(
+			fake(async () => [undefined, '7', undefined]).client.run(
+				committing,
+			),
+		);
+		expect(wrong).toMatchObject({ slot: 2 });
+	});
+
+	it('refuses a value slot outside the results', () => {
+		for (const valueSlot of [0, 4, 1.5]) {
+			expect(() =>
+				make({
+					sql: 'BEGIN; RETURN 7; COMMIT;',
+					params: {},
+					result: SurrealSchema.Int,
+					slots: 3,
+					valueSlot,
+				}),
+			).toThrow(RangeError);
+		}
+	});
+});

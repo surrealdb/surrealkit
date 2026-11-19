@@ -334,20 +334,20 @@ const decode = (
 	offset: number,
 	writes: Changes,
 ): Effect.Effect<unknown, StatementDecodeError | StatementEmptyResult> => {
-	const last = offset + statement.slots - 1;
-	for (let slot = offset; slot < last; slot++) {
-		if (results[slot] !== undefined) {
+	const at = offset + statement.valueSlot - 1;
+	for (let slot = offset; slot < offset + statement.slots; slot++) {
+		if (slot !== at && results[slot] !== undefined) {
 			return Effect.fail(
 				new StatementDecodeError({
 					statement: statement.name,
 					slot: slot - offset + 1,
 					committed: writes !== 'none',
-					message: `result ${slot - offset + 1} of ${statement.slots} must be NONE; only the last result of a statement is decoded${committedNote(writes)}`,
+					message: `result ${slot - offset + 1} of ${statement.slots} must be NONE; only result ${statement.valueSlot} of a statement is decoded${committedNote(writes)}`,
 				}),
 			);
 		}
 	}
-	const value = results[last];
+	const value = results[at];
 	if (
 		statement.nonEmpty === true &&
 		(value === undefined ||
@@ -357,7 +357,7 @@ const decode = (
 		return Effect.fail(
 			new StatementEmptyResult({
 				statement: statement.name,
-				slot: statement.slots,
+				slot: statement.valueSlot,
 				message: `\`${statement.name}\` returned nothing, although it returns a row whenever it applies: the session may lack permission for it (SurrealDB reports a denied write as an empty result, without an error), and it wrote nothing`,
 			}),
 		);
@@ -369,7 +369,7 @@ const decode = (
 			(error) =>
 				new StatementDecodeError({
 					statement: statement.name,
-					slot: statement.slots,
+					slot: statement.valueSlot,
 					committed: writes !== 'none',
 					message: `${error.message}${committedNote(writes)}`,
 				}),

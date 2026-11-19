@@ -1120,6 +1120,13 @@ A transaction takes statements paired with their input by `bind`, which
 checks the input against the statement's bindings; a hand-built
 `{ statement, input }` does not compile.
 
+A statement decodes one result, at its `valueSlot`, and every other result
+of its text must be NONE. `valueSlot` is the last result unless the text
+ends with transaction control: a script written `BEGIN; guards…; <value>;
+COMMIT;` decodes the result before `COMMIT`, since SurrealDB answers NONE
+for `BEGIN`, `COMMIT` and `CANCEL`. `sequence` derives the slot from its
+parts, and `make` takes it as `valueSlot` (default: the last).
+
 `layer(db)` takes an SDK connection or session, and statements run with that
 session's authentication. `make(db)` returns the same client as a plain
 value, for an application that names its own services, one per session.

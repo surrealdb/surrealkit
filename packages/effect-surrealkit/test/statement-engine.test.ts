@@ -606,6 +606,43 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 		expect(await ok(client.run(teams, { name: 'ghost' }))).toEqual([]);
 	});
 
+	it('returns the value before COMMIT of a script that manages its transaction', async () => {
+		await engine.db.query(
+			'DEFINE TABLE slot_entry SCHEMAFULL; DEFINE FIELD n ON slot_entry TYPE int;',
+		);
+		const record = sequence(
+			part({ sql: 'BEGIN TRANSACTION;' }),
+			part({
+				sql: "IF $n < 0 { THROW 'Negative' };",
+				free: ['n'],
+				throws: ['Negative'],
+			}),
+			part({
+				sql: 'CREATE ONLY slot_entry SET n = $n RETURN VALUE n;',
+				free: ['n'],
+			}),
+			part({ sql: 'COMMIT TRANSACTION;' }),
+		).define({
+			name: 'record',
+			params: { n: SurrealSchema.Int },
+			result: SurrealSchema.Int,
+		});
+		expect(record.valueSlot).toBe(3);
+		const stored = () =>
+			engine.db.query('SELECT VALUE n FROM slot_entry ORDER BY n');
+
+		expect(await ok(client.run(record, { n: 5 }))).toBe(5);
+		expect(await stored()).toEqual([[5]]);
+
+		const thrown = await failure(client.run(record, { n: -1 }));
+		expect(thrown).toBeInstanceOf(StatementThrown);
+		expect(thrown).toMatchObject({
+			statement: 'record',
+			reason: 'Negative',
+		});
+		expect(await stored()).toEqual([[5]]);
+	});
+
 	it('joins statements without a terminator of their own', async () => {
 		const one = make({
 			sql: 'RETURN 1',

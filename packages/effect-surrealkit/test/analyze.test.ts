@@ -511,3 +511,36 @@ describe('fill', () => {
 		});
 	});
 });
+
+describe('valueSlot', () => {
+	it('equals slots for a text with no transaction control', () => {
+		const a = analyzeSync('LET $x = 1; IF $x > 2 { THROW "big" }; $x;');
+		expect(a.valueSlot).toBe(a.slots);
+		expect(a.valueSlot).toBe(3);
+	});
+
+	it('is the last statement before COMMIT', () => {
+		expect(
+			analyzeSync('BEGIN; LET $x = 1; RETURN $x; COMMIT;').valueSlot,
+		).toBe(3);
+		expect(
+			analyzeSync(
+				'BEGIN TRANSACTION; CREATE t:1; RETURN 2; COMMIT TRANSACTION;',
+			).valueSlot,
+		).toBe(3);
+		expect(analyzeSync('begin; 1; commit transaction;').valueSlot).toBe(2);
+		expect(analyzeSync('BEGIN; 1; CANCEL;').valueSlot).toBe(2);
+	});
+
+	it('is 0 for only control statements and for a fragment', () => {
+		expect(analyzeSync('COMMIT;').valueSlot).toBe(0);
+		expect(analyzeSync('BEGIN TRANSACTION; CANCEL;').valueSlot).toBe(0);
+		expect(analyzeSync('$a + 1').valueSlot).toBe(0);
+	});
+
+	it('does not count COMMIT inside a string or a comment as control', () => {
+		expect(analyzeSync("RETURN 'COMMIT';").valueSlot).toBe(1);
+		expect(analyzeSync('BEGIN; 1; /* COMMIT; */ 2;').valueSlot).toBe(3);
+		expect(analyzeSync('BEGIN; 1; -- COMMIT;\n2;').valueSlot).toBe(3);
+	});
+});

@@ -74,9 +74,13 @@ export const StatementTypeId = '~effect-surrealkit/Statement';
  * - `sql`: the SurrealQL text, one or more statements.
  * - `params`: the codec of every binding the text reads. Values are encoded
  *   through them before anything is sent.
- * - `result`: decodes the result of the last statement of the text.
+ * - `result`: decodes the result at `valueSlot`.
  * - `slots`: how many results the text returns, one per top-level statement.
- *   Every one but the last must be NONE (`LET`, guards).
+ *   Every one but the one at `valueSlot` must be NONE (`LET`, guards,
+ *   `BEGIN`, `COMMIT`).
+ * - `valueSlot`: the 1-based position of the result `result` decodes,
+ *   `slots` unless the text ends with transaction control (`sequence`
+ *   derives it; `make` takes it as declared).
  * - `throws`: the `THROW` messages the text can raise, which a client
  *   surfaces as a typed error rather than a request failure.
  * - `defines`: the names the text `LET`s at the top level. Statements in one
@@ -112,6 +116,7 @@ export interface Statement<
 	readonly params: P;
 	readonly result: R;
 	readonly slots: number;
+	readonly valueSlot: number;
 	readonly throws: ReadonlyArray<Throws>;
 	readonly defines: ReadonlyArray<string>;
 	readonly transactional: boolean;
@@ -217,6 +222,15 @@ const assertStatement = (statement: AnyStatement): void => {
 	if (!Number.isInteger(statement.slots) || statement.slots < 1) {
 		throw new RangeError(
 			`statement \`${statement.name}\` returns ${statement.slots} results; a statement returns at least one`,
+		);
+	}
+	if (
+		!Number.isInteger(statement.valueSlot) ||
+		statement.valueSlot < 1 ||
+		statement.valueSlot > statement.slots
+	) {
+		throw new RangeError(
+			`statement \`${statement.name}\` decodes result ${statement.valueSlot}, outside its ${statement.slots} results`,
 		);
 	}
 	for (const name of Object.keys(statement.params)) assertBindingName(name);
@@ -347,6 +361,8 @@ export const make = <
 	readonly params: P;
 	readonly result: R;
 	readonly slots?: number;
+	/** The 1-based result `result` decodes, in `1..slots`. Default `slots`. */
+	readonly valueSlot?: number;
 	readonly throws?: ReadonlyArray<Throws>;
 	/** The names the text `LET`s at the top level. Default none. */
 	readonly defines?: ReadonlyArray<string>;
@@ -373,6 +389,7 @@ export const make = <
 		params: withoutRefs(options.params),
 		result: options.result,
 		slots: options.slots ?? 1,
+		valueSlot: options.valueSlot ?? options.slots ?? 1,
 		throws: options.throws ?? [],
 		defines: options.defines ?? [],
 		transactional: options.transactional ?? false,
