@@ -529,6 +529,123 @@ leaves out. Sets are not split.
 keys still read them. A projection names the fields it keeps instead, so
 the two do not combine. The conformance suite pins both clauses.
 
+### Blocks
+
+`block()` writes a guarded, branching script in TypeScript instead of
+SurrealQL text, and builds it into an ordinary statement: static text, a
+codec per binding, a result codec derived from what the branches return,
+and the `THROW` messages as typed `throws`.
+
+```ts
+import { block, call, create, eq, lt, ne, object, param, select, update } from 'effect-surrealkit/statement';
+
+const amount = param('amount', SurrealSchema.Int);
+
+export const pay = block()
+  .let('wallet', () =>
+    select(WalletTable, param('wallet_id', WalletId)).forUpdate().only().build())
+  .throwIfNone('wallet', 'Wallet not found')          // later steps read $wallet without NONE
+  .throwIf(($) => ne($.wallet.owner, param('payer', AccountId)), 'Not your wallet')
+  .let('key', ($) => call(fn_payment_key, $.wallet.id, param('request', SurrealSchema.String)))
+  .let('previous', ($) =>
+    select(PaymentTable).where((row) => eq(row.key, $.key)).only().build())
+  .ifNotNone('previous', (arm) =>
+    arm.return(($) => ({ kind: 'replayed', payment: $.previous.id, amount: $.previous.amount })))
+  .elseIf(($) => $.wallet.frozen, (arm) => arm.throw('Wallet is frozen'))
+  .elseIf(($) => lt($.wallet.balance, amount), (arm) =>
+    arm.return(($) => ({ kind: 'declined', balance: $.wallet.balance })))
+  .else((arm) =>
+    arm
+      .let('balance', ($) => call(fn_debit, $.wallet.balance, amount))
+      .let('payment', ($) =>
+        create(PaymentTable).content(object({ wallet: $.wallet.id, amount, key: $.key })).build())
+      .do(($) =>
+        update(WalletTable, $.wallet.id).merge(object({ balance: $.balance })).returning('none').build())
+      .return(($) => ({ kind: 'paid', payment: $.payment.id, balance: $.balance })))
+  .build('pay');
+
+// Result<typeof pay>:
+//   | { readonly kind: 'replayed'; readonly payment: PaymentId; readonly amount: number }
+//   | { readonly kind: 'declined'; readonly balance: number }
+//   | { readonly kind: 'paid'; readonly payment: PaymentId; readonly balance: number }
+// Thrown<typeof pay>: 'Wallet not found' | 'Not your wallet' | 'Wallet is frozen'
+// Input: { wallet_id: WalletId; payer: AccountId; request: string; amount: number }
+```
+
+```sql
+{
+	LET $wallet = (SELECT * FROM ONLY $wallet_id FOR UPDATE);
+	IF $wallet = NONE { THROW s"Wallet not found" };
+	IF $wallet.owner != $payer { THROW s"Not your wallet" };
+	LET $key = fn::payment_key($wallet.id, $request);
+	LET $previous = (SELECT * FROM ONLY ⟨payment⟩ WHERE key = $key LIMIT 1);
+	IF $previous != NONE { { kind: s"replayed", payment: $previous.id, amount: $previous.amount } } ELSE IF $wallet.frozen { THROW s"Wallet is frozen" } ELSE IF $wallet.balance < $amount { { kind: s"declined", balance: $wallet.balance } } ELSE { LET $balance = fn::debit($wallet.balance, $amount); LET $payment = (CREATE ONLY ⟨payment⟩ CONTENT { wallet: $wallet.id, amount: $amount, key: $key } RETURN AFTER); UPDATE ONLY $wallet.id MERGE { balance: $balance } RETURN NONE; { kind: s"paid", payment: $payment.id, balance: $balance } }
+};
+```
+
+| Step | SurrealQL | Types |
+| --- | --- | --- |
+| `.let(name, ($) => value)` | `LET $name = value` | `value` is an expression or a built statement of one result; later steps read `$.name`, with a field expression per field when it holds a row (`$.wallet.balance`), NONE while the row may be |
+| `.throwIf(($) => condition, message)` | `IF condition { THROW message }` | `message` joins `throws` |
+| `.throwIfNone(name, message)` | `IF $name = NONE { THROW message }` | later steps read the local without NONE |
+| `.do(($) => statement)` | the statement | its result must be NONE (`.returning('none')` on a record) |
+| `.return(($) => value)` | `value`, last | an expression, or an object of expressions and primitives, which decodes as a struct; a constant on its own is a `literal` |
+| `.throw(message)` | `THROW message`, last | contributes no result |
+| `.if(($) => condition, (arm) => …)`, `.ifNotNone(name, (arm) => …)`, `.elseIf(…)`, `.else(…)` | `IF … ELSE IF … ELSE`, last | each branch is a block of its own; its locals are visible only in it |
+
+The result is the union of what the branches can yield: a branch that
+neither returns nor throws, and an `if` without `else` whose conditions all
+fail, yield NONE, so the result includes `undefined`; a branch that throws
+adds nothing. `object(fields)` is the same object as an expression, for
+`CONTENT` and `MERGE` data built from locals, checked against the table's
+schema as any data is.
+
+A local is named like a SurrealQL parameter and may not be a local already,
+a binding the block reads, or a name SurrealDB sets (`$auth`, `$value`,
+`$after`, …): a compile error with the reason as its first line, except for
+a binding only a later step reads, which is refused when the block is built
+(every check runs again then). A select by id can read the record
+`FOR UPDATE` (call `.forUpdate()` first): a transaction that read it fails
+with a `StatementConflict` when a concurrent write changes the record before
+it commits; no lock is held. SurrealDB 3.3 and 4.0 accept it only on a
+record id held by a parameter, so the id is a binding or a local (`LET` a
+field such as `$.invite.team` first).
+
+The whole block is one SurrealQL statement, `{ … }`, and never writes
+`RETURN`. SurrealDB 3.3.4 and 4.0.1 agree on what that gives
+(`test/conformance.test.ts`):
+
+- **All or nothing, even on its own.** Outside a transaction a `THROW` fails
+  only its own statement and the statements after it still run; inside a
+  block it stops the rest of the block and undoes what the block wrote. So a
+  guard after a write is a guard in `run` too.
+- **Nothing shared.** A `LET` inside a block is local to it, in a
+  transaction as well, so a block's `defines` is empty: another statement
+  of a transaction may bind a name the block uses for a local, and each
+  reads its own value. A block's bindings follow the rules of any
+  statement: one that another statement `LET`s, or that two statements bind
+  to different values (the same block twice, say), is refused.
+- **Safe anywhere in a transaction.** A `RETURN` inside an `IF` ends a
+  transaction on SurrealDB 3, skipping what follows, and the SDK cannot see
+  it; a branch's last expression is its value on both. For the same reason
+  a statement that writes `RETURN` is refused as a local's value: in a
+  `LET`'s value it ends the block on SurrealDB 4 and is the value on 3.
+
+A block is also a value: a built block can be another block's local.
+`test/consistent.ts` checks that the analyzer, reading a block's text, finds
+exactly its bindings, defines, result count and messages; the suite applies
+it to every block it builds (`test/blocks.ts`, whose two scripts run on both
+engines in `test/block-engine.test.ts` over the schema in
+`test/fixtures/scripts`, generated as `test/golden/scripts`). A block builds
+without the analyzer, so builder bundles stay without it.
+
+What blocks leave out: loops (`FOR`), which would need a body whose value is
+discarded and a way to type what it changes; arithmetic and built-in
+functions, which have no typed expressions yet (`call` a `DEFINE FUNCTION`,
+or `unsafeExpr`); and the empty-result check of a `create` bound to a local,
+since only a statement's last result is checked. A block costs the compiler
+about what nine statements do (`test/budget.test.ts`).
+
 ### Authored SurrealQL
 
 A multi-statement script stays SurrealQL. Describe each text as a `part`
