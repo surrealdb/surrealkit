@@ -30,6 +30,11 @@ export const UpRow = SurrealSchema.NoneAsAbsent(Up);
 export type UpRow = typeof UpRow.Type;
 export type UpRowEncoded = typeof UpRow.Encoded;
 
+/** `Up` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Up`. */
+export const UpVisible = Up;
+export type UpVisible = typeof UpVisible.Type;
+export type UpVisibleEncoded = typeof UpVisible.Encoded;
+
 /** Input for `CREATE up CONTENT` / `INSERT`. The record id is an operation argument. */
 export const UpCreate = Schema.Struct({
 	obj: Schema.Struct({
@@ -65,6 +70,7 @@ export const UpTable = SurrealSchema.table({
 	drop: false,
 	id: UpId,
 	select: Up,
+	visible: UpVisible,
 	create: UpCreate,
 	merge: UpMerge,
 	content: UpContent,

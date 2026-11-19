@@ -25,6 +25,11 @@ export const LedgerRow = SurrealSchema.NoneAsAbsent(Ledger);
 export type LedgerRow = typeof LedgerRow.Type;
 export type LedgerRowEncoded = typeof LedgerRow.Encoded;
 
+/** `Ledger` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Ledger`. */
+export const LedgerVisible = Ledger;
+export type LedgerVisible = typeof LedgerVisible.Type;
+export type LedgerVisibleEncoded = typeof LedgerVisible.Encoded;
+
 /** Input for `CREATE ledger CONTENT` / `INSERT`. The record id is an operation argument. */
 export const LedgerCreate = Schema.Struct({
 	amount: LedgerFields.amount,
@@ -54,6 +59,7 @@ export const LedgerTable = SurrealSchema.table({
 	drop: false,
 	id: LedgerId,
 	select: Ledger,
+	visible: LedgerVisible,
 	create: LedgerCreate,
 	merge: LedgerMerge,
 	content: LedgerContent,

@@ -58,6 +58,11 @@ export const MRow = SurrealSchema.NoneAsAbsent(M);
 export type MRow = typeof MRow.Type;
 export type MRowEncoded = typeof MRow.Encoded;
 
+/** `M` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `M`. */
+export const MVisible = M;
+export type MVisible = typeof MVisible.Type;
+export type MVisibleEncoded = typeof MVisible.Encoded;
+
 /** Input for `CREATE m CONTENT` / `INSERT`. The record id is an operation argument. */
 export const MCreate = Schema.Struct({
 	dalw: Schema.optionalKey(MFields.dalw),
@@ -128,6 +133,7 @@ export const MTable = SurrealSchema.table({
 	drop: false,
 	id: MId,
 	select: M,
+	visible: MVisible,
 	create: MCreate,
 	merge: MMerge,
 	content: MContent,

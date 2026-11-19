@@ -25,6 +25,11 @@ export const OaRow = SurrealSchema.NoneAsAbsent(Oa);
 export type OaRow = typeof OaRow.Type;
 export type OaRowEncoded = typeof OaRow.Encoded;
 
+/** `Oa` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Oa`. */
+export const OaVisible = Oa;
+export type OaVisible = typeof OaVisible.Type;
+export type OaVisibleEncoded = typeof OaVisible.Encoded;
+
 /** Input for `CREATE oa CONTENT` / `INSERT`. The record id is an operation argument. */
 export const OaCreate = Schema.Struct({
 	x: Schema.optionalKey(OaFields.x),
@@ -54,6 +59,7 @@ export const OaTable = SurrealSchema.table({
 	drop: false,
 	id: OaId,
 	select: Oa,
+	visible: OaVisible,
 	create: OaCreate,
 	merge: OaMerge,
 	content: OaContent,

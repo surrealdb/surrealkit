@@ -37,6 +37,8 @@ export interface PureTable {
 	readonly schemafull?: boolean;
 	readonly id: Codec;
 	readonly select: RowCodecIn;
+	/** The row as a session reads it when field permissions may hide fields. */
+	readonly visible?: RowCodecIn;
 	readonly create?: RowCodecIn;
 	readonly merge?: RowCodecIn;
 	readonly content?: RowCodecIn;
@@ -105,19 +107,47 @@ type KnownReadFields<T extends PureTable, S extends RowCodecIn> = T extends {
 	: unknown;
 
 /**
+ * `T`, when it is a descriptor with a generated `visible` row; otherwise a
+ * message saying what `readAs(table)` needs.
+ */
+export type WithVisible<T> = T extends { readonly visible: RowCodecIn }
+	? T
+	: 'this descriptor has no generated `visible` row: regenerate it, or pass the row the session reads as the second argument';
+
+/**
  * `table` as a session with narrower permissions reads it.
  *
  * A generated `select` schema describes a privileged reader. SurrealDB does
  * not report what permissions hide: a field the session may not read comes
- * back as NONE, and a row it may not read is simply absent. Declare the row
- * such a session really gets (usually the same fields, optional where a
- * permission can hide them) and build statements from the result, so the
- * rows decode instead of failing on the missing fields.
+ * back as NONE, and a row it may not read is simply absent.
+ *
+ * With one argument the statements read the generated `visible` row, in
+ * which every field whose `select` permission is not FULL may be absent.
+ * With two, they read the row given: declare the row such a session really
+ * gets (usually the same fields, optional where a permission can hide them),
+ * so the rows decode instead of failing on the missing fields.
+ *
+ * @example
+ * const visible = select(readAs(MemberTable)).build();
+ * // ReadonlyArray<{ …; email?: string; salary?: number }>
  */
-export const readAs = <T extends PureTable, S extends RowCodecIn>(
+export function readAs<T extends PureTable>(
+	table: WithVisible<T>,
+): Omit<T, 'select'> & { readonly select: NonNullable<T['visible']> };
+export function readAs<T extends PureTable, S extends RowCodecIn>(
 	table: T,
 	select: S & KnownReadFields<NoInfer<T>, NoInfer<S>>,
-): Omit<T, 'select'> & { readonly select: S } => {
+): Omit<T, 'select'> & { readonly select: S };
+export function readAs(table: PureTable, declared?: RowCodecIn): PureTable {
+	if (declared === undefined) {
+		if (table.visible === undefined) {
+			throw new TypeError(
+				`readAs: the descriptor of \`${table.name}\` has no generated \`visible\` row; regenerate it, or pass the row the session reads`,
+			);
+		}
+		return { ...table, select: table.visible };
+	}
+	const select = declared;
 	if (table.schemafull) {
 		const stored = fieldsOf(table.select);
 		const view = fieldsOf(select);
@@ -133,7 +163,7 @@ export const readAs = <T extends PureTable, S extends RowCodecIn>(
 		}
 	}
 	return { ...table, select };
-};
+}
 
 /**
  * A table name as SurrealQL reads it in subject position (`FROM`,

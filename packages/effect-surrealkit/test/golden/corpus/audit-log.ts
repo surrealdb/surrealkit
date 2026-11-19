@@ -27,6 +27,11 @@ export const AuditLogRow = SurrealSchema.NoneAsAbsent(AuditLog);
 export type AuditLogRow = typeof AuditLogRow.Type;
 export type AuditLogRowEncoded = typeof AuditLogRow.Encoded;
 
+/** `AuditLog` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `AuditLog`. */
+export const AuditLogVisible = AuditLog;
+export type AuditLogVisible = typeof AuditLogVisible.Type;
+export type AuditLogVisibleEncoded = typeof AuditLogVisible.Encoded;
+
 /** Input for `CREATE audit_log CONTENT` / `INSERT`. The record id is an operation argument. */
 export const AuditLogCreate = Schema.Struct({
 	doc: Schema.optionalKey(AuditLogFields.doc),
@@ -59,6 +64,7 @@ export const AuditLogTable = SurrealSchema.table({
 	drop: false,
 	id: AuditLogId,
 	select: AuditLog,
+	visible: AuditLogVisible,
 	create: AuditLogCreate,
 	merge: AuditLogMerge,
 	content: AuditLogContent,

@@ -356,4 +356,12 @@ export const rejectedReadView = () => {
 	readAs(PersonTable, Schema.Struct({ emial: Schema.String }));
 	// @ts-expect-error [read-view/wrong-record-table] the native encoding of the person id cannot address team.
 	readAs(PersonTable, Schema.Struct({ id: TeamId }));
+	const NoteId = SurrealSchema.RecordIdFor('note');
+	const handWritten = {
+		name: 'note',
+		id: NoteId,
+		select: Schema.Struct({ id: NoteId }),
+	} as const;
+	// @ts-expect-error [read-view/no-visible-row] a hand-written descriptor has no generated `visible` row to read through
+	readAs(handWritten);
 };

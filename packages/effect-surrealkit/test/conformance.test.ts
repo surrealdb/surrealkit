@@ -343,6 +343,15 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 				DEFINE FIELD shown ON visible TYPE string;
 				DEFINE FIELD hidden ON visible TYPE string PERMISSIONS FOR select NONE;
 				CREATE visible:one SET shown = 's', hidden = 'h';
+				DEFINE TABLE nested SCHEMAFULL
+					PERMISSIONS FOR select FULL FOR create, update, delete NONE;
+				DEFINE FIELD card ON nested TYPE object;
+				DEFINE FIELD card.name ON nested TYPE string;
+				DEFINE FIELD card.phone ON nested TYPE string
+					PERMISSIONS FOR select WHERE $auth.id = id;
+				DEFINE FIELD owned ON nested TYPE string
+					PERMISSIONS FOR select WHERE $auth.id = id;
+				CREATE nested:one SET card = { name: 'n', phone: 'p' }, owned = 'o';
 				DEFINE FUNCTION fn::denied() { RETURN 1; } PERMISSIONS NONE;
 				DEFINE FUNCTION fn::allowed() { RETURN 1; } PERMISSIONS FULL;
 			`);
@@ -416,6 +425,20 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 			expect(
 				await query('SELECT VALUE hidden FROM visible;'),
 			).toStrictEqual([['h']]);
+		});
+
+		it('a nested field whose SELECT is denied is absent from its object; a WHERE permission is checked per record', async () => {
+			// `$auth.id = id` is false for this user on `nested:one`.
+			expect(await asUser('SELECT * OMIT id FROM nested;')).toStrictEqual(
+				[[{ card: { name: 'n' } }]],
+			);
+			expect(
+				await asUser('SELECT VALUE card FROM ONLY nested:one;'),
+			).toStrictEqual([{ name: 'n' }]);
+			// A system user is not a record user: the permission does not apply.
+			expect(await query('SELECT * OMIT id FROM nested;')).toStrictEqual([
+				[{ card: { name: 'n', phone: 'p' }, owned: 'o' }],
+			]);
 		});
 
 		it('calling a function the session may not run is an error', async () => {

@@ -29,6 +29,11 @@ export const MemberOfRow = SurrealSchema.NoneAsAbsent(MemberOf);
 export type MemberOfRow = typeof MemberOfRow.Type;
 export type MemberOfRowEncoded = typeof MemberOfRow.Encoded;
 
+/** `MemberOf` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `MemberOf`. */
+export const MemberOfVisible = MemberOf;
+export type MemberOfVisible = typeof MemberOfVisible.Type;
+export type MemberOfVisibleEncoded = typeof MemberOfVisible.Encoded;
+
 /** Input for `CREATE member_of CONTENT` / `INSERT`. The record id is an operation argument. */
 export const MemberOfCreate = Schema.Struct({
 	role: Schema.optionalKey(MemberOfFields.role),
@@ -68,6 +73,7 @@ export const MemberOfTable = SurrealSchema.table({
 	drop: false,
 	id: MemberOfId,
 	select: MemberOf,
+	visible: MemberOfVisible,
 	create: MemberOfCreate,
 	merge: MemberOfMerge,
 	content: MemberOfContent,

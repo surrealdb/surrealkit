@@ -276,7 +276,7 @@ export type Replaced<T extends TableDescriptor, Replacements> = {
 					? Replacements[F]
 					: T['fields'][F];
 			}
-		: K extends Operation
+		: K extends Operation | 'visible'
 			? ReplaceVariant<T[K], Replacements>
 			: T[K];
 };
@@ -294,7 +294,7 @@ const isStructWithRest = (
 
 const replaceInRow = (
 	row: RowSchema,
-	operation: Operation,
+	operation: Operation | 'visible',
 	presence: TableDescriptor['presence'],
 	replacements: { readonly [key: string]: Schema.Top },
 ): RowSchema => {
@@ -302,7 +302,14 @@ const replaceInRow = (
 	const fields: Record<string, Schema.Constraint> = {};
 	for (const [key, field] of Object.entries(struct.fields)) {
 		const replacement = replacements[key];
-		const fieldPresence = presence[key]?.[operation];
+		// The visible row is the select row with fields a permission can hide
+		// made optional: a field keeps the presence it has there.
+		const fieldPresence =
+			operation === 'visible'
+				? field.ast.context?.isOptional === true
+					? 'optional'
+					: 'required'
+				: presence[key]?.[operation];
 		fields[key] =
 			replacement === undefined || fieldPresence === undefined
 				? field
@@ -314,8 +321,9 @@ const replaceInRow = (
 		: rebuilt;
 };
 
-const operations: ReadonlyArray<Operation> = [
+const operations: ReadonlyArray<Operation | 'visible'> = [
 	'select',
+	'visible',
 	'create',
 	'merge',
 	'content',

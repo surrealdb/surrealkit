@@ -22,6 +22,11 @@ export const PRow = SurrealSchema.NoneAsAbsent(P);
 export type PRow = typeof PRow.Type;
 export type PRowEncoded = typeof PRow.Encoded;
 
+/** `P` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `P`. */
+export const PVisible = P;
+export type PVisible = typeof PVisible.Type;
+export type PVisibleEncoded = typeof PVisible.Encoded;
+
 /** Input for `CREATE p CONTENT` / `INSERT`. The record id is an operation argument. */
 export const PCreate = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type PCreate = typeof PCreate.Type;
@@ -45,6 +50,7 @@ export const PTable = SurrealSchema.table({
 	drop: false,
 	id: PId,
 	select: P,
+	visible: PVisible,
 	create: PCreate,
 	merge: PMerge,
 	content: PContent,

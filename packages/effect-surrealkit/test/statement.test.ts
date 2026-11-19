@@ -533,6 +533,17 @@ it('checks schemafull views even when the table type was widened', () => {
 	expect(() => readAs({ ...table, schemafull: false }, view)).not.toThrow();
 });
 
+it('reads through the generated visible row with one argument, and refuses a descriptor without one', () => {
+	const read = readAs(PersonTable);
+	expect(read.select).toBe(PersonTable.visible);
+	expect(select(read).build().sql).toBe('SELECT * FROM ⟨person⟩;');
+	const { visible: _, ...handWritten } = PersonTable;
+	const untyped = readAs as unknown as (table: unknown) => unknown;
+	expect(() => untyped(handWritten)).toThrow(
+		/the descriptor of `person` has no generated `visible` row/,
+	);
+});
+
 describe('writes', () => {
 	const person = param('person', PersonCreate);
 	const id = param('id', PersonId);

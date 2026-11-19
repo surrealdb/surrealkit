@@ -45,6 +45,11 @@ export const PersonRow = SurrealSchema.NoneAsAbsent(Person);
 export type PersonRow = typeof PersonRow.Type;
 export type PersonRowEncoded = typeof PersonRow.Encoded;
 
+/** `Person` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Person`. */
+export const PersonVisible = Person;
+export type PersonVisible = typeof PersonVisible.Type;
+export type PersonVisibleEncoded = typeof PersonVisible.Encoded;
+
 /** Input for `CREATE person CONTENT` / `INSERT`. The record id is an operation argument. */
 export const PersonCreate = Schema.Struct({
 	age: Schema.optionalKey(PersonFields.age),
@@ -99,6 +104,7 @@ export const PersonTable = SurrealSchema.table({
 	drop: false,
 	id: PersonId,
 	select: Person,
+	visible: PersonVisible,
 	create: PersonCreate,
 	merge: PersonMerge,
 	content: PersonContent,

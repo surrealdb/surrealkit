@@ -37,6 +37,11 @@ export const DocRow = SurrealSchema.NoneAsAbsent(Doc);
 export type DocRow = typeof DocRow.Type;
 export type DocRowEncoded = typeof DocRow.Encoded;
 
+/** `Doc` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Doc`. */
+export const DocVisible = Doc;
+export type DocVisible = typeof DocVisible.Type;
+export type DocVisibleEncoded = typeof DocVisible.Encoded;
+
 /** Input for `CREATE doc CONTENT` / `INSERT`. The record id is an operation argument. */
 export const DocCreate = Schema.Struct({
 	body: DocFields.body,
@@ -84,6 +89,7 @@ export const DocTable = SurrealSchema.table({
 	drop: false,
 	id: DocId,
 	select: Doc,
+	visible: DocVisible,
 	create: DocCreate,
 	merge: DocMerge,
 	content: DocContent,

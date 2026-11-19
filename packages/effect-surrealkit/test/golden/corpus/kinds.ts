@@ -123,6 +123,11 @@ export const KindsRow = SurrealSchema.NoneAsAbsent(Kinds);
 export type KindsRow = typeof KindsRow.Type;
 export type KindsRowEncoded = typeof KindsRow.Encoded;
 
+/** `Kinds` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Kinds`. */
+export const KindsVisible = Kinds;
+export type KindsVisible = typeof KindsVisible.Type;
+export type KindsVisibleEncoded = typeof KindsVisible.Encoded;
+
 /** Input for `CREATE kinds CONTENT` / `INSERT`. The record id is an operation argument. */
 export const KindsCreate = Schema.Struct({
 	k_any: Schema.optionalKey(KindsFields.k_any),
@@ -299,6 +304,7 @@ export const KindsTable = SurrealSchema.table({
 	drop: false,
 	id: KindsId,
 	select: Kinds,
+	visible: KindsVisible,
 	create: KindsCreate,
 	merge: KindsMerge,
 	content: KindsContent,

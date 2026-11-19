@@ -124,6 +124,7 @@ matrix of the contract (section 7):
 | --- | --- |
 | `Person` | A stored row as a privileged reader selects it: the plain struct, which `refine` works on. |
 | `PersonRow` | `NoneAsAbsent(Person)`: decode rows the SDK returned with this one, so NONE (an `undefined` property) is an absent optional field. |
+| `PersonVisible` | The row as a session reads it when field permissions may hide fields: every field (at any depth) whose `select` permission is not FULL is optional. `Person` itself when no permission can hide a field. Statements read it through `readAs(PersonTable)`. |
 | `PersonCreate` | `CREATE … CONTENT` / `INSERT`; the id is an operation argument. |
 | `PersonMerge` | `UPDATE … MERGE`: omission keeps a value, `undefined` (NONE) removes an `option<T>` field and re-applies a `DEFAULT ALWAYS` one (an `option<T>` included). |
 | `PersonContent` | `UPDATE … CONTENT`: a full replacement. |
@@ -155,7 +156,10 @@ ranges stay server-side.
 Regenerating with this version only adds to the output; every existing
 export keeps its name, its schema and its type:
 
-- every table descriptor gains `fieldPermissions` and `indexes`;
+- every table descriptor gains `fieldPermissions`, `indexes` and `visible`,
+  and every table module a `<Table>Visible` export (with its `Type` and
+  `Encoded` types), so a table whose PascalCase name is another table's
+  plus `Visible` (`person` and `person_visible`) now needs a `names` entry;
 - a new module, `_store.ts`, exports `store`, and `index.ts` re-exports it.
   A SurrealKit-run emitter records the new file in `.surrealkit-emit.json`
   as it does every generated file.
@@ -656,14 +660,26 @@ empty results.
 
 - **Permissions.** A generated `select` schema is the row a privileged
   reader gets. For a restricted session SurrealDB returns NONE for a field
-  it may not read and leaves out a row it may not see, without an error.
-  Declare the row that session really gets and build from
-  `readAs(table, schema)`, or project the fields it may read. For a generated
-  SCHEMAFULL table, TypeScript checks the view's declared top-level field names
-  against the descriptor. A view may refine a field's codec or brand; native
-  record links must still encode to the declared table and key type. For
-  example, `param('email', codecOf(row.email))` takes its input type from the
-  visible field and preserves its brand through the statement.
+  it may not read and leaves out a row it may not see, without an error
+  (`test/conformance.test.ts` pins both, nested fields included). Build
+  from `readAs(table)` to read the generated `visible` row instead, in which
+  every field whose `select` permission is not FULL may be absent, so every
+  condition, projection and result follows:
+
+  ```ts
+  const members = select(readAs(MemberTable)).build();
+  // ReadonlyArray<{ id: MemberId; handle: string; email?: string; salary?: number; … }>
+  ```
+
+  Where the session's real row is narrower still, declare it and build
+  from `readAs(table, schema)`, or project the fields it may read. For a
+  generated SCHEMAFULL table, TypeScript checks the view's declared
+  top-level field names against the descriptor. A view may refine a field's
+  codec or brand; native record links must still encode to the declared
+  table and key type. For example, `param('email', codecOf(row.email))`
+  takes its input type from the visible field and preserves its brand
+  through the statement. `refine` and `replaceField` change the `visible`
+  row with the others.
 - **Authored text.** The analyzer derives a part's names, result count and
   messages, not its result type: a result codec that does not match the
   script fails when it runs, not when it compiles.
@@ -866,7 +882,10 @@ process (`Arbitrary.schema` + `Arbitrary.checkEffect`). Golden output lives in
 `example.v2.json`, the same with the `bigint`/`effect-datetime`/`patch`
 options, the whole corpus, the integer-keyed corpus tables in the `bigint` profile (the
 whole corpus in that profile is checked line by line against the `corpus`
-golden instead of being pinned twice) and the field-presence evidence tables. The corpus
+golden instead of being pinned twice), the field-presence evidence tables and
+the `members` fixture (`test/fixtures/members`: field permissions and unique
+indexes, compiled with `surrealkit compile` in that directory and applied by
+`test/members.test.ts`). The corpus
 inputs are real `surrealkit compile` output, pinned byte for byte by
 SurrealKit's own test suite under `typegen_corpus/compiled/`, and every input
 document is validated against the published JSON Schema. The golden

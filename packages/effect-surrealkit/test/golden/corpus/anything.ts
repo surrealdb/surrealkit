@@ -22,6 +22,11 @@ export const AnythingRow = SurrealSchema.NoneAsAbsent(Anything);
 export type AnythingRow = typeof AnythingRow.Type;
 export type AnythingRowEncoded = typeof AnythingRow.Encoded;
 
+/** `Anything` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Anything`. */
+export const AnythingVisible = Anything;
+export type AnythingVisible = typeof AnythingVisible.Type;
+export type AnythingVisibleEncoded = typeof AnythingVisible.Encoded;
+
 /** Input for `CREATE anything CONTENT` / `INSERT`. The record id is an operation argument. */
 export const AnythingCreate = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type AnythingCreate = typeof AnythingCreate.Type;
@@ -45,6 +50,7 @@ export const AnythingTable = SurrealSchema.table({
 	drop: false,
 	id: AnythingId,
 	select: Anything,
+	visible: AnythingVisible,
 	create: AnythingCreate,
 	merge: AnythingMerge,
 	content: AnythingContent,

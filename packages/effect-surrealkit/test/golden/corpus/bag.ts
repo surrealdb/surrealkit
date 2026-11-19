@@ -25,6 +25,11 @@ export const BagRow = SurrealSchema.NoneAsAbsent(Bag);
 export type BagRow = typeof BagRow.Type;
 export type BagRowEncoded = typeof BagRow.Encoded;
 
+/** `Bag` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Bag`. */
+export const BagVisible = Bag;
+export type BagVisible = typeof BagVisible.Type;
+export type BagVisibleEncoded = typeof BagVisible.Encoded;
+
 /** Input for `CREATE bag CONTENT` / `INSERT`. The record id is an operation argument. */
 export const BagCreate = Schema.StructWithRest(Schema.Struct({
 	label: Schema.optionalKey(BagFields.label),
@@ -54,6 +59,7 @@ export const BagTable = SurrealSchema.table({
 	drop: false,
 	id: BagId,
 	select: Bag,
+	visible: BagVisible,
 	create: BagCreate,
 	merge: BagMerge,
 	content: BagContent,

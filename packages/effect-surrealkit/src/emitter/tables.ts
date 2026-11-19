@@ -229,11 +229,25 @@ class TablePrinter {
 		readonly scope: ModuleScope,
 		readonly options: EmitterOptions,
 		readonly world: 'native' | 'json' = 'native',
+		/**
+		 * Print the selected row as a session reads it when field permissions
+		 * may hide fields: a field whose `select` permission is not FULL is
+		 * optional, because SurrealDB returns it as NONE without an error.
+		 */
+		readonly visible = false,
 	) {
 		this.root = buildTree(table.fields);
 		this.isRelation = table.type.kind === 'relation';
 		this.lightweight =
 			table.type.kind === 'relation' && table.type.lightweight;
+	}
+
+	/** Some session may be refused this field when it selects it. */
+	mayBeHidden(fieldNode: FieldNode): boolean {
+		return (
+			fieldNode.field !== undefined &&
+			fieldNode.field.permissions.select !== true
+		);
 	}
 
 	location(path: ReadonlyArray<string>): string {
@@ -257,12 +271,19 @@ class TablePrinter {
 	): Presence {
 		const override =
 			this.options.fields?.[this.location(fieldNode.path)]?.[operation];
-		if (override !== undefined) return override;
 		// Elements are written whole, never merged: their children follow Create.
 		const effective =
 			element && operation !== 'select' ? 'create' : operation;
 		const writeExcluded = this.lightweight || this.table.view !== undefined;
-		return derivePresence(infoOf(fieldNode), effective, writeExcluded);
+		const presence =
+			override ??
+			derivePresence(infoOf(fieldNode), effective, writeExcluded);
+		return this.visible &&
+			operation === 'select' &&
+			presence === 'required' &&
+			this.mayBeHidden(fieldNode)
+			? 'optional'
+			: presence;
 	}
 
 	/** The schema of one field in one operation, before its own presence. */
@@ -458,6 +479,56 @@ const SUFFIX: Readonly<Record<Operation, string>> = {
 	content: 'Content',
 };
 
+/**
+ * `<Table>Visible`: the selected row with every field some session may be
+ * refused optional (its `select` permission is not FULL), at any depth.
+ * SurrealDB returns such a field as NONE without an error, so the plain
+ * select schema, which describes a privileged reader, would refuse the row.
+ * When no permission can hide a field it is the select schema itself.
+ */
+const printVisible = (
+	name: string,
+	selectEntries: ReadonlyArray<readonly [string, string]>,
+	fields: ReadonlyArray<FieldNode>,
+	printer: TablePrinter,
+	reference: (field: FieldNode) => string,
+	selectCode: (field: FieldNode) => string | undefined,
+	open: boolean,
+): string[] => {
+	const byKey = new Map(fields.map((field) => [field.key, field]));
+	let changed = false;
+	const entries = selectEntries.map(([key, value]) => {
+		const field = byKey.get(key);
+		if (field === undefined) return [key, value] as const;
+		const code = printer.field(field, 'select', 1, false);
+		const printed = wrap(
+			code === selectCode(field) ? reference(field) : code,
+			printer.presence(field, 'select', false),
+		);
+		if (printed !== value) changed = true;
+		return [key, printed] as const;
+	});
+	const visible = `${name}Visible`;
+	const types = [
+		`export type ${visible} = typeof ${visible}.Type;`,
+		`export type ${visible}Encoded = typeof ${visible}.Encoded;`,
+	];
+	if (!changed) {
+		return [
+			`/** \`${name}\` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is \`${name}\`. */`,
+			`export const ${visible} = ${name};`,
+			...types,
+			'',
+		];
+	}
+	return [
+		`/** \`${name}\` as a session reads it when field permissions may hide fields: each field whose select permission is not FULL may be NONE (absent). Build statements from \`readAs(${name}Table)\`. */`,
+		`export const ${visible} = ${struct(entries, 0, open)};`,
+		...types,
+		'',
+	];
+};
+
 /** Prints the module of one table, view or relation. */
 export const printTable = (input: TableInput): string => {
 	const { table, scope, options } = input;
@@ -604,6 +675,20 @@ export const printTable = (input: TableInput): string => {
 			);
 			exportType(`${name}Row`);
 			lines.push('');
+			lines.push(
+				...printVisible(
+					name,
+					entries,
+					fields,
+					new TablePrinter(table, scope, options, 'native', true),
+					(field) =>
+						sharedKeys.has(field.key)
+							? `${fieldsName}${propertyAccess(field.key)}`
+							: (codes.get(field.key)?.get('select') as string),
+					(field) => codes.get(field.key)?.get('select'),
+					open,
+				),
+			);
 		}
 	}
 
@@ -703,8 +788,10 @@ export const printTable = (input: TableInput): string => {
 		`\tschemafull: ${table.schemafull},`,
 		`\tdrop: ${table.drop},`,
 		`\tid: ${idName},`,
-		...operations.map(
-			(operation) => `\t${operation}: ${pascal}${SUFFIX[operation]},`,
+		...operations.flatMap((operation) =>
+			operation === 'select'
+				? [`\tselect: ${pascal},`, `\tvisible: ${pascal}Visible,`]
+				: [`\t${operation}: ${pascal}${SUFFIX[operation]},`],
 		),
 		`\tfields: ${fieldsName},`,
 		'\tpresence: {',

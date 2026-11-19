@@ -153,6 +153,7 @@ const checkNames = (
 		for (const suffix of [
 			'',
 			'Row',
+			'Visible',
 			'Id',
 			'Create',
 			'Merge',

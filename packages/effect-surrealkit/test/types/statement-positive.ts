@@ -3,7 +3,7 @@
  * `effect-surrealkit/client`: what the builders derive from the golden
  * generated modules. Compiled by `tsc -p test/types`.
  */
-import { type Effect, Schema } from 'effect';
+import { type Brand, type Effect, Schema } from 'effect';
 import * as SurrealSchema from 'effect-surrealkit';
 import type { DateTime } from 'surrealdb';
 
@@ -65,6 +65,7 @@ import {
 	PersonTable,
 	TeamId,
 } from '../golden/example/index.js';
+import * as Members from '../golden/members/index.js';
 
 /** Fails to compile unless `A` and `B` are the same type. */
 type Same<A, B> =
@@ -424,3 +425,41 @@ export const resultCodec: Schema.Codec<
 	ReadonlyArray<string>,
 	unknown
 > = names.result;
+
+// ---- readAs(table): the generated row a restricted session reads.
+
+export const asSession = select(readAs(Members.MemberTable)).build();
+same<
+	Result<typeof asSession>,
+	ReadonlyArray<typeof Members.MemberVisible.Type>
+>(true);
+export type SessionRow = Result<typeof asSession>[number];
+// A field some session may not select may be absent; the others may not.
+same<SessionRow['email'], string | undefined>(true);
+same<SessionRow['handle'], string>(true);
+same<SessionRow['profile']['phone'], string | undefined>(true);
+same<SessionRow['profile']['bio'], string>(true);
+// Conditions and projections read the same row.
+export const sessionEmails = select(readAs(Members.MemberTable))
+	.where((row) => isNone(row.email))
+	.project((row) => ({ email: row.email, handle: row.handle }))
+	.build();
+same<
+	Result<typeof sessionEmails>,
+	ReadonlyArray<{
+		readonly email: string | undefined;
+		readonly handle: string;
+	}>
+>(true);
+// A refinement reaches the visible row too, keeping each field's presence.
+export const RefinedMembers = SurrealSchema.refine(Members.MemberTable, {
+	email: (s) => s.pipe(Schema.brand('Email')),
+});
+export type RefinedVisible = (typeof RefinedMembers.visible)['Type'];
+same<RefinedVisible['email'], (string & Brand.Brand<'Email'>) | undefined>(
+	true,
+);
+same<
+	(typeof RefinedMembers.select)['Type']['email'],
+	string & Brand.Brand<'Email'>
+>(true);

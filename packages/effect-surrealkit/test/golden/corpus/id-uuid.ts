@@ -22,6 +22,11 @@ export const IdUuidRow = SurrealSchema.NoneAsAbsent(IdUuid);
 export type IdUuidRow = typeof IdUuidRow.Type;
 export type IdUuidRowEncoded = typeof IdUuidRow.Encoded;
 
+/** `IdUuid` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `IdUuid`. */
+export const IdUuidVisible = IdUuid;
+export type IdUuidVisible = typeof IdUuidVisible.Type;
+export type IdUuidVisibleEncoded = typeof IdUuidVisible.Encoded;
+
 /** Input for `CREATE id_uuid CONTENT` / `INSERT`. The record id is an operation argument. */
 export const IdUuidCreate = Schema.Struct({});
 export type IdUuidCreate = typeof IdUuidCreate.Type;
@@ -45,6 +50,7 @@ export const IdUuidTable = SurrealSchema.table({
 	drop: false,
 	id: IdUuidId,
 	select: IdUuid,
+	visible: IdUuidVisible,
 	create: IdUuidCreate,
 	merge: IdUuidMerge,
 	content: IdUuidContent,

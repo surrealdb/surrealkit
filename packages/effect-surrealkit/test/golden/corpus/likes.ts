@@ -24,6 +24,11 @@ export const LikesRow = SurrealSchema.NoneAsAbsent(Likes);
 export type LikesRow = typeof LikesRow.Type;
 export type LikesRowEncoded = typeof LikesRow.Encoded;
 
+/** `Likes` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Likes`. */
+export const LikesVisible = Likes;
+export type LikesVisible = typeof LikesVisible.Type;
+export type LikesVisibleEncoded = typeof LikesVisible.Encoded;
+
 /** Input for `CREATE likes CONTENT` / `INSERT`. The record id is an operation argument. */
 export const LikesCreate = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type LikesCreate = typeof LikesCreate.Type;
@@ -56,6 +61,7 @@ export const LikesTable = SurrealSchema.table({
 	drop: false,
 	id: LikesId,
 	select: Likes,
+	visible: LikesVisible,
 	create: LikesCreate,
 	merge: LikesMerge,
 	content: LikesContent,

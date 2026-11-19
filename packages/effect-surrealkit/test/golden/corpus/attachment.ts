@@ -29,6 +29,11 @@ export const AttachmentRow = SurrealSchema.NoneAsAbsent(Attachment);
 export type AttachmentRow = typeof AttachmentRow.Type;
 export type AttachmentRowEncoded = typeof AttachmentRow.Encoded;
 
+/** `Attachment` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Attachment`. */
+export const AttachmentVisible = Attachment;
+export type AttachmentVisible = typeof AttachmentVisible.Type;
+export type AttachmentVisibleEncoded = typeof AttachmentVisible.Encoded;
+
 /** Input for `CREATE attachment CONTENT` / `INSERT`. The record id is an operation argument. */
 export const AttachmentCreate = Schema.Struct({
 	any_file: Schema.optionalKey(AttachmentFields.any_file),
@@ -64,6 +69,7 @@ export const AttachmentTable = SurrealSchema.table({
 	drop: false,
 	id: AttachmentId,
 	select: Attachment,
+	visible: AttachmentVisible,
 	create: AttachmentCreate,
 	merge: AttachmentMerge,
 	content: AttachmentContent,
