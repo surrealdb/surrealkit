@@ -25,6 +25,11 @@ export const AccountRow = SurrealSchema.NoneAsAbsent(Account);
 export type AccountRow = typeof AccountRow.Type;
 export type AccountRowEncoded = typeof AccountRow.Encoded;
 
+/** `Account` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Account`. */
+export const AccountVisible = Account;
+export type AccountVisible = typeof AccountVisible.Type;
+export type AccountVisibleEncoded = typeof AccountVisible.Encoded;
+
 /** Input for `CREATE account CONTENT` / `INSERT`. The record id is an operation argument. */
 export const AccountCreate = Schema.Struct({
 	name: AccountFields.name,
@@ -54,6 +59,7 @@ export const AccountTable = SurrealSchema.table({
 	drop: false,
 	id: AccountId,
 	select: Account,
+	visible: AccountVisible,
 	create: AccountCreate,
 	merge: AccountMerge,
 	content: AccountContent,

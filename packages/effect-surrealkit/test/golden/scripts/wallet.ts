@@ -29,6 +29,11 @@ export const WalletRow = SurrealSchema.NoneAsAbsent(Wallet);
 export type WalletRow = typeof WalletRow.Type;
 export type WalletRowEncoded = typeof WalletRow.Encoded;
 
+/** `Wallet` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Wallet`. */
+export const WalletVisible = Wallet;
+export type WalletVisible = typeof WalletVisible.Type;
+export type WalletVisibleEncoded = typeof WalletVisible.Encoded;
+
 /** Input for `CREATE wallet CONTENT` / `INSERT`. The record id is an operation argument. */
 export const WalletCreate = Schema.Struct({
 	balance: WalletFields.balance,
@@ -64,6 +69,7 @@ export const WalletTable = SurrealSchema.table({
 	drop: false,
 	id: WalletId,
 	select: Wallet,
+	visible: WalletVisible,
 	create: WalletCreate,
 	merge: WalletMerge,
 	content: WalletContent,

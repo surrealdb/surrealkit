@@ -609,6 +609,22 @@ describe('writes', () => {
 		).toBe('UPDATE ONLY $id CONTENT $content RETURN NONE;');
 	});
 
+	it('a write of one record with RETURN NONE decodes NONE alone, as its type says, and of many an empty list', () => {
+		const ast = (statement: { readonly result: Schema.Top }) =>
+			statement.result.ast._tag;
+		const changes = param('changes', PersonTable.merge);
+		expect(
+			ast(
+				update(PersonTable, id)
+					.merge(changes)
+					.returning('none')
+					.build(),
+			),
+		).toBe('Undefined');
+		expect(ast(deleteFrom(PersonTable, id).build())).toBe('Undefined');
+		expect(ast(update(PersonTable).merge(changes).build())).toBe('Arrays');
+	});
+
 	it('delete, returning nothing unless asked', () => {
 		expect(deleteFrom(PersonTable, id).build().sql).toBe(
 			'DELETE ONLY $id RETURN NONE;',

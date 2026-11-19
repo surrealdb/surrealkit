@@ -14,12 +14,14 @@ import {
 	block,
 	codecOf,
 	eq,
+	idRange,
 	isStatement,
 	literal,
 	make,
 	object,
 	param,
 	part,
+	recordId,
 	select,
 	sequence,
 	sqlOf,
@@ -400,6 +402,20 @@ describe('FOR UPDATE', () => {
 				).toThrow('SurrealDB refuses `$invite.id` as its target');
 				return $.invite.id;
 			});
+	});
+
+	it('refuses a record id built from its key and an id range, which are no binding', () => {
+		expect(() =>
+			select(InviteTable, recordId(InviteTable, 'a')).forUpdate(),
+		).toThrow('FOR UPDATE reads one record from a binding or a local');
+		expect(() =>
+			select(
+				InviteTable,
+				idRange(InviteTable, { from: 'a' }),
+			).forUpdate(),
+		).toThrow(
+			'FOR UPDATE reads one record, and an id range of `invite` reads many; select the record by its id',
+		);
 	});
 });
 

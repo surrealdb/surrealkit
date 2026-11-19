@@ -31,6 +31,11 @@ export const InviteRow = SurrealSchema.NoneAsAbsent(Invite);
 export type InviteRow = typeof InviteRow.Type;
 export type InviteRowEncoded = typeof InviteRow.Encoded;
 
+/** `Invite` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Invite`. */
+export const InviteVisible = Invite;
+export type InviteVisible = typeof InviteVisible.Type;
+export type InviteVisibleEncoded = typeof InviteVisible.Encoded;
+
 /** Input for `CREATE invite CONTENT` / `INSERT`. The record id is an operation argument. */
 export const InviteCreate = Schema.Struct({
 	expires_at: InviteFields.expires_at,
@@ -69,6 +74,7 @@ export const InviteTable = SurrealSchema.table({
 	drop: false,
 	id: InviteId,
 	select: Invite,
+	visible: InviteVisible,
 	create: InviteCreate,
 	merge: InviteMerge,
 	content: InviteContent,

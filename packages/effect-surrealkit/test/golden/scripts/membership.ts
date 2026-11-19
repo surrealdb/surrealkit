@@ -31,6 +31,11 @@ export const MembershipRow = SurrealSchema.NoneAsAbsent(Membership);
 export type MembershipRow = typeof MembershipRow.Type;
 export type MembershipRowEncoded = typeof MembershipRow.Encoded;
 
+/** `Membership` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Membership`. */
+export const MembershipVisible = Membership;
+export type MembershipVisible = typeof MembershipVisible.Type;
+export type MembershipVisibleEncoded = typeof MembershipVisible.Encoded;
+
 /** Input for `CREATE membership CONTENT` / `INSERT`. The record id is an operation argument. */
 export const MembershipCreate = Schema.Struct({
 	account: MembershipFields.account,
@@ -69,6 +74,7 @@ export const MembershipTable = SurrealSchema.table({
 	drop: false,
 	id: MembershipId,
 	select: Membership,
+	visible: MembershipVisible,
 	create: MembershipCreate,
 	merge: MembershipMerge,
 	content: MembershipContent,

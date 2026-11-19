@@ -29,6 +29,11 @@ export const PaymentRow = SurrealSchema.NoneAsAbsent(Payment);
 export type PaymentRow = typeof PaymentRow.Type;
 export type PaymentRowEncoded = typeof PaymentRow.Encoded;
 
+/** `Payment` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Payment`. */
+export const PaymentVisible = Payment;
+export type PaymentVisible = typeof PaymentVisible.Type;
+export type PaymentVisibleEncoded = typeof PaymentVisible.Encoded;
+
 /** Input for `CREATE payment CONTENT` / `INSERT`. The record id is an operation argument. */
 export const PaymentCreate = Schema.Struct({
 	amount: PaymentFields.amount,
@@ -64,6 +69,7 @@ export const PaymentTable = SurrealSchema.table({
 	drop: false,
 	id: PaymentId,
 	select: Payment,
+	visible: PaymentVisible,
 	create: PaymentCreate,
 	merge: PaymentMerge,
 	content: PaymentContent,

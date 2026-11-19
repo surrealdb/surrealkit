@@ -327,8 +327,10 @@ const elementOf = (state: State): Codec => {
 };
 
 const resultOf = (state: State): Codec => {
-	if (state.returning === undefined && state.shape === 'many') {
-		return Schema.Tuple([]);
+	// `RETURN NONE` is an empty list for many records and NONE for one, as
+	// `NoResult` types it.
+	if (state.returning === undefined) {
+		return state.shape === 'many' ? Schema.Tuple([]) : Schema.Undefined;
 	}
 	const element = elementOf(state);
 	if (state.shape === 'one') return element;

@@ -911,13 +911,13 @@ exports[`type diagnostics > schema/unbranded-sdk-id 1`] = `
 
 exports[`type diagnostics > select/for-update-late 1`] = `
 [
-  "TS2339: Property 'forUpdate' does not exist on type 'Select<{ readonly name: "invite"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"invite">, _RecordId<"invite">, readonly [declareConstructor<...>], _RecordId<...>>, "scripts/invite">; ... 9 more ...; readonly indexes: {}; }, { ...; }, declar...'.",
+  "TS2339: Property 'forUpdate' does not exist on type 'Select<{ readonly name: "invite"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"invite">, _RecordId<"invite">, readonly [declareConstructor<...>], _RecordId<...>>, "scripts/invite">; ... 10 more ...; readonly indexes: {}; }, { ...; }, decla...'.",
 ]
 `;
 
 exports[`type diagnostics > select/for-update-table 1`] = `
 [
-  "TS2339: Property 'forUpdate' does not exist on type 'Select<{ readonly name: "invite"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"invite">, _RecordId<"invite">, readonly [declareConstructor<...>], _RecordId<...>>, "scripts/invite">; ... 9 more ...; readonly indexes: {}; }, NoParams, declar...'.",
+  "TS2339: Property 'forUpdate' does not exist on type 'Select<{ readonly name: "invite"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"invite">, _RecordId<"invite">, readonly [declareConstructor<...>], _RecordId<...>>, "scripts/invite">; ... 10 more ...; readonly indexes: {}; }, NoParams, decla...'.",
 ]
 `;
 
