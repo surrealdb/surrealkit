@@ -29,6 +29,7 @@ import { isPlainObject } from '../internal/declare.js';
 import { SurrealString, Uuid } from '../scalars.js';
 import type { FunctionDescriptor } from '../table.js';
 import { DateTime, Duration, dateTimeToString } from '../temporal.js';
+import { assertNotNested, joinRefs, withRefs } from './refs.js';
 import {
 	assertBindingName,
 	type Codec,
@@ -198,7 +199,7 @@ export const mergeParams = (...sets: ReadonlyArray<Params>): Params => {
 			merged[name] = codec;
 		}
 	}
-	return merged;
+	return withRefs(merged, joinRefs(sets));
 };
 
 /**
@@ -495,6 +496,7 @@ const logical =
 		...operands: A
 	): Expr<Schema.Boolean, ParamsOfAll<A[number]>> => {
 		const level = operator === 'AND' ? Level.and : Level.or;
+		if (operator === 'OR') assertNotNested(operands.map(paramsOf), 'OR');
 		return makeExpr(
 			Schema.Boolean,
 			operands.map((item) => conjunct(item, level)).join(` ${operator} `),
@@ -511,8 +513,15 @@ export const or = logical('OR');
 /** `!value` */
 export const not = <P extends Params>(
 	value: Expr<BooleanCodec, P>,
-): Expr<Schema.Boolean, P> =>
-	makeExpr(Schema.Boolean, `!${operand(value)}`, paramsOf(value), Level.atom);
+): Expr<Schema.Boolean, P> => {
+	assertNotNested([paramsOf(value)], 'NOT');
+	return makeExpr(
+		Schema.Boolean,
+		`!${operand(value)}`,
+		paramsOf(value),
+		Level.atom,
+	);
+};
 
 /** `value = NONE`: the field is absent, or the expression yields nothing. */
 export const isNone = <P extends Params>(

@@ -48,8 +48,10 @@ import {
 	sequence,
 	update,
 } from 'effect-surrealkit/statement';
+import * as search from 'effect-surrealkit/statement';
 
 import {
+	DocTable,
 	fn_greet,
 	PersonCreate,
 	PersonId,
@@ -82,6 +84,18 @@ type Exact<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B 
 const exactBindings: Exact<typeof directoryLookup.params.email.Type, typeof Email.Type> = true;
 const exactRows: Exact<typeof directoryLookup.result.Type, ReadonlyArray<{readonly person: typeof PersonId.Type; readonly contact: typeof Email.Type}>> = true;
 void [exactBindings, exactRows];
+
+const words = search.match(DocTable, 'body', param('terms', SurrealSchema.String), { ref: 1 });
+const near = search.knn(DocTable, 'embedding', 'query', { k: 3, ef: 40 });
+export const searched = search.evaluate(
+	search.rrf(
+		[
+			select(DocTable).where(() => words).project((row) => ({ id: row.id, score: search.score(words) })).toExpr(),
+			select(DocTable).where(() => near).project((row) => ({ id: row.id, distance: search.knnDistance(near) })).toExpr(),
+		],
+		{ limit: 10 },
+	),
+);
 
 export const rename = update(PersonTable, param('id', PersonId))
 	.merge(param('changes', PersonMerge))

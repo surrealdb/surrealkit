@@ -8,6 +8,8 @@
  */
 import type { Schema } from 'effect';
 
+import { assertResolved } from './refs.js';
+
 /** A codec that needs no services, so a statement needs only a client. */
 export type Codec = Schema.Codec<unknown, unknown, never, never>;
 
@@ -381,6 +383,7 @@ export const make = <
 		}),
 	};
 	assertStatement(statement);
+	assertResolved(options.params, `statement \`${statement.name}\``);
 	if (options.defines === undefined) {
 		const { lets } = scanTopLevel(statement.sql);
 		if (lets.length > 0) {

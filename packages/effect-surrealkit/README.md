@@ -646,6 +646,78 @@ or `unsafeExpr`); and the empty-result check of a `create` bound to a local,
 since only a statement's last result is checked. A block costs the compiler
 about what nine statements do (`test/budget.test.ts`).
 
+### Search
+
+Full-text matches, nearest-neighbour searches and fused rankings name their
+table and field, so the compiler checks the index the engine needs against
+the descriptor's `indexes`. What SurrealDB parses only as a literal (the
+match reference, the neighbour count, the search effort, the distance) is a
+validated literal; the search terms and the query vector are bindings.
+
+```ts
+import {
+  evaluate, highlight, knn, knnDistance, match, param, rrf, score, select,
+} from 'effect-surrealkit/statement';
+
+const words = match(DocTable, 'body', param('terms', SurrealSchema.String), { ref: 1 });
+const byWords = select(DocTable)
+  .where(() => words)
+  .project((row) => ({ id: row.id, score: score(words), marked: highlight(words, '<b>', '</b>') }));
+byWords.build('by words').sql;
+// SELECT id AS id, search::score(1) AS score, search::highlight(s"<b>", s"</b>", 1) AS marked
+//   FROM ⟨doc⟩ WHERE body @1@ $terms;
+
+const near = knn(DocTable, 'embedding', 'query', { k: 5, ef: 40 });
+const byMeaning = select(DocTable)
+  .where(() => near)
+  .project((row) => ({ id: row.id, distance: knnDistance(near) }));
+// SELECT id AS id, vector::distance::knn() AS distance FROM ⟨doc⟩ WHERE embedding <|5,40|> $query
+
+const fused = evaluate(rrf([byMeaning.toExpr(), byWords.toExpr()], { limit: 10 }));
+// RETURN search::rrf([(SELECT …), (SELECT …)], 10, 60);
+// ReadonlyArray<{ id: DocId; distance?: number; score?: number; marked?: string; rrf_score: number }>
+```
+
+| Function | SurrealQL |
+| --- | --- |
+| `match(table, field, terms, { ref?, operator? })` | `field @ref@ terms`, `@ref,AND@`, `@OR@`, `@@`; a compile error unless a `FULLTEXT` index covers `field`; `ref` is a literal 0 to 255 |
+| `score(m)`, `highlight(m, open, close)`, `offsets(m)` | `search::score(ref)` (a float), `search::highlight(open, close, ref)` (the field's type; the index must keep `HIGHLIGHTS`), `search::offsets(ref)` (`{ [element]: [{ s, e }] }` or NONE) |
+| `knn(table, field, vector, { k, ef })` | `field <|k,ef|> $vector` through the field's `HNSW` or `DISKANN` index (a compile error without one) |
+| `knn(table, field, vector, { k, distance })` | `field <|k,DISTANCE|> $vector` by brute force: `EUCLIDEAN`, `COSINE`, `MANHATTAN`, `CHEBYSHEV`, `HAMMING`, `JACCARD`, `PEARSON`, `INNER_PRODUCT`, `COSINE_NORMALIZED` or `['MINKOWSKI', p]` |
+| `knnDistance(hit)` | `vector::distance::knn()`, the distance of each hit |
+| `rrf(lists, { limit, k? })`, `linear(lists, { weights, limit, normalisation })` | `search::rrf(…)`, `search::linear(…)` over two or more subqueries whose rows have an `id` |
+| `evaluate(expr)` | `RETURN expr;` as a statement, for a fused ranking |
+
+The query vector is a binding name (its value an array of floats) or a
+binding of your own; its length is checked against the index dimension
+when it is encoded, and by the compiler when its codec is a tuple. `k` and
+`ef` are positive integer literals, `ref` an integer literal from 0 to 255:
+a binding, a fraction or a value out of range is a compile error.
+
+A fused row has the `id` of every list, every other field of any list as an
+optional key (SurrealDB merges rows by `id`, so a field is absent when the
+row was not in that list), and `rrf_score` or `linear_score`. A list whose
+rows have no `id` is a compile error: SurrealDB leaves such rows out.
+
+What is refused when the statement is built, because SurrealDB would answer
+without an error: a `score`, `highlight` or `offsets` of a reference no match
+of the same `SELECT` defines (SurrealDB 3.3 and 4.0 return another match's
+score), one reference on two fields, and `knnDistance` with no search (an
+error on both). A second nearest-neighbour search in one `SELECT` (4.0
+refuses it, 3.3 runs it) and one under `OR` or `NOT` (both refuse it) are
+refused when the expression is built. A subquery's references are its own.
+
+`test/conformance.test.ts` pins what this relies on, on both engines: the
+match reference, `k` and `ef` parse only as literals; a match without a
+`FULLTEXT` index fails; `<|k, ef|>` without a vector index fails on 4.0.1 and
+returns no rows on 3.3; SurrealDB 3.3 scores a term in at least half the
+rows 0, 4.0 above 0; two matches sharing a reference highlight both on 4.0
+and the last on 3.3; a row admitted through `OR` scores 0, is unmarked and
+has no offsets; and the plan of each form. `test/search-engine.test.ts` runs
+the builders on the corpus `doc` table and proves with `expectIndex` that the
+match reads `ft_body` and `<|k, ef|>` one of its vector indexes, and with
+`expectNoIndex` that the brute-force form reads neither.
+
 ### Authored SurrealQL
 
 A multi-statement script stays SurrealQL. Describe each text as a `part`
@@ -950,11 +1022,11 @@ empty results.
 - **Authored text.** The analyzer derives a part's names, result count and
   messages, not its result type: a result codec that does not match the
   script fails when it runs, not when it compiles.
-- **Coverage.** `FETCH`, graph traversal, full-text and
-  vector operators, live queries and views have no typed builder yet; use
-  `unsafeExpr` or authored SurrealQL. `ON DUPLICATE KEY UPDATE` takes plain
-  assignments only (no `+=`), and an aggregate takes a field, not an
-  expression over fields.
+- **Coverage.** `FETCH`, graph traversal, live queries and views have no
+  typed builder yet; use `unsafeExpr` or authored SurrealQL. `ON DUPLICATE
+  KEY UPDATE` takes plain assignments only (no `+=`), and an aggregate takes
+  a field, not an expression over fields. `ORDER BY` a score or distance
+  alias is not expressible yet ([Search](#search)).
 
 The engine suite (`test/statement-engine.test.ts`) runs every builder against
 the corpus schema and the modules generated from it, and passes on SurrealDB

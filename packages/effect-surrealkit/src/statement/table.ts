@@ -17,6 +17,7 @@ import {
 	paramsOf,
 	sqlOf,
 } from './expr.js';
+import { assertResolved, withoutRefs } from './refs.js';
 import {
 	type FieldsOf,
 	fieldsOf,
@@ -248,4 +249,8 @@ export const subquery = <S extends Codec, P extends Params>(
 	codec: S,
 	sql: string,
 	params: P,
-): Expr<S, P> => makeExpr(codec, `(${sql})`, params, Level.atom);
+): Expr<S, P> => {
+	// A subquery's search references are its own.
+	assertResolved(params, `the subquery \`${sql}\``);
+	return makeExpr(codec, `(${sql})`, withoutRefs(params), Level.atom);
+};
