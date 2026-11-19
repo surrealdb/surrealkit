@@ -15,12 +15,12 @@ import { NoneAsAbsent, stripNone } from '../row.js';
 import {
 	type CodecOf,
 	type Expr,
-	Level,
-	makeExpr,
+	makePath,
 	type OrNone,
 	orNone,
+	type Path,
 } from './expr.js';
-import type { Codec, NoParams } from './statement.js';
+import type { Codec } from './statement.js';
 
 /** A row schema's own fields: codecs, possibly optional keys. */
 export type Fields = { readonly [field: string]: Codec };
@@ -58,10 +58,12 @@ type IsOptional<S> = S extends { readonly '~type.optionality': 'optional' }
 
 type NestedFields<S> = S extends RowCodecIn ? FieldsOf<S> : never;
 
-/** The expression of one field, with its children when it is an object. */
-export type FieldExpr<S, Optional extends boolean> = Expr<
-	Optional extends true ? OrNone<Unwrapped<S> & Codec> : Unwrapped<S> & Codec,
-	NoParams
+/**
+ * The expression of one field, a field path, with its children when it is
+ * an object.
+ */
+export type FieldExpr<S, Optional extends boolean> = Path<
+	Optional extends true ? OrNone<Unwrapped<S> & Codec> : Unwrapped<S> & Codec
 > &
 	([NestedFields<Unwrapped<S>>] extends [never]
 		? unknown
@@ -103,16 +105,20 @@ const build = (
 	fields: Fields,
 	prefix: string,
 	optional: boolean,
+	root: { readonly root: string; readonly rootSql: string } | undefined,
 ): Record<string, Expr> => {
 	const row: Record<string, Expr> = {};
 	for (const [key, declared] of Object.entries(fields)) {
 		const mayBeNone = optional || isOptional(declared);
 		const codec = unwrap(declared);
 		const path = `${prefix}${escapeIdent(key)}`;
+		const start = root ?? { root: key, rootSql: path };
 		const nested = fieldsOf(codec);
 		row[key] = Object.assign(
-			nested === undefined ? {} : build(nested, `${path}.`, mayBeNone),
-			makeExpr(mayBeNone ? orNone(codec) : codec, path, {}, Level.atom),
+			nested === undefined
+				? {}
+				: build(nested, `${path}.`, mayBeNone, start),
+			makePath(mayBeNone ? orNone(codec) : codec, path, start),
 		);
 	}
 	return row;
@@ -127,7 +133,7 @@ export const rowOf = <R extends RowCodecIn>(schema: R): RowOf<FieldsOf<R>> => {
 	if (fields === undefined) {
 		throw new TypeError('rowOf takes a generated row schema (a struct)');
 	}
-	return build(fields, '', false) as RowOf<FieldsOf<R>>;
+	return build(fields, '', false, undefined) as RowOf<FieldsOf<R>>;
 };
 
 /** The codec stored rows decode with: NONE reads as an absent key. */

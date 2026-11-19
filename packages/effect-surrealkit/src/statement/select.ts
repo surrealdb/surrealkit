@@ -11,10 +11,14 @@ import {
 	codecOf,
 	type Expr,
 	isExpr,
+	isPath,
 	mergeParams,
 	type OperandParams,
 	type ParamsOfAll,
+	type Path,
+	type PathData,
 	paramsOf,
+	pathOf,
 	sqlOf,
 } from './expr.js';
 import {
@@ -62,12 +66,36 @@ interface State {
 	readonly out: Codec;
 	readonly fields: string;
 	readonly where: ReadonlyArray<Expr>;
-	readonly order: ReadonlyArray<string>;
+	readonly order: ReadonlyArray<Order>;
+	/** The projection's aliases and the text each stands for. */
+	readonly aliases: ReadonlyMap<string, string>;
 	readonly limit: string | undefined;
 	readonly start: string | undefined;
 	readonly only: boolean;
 	readonly params: Params;
 }
+
+interface Order {
+	readonly sql: string;
+	readonly direction: 'ASC' | 'DESC';
+	readonly path: PathData;
+}
+
+/**
+ * SurrealDB resolves an `ORDER BY` path against the projection before the
+ * stored row, so an alias named like the field the path starts from, over
+ * anything but that field, would change what is sorted.
+ */
+const assertOrder = (state: State): void => {
+	for (const { path, sql } of state.order) {
+		const source = state.aliases.get(path.root);
+		if (source !== undefined && source !== path.rootSql) {
+			throw new RangeError(
+				`the projection alias \`${path.root}\` stands for \`${source}\`, not the stored field \`${path.root}\` that ORDER BY ${sql} reads, and SurrealDB would order by the alias; rename the alias`,
+			);
+		}
+	}
+};
 
 const count = (value: Count, clause: string): string => {
 	if (isExpr(value)) return sqlOf(value);
@@ -80,6 +108,7 @@ const count = (value: Count, clause: string): string => {
 };
 
 const render = (state: State): string => {
+	assertOrder(state);
 	const limit = state.only && state.source === undefined ? '1' : state.limit;
 	return [
 		`SELECT ${state.fields} FROM ${state.only ? 'ONLY ' : ''}${
@@ -89,7 +118,11 @@ const render = (state: State): string => {
 		}`,
 		...(state.where.length > 0 ? [`WHERE ${andAll(state.where)}`] : []),
 		...(state.order.length > 0
-			? [`ORDER BY ${state.order.join(', ')}`]
+			? [
+					`ORDER BY ${state.order
+						.map(({ direction, sql }) => `${sql} ${direction}`)
+						.join(', ')}`,
+				]
 			: []),
 		...(limit === undefined ? [] : [`LIMIT ${limit}`]),
 		...(state.start === undefined ? [] : [`START ${state.start}`]),
@@ -115,11 +148,17 @@ export interface Select<
 		predicate: (row: RowExprs<T>) => Condition<P2>,
 	) => Select<T, P & P2, Row, Only>;
 
-	/** Adds a sort key, after the ones already given. */
-	readonly orderBy: <P2 extends Params = NoParams>(
-		key: (row: RowExprs<T>) => Expr<Codec, P2>,
+	/**
+	 * Adds a sort key, after the ones already given: a field path of the
+	 * stored row (`row.name`, `row.address.city`, `at(row.pins, 0)`), the
+	 * only thing SurrealDB parses there. A projection alias named like the
+	 * field the path starts from must be that field (`.project((row) =>
+	 * ({ age: row.age }))`), or the statement is refused when it is built.
+	 */
+	readonly orderBy: (
+		key: (row: RowExprs<T>) => Path,
 		direction?: 'ASC' | 'DESC',
-	) => Select<T, P & P2, Row, Only>;
+	) => Select<T, P, Row, Only>;
 
 	/** `LIMIT`: at most this many rows. */
 	readonly limit: <const L extends Count>(
@@ -179,11 +218,19 @@ const builder = <
 			});
 		},
 		orderBy: (key, direction = 'ASC') => {
-			const by = key(row);
+			const by: unknown = key(row);
+			const path = isPath(by) ? pathOf(by) : undefined;
+			if (path === undefined) {
+				throw new TypeError(
+					'ORDER BY takes a field path of the row (`row.name`, `row.address.city`, `at(row.pins, 0)`); SurrealDB parses nothing else there',
+				);
+			}
 			return builder({
 				...state,
-				order: [...state.order, `${sqlOf(by)} ${direction}`],
-				params: mergeParams(state.params, paramsOf(by)),
+				order: [
+					...state.order,
+					{ sql: sqlOf(by as Path), direction, path },
+				],
 			});
 		},
 		limit: (rows) => {
@@ -209,6 +256,7 @@ const builder = <
 			return builder({
 				...state,
 				fields: projected.sql,
+				aliases: projected.aliases,
 				out: projected.codec,
 				params: mergeParams(state.params, projected.params),
 			});
@@ -218,6 +266,7 @@ const builder = <
 			return builder({
 				...state,
 				fields: `VALUE ${sqlOf(picked)}`,
+				aliases: new Map(),
 				out: rowCodec(codecOf(picked)),
 				params: mergeParams(state.params, paramsOf(picked)),
 			});
@@ -272,6 +321,7 @@ export const select: {
 		fields: '*',
 		where: [],
 		order: [],
+		aliases: new Map(),
 		limit: undefined,
 		start: undefined,
 		only: false,

@@ -264,7 +264,7 @@ may be NONE.
 | `and(…)` `or(…)` `not(x)` | `AND` `OR` `!` |
 | `isNone(x)` `isNotNone(x)` | `x = NONE`, `x != NONE` |
 | `inside(x, xs)` `contains(xs, x)` | `INSIDE`, `CONTAINS`; `xs` may be an array of primitives |
-| `at(array, i)` | `array[i]`, or NONE past the end |
+| `at(array, i)` | `array[i]`, or NONE past the end; an element of a field path is a field path |
 | `cast(kind, x)` | `<kind>x` |
 | `call(fn, …args)` | a `DEFINE FUNCTION`, through its generated descriptor |
 | `select(…).toExpr()` | a subquery |
@@ -288,6 +288,14 @@ two codecs is refused, as are names SurrealDB sets itself (`$auth`, `$this`,
 | `update(table).merge(x).where(…)` | every changed row |
 | `deleteFrom(table, id)`, `deleteFrom(table).where(…)` | nothing; `.returning('before')` for the deleted rows |
 | `relate(edgeTable, from, to)` | the edge (`RELATE ONLY`); the endpoints must be ids the relation declares |
+
+`.orderBy(…)` takes a field path of the stored row (`row.name`,
+`row.address.city`, `at(row.pins, 0)`), the only thing SurrealDB parses
+after `ORDER BY`; anything else is a compile error. SurrealDB resolves an
+`ORDER BY` path against the projection before the stored row, so a
+projection alias named like the field a path starts from must be that same
+field (`age: row.age`); any other alias of that name is refused when the
+statement is built.
 
 Data is always bound, and must fit the descriptor's schema for the operation
 (`create`, `merge`, `content`). `.returning('none' | 'after' | 'before')` or a

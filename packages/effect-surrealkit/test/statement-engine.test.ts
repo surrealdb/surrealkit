@@ -198,6 +198,46 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 		).toEqual([]);
 	});
 
+	it('orders by the stored field the callback selected, whatever is projected', async () => {
+		// Ann 30, Bob no age, Cy 41: the projection leaves `age` out.
+		const byAge = select(PersonTable)
+			.orderBy((row) => row.age, 'DESC')
+			.project((row) => ({ name: row.name }))
+			.build();
+		expect(await ok(client.run(byAge))).toEqual([
+			{ name: 'Cy' },
+			{ name: 'Ann' },
+			{ name: 'Bob' },
+		]);
+		const withAge = select(PersonTable)
+			.orderBy((row) => row.age, 'DESC')
+			.project((row) => ({ name: row.name, age: row.age }))
+			.build();
+		expect((await ok(client.run(withAge))).map((row) => row.name)).toEqual([
+			'Cy',
+			'Ann',
+			'Bob',
+		]);
+		// Nested fields and array elements are paths too.
+		const byCity = select(PersonTable)
+			.orderBy((row) => row.address.city, 'DESC')
+			.orderBy((row) => at(row.pins, 0))
+			.orderBy((row) => row.name)
+			.value((row) => row.name)
+			.build();
+		// York before Leeds; then Cy, who has no pins (NONE sorts first),
+		// before Ann.
+		expect(await ok(client.run(byCity))).toEqual(['Bob', 'Cy', 'Ann']);
+		// An alias of the same name over another field would sort by the
+		// alias instead: it is refused when the statement is built.
+		expect(() =>
+			select(PersonTable)
+				.orderBy((row) => row.age)
+				.project((row) => ({ age: row.name }))
+				.build(),
+		).toThrow(/alias `age`/);
+	});
+
 	it('projects expressions, NONE included', async () => {
 		const listing = select(PersonTable)
 			.orderBy((row) => row.name)

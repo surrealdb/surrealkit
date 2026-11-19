@@ -83,6 +83,15 @@ same<
 	{ readonly minimum: number; readonly city: string; readonly rows: number }
 >(true);
 
+// ORDER BY takes field paths: nested fields and array elements included.
+export const ordered = select(PersonTable)
+	.orderBy((row) => row.address.city)
+	.orderBy((row) => at(row.phones, 0), 'DESC')
+	.orderBy((row) => row['odd.name'])
+	.value((row) => row.name)
+	.build();
+same<Input<(typeof ordered)['params']>, Record<never, never>>(true);
+
 // An optional field, and a field read through one, may be NONE.
 export const projected = select(PersonTable)
 	.project((row) => ({

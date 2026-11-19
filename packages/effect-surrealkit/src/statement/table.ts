@@ -107,6 +107,8 @@ export const project = <F extends Projection>(
 	readonly sql: string;
 	readonly codec: ProjectedCodec<F>;
 	readonly params: ParamsOfAll<F[keyof F]>;
+	/** Each alias and the text of its expression. */
+	readonly aliases: ReadonlyMap<string, string>;
 } => {
 	const entries = Object.entries(fields);
 	if (entries.length === 0) {
@@ -126,6 +128,9 @@ export const project = <F extends Projection>(
 		params: mergeParams(
 			...entries.map(([, value]) => paramsOf(value)),
 		) as ParamsOfAll<F[keyof F]>,
+		aliases: new Map(
+			entries.map(([alias, value]) => [alias, sqlOf(value)]),
+		),
 	};
 };
 

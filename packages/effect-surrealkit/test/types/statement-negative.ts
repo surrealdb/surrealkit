@@ -3,6 +3,7 @@
  * `effect-surrealkit/client`: each `@ts-expect-error` must be an actual
  * error, or `tsc -p test/types` fails.
  */
+import { Schema } from 'effect';
 import * as SurrealSchema from 'effect-surrealkit';
 
 import { bind, run, transaction } from '../../src/client/index.js';
@@ -10,11 +11,13 @@ import {
 	and,
 	at,
 	call,
+	cast,
 	contains,
 	create,
 	eq,
 	gt,
 	inside,
+	literal,
 	not,
 	param,
 	part,
@@ -76,6 +79,24 @@ export const rejectedConditions = () => {
 	}));
 	// @ts-expect-error LIMIT takes a number
 	select(PersonTable).limit(param('rows', SurrealSchema.String));
+};
+
+// ORDER BY takes field paths only: the engine parses nothing else there.
+export const rejectedOrders = () => {
+	// @ts-expect-error a cast is not a field path
+	select(PersonTable).orderBy((row) => cast('string', row.age));
+	// @ts-expect-error a constant is not a field path
+	select(PersonTable).orderBy(() => literal(1));
+	// @ts-expect-error a function call is not a field path
+	select(PersonTable).orderBy((row) => call(fn_greet, row.name));
+	// @ts-expect-error a comparison is not a field path
+	select(PersonTable).orderBy((row) => eq(row.age, 1));
+	// @ts-expect-error a parameter is not a field path
+	select(PersonTable).orderBy(() => param('x', SurrealSchema.Int));
+	select(PersonTable).orderBy(() =>
+		// @ts-expect-error an element of a bound array is not a field path
+		at(param('xs', Schema.Array(SurrealSchema.Int)), 0),
+	);
 };
 
 export const rejectedCalls = () => {

@@ -30,6 +30,19 @@ interface ExprData<S extends Codec, P extends Params> {
 	readonly params: P;
 	/** How loosely the text binds, which decides where it needs parentheses. */
 	readonly level: Level;
+	/** Set when the text is a field path of the row. */
+	readonly path?: PathData;
+}
+
+/**
+ * Where a field path starts: the top-level field it reads, as the row
+ * schema names it and as the text spells it.
+ *
+ * @internal
+ */
+export interface PathData {
+	readonly root: string;
+	readonly rootSql: string;
 }
 
 /**
@@ -57,6 +70,15 @@ export interface Expr<S extends Codec = Codec, P extends Params = Params> {
 	readonly [ExprTypeId]: ExprData<S, P>;
 }
 
+/**
+ * A field path of the row (`name`, `address.city`, `phones[0]`): what
+ * `ORDER BY` accepts. The row's field expressions are paths, and so is an
+ * element of one ({@link at}); nothing else is.
+ */
+export interface Path<S extends Codec = Codec> extends Expr<S, NoParams> {
+	readonly [ExprTypeId]: ExprData<S, NoParams> & { readonly path: PathData };
+}
+
 /** The codec of the value an expression yields. */
 export type CodecOf<E> = E extends Expr<infer S, Params> ? S : never;
 
@@ -81,6 +103,10 @@ export type ParamsOfAll<E> = [ParamsOf<E>] extends [never]
 export const isExpr = (value: unknown): value is Expr =>
 	typeof value === 'object' && value !== null && ExprTypeId in value;
 
+/** Whether `value` is a field path of a row. */
+export const isPath = (value: unknown): value is Path =>
+	isExpr(value) && value[ExprTypeId].path !== undefined;
+
 /** The codec of the value `expr` yields. */
 export const codecOf = <S extends Codec>(expr: Expr<S, Params>): S =>
 	expr[ExprTypeId].codec;
@@ -99,6 +125,19 @@ export const makeExpr = <S extends Codec, P extends Params>(
 	params: P,
 	level: Level,
 ): Expr<S, P> => ({ [ExprTypeId]: { codec, sql, params, level } });
+
+/** @internal */
+export const makePath = <S extends Codec>(
+	codec: S,
+	sql: string,
+	path: PathData,
+): Path<S> => ({
+	[ExprTypeId]: { codec, sql, params: {}, level: Level.atom, path },
+});
+
+/** The path data of `expr`, when it is a field path. @internal */
+export const pathOf = (expr: Expr): PathData | undefined =>
+	expr[ExprTypeId].path;
 
 /**
  * The text of `expr` as an operand of a comparison, call or clause: anything
@@ -451,19 +490,26 @@ export const orNone = <S extends Codec>(codec: S): OrNone<S> =>
 		? codec
 		: Schema.UndefinedOr(codec)) as OrNone<S>;
 
+type ArrayOnly<S extends Codec> = [ItemOf<S>] extends [never]
+	? {
+			readonly 'this expression is not an array, so it has no elements to index': S['Encoded'];
+		}
+	: unknown;
+
 /**
  * `array[index]`: one element, or NONE past the end. A negative index is
- * not an offset from the end in SurrealQL, so it is refused.
+ * not an offset from the end in SurrealQL, so it is refused. An element of
+ * a field path is a field path.
  */
-export const at = <S extends Codec, P extends Params>(
-	array: Expr<S, P> &
-		([ItemOf<S>] extends [never]
-			? {
-					readonly 'this expression is not an array, so it has no elements to index': S['Encoded'];
-				}
-			: unknown),
+export function at<S extends Codec>(
+	array: Path<S> & ArrayOnly<S>,
 	index: number,
-): Expr<OrNone<ItemOf<S>>, P> => {
+): Path<OrNone<ItemOf<S>>>;
+export function at<S extends Codec, P extends Params>(
+	array: Expr<S, P> & ArrayOnly<S>,
+	index: number,
+): Expr<OrNone<ItemOf<S>>, P>;
+export function at(array: Expr, index: number): Expr {
 	if (!Number.isInteger(index) || index < 0) {
 		throw new RangeError(
 			`${index} is not an array index: use a non-negative integer`,
@@ -475,13 +521,13 @@ export const at = <S extends Codec, P extends Params>(
 			`\`${sqlOf(array)}\` is not an array expression, so it has no elements to index`,
 		);
 	}
-	return makeExpr(
-		orNone(codec.value as ItemOf<S>),
-		`${operand(array)}[${index}]`,
-		paramsOf(array),
-		Level.atom,
-	);
-};
+	const element = orNone(codec.value as Codec);
+	const sql = `${operand(array)}[${index}]`;
+	const path = pathOf(array);
+	return path === undefined
+		? makeExpr(element, sql, paramsOf(array), Level.atom)
+		: makePath(element, sql, path);
+}
 
 const casts = {
 	bool: Schema.Boolean,

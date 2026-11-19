@@ -378,6 +378,62 @@ describe('select', () => {
 		);
 	});
 
+	it('orders by the stored field, refusing an alias that would hide it', () => {
+		// Finding 3: SurrealDB resolves ORDER BY against the projection
+		// first, so `ORDER BY age` sorted by an alias `age` of `name`.
+		expect(() =>
+			select(PersonTable)
+				.orderBy((row) => row.age)
+				.project((row) => ({ age: row.name }))
+				.build(),
+		).toThrow(/alias `age`.*`name`.*ORDER BY age/);
+		expect(() =>
+			select(PersonTable)
+				.project((row) => ({ address: row.name }))
+				.orderBy((row) => row.address.city)
+				.toExpr(),
+		).toThrow(/alias `address`/);
+		expect(() =>
+			select(PersonTable)
+				.orderBy((row) => row.phones)
+				.project((row) => ({ phones: at(row.phones, 0) }))
+				.build(),
+		).toThrow(/alias `phones`/);
+		// An alias that is the ordered field itself keeps working.
+		expect(
+			select(PersonTable)
+				.orderBy((row) => row.address.city)
+				.orderBy((row) => row.age, 'DESC')
+				.project((row) => ({ age: row.age, address: row.address }))
+				.build().sql,
+		).toBe(
+			'SELECT age AS age, address AS address FROM person ORDER BY address.city ASC, age DESC;',
+		);
+		expect(
+			select(PersonTable)
+				.orderBy((row) => at(row.phones, 0))
+				.project((row) => ({ city: row.address.city }))
+				.build().sql,
+		).toBe(
+			'SELECT address.city AS city FROM person ORDER BY phones[0] ASC;',
+		);
+	});
+
+	it('orders only by field paths', () => {
+		// Finding 4: the engine parses nothing else after ORDER BY. The
+		// types refuse it (test/types); untyped callers are refused here.
+		const untyped = select(PersonTable).orderBy as (
+			key: (row: unknown) => unknown,
+		) => unknown;
+		expect(() => untyped(() => cast('string', rowOf(Person).age))).toThrow(
+			/ORDER BY takes a field path/,
+		);
+		expect(() => untyped(() => param('x', SurrealSchema.Int))).toThrow(
+			/ORDER BY takes a field path/,
+		);
+		expect(() => untyped(() => 1)).toThrow(/ORDER BY takes a field path/);
+	});
+
 	it('reads through a narrower row schema for a restricted session', () => {
 		const Visible = Schema.Struct({
 			id: PersonId,
