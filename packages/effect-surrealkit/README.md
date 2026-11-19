@@ -1179,8 +1179,8 @@ if (problems.length > 0) throw new Error(problems.map((p) => `${p.kind} ${p.path
 
 The analyzer is `effect-surrealkit/analyze`, pure and host-neutral:
 `analyze(sql, { holes? })` returns `{ kind, sql, free, defines, slots,
-throws, throwsAt, holes, provisional, transactional, writes, tables,
-functions, openTargets, diagnostics }` or fails
+throws, throwsAt, holes, holeScopes, provisional, transactional, writes,
+tables, functions, openTargets, diagnostics }` or fails
 with an `AnalyzeError` carrying a line and column.
 
 - **Lexing.** `--`, `//`, `#` and `/* */` comments; `'…'` and `"…"` strings
@@ -1246,12 +1246,156 @@ with an `AnalyzeError` carrying a line and column.
   the filled text, failing on an unknown hole, a missing fill or a fill
   with holes of its own (unless `allowHoles`); each fill must lex on its own
   with balanced brackets. Analyse the result to get a part.
+  `holeScopes` gives, for each hole, the names visible at every occurrence
+  (`bound`) and the free names a `LET` placed there would define for every
+  read (`binds`, only where the hole starts a statement); the command
+  writes it as `scopes`, which statement families build on.
 
 What it does not check: it lexes, it does not parse, so it does not know
 whether a text is valid SurrealQL, what a statement returns (only how many
 results), whether a fragment really is one expression, or what a function
 body reads when it is called; a `DEFINE PARAM` is reported as a warning
 and later reads of it stay free.
+
+### Statement families
+
+Some reads differ only in which clauses they hold: a filter the caller may
+leave out, a nearest-neighbour branch only some calls need. A statement
+family is the finite, declared set of those statements, composed from
+generated templates. The caller selects one variant per call with a key
+whose axes the family declares. Every variant is an ordinary static
+`Statement`, with its own text, its own bindings and its own pin. Input
+values never change a text. They still travel only as bindings.
+
+`compose(template, fills)` fills every hole of a generated template.
+`choose(axis, options)` picks a fill by the value of one axis, and `empty`
+leaves a clause out. A fill is a generated text without holes, a part (for
+a hole that starts a statement), another `compose(…)` or `choose(…)`, a
+constant that binds nothing (`literal(…)`) or `empty`. Raw strings are
+refused. `family(axes, root).define({ name, params, result })` takes one
+codec for each name any variant reads, and `select(key)` returns the
+variant's statement:
+
+```text
+queries/catalog/visible.surql   shelf = $shelf.id __PRICE__ __REGION__
+queries/catalog/priceCap.surql  AND price <= $maxPrice
+queries/catalog/regionIs.surql  AND region = $region
+queries/catalog/byWords.surql   SELECT id, title FROM listing WHERE __WHERE__ AND title @1@ $terms ORDER BY id LIMIT 10
+queries/catalog/guarded.surql   RETURN IF $tenant = NONE { … } ELSE { LET $shelf = (…); … data: (__BODY__) … };
+```
+
+```ts
+import { Schema } from 'effect';
+import * as SurrealSchema from 'effect-surrealkit';
+import { run } from 'effect-surrealkit/client';
+import { choose, compose, empty, family } from 'effect-surrealkit/statement';
+import { catalog } from './generated/statements/index.js';
+
+const visible = compose(catalog.visible, {
+	__PRICE__: choose('price', { true: catalog.priceCap, false: empty }),
+	__REGION__: choose('region', { true: catalog.regionIs, false: empty }),
+});
+
+export const listings = family(
+	{ price: [false, true], region: [false, true] },
+	compose(catalog.guarded, {
+		__BODY__: compose(catalog.byWords, { __WHERE__: visible }),
+	}),
+).define({
+	name: 'listings',
+	params: {
+		tenant: SurrealSchema.String,
+		terms: SurrealSchema.String,
+		maxPrice: SurrealSchema.Int,
+		region: SurrealSchema.String,
+	},
+	result: Schema.Unknown,
+});
+
+// A key known at compile time: this variant binds exactly tenant, terms and maxPrice.
+run(listings.select({ price: true, region: false }), { tenant: 't', terms: 'lamp', maxPrice: 40 });
+
+// A key known only at run time: the input must carry every required name
+// some selectable variant reads; the variant selected sends only its own.
+declare const input: { tenant: string; terms: string; maxPrice?: number };
+run(
+	listings.select({ price: input.maxPrice !== undefined, region: false }),
+	{ ...input, maxPrice: input.maxPrice ?? 0 },
+);
+```
+
+The compiler works out what each variant reads from the literal names the
+`statements` command writes. Each text carries its `free` names and, for a
+template, the `scopes` of its holes: `bound`, the names visible at every
+occurrence of a hole, such as `$shelf` above, and `binds`, the names a
+`LET` placed there would define. `$shelf` is a local of the guard, so it
+is no binding of any variant. A key whose axes are unions (`price:
+boolean`) selects any variant in that sub-product. Its statement is typed
+with every name those variants read, and a name is required when its codec
+does not accept `undefined`. Typing the selection as a union of variant
+statements would be unsound: TypeScript would keep only the names every
+variant reads, and a call could omit a value the selected variant needs.
+No type builds SQL or enumerates the variants, so the cost of a family
+does not grow with the number of variants. `test/budget.test.ts` holds it:
+30 families shaped like an eight-variant search cost about 8,000
+instantiations each, about what a block costs.
+
+Mistakes are compile errors whose first line names them
+(`test/diagnostics.test.ts` pins every case `family/*`):
+
+| Mistake | First line (abridged) |
+| --- | --- |
+| a hole without a fill | `… '{ __PRICE__: Empty; }' is not assignable to parameter of type '"hole `__REGION__` has no fill"'` |
+| a fill for no hole | `Type 'Empty' is not assignable to type '"`__COLOUR__` is not a hole of this template"'` |
+| raw SurrealQL as a fill or option | `… '"a hole takes a generated text or part, `compose(…)`, `choose(…)`, `literal(…)` or `empty`, not raw SurrealQL"'` |
+| a template as a fill | `… '"this fill is a template with holes (__NEAR__ …): compose it first"'` |
+| a constant that binds | `… '"a constant fill binds nothing: put the binding in a `.surql` fragment"'` |
+| a fill typed as one of several texts | `… '"this fill is typed as one of several texts, so the compiler cannot tell which a variant holds: choose between them with `choose(…)`"'` |
+| a choice on an undeclared axis | `… '"choose('vector', …) names an axis this family does not declare"'` |
+| an axis nothing chooses on | `… '"axis `size` is never chosen on, so every value of it gives the same text"'` |
+| an axis value without a text | `… '"choose('price', …) has no text for `none`" \| …'` |
+| a codec missing, or one too many | `… '"binding `$maxPrice` is read by a variant of this family and has no codec"'`, `… '"binding `$colour` is not read by any variant of this family"'` |
+| `select` with a property that is no axis | `… '"`colour` is not an axis of this family"'` |
+| `select` without an axis, or a bad value | TypeScript's own (`Property 'vector' is missing …`, `Type 'string' is not assignable to type 'boolean'`) |
+| `run` without a value the variant reads | `… '"binding `maxPrice` has no value"'`, also for a run-time key that may select the variant |
+| `run` with a value the variant does not read, misspelt, or of the wrong type | `TS2353 … 'region' does not exist …`, `TS2561 … Did you mean to write 'maxPrice'?`, `Type 'string' is not assignable to type 'number'` |
+
+The same rules are checked at run time, so a hand-written or out-of-date
+text cannot mislead the compiler:
+
+| When | Check |
+| --- | --- |
+| `compose`, `choose` | every hole filled and none extra; each fill a node; no raw string, template or constant that binds; a choice has options |
+| `define` (module load) | every text's declared `holes`, `free`, `defines`, `throws` and `scopes` equal what the analyzer derives from its SQL (`… does not declare what its text does: scopes.__BODY__.bound: declared [], the text has [shelf]`); the axes are well formed, every chosen axis is declared and every declared axis is chosen on; the codecs are exactly the names the variants read (`the bindings of family `short` do not match the names its variants read; missing: $maxPrice`) |
+| first `select` of a key, `variants()`, or `define` with `build: 'eager'` | the variant's final text is analysed. It must have no holes, be a part rather than a fragment, read and throw exactly what the compiler's rule says, and have no error diagnostics. Its statement then binds exactly the analysed free names (`family `x`, variant price=true: the composition reads [$a], its text reads [$a, $b]`) |
+| `select` | every axis has one of its declared values, and there is no other axis (`family `x`: yes is not a value of the axis `price` (false, true)`) |
+| `run` | unchanged: only the variant's own `params` are encoded and sent |
+
+A variant is built once, on first use. `variants()` builds every one and
+returns `{ key, name, sql, statement }` for each. Its `name` is the
+family's name plus one `axis-value` segment per axis, so the list feeds
+`renderPinnedStatements` and `pinnedStatementProblems` as it is: run it in
+CI and every variant is checked and reviewed as SurrealQL
+(`pins/listings/price-true/region-false.surql`). Every variant's
+statement is named after the family, so metrics count the family under
+one label. Its `variant` (`price=true, region=false`) is recorded on the
+span of a `run` as `effect_surrealkit.statement.variant`. Binding values
+never are.
+
+What a family does not do:
+
+- No text depends on an input value; the choice is by declared keys only.
+- No absent filter is neutralised (`$x = NONE OR …`). The clause is left
+  out of the text.
+- No per-variant codecs: one codec per name per family, so a name only
+  some variants require takes the one codec.
+- No dependent axes (an axis that exists only under some value of
+  another): use two families, or accept variants nobody selects.
+- No custom hole delimiters yet: `Text` does not record its delimiters,
+  and composition assumes `__NAME__`.
+- No definitions propagate through a composite at a statement hole. Only a
+  text's or part's own `defines` count, and `define` refuses a family that
+  relies on more instead of sending a wrong statement.
 
 ### Running statements
 
