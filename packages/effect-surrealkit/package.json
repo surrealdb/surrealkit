@@ -53,6 +53,7 @@
 		"lint": "biome ci .",
 		"test": "vitest run",
 		"test:roundtrip": "node scripts/roundtrip.mjs",
+		"generate:functions": "node scripts/generate-functions.mjs",
 		"typecheck": "tsc --noEmit && tsc --noEmit -p test/types"
 	},
 	"keywords": [
