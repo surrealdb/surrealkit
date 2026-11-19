@@ -99,9 +99,13 @@ export const fieldsOf = (codec: Codec): Fields | undefined => {
 	return undefined;
 };
 
+const fieldRoots = new WeakMap<Expr, string>();
+export const fieldRoot = (field: Expr) => fieldRoots.get(field);
+
 const build = (
 	fields: Fields,
 	prefix: string,
+	root: string | undefined,
 	optional: boolean,
 ): Record<string, Expr> => {
 	const row: Record<string, Expr> = {};
@@ -110,10 +114,14 @@ const build = (
 		const codec = unwrap(declared);
 		const path = `${prefix}${escapeIdent(key)}`;
 		const nested = fieldsOf(codec);
-		row[key] = Object.assign(
-			nested === undefined ? {} : build(nested, `${path}.`, mayBeNone),
+		const field = Object.assign(
+			nested === undefined
+				? {}
+				: build(nested, `${path}.`, root ?? key, mayBeNone),
 			makeExpr(mayBeNone ? orNone(codec) : codec, path, {}, Level.atom),
 		);
+		row[key] = field;
+		fieldRoots.set(field, root ?? key);
 	}
 	return row;
 };
@@ -127,7 +135,7 @@ export const rowOf = <R extends RowCodecIn>(schema: R): RowOf<FieldsOf<R>> => {
 	if (fields === undefined) {
 		throw new TypeError('rowOf takes a generated row schema (a struct)');
 	}
-	return build(fields, '', false) as RowOf<FieldsOf<R>>;
+	return build(fields, '', undefined, false) as RowOf<FieldsOf<R>>;
 };
 
 /** The codec stored rows decode with: NONE reads as an absent key. */

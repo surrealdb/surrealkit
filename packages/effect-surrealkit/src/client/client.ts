@@ -9,9 +9,9 @@
 import { Context, Effect, Layer, Schema } from 'effect';
 import {
 	BoundQuery,
+	CborCodec,
 	type RetryValue,
 	type SurrealSession,
-	toSurqlString,
 } from 'surrealdb';
 
 import type {
@@ -238,6 +238,14 @@ const countOf = (
 				}),
 			);
 
+const sameWireValue = (left: unknown, right: unknown): boolean => {
+	if (Object.is(left, right)) return true;
+	const codec = CborCodec.DEFAULT;
+	const a = new Uint8Array(codec.encode(left));
+	const b = new Uint8Array(codec.encode(right));
+	return a.length === b.length && a.every((byte, index) => byte === b[index]);
+};
+
 const traced = <A, E>(
 	name: string,
 	sql: string,
@@ -309,14 +317,23 @@ export const make = (db: Queryable): Client => ({
 			sql,
 			Effect.gen(function* () {
 				if (statements.length === 0) return [];
-				const bindings: Record<string, unknown> = {};
+				const bindings: Record<string, unknown> = Object.create(null);
+				const locals = new Set<string>();
 				for (const { input, statement } of statements) {
 					const encoded = yield* encode(statement, input);
 					for (const [key, value] of Object.entries(encoded)) {
+						if (locals.has(key)) {
+							return yield* Effect.fail(
+								new StatementEncodeError({
+									statement: statement.name,
+									binding: key,
+									message: `An earlier LET shadows $${key}`,
+								}),
+							);
+						}
 						if (
 							key in bindings &&
-							toSurqlString(bindings[key]) !==
-								toSurqlString(value)
+							!sameWireValue(bindings[key], value)
 						) {
 							return yield* Effect.fail(
 								new StatementEncodeError({
@@ -328,6 +345,8 @@ export const make = (db: Queryable): Client => ({
 						}
 						bindings[key] = value;
 					}
+					for (const name of statement.defines ?? [])
+						locals.add(name);
 				}
 				const throws = statements.flatMap(
 					({ statement }) => statement.throws,

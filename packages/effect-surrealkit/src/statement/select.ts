@@ -18,6 +18,7 @@ import {
 	sqlOf,
 } from './expr.js';
 import {
+	fieldRoot,
 	type ProjectedCodec,
 	type Projection,
 	type RowCodec,
@@ -62,7 +63,8 @@ interface State {
 	readonly out: Codec;
 	readonly fields: string;
 	readonly where: ReadonlyArray<Expr>;
-	readonly order: ReadonlyArray<string>;
+	readonly order: ReadonlyArray<{ sql: string; root: string }>;
+	readonly projection: Projection | undefined;
 	readonly limit: string | undefined;
 	readonly start: string | undefined;
 	readonly only: boolean;
@@ -80,6 +82,13 @@ const count = (value: Count, clause: string): string => {
 };
 
 const render = (state: State): string => {
+	for (const { root } of state.order) {
+		const alias = state.projection?.[root];
+		if (alias !== undefined && alias !== state.row[root])
+			throw new RangeError(
+				`projection alias ${root} shadows ORDER BY field`,
+			);
+	}
 	const limit = state.only && state.source === undefined ? '1' : state.limit;
 	return [
 		`SELECT ${state.fields} FROM ${state.only ? 'ONLY ' : ''}${
@@ -89,7 +98,7 @@ const render = (state: State): string => {
 		}`,
 		...(state.where.length > 0 ? [`WHERE ${andAll(state.where)}`] : []),
 		...(state.order.length > 0
-			? [`ORDER BY ${state.order.join(', ')}`]
+			? [`ORDER BY ${state.order.map((order) => order.sql).join(', ')}`]
 			: []),
 		...(limit === undefined ? [] : [`LIMIT ${limit}`]),
 		...(state.start === undefined ? [] : [`START ${state.start}`]),
@@ -180,9 +189,15 @@ const builder = <
 		},
 		orderBy: (key, direction = 'ASC') => {
 			const by = key(row);
+			const root = fieldRoot(by);
+			if (root === undefined)
+				throw new RangeError('ORDER BY requires a field path');
 			return builder({
 				...state,
-				order: [...state.order, `${sqlOf(by)} ${direction}`],
+				order: [
+					...state.order,
+					{ sql: `${sqlOf(by)} ${direction}`, root },
+				],
 				params: mergeParams(state.params, paramsOf(by)),
 			});
 		},
@@ -205,9 +220,11 @@ const builder = <
 				params: bounded(rows),
 			}),
 		project: (fields) => {
-			const projected = project(fields(row));
+			const projection = fields(row);
+			const projected = project(projection);
 			return builder({
 				...state,
+				projection,
 				fields: projected.sql,
 				out: projected.codec,
 				params: mergeParams(state.params, projected.params),
@@ -217,6 +234,7 @@ const builder = <
 			const picked = pick(row);
 			return builder({
 				...state,
+				projection: undefined,
 				fields: `VALUE ${sqlOf(picked)}`,
 				out: rowCodec(codecOf(picked)),
 				params: mergeParams(state.params, paramsOf(picked)),
@@ -272,6 +290,7 @@ export const select: {
 		fields: '*',
 		where: [],
 		order: [],
+		projection: undefined,
 		limit: undefined,
 		start: undefined,
 		only: false,
