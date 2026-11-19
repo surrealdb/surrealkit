@@ -14,6 +14,7 @@ import {
 	create,
 	eq,
 	gte,
+	insert,
 	lt,
 	ne,
 	not,
@@ -22,6 +23,7 @@ import {
 	select,
 	sum,
 	update,
+	upsert,
 } from '../src/statement/index.js';
 import {
 	AccountId,
@@ -319,3 +321,40 @@ export const summarise = block()
 		rounded: math.fixed($.wallet.balance, 1),
 	}))
 	.build('summarise', { writes: false });
+
+/**
+ * The newer writes as locals: an UPSERT of a wallet by id, then an INSERT
+ * of its payment, each result read by later steps.
+ */
+export const topUp = block()
+	.let('wallet', () =>
+		upsert(WalletTable, param('wallet_id', WalletId))
+			.content(
+				object({
+					owner: param('owner', AccountId),
+					balance: amount,
+					frozen: false,
+				}),
+			)
+			.build(),
+	)
+	.let('receipts', ($) =>
+		insert(
+			PaymentTable,
+			object({
+				wallet: $.wallet.id,
+				amount,
+				key: string.concat(
+					$.wallet.id,
+					'/',
+					param('request', SurrealSchema.String),
+				),
+			}),
+		).build(),
+	)
+	.return(($) => ({
+		balance: $.wallet.balance,
+		receipts: $.receipts,
+		first: array.first($.receipts),
+	}))
+	.build('top up');

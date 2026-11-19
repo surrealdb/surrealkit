@@ -739,7 +739,11 @@ The [built-in functions](#built-in-functions) are expressions like any
 other, so they fit a guard (`.throwIf(($) => lt(math.abs($.wallet.balance),
 1), …)`), a local, the result, and the conditions and projections of the
 statements a block binds, a grouped select's condition included;
-`test/block-engine.test.ts` runs such a block on both engines.
+`test/block-engine.test.ts` runs such a block on both engines. A local
+also holds what an `upsert` or an `insert` returns (the record, or the
+list of inserted rows), so a later step can read the upserted record's id
+and the inserted rows; a write that fails, such as an insert on a taken
+unique key, undoes the whole block.
 
 What blocks leave out: loops (`FOR`), which would need a body whose value is
 discarded and a way to type what it changes; arithmetic operators (`+`,

@@ -27,6 +27,7 @@ import {
 	pay,
 	payAndRead,
 	summarise,
+	topUp,
 	withdraw,
 } from './blocks.js';
 import {
@@ -428,7 +429,7 @@ describe.skipIf(!engineConfigured)('blocks on a disposable engine', () => {
 			expect(after?.id).toEqual(earlier);
 		});
 	});
-	describe('built-in functions', () => {
+	describe('built-in functions and the newer writes', () => {
 		beforeAll(async () => {
 			await engine.db.query(`
 				CREATE wallet:fun SET owner = account:dee, balance = 7, frozen = false;
@@ -480,6 +481,31 @@ describe.skipIf(!engineConfigured)('blocks on a disposable engine', () => {
 			);
 			expect(error).toBeInstanceOf(StatementThrown);
 			expect((error as StatementThrown<string>).message).toBe(message);
+		});
+
+		it('binds the result of an UPSERT and an INSERT, all or nothing', async () => {
+			const input = (balance: number, request: string) => ({
+				wallet_id: wallet('topped'),
+				owner: account('dee'),
+				amount: balance,
+				request,
+			});
+			const created = await ok(client.run(topUp, input(10, 'r1')));
+			expect(created.balance).toBe(10);
+			expect(created.receipts).toHaveLength(1);
+			expect(created.first?.amount).toBe(10);
+			expect(created.first?.key.endsWith('/r1')).toBe(true);
+			expect(String(created.first?.wallet)).toBe('wallet:topped');
+			const changed = await ok(client.run(topUp, input(25, 'r2')));
+			expect(changed.balance).toBe(25);
+			expect(changed.first?.amount).toBe(25);
+			// The same request again collides on the unique payment key, so the
+			// whole block fails and the UPSERT before it is undone.
+			await failure(client.run(topUp, input(40, 'r2')));
+			const after = await ok(
+				client.run(readWallet, { id: wallet('topped') }),
+			);
+			expect(after?.balance).toBe(25);
 		});
 	});
 });
