@@ -522,8 +522,11 @@ parses `type::record(…)`. The conformance suite pins all of it.
 descriptor: `values` holds one operand per field of the index, a nested
 field by its path, and is rendered as
 `SELECT * FROM ONLY ⟨member⟩ WITH INDEX member_region_number WHERE region = $region AND number = $number LIMIT 1`.
-An index that is not unique, a missing or extra field and a value that
-never compares with its field are compile errors:
+A nested path reads through an object field, optional or not. An index
+that is not unique, a missing or extra field, a value that never compares
+with its field, and a path through a field that is not one object (a
+union of objects, a nullable object) are compile errors, and are refused
+when built:
 
 ```ts
 const byRegionNumber = select(MemberTable, 'member_region_number', {

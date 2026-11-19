@@ -91,6 +91,7 @@ import {
 	TeamTable,
 } from '../golden/example/index.js';
 import * as Members from '../golden/members/index.js';
+import { ShipmentTable } from '../shipments.js';
 
 /** Fails to compile unless `A` and `B` are the same type. */
 type Same<A, B> =
@@ -515,6 +516,11 @@ same<
 	Result<typeof byBio>,
 	{ readonly handle: string; readonly email: string | undefined } | undefined
 >(true);
+
+// A nested field of an optional object, by its path.
+export const byLabel = select(ShipmentTable, 'shipment_label', {
+	'label.text': param('text', SurrealSchema.String),
+}).build();
 
 // ---- Record ids from their key parts, and id ranges.
 

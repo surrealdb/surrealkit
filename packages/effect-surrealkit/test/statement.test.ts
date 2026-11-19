@@ -70,6 +70,7 @@ import {
 	TeamId,
 } from './golden/example/index.js';
 import * as Members from './golden/members/index.js';
+import { ShipmentTable } from './shipments.js';
 
 const names = (statement: { readonly params: object }) =>
 	Object.keys(statement.params).sort();
@@ -1037,6 +1038,34 @@ describe('select by a unique index', () => {
 				{ 'tags.*': 'a' },
 			),
 		).toThrow('`tagged` indexes array elements');
+	});
+
+	it('reads a nested field of an optional object, and refuses one under a union or a nullable object', () => {
+		expect(
+			select(ShipmentTable, 'shipment_label', {
+				'label.text': param('text', SurrealSchema.String),
+			}).build().sql,
+		).toBe(
+			'SELECT * FROM ONLY ⟨shipment⟩ WITH INDEX shipment_label WHERE label.text = $text LIMIT 1;',
+		);
+		const untyped = select as unknown as (
+			table: unknown,
+			index: string,
+			values: Record<string, unknown>,
+		) => unknown;
+		expect(() =>
+			untyped(ShipmentTable, 'shipment_event', {
+				sender: 'p',
+				'event.id': 'e',
+			}),
+		).toThrow(
+			'`event.id` of the unique index `shipment_event` is not a declared field of `shipment`',
+		);
+		expect(() =>
+			untyped(ShipmentTable, 'shipment_parcel', { 'parcel.code': 'c' }),
+		).toThrow(
+			'`parcel.code` of the unique index `shipment_parcel` is not a declared field of `shipment`',
+		);
 	});
 });
 

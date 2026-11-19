@@ -53,6 +53,7 @@ import {
 } from '../golden/example/index.js';
 import { MemberTable } from '../golden/members/index.js';
 import { LookupAnyTable, LookupUnionTable } from '../lookups.js';
+import { ShipmentTable } from '../shipments.js';
 
 // ---- expressions
 
@@ -396,6 +397,10 @@ export const rejectedUniqueLookups = () => {
 	select(MemberTable, 'member_handle', { handle: handleAsInt });
 	// @ts-expect-error [unique/nested-by-root] a nested field is named by its path
 	select(MemberTable, 'member_bio', { profile: 'b' });
+	// @ts-expect-error [unique/path-through-union] `event` is a union of objects, so `event.id` has no path to read
+	select(ShipmentTable, 'shipment_event', { sender: 'p', 'event.id': 'e' });
+	// @ts-expect-error [unique/path-through-nullable] `parcel` is a nullable object, so `parcel.code` has no path to read
+	select(ShipmentTable, 'shipment_parcel', { 'parcel.code': 'c' });
 };
 
 // SurrealDB 3.3 finds no array through a unique index on a field that may

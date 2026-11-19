@@ -169,6 +169,16 @@ type ExprAt<R, P> = P extends readonly [
 	: never;
 
 /**
+ * The index fields whose path the row of `T` does not expose: a segment
+ * under a field that is not one object (a union of objects, a nullable
+ * object), which the run-time lookup cannot resolve either.
+ */
+type Unaddressable<T extends PureTable, C> = {
+	[K in keyof C]-?: [ExprAt<RowExprs<T>, C[K]>] extends [never] ? K : never;
+}[keyof C] &
+	string;
+
+/**
  * `N`, when it names a unique index of `T` over field paths; otherwise a
  * message saying why it cannot be looked up by.
  */
@@ -180,7 +190,9 @@ export type UniqueIndex<T extends PureTable, N> = N extends keyof IndexesOf<T>
 					`${string}*${string}`
 				>,
 			] extends [never]
-			? N
+			? [Unaddressable<T, ColumnsOf<IndexesOf<T>[N]>>] extends [never]
+				? N
+				: `\`${Unaddressable<T, ColumnsOf<IndexesOf<T>[N]>>}\` of the unique index \`${N & string}\` is no field path of \`${T['name']}\` a lookup can read: a field on it is not one object (a union or a nullable object has no fields to address)`
 			: `\`${N & string}\` indexes array elements, which a unique lookup cannot address`
 		: `\`${N & string}\` is a ${IndexesOf<T>[N] extends { readonly type: infer K extends string } ? K : 'non-unique'} index of \`${T['name']}\`, not a unique one`
 	: `\`${T['name']}\` has no index \`${N & string}\``;
@@ -1137,8 +1149,10 @@ export const select: {
 	 * `'profile.bio'`), so the result is the row or NONE. `WITH INDEX`
 	 * makes the engine read that index: with `LIMIT 1` it otherwise reads
 	 * any index on a prefix of the fields whose name sorts first. An index
-	 * that is not unique, a missing or extra field and a value that never
-	 * compares with its field are compile errors, as is a value that may be
+	 * that is not unique, a missing or extra field, a value that never
+	 * compares with its field and a path through a field that is not one
+	 * object (a union of objects, a nullable object) are compile errors, as
+	 * is a value that may be
 	 * an array on a field that may hold an array or another kind: SurrealDB
 	 * 3.3 finds no array through such an index, and 4.0 does.
 	 */

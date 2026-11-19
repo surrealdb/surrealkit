@@ -1371,6 +1371,18 @@ exports[`type diagnostics > unique/not-unique 1`] = `
 ]
 `;
 
+exports[`type diagnostics > unique/path-through-nullable 1`] = `
+[
+  "TS2345: Argument of type '"shipment_parcel"' is not assignable to parameter of type '"\`parcel.code\` of the unique index \`shipment_parcel\` is no field path of \`shipment\` a lookup can read: a field on it is not one object (a union or a nullable object has no fields to address)"'.",
+]
+`;
+
+exports[`type diagnostics > unique/path-through-union 1`] = `
+[
+  "TS2345: Argument of type '"shipment_event"' is not assignable to parameter of type '"\`event.id\` of the unique index \`shipment_event\` is no field path of \`shipment\` a lookup can read: a field on it is not one object (a union or a nullable object has no fields to address)"'.",
+]
+`;
+
 exports[`type diagnostics > unique/wrong-value 1`] = `
 [
   "TS2345: Argument of type '{ handle: Expr<Schema.declareConstructor<number, number, readonly [], number>, { readonly handle: Schema.declareConstructor<number, number, readonly [], number>; }>; }' is not assignable to parameter of type '"\`handle\` never compares with this value: their stored types do not overlap"'.",
