@@ -28,6 +28,7 @@ import {
 	type Operand,
 	type OperandEncoded,
 	type OperandParams,
+	type ParamsOf,
 	type ParamsOfAll,
 	type Path,
 	type PathData,
@@ -45,7 +46,16 @@ import {
 	fetchedCodec,
 	fetchPath,
 } from './fetch.js';
-import { type GraphStore, viewOf } from './graph.js';
+import {
+	type GraphStore,
+	type LinkTables,
+	linkShape,
+	shapeTables,
+	type TableIn,
+	TraversalTypeId,
+	traversalOf,
+	viewOf,
+} from './graph.js';
 import {
 	type Base,
 	type CheckedKeys,
@@ -1148,6 +1158,110 @@ export const select: {
 			});
 		},
 	} as never;
+};
+
+type IsUnion<U, All = U> = U extends unknown
+	? [All] extends [U]
+		? false
+		: true
+	: never;
+
+/**
+ * The table whose records the traversal `R` of store `S` yields, when it
+ * is one table of the store; otherwise a message saying why `R` is no
+ * subject.
+ */
+export type ReachedTable<S, R> = R extends {
+	readonly [TraversalTypeId]: unknown;
+}
+	? LinkTables<CodecOf<R>['Encoded']> extends infer Tb
+		? [Tb] extends [never]
+			? 'a select reads the records of a graph step or a recursive path'
+			: string extends Tb
+				? 'the records of this step can be of any table, so a select has no row to read them with'
+				: true extends IsUnion<Tb>
+					? 'the records of this step are of several tables, and a select reads the rows of one'
+					: Extract<TableIn<S, Tb>, PureTable>
+		: never
+	: "a select reads the records of a graph step or a recursive path, like `outgoing(store, param('who', PersonId), 'knows')`";
+
+/** `R`, when it is a subject {@link selectFrom} takes; otherwise the message. */
+export type ReachedSubject<S, R> =
+	ReachedTable<S, R> extends PureTable ? R : ReachedTable<S, R>;
+
+/**
+ * `SELECT * FROM <records>`: the records a graph step (`outgoing`,
+ * `incoming`, `both`), the edges of one (`edges`) or a recursive path
+ * reaches, read as rows of their table, so a condition, a sort key, a
+ * limit, a projection, FETCH and grouping apply to them as to any select.
+ * The records must be of one table of `store`, and decode with its select
+ * row (its `visible` row through `readAs(store)`). SurrealDB 3.3 and 4.0
+ * read a step from a record that does not exist as no rows, keep the
+ * duplicates of chained steps, and read a step from the row of an outer
+ * select in a subquery from that row.
+ *
+ * @example
+ * selectFrom(store, outgoing(store, param('who', PersonId), 'knows'))
+ *   .where((peer) => gte(peer.age, 18))
+ *   .orderBy((peer) => peer.name)
+ *   .limit(10)
+ *   .build();
+ * // SELECT * FROM $who->knows->? WHERE age >= 18 ORDER BY name ASC LIMIT 10;
+ */
+export const selectFrom = <S extends GraphStore, const R extends Expr>(
+	store: S,
+	records: ReachedSubject<S, R>,
+): Select<
+	Extract<ReachedTable<S, R>, PureTable>,
+	ParamsOf<R>,
+	StoredRow<Extract<ReachedTable<S, R>, PureTable>>,
+	false
+> => {
+	const source = records as Expr;
+	const data = traversalOf(source);
+	if (data === undefined) {
+		throw new TypeError(
+			'a select reads the records of a graph step or a recursive path',
+		);
+	}
+	const shape = linkShape(data.item);
+	const names = shape === undefined ? 'any' : shapeTables(shape);
+	if (names === 'any') {
+		throw new TypeError(
+			'the records of this step can be of any table, so a select has no row to read them with',
+		);
+	}
+	if (names.length !== 1) {
+		throw new RangeError(
+			`the records of this step are of several tables (${names.map((name) => `\`${name}\``).join(', ')}), and a select reads the rows of one`,
+		);
+	}
+	const [name] = names as readonly [string];
+	const table = store.tables[name];
+	if (table === undefined) {
+		throw new RangeError(`\`${name}\` is not a table of this store`);
+	}
+	const scope = new RowScope('select', table.name);
+	const state: State = {
+		table,
+		scope,
+		row: rowExprs(table, scope),
+		source,
+		range: true,
+		out: storedRow(table),
+		fields: '*',
+		where: [],
+		pure: false,
+		order: [],
+		aliases: new Map(),
+		limit: undefined,
+		start: undefined,
+		only: false,
+		params: paramsOf(source),
+		base: { kind: 'row', table },
+		fetch: [],
+	};
+	return builder(reading(state, [source], false)) as never;
 };
 
 /** The conditions of a lookup by a unique index, checked as the types are. */

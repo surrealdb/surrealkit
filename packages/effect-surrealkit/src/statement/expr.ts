@@ -62,7 +62,13 @@ interface ExprData<S extends Codec, P extends Params> {
  */
 export class RowScope {
 	constructor(
-		readonly kind: 'select' | 'write' | 'edge' | 'target' | 'node',
+		readonly kind:
+			| 'select'
+			| 'write'
+			| 'edge'
+			| 'target'
+			| 'reached'
+			| 'node',
 		readonly table: string,
 	) {}
 }
@@ -328,6 +334,8 @@ const ownRow = (scope: RowScope): string => {
 			return `the edge (\`${scope.table}\`)`;
 		case 'target':
 			return `the record it destructures (\`${scope.table}\`)`;
+		case 'reached':
+			return `the record the step reaches (\`${scope.table}\`)`;
 		case 'node':
 			return 'each record the path reaches';
 		default:
@@ -341,6 +349,8 @@ const otherRow = (scope: RowScope): string => {
 			return `the edge \`${scope.table}\` of a step`;
 		case 'target':
 			return `the record of \`${scope.table}\` a destructuring reads`;
+		case 'reached':
+			return `the record of \`${scope.table}\` a step's \`whereTarget\` reads`;
 		case 'node':
 			return 'the node of a recursive path';
 		case 'select':

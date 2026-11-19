@@ -1251,6 +1251,30 @@ exports[`type diagnostics > step/parent-not-a-path 1`] = `
 ]
 `;
 
+exports[`type diagnostics > step/target-filter-no-such-field 1`] = `
+[
+  "TS2339: Property 'nope' does not exist on type 'ReachedRow<{ readonly name: "corpus"; readonly tables: { readonly anything: { readonly name: "anything"; readonly type: "any"; readonly schemafull: false; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"anything">, _RecordId<...>, readonly [...], _RecordId<...>>, "corpus/anything">; ... 10 mor...'.",
+]
+`;
+
+exports[`type diagnostics > step/target-filter-uncommon-field 1`] = `
+[
+  "TS2339: Property 'members' does not exist on type 'ReachedRow<{ readonly name: "corpus"; readonly tables: { readonly anything: { readonly name: "anything"; readonly type: "any"; readonly schemafull: false; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"anything">, _RecordId<...>, readonly [...], _RecordId<...>>, "corpus/anything">; ... 10 mor...'.",
+]
+`;
+
+exports[`type diagnostics > subject/not-a-traversal 1`] = `
+[
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person">, { ...; }>' is not assignable to parameter of type '"a select reads the records of a graph step or a recursive path, like \`outgoing(store, param('who', PersonId), 'knows')\`"'.",
+]
+`;
+
+exports[`type diagnostics > subject/several-tables 1`] = `
+[
+  "TS2345: Argument of type 'Step<{ readonly name: "corpus"; readonly tables: { readonly anything: { readonly name: "anything"; readonly type: "any"; readonly schemafull: false; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"anything">, _RecordId<...>, readonly [...], _RecordId<...>>, "corpus/anything">; ... 10 more ...;...' is not assignable to parameter of type '"the records of this step are of several tables, and a select reads the rows of one"'.",
+]
+`;
+
 exports[`type diagnostics > transaction/unbound-statement 1`] = `
 [
   "TS2322: Type 'Statement<{ readonly email: declareConstructor<string, string, readonly [], string>; }, $Array<declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 18 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { ...; }>>, never>' is not assignable to type '"a transaction takes statements paired with their input by \`bind\`"'.",

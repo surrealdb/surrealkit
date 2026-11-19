@@ -1146,14 +1146,15 @@ const withManager = select(PersonTable).fetch(store, 'manager', 'watchers').buil
 | `follow(store, link).field` | `manager.name`, `watchers.name` | each field of the target, possibly NONE; a list through a list of links |
 | `rows(store, link)` | `manager.*` | the target's row (its table's select schema), or a list of them |
 | `destructure(store, link, (target) => ({ … }))` | `manager.{ n: name }` | the projected object, or a list of them |
-| `outgoing(store, from, 'member_of', { where? })` | `id->member_of->?`, `id->(member_of WHERE …)->?` | the ids on the relation's `out` side, as a list |
-| `incoming(store, from, 'member_of', { where? })` | `id<-member_of<-?` | the ids on its `in` side |
-| `both(store, from, 'knows', { where? })` | `id<->knows<->?` | both endpoints of each edge, `from` included once per edge |
+| `outgoing(store, from, 'member_of', { where?, whereTarget? })` | `id->member_of->?`, `id->(member_of WHERE …)->?`, `id->member_of->(? WHERE …)` | the ids on the relation's `out` side, as a list |
+| `incoming(store, from, 'member_of', { where?, whereTarget? })` | `id<-member_of<-?` | the ids on its `in` side |
+| `both(store, from, 'knows', { where?, whereTarget? })` | `id<->knows<->?` | both endpoints of each edge, `from` included once per edge |
 | `edges(step)` | `id->member_of` | the ids of the edges the step walks, for `follow` and `rows` |
 | `recurse(from, { min, max }, (node) => step)` | `id.{1..3}(->knows->?)` | the records the last repetition that reached any record reached |
 | `collect(from, step, { min?, max?, inclusive? })` | `id.{..+collect}(->knows->?)` | every distinct record reached (`+inclusive` adds `from`) |
 | `shortest(from, to, step, { inclusive? })` | `id.{..+shortest=$to}(->knows->?)` | the records of a shortest path to `to`, or NONE |
 | `select(table).fetch(store, ...paths)` | `… FETCH manager, owner.team` | each named link replaced by its target's row |
+| `selectFrom(store, step)` | `SELECT * FROM $who->knows->? WHERE …` | the records a step, the edges of one or a recursive path reaches, as rows of their one table, to filter, order, limit, project, fetch and group |
 
 What the types say, and the engine behaviour behind it (pinned in
 `test/conformance.test.ts` on SurrealDB 3.3.4 and 4.0.1):
@@ -1234,11 +1235,21 @@ What the types say, and the engine behaviour behind it (pinned in
   not exist: 3.3 reads NONE, 4.0 fails the statement ("The table … does not
   exist"). A link typed from the store always names a table of the store.
 
-Not covered yet: a step to one table of several (`->member_of->team`),
-several relations in one step (`->(likes, follows)->`), a filter on the
-records a step reaches (`->member_of->(team WHERE …)`), `+path`, a step as
-the subject of a select (`SELECT … FROM $id->knows->?`), ordering by a
-field read through a link, and `FETCH` inside a step.
+- **The records a step reaches.** `whereTarget` keeps the records that
+  satisfy a condition on their fields (`->member_of->(? WHERE name =
+  $name)`), after the edge filter, in each direction, chained, followed,
+  destructured and repeated alike on 3.3 and 4.0; its callback reads the
+  fields every table on that side has. `edges` refuses such a step, whose
+  edges would include those to the records it leaves out. `selectFrom`
+  reads the records as rows of their table (`SELECT * FROM
+  $who->knows->?`): the engines read none from a missing or NONE start,
+  keep the duplicates of chained steps, and read a step from the outer row
+  in a subquery from that row (`(SELECT … FROM id->knows->?)`).
+
+Not supported: a step to one table of several (`->member_of->team`), so
+`selectFrom` takes the records of one table only; several relations in one
+step (`->(likes, follows)->`); `+path`; ordering by a field read through a
+link; `FETCH` under `SELECT VALUE`; and `FETCH` inside a step.
 
 ### Putting it together
 

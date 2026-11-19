@@ -24,6 +24,7 @@ import {
 	recurse,
 	rows,
 	select,
+	selectFrom,
 	shortest,
 } from '../../src/statement/index.js';
 import {
@@ -277,4 +278,22 @@ export const sessionDocs = select(readAs(DocTable))
 same<
 	Result<typeof sessionDocs>[number]['teams'],
 	ReadonlyArray<{ readonly name: string }>
+>(true);
+
+// ---- selectFrom: the records a step reaches, as rows; whereTarget.
+
+export const adultPeers = selectFrom(
+	store,
+	outgoing(store, param('who', PersonId), 'knows', {
+		whereTarget: (peer) =>
+			eq(peer.name, param('name', SurrealSchema.String)),
+	}),
+)
+	.orderBy((peer) => peer.name)
+	.limit(3)
+	.build();
+same<Result<typeof adultPeers>, ReadonlyArray<PersonRow>>(true);
+same<
+	Input<typeof adultPeers.params>,
+	{ readonly who: PersonId; readonly name: string }
 >(true);

@@ -1955,6 +1955,101 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 			});
 		});
 
+		describe('a step as the subject of a select, and a filter on the records it reaches', () => {
+			beforeAll(async () => {
+				await query(`
+					DEFINE TABLE ps_p SCHEMALESS;
+					DEFINE TABLE ps_e TYPE RELATION IN ps_p OUT ps_p;
+					CREATE ps_p:1 SET y = 'k1';
+					CREATE ps_p:2 SET y = 'k2';
+					CREATE ps_p:3 SET y = 'k3';
+					RELATE ps_p:1->ps_e->ps_p:2 SET x = 'k1';
+					RELATE ps_p:1->ps_e->ps_p:3 SET x = 'k2';
+					RELATE ps_p:2->ps_e->ps_p:3 SET x = 'k2';
+					RELATE ps_p:2->ps_e->ps_p:1 SET x = 'k1';
+					RELATE ps_p:3->ps_e->ps_p:1 SET x = 'k3';
+				`);
+			});
+
+			it('SELECT … FROM a step reads its records as rows: WHERE, ORDER BY, LIMIT, START and ONLY with LIMIT 1 apply; a missing start or NONE reads none', async () => {
+				const [, rows, paged, only, missing, none] = (await query(
+					[
+						'LET $w = ps_p:1;',
+						"SELECT VALUE y FROM $w->ps_e->? WHERE y != 'k9' ORDER BY y DESC LIMIT 2;",
+						'SELECT VALUE y FROM $w->ps_e->? ORDER BY y ASC LIMIT 1 START 1;',
+						'SELECT VALUE y FROM ONLY $w->ps_e->? ORDER BY y LIMIT 1;',
+						'SELECT * FROM ps_p:9->ps_e->?;',
+						'SELECT * FROM NONE->ps_e->?;',
+					].join(' '),
+				)) as Array<unknown>;
+				expect(rows).toStrictEqual(['k3', 'k2']);
+				expect(paged).toStrictEqual(['k3']);
+				expect(only).toBe('k2');
+				expect(missing).toStrictEqual([]);
+				expect(none).toStrictEqual([]);
+			});
+
+			it('chained steps keep their duplicates as rows; the edges of a step and a recursive path are subjects too', async () => {
+				const [chained, edgeRows, collected] = (await query(
+					[
+						'SELECT VALUE id FROM ps_p:1->ps_e->?->ps_e->?;',
+						'SELECT VALUE x FROM ps_p:1->ps_e ORDER BY x;',
+						'SELECT VALUE id FROM ps_p:1.{..+collect}(->ps_e->?);',
+					].join(' '),
+				)) as Array<unknown>;
+				expect(ids(chained)).toStrictEqual([
+					'ps_p:1',
+					'ps_p:1',
+					'ps_p:3',
+				]);
+				expect(edgeRows).toStrictEqual(['k1', 'k2']);
+				expect(ids(collected)).toStrictEqual([
+					'ps_p:1',
+					'ps_p:2',
+					'ps_p:3',
+				]);
+			});
+
+			it('a subquery FROM a step of the outer row reads that row', async () => {
+				const [rows] = (await query(
+					'SELECT id, (SELECT VALUE y FROM id->ps_e->? ORDER BY y) AS r FROM ps_p ORDER BY id;',
+				)) as Array<Array<{ r: unknown }>>;
+				expect(rows?.map((row) => row.r)).toStrictEqual([
+					['k2', 'k3'],
+					['k1', 'k3'],
+					['k1'],
+				]);
+			});
+
+			it('`->(? WHERE …)` keeps the records reached that satisfy it, in each direction, after an edge filter, chained, followed and repeated', async () => {
+				const results = (await query(
+					[
+						"RETURN ps_p:1->(ps_e WHERE x = 'k1')->(? WHERE y = 'k2');",
+						"RETURN ps_p:1->(ps_e WHERE x = 'k1')->(? WHERE y = 'k3');",
+						"RETURN ps_p:2<-ps_e<-(? WHERE y = 'k1');",
+						"RETURN ps_p:2<->ps_e<->(? WHERE y = 'k1');",
+						"RETURN ps_p:1->ps_e->(? WHERE y = 'k2')->ps_e->(? WHERE y != 'k1');",
+						"RETURN ps_p:1->ps_e->(? WHERE y = 'k2').{ n: y };",
+						"RETURN ps_p:1.{1..2}(->ps_e->(? WHERE y != 'k1'));",
+						"RETURN ps_p:9->ps_e->(? WHERE y = 'k2');",
+					].join(' '),
+				)) as Array<unknown>;
+				expect(
+					results.map((value, at) => (at === 5 ? value : ids(value))),
+				).toStrictEqual([
+					['ps_p:2'],
+					[],
+					['ps_p:1'],
+					// Both endpoints of each edge at ps_p:2 that pass.
+					['ps_p:1', 'ps_p:1'],
+					['ps_p:3'],
+					[{ n: 'k2' }],
+					['ps_p:3'],
+					[],
+				]);
+			});
+		});
+
 		it('a link to a record of a table that does not exist reads NONE on SurrealDB 3 and is an error on 4', async () => {
 			const read = query(
 				'SELECT VALUE l.x FROM ONLY g_holder:one; SELECT l FROM ONLY g_holder:one FETCH l;',

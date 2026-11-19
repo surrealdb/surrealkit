@@ -16,6 +16,7 @@ import {
 	recurse,
 	rowOf,
 	select,
+	selectFrom,
 	shortest,
 } from '../../src/statement/index.js';
 import {
@@ -110,6 +111,26 @@ export const rejectedSteps = () => {
 			collect(row.id, (node) => outgoing(store, node, 'knows')),
 		),
 	}));
+};
+
+// ---- the records a step reaches
+
+export const rejectedReached = () => {
+	selectFrom(
+		store,
+		// @ts-expect-error [subject/several-tables] `member_of` leads to `org` and `team`
+		outgoing(store, param('who', PersonId), 'member_of'),
+	);
+	// @ts-expect-error [subject/not-a-traversal] a select reads the records of a step
+	selectFrom(store, param('who', PersonId));
+	outgoing(store, param('who', PersonId), 'knows', {
+		// @ts-expect-error [step/target-filter-no-such-field] the records reached have no such field
+		whereTarget: (peer) => eq(peer.nope, 1),
+	});
+	outgoing(store, param('who', PersonId), 'member_of', {
+		// @ts-expect-error [step/target-filter-uncommon-field] only `team` has `members`
+		whereTarget: (target) => eq(target.members, 1),
+	});
 };
 
 // ---- recursive paths

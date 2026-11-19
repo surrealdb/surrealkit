@@ -137,6 +137,11 @@ export interface TraversalData<
 		readonly sql: string;
 		readonly codec: Edge;
 		readonly item: Codec;
+		/**
+		 * The step filters the records it reaches, which its edges do not:
+		 * they would include the edges to the records it leaves out.
+		 */
+		readonly filtered?: boolean;
 	};
 }
 
@@ -368,7 +373,8 @@ const lift = (shape: LinkShape, present: boolean, leaf: Codec): Codec => {
 	}
 };
 
-const traversalOf = (value: unknown): TraversalData | undefined =>
+/** @internal */
+export const traversalOf = (value: unknown): TraversalData | undefined =>
 	typeof value === 'object' && value !== null && TraversalTypeId in value
 		? (value as { readonly [TraversalTypeId]: TraversalData })[
 				TraversalTypeId
@@ -816,7 +822,12 @@ export type Step<S, R, N, D extends Direction, P extends Params> = Traversal<
 >;
 
 /** A step's options. */
-export interface StepOptions<T extends PureTable, P extends Params> {
+export interface StepOptions<
+	T extends PureTable,
+	P extends Params,
+	Target = never,
+	Q extends Params = NoParams,
+> {
 	/**
 	 * Walks only the edges that satisfy this condition, which reads the
 	 * edge's fields: `->(member_of WHERE role = $role)->?`. A field path of
@@ -825,7 +836,21 @@ export interface StepOptions<T extends PureTable, P extends Params> {
 	 * sits directly under with `parent(row.field)`, or bind the value.
 	 */
 	readonly where?: (edge: RowExprs<T>) => Condition<P>;
+	/**
+	 * Keeps only the records reached that satisfy this condition, which
+	 * reads their fields (those every table on that side has):
+	 * `->member_of->(? WHERE name = $name)`. A field path of another row is
+	 * refused, as in `where`, and so is `parent(row.field)`. The step's
+	 * `edges` would include the edges to the records it leaves out, so
+	 * {@link edges} refuses a step with this filter.
+	 */
+	readonly whereTarget?: (record: Target) => Condition<Q>;
 }
+
+/** The row object a step's `whereTarget` receives: the records it reaches. */
+export type ReachedRow<S, N, D extends Direction> = RowOf<
+	TargetFields<S, EncodedOfCodec<StepEnds<S, N, D>>>
+>;
 
 type EdgeRowTable<S, N> = Extract<EdgeTable<S, N>, PureTable>;
 
@@ -867,7 +892,7 @@ const step = (
 	store: GraphStore,
 	from: Expr,
 	name: string,
-	options: StepOptions<PureTable, Params> | undefined,
+	options: StepOptions<PureTable, Params, unknown, Params> | undefined,
 ): Traversal<Codec, Params, boolean, Codec> => {
 	const edge = store.edges[name];
 	const table = store.tables[name];
@@ -926,22 +951,60 @@ const step = (
 	const item = union(ends);
 	const list = (codec: Codec): Codec =>
 		start.optional ? orNone(Schema.Array(codec)) : Schema.Array(codec);
+	const reached = options?.whereTarget;
+	let test: Expr | undefined;
+	let kept: Context | undefined;
+	if (reached !== undefined) {
+		const names = accepted(ends);
+		if (names === 'any') {
+			throw new TypeError(
+				`the records \`${name}\` reaches can be of any table, so a filter on them has no fields to read`,
+			);
+		}
+		const targets = names.map((target) => {
+			const found = store.tables[target];
+			if (found === undefined) {
+				throw new RangeError(
+					`\`${target}\` is not a table of this store`,
+				);
+			}
+			return found;
+		});
+		const own = new RowScope('reached', names.join(' | '));
+		test = reached(targetRowExprs(targets, own)) as Expr;
+		kept = admit(
+			{
+				own,
+				what: "a step's `whereTarget`",
+				parents: 'refuse',
+				refused:
+					'it reads the select’s row only from a filter on the edges of a step directly under it',
+			},
+			[test],
+		);
+	}
 	const params = mergeParams(
 		paramsOf(from),
 		condition === undefined ? {} : paramsOf(condition),
+		test === undefined ? {} : paramsOf(test),
 	);
 	return {
 		...makeExpr(
 			list(item),
-			`${edgesSql}${arrow}?`,
+			`${edgesSql}${arrow}${test === undefined ? '?' : `(? WHERE ${sqlOf(test)})`}`,
 			params,
 			Level.atom,
-			joinContexts([contextOf(from), filtered, viewOf(store)]),
+			joinContexts([contextOf(from), filtered, kept, viewOf(store)]),
 		),
 		[TraversalTypeId]: {
 			present: edge.enforced,
 			item,
-			edges: { sql: edgesSql, codec: list(table.id), item: table.id },
+			edges: {
+				sql: edgesSql,
+				codec: list(table.id),
+				item: table.id,
+				...(test !== undefined && { filtered: true }),
+			},
 		},
 	};
 };
@@ -954,12 +1017,13 @@ type StepFunction<D extends Direction> = <
 	const R extends Expr,
 	const N extends keyof S['edges'] & string,
 	P extends Params = NoParams,
+	Q extends Params = NoParams,
 >(
 	store: S,
 	from: StepFrom<S, R, N, D>,
 	edge: N,
-	options?: StepOptions<EdgeRowTable<S, N>, P>,
-) => Step<S, R, N, D, P>;
+	options?: StepOptions<EdgeRowTable<S, N>, P, ReachedRow<S, N, D>, Q>,
+) => Step<S, R, N, D, P & Q>;
 
 const stepIn =
 	<D extends Direction>(direction: D): StepFunction<D> =>
@@ -969,7 +1033,9 @@ const stepIn =
 			store,
 			from as Expr,
 			edge,
-			options as StepOptions<PureTable, Params> | undefined,
+			options as
+				| StepOptions<PureTable, Params, unknown, Params>
+				| undefined,
 		) as never;
 
 /**
@@ -1035,6 +1101,11 @@ export const edges = <const R extends Traversal<Codec, Params, boolean, Codec>>(
 	if (data?.edges === undefined) {
 		throw new TypeError(
 			'only a graph step walks edges; a recursive path has none to read',
+		);
+	}
+	if (data.edges.filtered === true) {
+		throw new RangeError(
+			'the edges of a step with a `whereTarget` filter would include the edges to the records it leaves out; filter the edges with `where` (`follow(store, edge.out)` reads the record an edge leads to)',
 		);
 	}
 	return {

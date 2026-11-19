@@ -15,13 +15,17 @@ import { type Client, make as makeClient } from '../src/client/index.js';
 import * as SurrealSchema from '../src/index.js';
 import {
 	destructure,
+	edges,
 	eq,
 	evaluate,
 	follow,
 	incoming,
+	ne,
 	outgoing,
 	param,
 	type Result,
+	select,
+	selectFrom,
 } from '../src/statement/index.js';
 import {
 	type Engine,
@@ -380,5 +384,114 @@ describe.skipIf(!engineConfigured)('traversal shapes on an engine', () => {
 		expect(await ok(client.run(statement, { group: g('ghost') }))).toEqual(
 			[],
 		);
+	});
+
+	describe('the records a step reaches, as rows and filtered', () => {
+		it('selectFrom filters, orders, limits and projects them, and reads none from a missing record', async () => {
+			const statement = selectFrom(
+				store,
+				incoming(store, param('who', PId), 'tr_follows'),
+			)
+				.where((fan) =>
+					ne(fan.name, param('not', SurrealSchema.String)),
+				)
+				.orderBy((fan) => fan.name, 'DESC')
+				.limit(1)
+				.project((fan) => ({ id: fan.id, name: fan.name }))
+				.build('a follower', { writes: false });
+			expect(statement.sql).toBe(
+				'SELECT id AS id, name AS name FROM $who<-tr_follows<-? WHERE name != $not ORDER BY name DESC LIMIT 1;',
+			);
+			const run = (who: RecordId, not: string) =>
+				ok(client.run(statement, { who, not } as never));
+			expect(await run(p('ann'), 'Nobody')).toEqual([
+				{ id: p('cy'), name: 'Cy' },
+			]);
+			expect(await run(p('ann'), 'Cy')).toEqual([
+				{ id: p('bob'), name: 'Bob' },
+			]);
+			expect(await run(p('ghost'), 'Cy')).toEqual([]);
+		});
+
+		it('selectFrom reads chained steps, the edges of a step and one row with ONLY', async () => {
+			const reach = selectFrom(
+				store,
+				incoming(
+					store,
+					incoming(store, param('who', PId), 'tr_follows'),
+					'tr_follows',
+				),
+			)
+				.orderBy((fan) => fan.name)
+				.value((fan) => fan.name)
+				.build();
+			expect(await ok(client.run(reach, { who: p('ann') }))).toEqual([
+				'Dee',
+				'Eve',
+			]);
+			const memberships = selectFrom(
+				store,
+				edges(outgoing(store, param('who', PId), 'tr_member')),
+			)
+				.value((edge) => edge.out)
+				.build();
+			expect(
+				await ok(client.run(memberships, { who: p('ann') })),
+			).toEqual([g('red')]);
+			const first = selectFrom(
+				store,
+				incoming(store, param('who', PId), 'tr_follows'),
+			)
+				.orderBy((fan) => fan.name)
+				.only()
+				.value((fan) => fan.name)
+				.build();
+			expect(await ok(client.run(first, { who: p('ann') }))).toBe('Bob');
+			expect(
+				await ok(client.run(first, { who: p('ghost') })),
+			).toBeUndefined();
+		});
+
+		it('selectFrom nests as a subquery from the outer row', async () => {
+			const statement = select(P)
+				.project((row) => ({
+					name: row.name,
+					fans: selectFrom(
+						store,
+						incoming(store, row.id, 'tr_follows'),
+					)
+						.orderBy((fan) => fan.name)
+						.value((fan) => fan.name)
+						.toExpr(),
+				}))
+				.orderBy((row) => row.name)
+				.build();
+			expect(await ok(client.run(statement))).toEqual([
+				{ name: 'Ann', fans: ['Bob', 'Cy'] },
+				{ name: 'Bob', fans: ['Dee'] },
+				{ name: 'Cy', fans: ['Eve'] },
+				{ name: 'Dee', fans: [] },
+				{ name: 'Eve', fans: [] },
+			]);
+		});
+
+		it('whereTarget keeps the records that satisfy it', async () => {
+			const statement = evaluate(
+				outgoing(store, param('who', PId), 'tr_member', {
+					whereTarget: (group) =>
+						eq(group.name, param('name', SurrealSchema.String)),
+				}),
+				'my group of that name',
+				{ writes: false },
+			);
+			expect(statement.sql).toBe(
+				'RETURN $who->tr_member->(? WHERE name = $name);',
+			);
+			const run = (who: RecordId, name: string) =>
+				ok(client.run(statement, { who, name } as never));
+			expect(await run(p('ann'), 'Red')).toEqual([g('red')]);
+			expect(await run(p('cy'), 'Red')).toEqual([]);
+			expect(await run(p('ghost'), 'Red')).toEqual([]);
+		});
 	});
 });
