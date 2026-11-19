@@ -136,23 +136,41 @@ export const wrap = <S extends Schema.Top>(
 		readonly equivalence?: (self: S['Type'], that: S['Type']) => boolean;
 		/** Applied to the input before the inner codec, when decoding only. */
 		readonly preprocess?: (input: unknown) => unknown;
+		/**
+		 * A message for an input to refuse with it, when decoding only,
+		 * before the inner codec sees it; `undefined` to decode it.
+		 */
+		readonly refuse?: (input: unknown) => string | undefined;
 		/** Replaces the arbitrary derived from the wrapped codec's type side. */
 		readonly arbitrary?: () => SchemaAST.Link;
 	},
 ) => {
 	const preprocess = annotations.preprocess ?? ((input: unknown) => input);
 	const parser =
-		(before: (input: unknown) => unknown): DeclarationRun =>
+		(
+			before: (input: unknown) => unknown,
+			refuse?: (input: unknown) => string | undefined,
+		): DeclarationRun =>
 		(typeParameters) => {
 			// The one type parameter: `inner`, flipped when encoding.
 			const codec = Schema.make<Schema.Codec<unknown, unknown>>(
 				typeParameters[0] ?? inner.ast,
 			);
-			return (input, _ast, parseOptions) =>
-				SchemaParser.decodeUnknownEffect(codec)(
-					before(input),
-					parseOptions,
-				);
+			return (input, _ast, parseOptions) => {
+				const refused = refuse?.(input);
+				return refused === undefined
+					? SchemaParser.decodeUnknownEffect(codec)(
+							before(input),
+							parseOptions,
+						)
+					: Effect.fail(
+							new SchemaIssue.InvalidValue(
+								{ message: refused },
+								input,
+								parseOptions,
+							),
+						);
+			};
 		};
 	const declaration: Schema.Annotations.Declaration<S['Type'], readonly [S]> =
 		{
@@ -179,7 +197,7 @@ export const wrap = <S extends Schema.Top>(
 	>(
 		new SchemaAST.Declaration(
 			[inner.ast],
-			parser(preprocess),
+			parser(preprocess, annotations.refuse),
 			declaration,
 			undefined,
 			undefined,

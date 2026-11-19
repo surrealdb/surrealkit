@@ -1180,7 +1180,11 @@ What the types say, and the engine behaviour behind it (pinned in
   `ENFORCED` relation cannot point at a missing record, so its records are
   rows, never NONE; one that is not enforced can (`RELATE` to a missing
   record succeeds), and its records read as NONE where they are missing.
-  Deleting a record deletes its edges.
+  Deleting a record deletes its edges. So a record an `ENFORCED` relation
+  reaches can read NONE only when the live schema is not the one the
+  descriptors were generated from, and decoding it fails with a message
+  that names the relation and says so; `schemaDrift` from
+  `effect-surrealkit/testing` lists such differences.
 - **Filters and destructuring read the edge or the target.** Inside a step's
   `where` and a `destructure` callback, field paths are relative to the edge
   or target, so a field of the outer row would read the edge's or target's
@@ -1402,6 +1406,7 @@ const test = Effect.gen(function* () {
 | `layerFrom(connection, { namespace, database })` | The same over a connection a test already has (a server, the suite's engine). |
 | `loadSchema(text)` | Runs more schema text in the `TestDatabase`. |
 | `recordUser({ access, variables? })` | Signs a new record user up through a `DEFINE ACCESS … TYPE RECORD` and returns `{ session, client }`, a client running as that session, closed with the scope: what a restricted session sees, row and field permissions included. |
+| `schemaDrift(store)` | The differences between what a store registry declares and what the `TestDatabase` defines, as a list (empty for a match): a declared table that is missing or of another kind, a relation whose `ENFORCED` flag or endpoint tables differ, and a declared index that is missing, of another kind or over other fields. It reads `INFO FOR DB STRUCTURE` and `INFO FOR TABLE … STRUCTURE`, which SurrealDB 3.3 and 4.0 answer alike. |
 | `expectIndex(statement, input, index)`, `expectNoIndex(…)` | Succeed when the engine's plan of a `SELECT` does (does not) read `index`; otherwise an `IndexExpectationError` naming the indexes it does read. `explain(statement, input)` returns the plan and its indexes. |
 | `fake(script)`, `fakeLayer(script)` | A client with no engine that answers each statement by name: a value (the last result, as the SDK returns it), `result(value)`, `thrown(message)`, `conflict()`, `failure(message)`, or a function of the encoded bindings returning one. `calls` records every request. |
 

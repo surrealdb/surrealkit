@@ -2,7 +2,8 @@
  * Helpers for testing code built on `effect-surrealkit/statement` and
  * `effect-surrealkit/client`: an in-memory database (from `@surrealdb/node`,
  * an optional peer dependency imported only when one starts), record users,
- * index expectations read from the engine's plan, and a scripted client.
+ * index expectations read from the engine's plan, a check of a store's
+ * declarations against a live database, and a scripted client.
  *
  * Nothing else in the package imports this module, so the main entry points
  * stay host-neutral and installable without `@surrealdb/node`.
@@ -21,6 +22,12 @@ export {
 	recordUser,
 	TestDatabase,
 } from './database.js';
+export {
+	type DeclaredStore,
+	type DeclaredTable,
+	type SchemaDifference,
+	schemaDrift,
+} from './drift.js';
 export { IndexExpectationError, TestingError } from './errors.js';
 export { expectIndex, expectNoIndex, explain, indexesOf } from './explain.js';
 export {

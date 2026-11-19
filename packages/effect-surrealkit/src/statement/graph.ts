@@ -17,6 +17,9 @@
 import { Schema, SchemaAST } from 'effect';
 import { escapeIdent, type RecordId } from 'surrealdb';
 
+import { runtimeCode } from '../internal/code.js';
+import { wrap } from '../internal/declare.js';
+
 import {
 	admit,
 	type CodecOf,
@@ -132,6 +135,11 @@ export interface TraversalData<
 	readonly present: Present;
 	/** The codec of one record of the list. */
 	readonly item: Codec;
+	/**
+	 * The `ENFORCED` relation `present` relies on, named when a record it
+	 * reaches decodes as NONE: only schema drift can leave one dangling.
+	 */
+	readonly relation?: string;
 	/** The edges a step walks (`id->member_of`), for {@link edges}. */
 	readonly edges?: {
 		readonly sql: string;
@@ -307,6 +315,10 @@ const mergeIds = (shapes: ReadonlyArray<LinkShape>): LinkShape | undefined => {
 const shapeOfAst = (ast: SchemaAST.AST): LinkShape | undefined => {
 	if (SchemaAST.isDeclaration(ast)) {
 		const id = representation(ast);
+		const [inner] = ast.typeParameters;
+		if (id === 'effect-surrealkit/Enforced' && inner !== undefined) {
+			return shapeOfAst(inner);
+		}
 		if (id === 'effect-surrealkit/RecordIdAny') {
 			return { kind: 'id', tables: 'any' };
 		}
@@ -362,14 +374,44 @@ const shapeTablesText = (shape: LinkShape): string => {
 	return tables === 'any' ? 'any table' : tables.join(' | ');
 };
 
-const lift = (shape: LinkShape, present: boolean, leaf: Codec): Codec => {
+/**
+ * `leaf`, read through the `ENFORCED` relation `relation`, refusing NONE
+ * with a message that says why it cannot happen: the engine refuses to
+ * relate to a missing record and deletes a record's edges with it, so a
+ * dangling endpoint means the live schema is not the generated one.
+ */
+const enforced = (leaf: Codec, relation: string): Codec =>
+	wrap(leaf, {
+		id: 'effect-surrealkit/Enforced',
+		payload: { relation },
+		expected: `a record the ENFORCED relation \`${relation}\` reaches`,
+		code: ([inner]) =>
+			runtimeCode(inner?.runtime ?? '', inner?.Type ?? 'unknown'),
+		refuse: (input) =>
+			input === undefined
+				? `a record reached through \`${relation}\` is NONE, but the generated descriptors declare \`${relation}\` ENFORCED, so SurrealDB would refuse to relate to a missing record and delete a record's edges with it: the live schema may differ from the generated descriptors (is \`${relation}\` ENFORCED there, and does it lead to these tables?); regenerate them, or check the database with \`schemaDrift\` from \`effect-surrealkit/testing\``
+				: undefined,
+	}) as unknown as Codec;
+
+const lift = (
+	shape: LinkShape,
+	present: boolean,
+	leaf: Codec,
+	relation?: string,
+): Codec => {
 	switch (shape.kind) {
 		case 'id':
-			return present ? leaf : orNone(leaf);
+			// A leaf that may be NONE itself (an optional field) reads NONE
+			// whether or not its record is there, so it needs no message.
+			return present
+				? relation === undefined || Schema.is(leaf)(undefined)
+					? leaf
+					: enforced(leaf, relation)
+				: orNone(leaf);
 		case 'optional':
-			return orNone(lift(shape.of, present, leaf));
+			return orNone(lift(shape.of, present, leaf, relation));
 		case 'list':
-			return Schema.Array(lift(shape.of, present, leaf));
+			return Schema.Array(lift(shape.of, present, leaf, relation));
 	}
 };
 
@@ -538,7 +580,7 @@ export const follow = <S extends GraphStore, const R extends Expr>(
 		tables.map(selectFields),
 		`${operand(link)}.`,
 		false,
-		(codec) => lift(shape, present, codec),
+		(codec) => lift(shape, present, codec, traversalOf(link)?.relation),
 		paramsOf(link),
 		joinContexts([contextOf(link), viewOf(store)]),
 	) as unknown as FollowedOf<S, R>;
@@ -572,7 +614,7 @@ export const rows = <S extends GraphStore, const R extends Expr>(
 	const { shape, tables } = targetsOf(store, link);
 	const present = traversalOf(link)?.present ?? false;
 	return makeExpr(
-		lift(shape, present, targetRow(tables)),
+		lift(shape, present, targetRow(tables), traversalOf(link)?.relation),
 		`${operand(link)}.*`,
 		paramsOf(link),
 		Level.atom,
@@ -692,7 +734,12 @@ export const destructure = <
 		Object.values(fields),
 	);
 	return makeExpr(
-		lift(targets.shape, present, projected.codec),
+		lift(
+			targets.shape,
+			present,
+			projected.codec,
+			traversalOf(link)?.relation,
+		),
 		`${operand(link)}.{ ${entries
 			.map(([alias, value]) => `${escapeIdent(alias)}: ${sqlOf(value)}`)
 			.join(', ')} }`,
@@ -998,6 +1045,7 @@ const step = (
 		),
 		[TraversalTypeId]: {
 			present: edge.enforced,
+			...(edge.enforced && { relation: name }),
 			item,
 			edges: {
 				sql: edgesSql,
@@ -1256,7 +1304,11 @@ const recursion = (
 				reads === undefined ? undefined : contextOf(reads),
 			]),
 		),
-		[TraversalTypeId]: { present: data.present, item: data.item },
+		[TraversalTypeId]: {
+			present: data.present,
+			...(data.relation !== undefined && { relation: data.relation }),
+			item: data.item,
+		},
 	};
 };
 

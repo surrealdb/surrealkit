@@ -16,6 +16,7 @@ import {
 	RecordId,
 	type Surreal,
 	type SurrealSession,
+	Table,
 } from 'surrealdb';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -1128,6 +1129,135 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 				/You don't have permission to run the fn::denied function/,
 			);
 			expect(await asUser('RETURN fn::allowed();')).toStrictEqual([1]);
+		});
+	});
+
+	describe('introspection: INFO … STRUCTURE, which the drift check reads', () => {
+		beforeAll(async () => {
+			await query(`
+				DEFINE TABLE in_p SCHEMAFULL;
+				DEFINE FIELD name ON in_p TYPE string;
+				DEFINE FIELD email ON in_p TYPE string;
+				DEFINE FIELD tags ON in_p TYPE array<string>;
+				DEFINE FIELD body ON in_p TYPE string;
+				DEFINE FIELD vec ON in_p TYPE array<float>;
+				DEFINE TABLE in_any TYPE ANY SCHEMALESS;
+				DEFINE TABLE in_plain SCHEMALESS;
+				DEFINE TABLE in_g TYPE NORMAL SCHEMALESS;
+				DEFINE TABLE in_r TYPE RELATION IN in_p OUT in_g | in_p ENFORCED;
+				DEFINE TABLE in_l TYPE RELATION FROM in_p TO in_p;
+				DEFINE TABLE in_u TYPE RELATION;
+				DEFINE INDEX in_email ON in_p FIELDS email UNIQUE;
+				DEFINE INDEX in_multi ON in_p FIELDS name, email;
+				DEFINE INDEX in_tags ON in_p FIELDS tags.*;
+				DEFINE INDEX in_odd ON in_plain FIELDS \`odd.name\`, profile.bio;
+				DEFINE ANALYZER in_simple TOKENIZERS blank FILTERS lowercase;
+				DEFINE INDEX in_ft ON in_p FIELDS body FULLTEXT ANALYZER in_simple BM25 HIGHLIGHTS;
+				DEFINE INDEX in_vec ON in_p FIELDS vec HNSW DIMENSION 3 DIST COSINE;
+				DEFINE INDEX in_dk ON in_p FIELDS vec DISKANN DIMENSION 3 DIST EUCLIDEAN;
+				DEFINE INDEX in_count ON in_p COUNT;
+				DEFINE INDEX in_open ON in_p COUNT WHERE name = 'open';
+			`);
+		});
+
+		it('INFO FOR DB STRUCTURE lists each table with its kind: NORMAL, ANY (also without TYPE), or RELATION with its tables and ENFORCED', async () => {
+			const [db] = (await query('INFO FOR DB STRUCTURE;')) as [
+				{
+					readonly tables: ReadonlyArray<{
+						readonly name: string;
+						readonly kind: unknown;
+					}>;
+				},
+			];
+			// A relation's tables, as names or as the SDK's `Table` values.
+			const named = (kind: unknown) =>
+				JSON.parse(
+					JSON.stringify(kind, (_, value) =>
+						value instanceof Table ? `table:${value.name}` : value,
+					),
+				);
+			const kinds = Object.fromEntries(
+				db.tables
+					.filter((table) => table.name.startsWith('in_'))
+					.map((table) => [table.name, named(table.kind)]),
+			);
+			expect(kinds).toStrictEqual({
+				in_any: { kind: 'ANY' },
+				in_g: { kind: 'NORMAL' },
+				in_l: {
+					kind: 'RELATION',
+					in: ['in_p'],
+					out: ['in_p'],
+					enforced: false,
+				},
+				in_p: { kind: 'NORMAL' },
+				in_plain: { kind: 'ANY' },
+				// Written `IN … OUT …` the tables come back as names, and written
+				// `FROM … TO …` as `Table` values, on 3.3 and 4.0 alike.
+				in_r: {
+					kind: 'RELATION',
+					in: ['in_p'],
+					out: ['in_g', 'in_p'],
+					enforced: true,
+				},
+				in_u: { kind: 'RELATION', enforced: false },
+			});
+		});
+
+		it('INFO FOR TABLE … STRUCTURE lists each index with its fields as SurrealQL spells them and a definition that starts with its kind, empty for a standard one', async () => {
+			const [table, plain, missing] = (await query(
+				'INFO FOR TABLE ⟨in_p⟩ STRUCTURE; INFO FOR TABLE in_plain STRUCTURE; INFO FOR TABLE in_nosuch STRUCTURE;',
+			)) as Array<{
+				readonly indexes: ReadonlyArray<{
+					readonly name: string;
+					readonly cols: ReadonlyArray<string>;
+					readonly index: string;
+				}>;
+			}>;
+			const indexes = Object.fromEntries(
+				(table?.indexes ?? []).map((index) => [
+					index.name,
+					{ cols: index.cols, index: index.index },
+				]),
+			);
+			expect(indexes.in_email).toStrictEqual({
+				cols: ['email'],
+				index: 'UNIQUE',
+			});
+			expect(indexes.in_multi).toStrictEqual({
+				cols: ['name', 'email'],
+				index: '',
+			});
+			expect(indexes.in_tags).toStrictEqual({
+				cols: ['tags.*'],
+				index: '',
+			});
+			expect(plain?.indexes).toMatchObject([
+				{
+					name: 'in_odd',
+					cols: ['`odd.name`', 'profile.bio'],
+					index: '',
+				},
+			]);
+			expect(indexes.in_count).toStrictEqual({
+				cols: [],
+				index: 'COUNT',
+			});
+			expect(indexes.in_open).toStrictEqual({
+				cols: [],
+				index: "COUNT WHERE name = 'open'",
+			});
+			expect(indexes.in_ft?.index).toMatch(
+				/^FULLTEXT ANALYZER in_simple BM25\(1\.2,0\.75\) HIGHLIGHTS$/,
+			);
+			expect(indexes.in_vec?.index).toMatch(
+				/^HNSW DIMENSION 3 DIST COSINE /,
+			);
+			expect(indexes.in_dk?.index).toMatch(
+				/^DISKANN DIMENSION 3 DIST EUCLIDEAN /,
+			);
+			// A table that does not exist has no definitions, without an error.
+			expect(missing?.indexes).toStrictEqual([]);
 		});
 	});
 
