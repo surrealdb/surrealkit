@@ -98,7 +98,24 @@ export interface Analysis {
 	 * is not certain; a binding with no such use is absent.
 	 */
 	readonly uses: BindingUses;
+	/**
+	 * For each hole, what the text around it does with names (empty for a
+	 * text without holes): `bound`, the names visible at every occurrence of
+	 * the hole (a `LET` before it in an enclosing block, a closure, `FOR` or
+	 * function parameter), so a fill that reads one of them does not read a
+	 * binding; and `binds`, the free names of this text that a `LET` placed
+	 * at the hole would define for every read of them, so a fill of
+	 * statements that `LET`s one of them takes it out of the free names
+	 * (empty unless the hole starts a statement).
+	 */
+	readonly holeScopes: Readonly<Record<string, HoleScope>>;
 	readonly diagnostics: ReadonlyArray<Diagnostic>;
+}
+
+/** What the text around one hole does with names; see {@link Analysis}. */
+export interface HoleScope {
+	readonly bound: ReadonlyArray<string>;
+	readonly binds: ReadonlyArray<string>;
 }
 
 /** Set by the engine: never free, and a `LET` of one is refused. */
@@ -237,6 +254,24 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 	const holes = new Set<string>();
 	const throwsAt = new Map<string, Set<number>>();
 	const skip = new Set<number>();
+	const holeSites: Array<{
+		readonly name: string;
+		readonly index: number;
+		readonly frame: Frame;
+		readonly visible: ReadonlySet<string>;
+		readonly statement: boolean;
+	}> = [];
+	const unboundReads = new Map<
+		string,
+		Array<{ readonly index: number; readonly frames: ReadonlyArray<Frame> }>
+	>();
+	const visibleNames = (): ReadonlySet<string> => {
+		const names = new Set<string>();
+		for (const f of frames) for (const name of f.vars) names.add(name);
+		for (const scope of closures)
+			for (const name of scope.vars) names.add(name);
+		return names;
+	};
 
 	let slots = 0;
 	let valueSlot = 0;
@@ -326,6 +361,13 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 		switch (token.kind) {
 			case 'hole':
 				holes.add(token.value);
+				holeSites.push({
+					name: token.value,
+					index: i,
+					frame: current,
+					visible: visibleNames(),
+					statement: starting,
+				});
 				break;
 			case 'param': {
 				const name = token.value;
@@ -336,6 +378,9 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 				if (visible(name) || PROTECTED.has(name) || IMPLICIT.has(name))
 					break;
 				if (inDefinition && CONTEXTUAL.has(name)) break;
+				const reads = unboundReads.get(name) ?? [];
+				reads.push({ index: i, frames: [...frames] });
+				unboundReads.set(name, reads);
 				if (!free.has(name)) {
 					free.add(name);
 					checkName(name, token);
@@ -597,8 +642,57 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 		functions: targets.functions,
 		openTargets: targets.openTargets,
 		uses: analyzeUses(tokens, sorted(free)),
+		holeScopes: holeScopesOf(holeSites, unboundReads, kind),
 		diagnostics,
 	};
+};
+
+/**
+ * Per hole: the names visible at every occurrence, and the free names whose
+ * every unbound read follows one occurrence inside the block it sits in.
+ */
+const holeScopesOf = (
+	sites: ReadonlyArray<{
+		readonly name: string;
+		readonly index: number;
+		readonly frame: Frame;
+		readonly visible: ReadonlySet<string>;
+		readonly statement: boolean;
+	}>,
+	reads: ReadonlyMap<
+		string,
+		ReadonlyArray<{
+			readonly index: number;
+			readonly frames: ReadonlyArray<Frame>;
+		}>
+	>,
+	kind: Analysis['kind'],
+): Readonly<Record<string, HoleScope>> => {
+	const out: Record<string, HoleScope> = {};
+	for (const name of sorted(sites.map((site) => site.name))) {
+		const own = sites.filter((site) => site.name === name);
+		const [first, ...rest] = own;
+		const bound = [...(first?.visible ?? [])].filter((candidate) =>
+			rest.every((site) => site.visible.has(candidate)),
+		);
+		const binds = [...reads.entries()]
+			.filter(([, list]) =>
+				own.some(
+					(site) =>
+						site.statement &&
+						// A LET can stand there: in a block, or at the top of a part.
+						(site.frame.open === '{' || kind === 'part') &&
+						list.every(
+							(read) =>
+								read.index > site.index &&
+								read.frames.includes(site.frame),
+						),
+				),
+			)
+			.map(([free]) => free);
+		out[name] = { bound: sorted(bound), binds: sorted(binds) };
+	}
+	return out;
 };
 
 /** {@link analyze}, throwing its {@link AnalyzeError}. */

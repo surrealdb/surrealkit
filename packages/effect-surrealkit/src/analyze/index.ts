@@ -11,6 +11,7 @@ export {
 	analyze,
 	analyzeSync,
 	type Diagnostic,
+	type HoleScope,
 } from './analyze.js';
 export {
 	AnalyzeError,

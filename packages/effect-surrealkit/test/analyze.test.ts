@@ -544,3 +544,78 @@ describe('valueSlot', () => {
 		expect(analyzeSync('BEGIN; 1; -- COMMIT;\n2;').valueSlot).toBe(3);
 	});
 });
+
+describe('analyze: hole scopes', () => {
+	const scopes = (sql: string) => analyzeSync(sql).holeScopes;
+
+	it('a hole sees the LETs before it in its blocks, closure and FOR parameters', () => {
+		expect(
+			scopes(
+				'{ LET $a = 1; LET $b = __EARLY__; array::map($xs, |$x| __EACH__); FOR $i IN $xs { __LOOP__ }; LET $c = 2; }',
+			),
+		).toEqual({
+			__EACH__: { bound: ['a', 'b', 'x'], binds: [] },
+			__EARLY__: { bound: ['a'], binds: [] },
+			__LOOP__: { bound: ['a', 'b', 'i'], binds: [] },
+		});
+	});
+
+	it('a hole used twice sees only what both occurrences see', () => {
+		expect(
+			scopes('{ LET $a = 1; __H__ } + { LET $b = 2; __H__ }').__H__,
+		).toEqual({ bound: [], binds: [] });
+	});
+
+	it('a hole that starts a statement binds the free names read only after it, in its block', () => {
+		expect(
+			scopes('{ __DEFS__ $total + $other }; $other;').__DEFS__,
+		).toEqual({ bound: [], binds: ['total'] });
+		expect(scopes('{ $total; __DEFS__ $total }').__DEFS__).toEqual({
+			bound: [],
+			binds: [],
+		});
+		expect(scopes('{ LET $x = __EXPR__; $total }').__EXPR__).toEqual({
+			bound: [],
+			binds: [],
+		});
+	});
+
+	it('a hole in a function body sees its parameters and the LETs before it', () => {
+		expect(
+			scopes(
+				'DEFINE FUNCTION fn::f($a: int) { LET $b = 1; RETURN __BODY__; };',
+			),
+		).toEqual({ __BODY__: { bound: ['a', 'b'], binds: [] } });
+		expect(
+			scopes(
+				'DEFINE FUNCTION fn::f($a: int) { __DEFS__ RETURN $total; };',
+			).__DEFS__,
+		).toEqual({ bound: ['a'], binds: ['total'] });
+	});
+
+	it('a hole in an IF arm sees only that arm, and binds nothing read in the other', () => {
+		expect(
+			scopes('IF $c { LET $a = 1; __THEN__ } ELSE { __ELSE__ };'),
+		).toEqual({
+			__ELSE__: { bound: [], binds: [] },
+			__THEN__: { bound: ['a'], binds: [] },
+		});
+		expect(
+			scopes('IF $c { __DEFS__ $total } ELSE { $total };').__DEFS__,
+		).toEqual({ bound: [], binds: [] });
+		expect(
+			scopes('{ IF $c { __DEFS__ $total } ELSE { 1 } }').__DEFS__,
+		).toEqual({ bound: [], binds: ['total'] });
+	});
+
+	it('a hole at the top level of a part binds the free names read after it', () => {
+		expect(scopes('LET $a = 1; __H__ RETURN $a + $x;').__H__).toEqual({
+			bound: ['a'],
+			binds: ['x'],
+		});
+	});
+
+	it('a text without holes has none', () => {
+		expect(scopes('LET $a = 1; RETURN $a;')).toEqual({});
+	});
+});
