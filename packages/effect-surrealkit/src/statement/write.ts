@@ -86,11 +86,67 @@ type WrongFields<S, Target> = {
  * out, a field whose value `Target` refuses, any other mismatch, and a field
  * `Target` does not have.
  */
+/** Whether `A` is a union. */
+type IsUnion<A, Whole = A> = A extends unknown
+	? [Whole] extends [A]
+		? false
+		: true
+	: never;
+
+/**
+ * The fields `S` sends below `Path` that `Target` does not have, as paths
+ * (`settings.notify.x`, `phones[*].x`), when both are objects or arrays.
+ * It descends only where the two types differ and `Target` is not a union,
+ * so it follows the target schema's own nesting and stops with it: at a
+ * type `S` shares, at an open record (whose keys are all accepted), and at
+ * a union (whose member is not known).
+ */
+type ExtraBelow<S, Target, Path extends string> = [Target] extends [S]
+	? never
+	: true extends IsUnion<Target>
+		? never
+		: Target extends ReadonlyArray<infer TargetItem>
+			? S extends ReadonlyArray<infer Item>
+				? ExtraBelow<
+						NonNullable<Item>,
+						NonNullable<TargetItem>,
+						`${Path}[*]`
+					>
+				: never
+			: [Target] extends [object]
+				? S extends object
+					?
+							| `${Path}.${Exclude<keyof S, keyof Target> & string}`
+							| NestedExtra<S, Target, `${Path}.`>
+					: never
+				: never;
+
+/** {@link ExtraBelow} for every field `S` and `Target` share. */
+type NestedExtra<S, Target, Prefix extends string> = {
+	[K in keyof S & keyof Target & string]-?: ExtraBelow<
+		NonNullable<S[K]>,
+		NonNullable<Target[K]>,
+		`${Prefix}${K}`
+	>;
+}[keyof S & keyof Target & string];
+
+/**
+ * Data of encoded type `S` for a schema of encoded type `Target`: `V` when
+ * it fits, otherwise a message naming what does not, read in this order: a
+ * value that is not an object, a field `Target` requires that `S` may leave
+ * out, a field whose value `Target` refuses, any other mismatch, a field
+ * `Target` does not have, and one inside a nested object or an array
+ * element (SurrealDB 3.3 and 4.0 refuse an undeclared key of a declared
+ * child object at any depth; 4.0 refuses one in an array element, which 3.3
+ * stores and the element's closed schema then cannot read).
+ */
 type FitsEncoded<S, Target, V, Table extends string, Clause extends string> = [
 	S,
 ] extends [Target]
 	? [ExtraFields<S, Target>] extends [never]
-		? V
+		? [NestedExtra<S, Target, ''>] extends [never]
+			? V
+			: `\`${NestedExtra<S, Target, ''>}\` is not a field \`${Table}\` accepts in ${Clause}`
 		: `\`${ExtraFields<S, Target>}\` is not a field \`${Table}\` accepts in ${Clause}`
 	: [S] extends [object]
 		? [Exclude<RequiredFields<Target>, RequiredFields<S>>] extends [never]

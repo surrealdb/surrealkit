@@ -225,6 +225,25 @@ export const mergeName = update(PersonTable, param('id', PersonId))
 	.merge(param('changes', Schema.Struct({ name: PersonMerge.fields.name })))
 	.build();
 
+// An open object (`address` keeps undeclared keys) accepts extra keys at
+// any depth; a declared child object accepts its own fields.
+export const mergeAddress = update(PersonTable, param('id', PersonId))
+	.merge(
+		param(
+			'changes',
+			Schema.Struct({
+				address: Schema.Struct({
+					city: SurrealSchema.String,
+					floor: Schema.Struct({ level: SurrealSchema.Int }),
+				}),
+				phones: Schema.Array(
+					Schema.Struct({ kind: Schema.Literals(['home', 'work']) }),
+				),
+			}),
+		),
+	)
+	.build();
+
 export const mergeOne = update(PersonTable, param('id', PersonId))
 	.merge(param('changes', PersonMerge))
 	.build();

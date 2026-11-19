@@ -138,6 +138,12 @@ exports[`type diagnostics > content/merge-value-missing-fields 1`] = `
 ]
 `;
 
+exports[`type diagnostics > create/depth-two-extra-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly settings: Struct<{ readonly notify: Struct<{ readonly email: Boolean; readonly bogus: declareConstructor<number, number, readonly [], number>; }>; }>; ... 29 more ...; readonly watchers: optionalKey<...>; }>, { ...; }>' is not assignable to parameter of type '"\`settings.notify.bogus\` is not a field \`person\` accepts in CREATE"'.",
+]
+`;
+
 exports[`type diagnostics > create/extra-field 1`] = `
 [
   "TS2345: Argument of type 'Expr<Struct<{ readonly bogus: declareConstructor<number, number, readonly [], number>; readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [...]>; ... 15 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }>' is not assignable to parameter of type '"\`bogus\` is not a field \`person\` accepts in CREATE"'.",
@@ -204,6 +210,12 @@ exports[`type diagnostics > flag/make-read-only 1`] = `
 ]
 `;
 
+exports[`type diagnostics > merge/element-extra-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly phones: $Array<Struct<{ readonly kind: Literals<readonly ["home", "mobile", "work"]>; readonly bogus: declareConstructor<number, number, readonly [], number>; }>>; }>, { ...; }>' is not assignable to parameter of type '"\`phones[*].bogus\` is not a field \`person\` accepts in MERGE"'.",
+]
+`;
+
 exports[`type diagnostics > merge/element-missing-field 1`] = `
 [
   "TS2345: Argument of type 'Expr<Struct<{ readonly phones: $Array<Struct<{}>>; }>, { readonly changes: Struct<{ readonly phones: $Array<Struct<{}>>; }>; }>' is not assignable to parameter of type '"\`phones\` is not a value \`person\` accepts in MERGE"'.",
@@ -213,6 +225,12 @@ exports[`type diagnostics > merge/element-missing-field 1`] = `
 exports[`type diagnostics > merge/extra-field 1`] = `
 [
   "TS2345: Argument of type 'Expr<Struct<{ readonly bogus: declareConstructor<string, string, readonly [], string>; readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [...]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' is not assignable to parameter of type '"\`bogus\` is not a field \`person\` accepts in MERGE"'.",
+]
+`;
+
+exports[`type diagnostics > merge/nested-extra-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly settings: Struct<{ readonly theme: optionalKey<Literals<readonly ["dark", "light"]>>; readonly bogus: declareConstructor<number, number, readonly [], number>; }>; }>, { ...; }>' is not assignable to parameter of type '"\`settings.bogus\` is not a field \`person\` accepts in MERGE"'.",
 ]
 `;
 

@@ -28,6 +28,7 @@ import {
 	sequence,
 	update,
 } from '../../src/statement/index.js';
+import * as Corpus from '../golden/corpus/index.js';
 import {
 	fn_greet,
 	MemberOfTable,
@@ -188,6 +189,49 @@ export const rejectedTargets = () => {
 		param(
 			'changes',
 			Schema.Struct({ phones: Schema.Array(Schema.Struct({})) }),
+		),
+	);
+	// An undeclared key inside a declared child object or an array element.
+	update(Corpus.PersonTable).merge(
+		// @ts-expect-error [merge/nested-extra-field] `settings` declares no `bogus`
+		param(
+			'changes',
+			Schema.Struct({
+				settings: Schema.Struct({
+					theme: Corpus.PersonMerge.fields.settings.schema.fields
+						.theme,
+					bogus: SurrealSchema.Int,
+				}),
+			}),
+		),
+	);
+	create(Corpus.PersonTable).content(
+		// @ts-expect-error [create/depth-two-extra-field] `settings.notify` declares no `bogus`
+		param(
+			'person',
+			Schema.Struct({
+				...Corpus.PersonCreate.fields,
+				settings: Schema.Struct({
+					notify: Schema.Struct({
+						email: Schema.Boolean,
+						bogus: SurrealSchema.Int,
+					}),
+				}),
+			}),
+		),
+	);
+	update(PersonTable).merge(
+		// @ts-expect-error [merge/element-extra-field] a phone declares no `bogus`
+		param(
+			'changes',
+			Schema.Struct({
+				phones: Schema.Array(
+					Schema.Struct({
+						kind: Schema.Literals(['home', 'mobile', 'work']),
+						bogus: SurrealSchema.Int,
+					}),
+				),
+			}),
 		),
 	);
 	// @ts-expect-error [create/return-before] CREATE has no RETURN BEFORE

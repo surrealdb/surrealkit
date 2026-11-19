@@ -330,9 +330,16 @@ keywords there, `none` is NONE and `a.b` is a field path (SurrealDB 3.3 and
 
 Data is always bound, and must fit the descriptor's schema for the operation
 (`create`, `merge`, `content`): a value of another shape, or with a field the
-schema does not have, is a compile error naming the field. `.returning('none' | 'after' | 'before')` or a
-projection changes the result type with the `RETURN` clause. Builders are
-immutable, so a base query can be shared.
+schema does not have, is a compile error naming the field. That includes a
+field inside a nested object or an array element (`settings.notify.x`,
+`phones[*].x`): SurrealDB 3.3 and 4.0 refuse an undeclared key of a declared
+child object at any depth, and 4.0 refuses one in an array element, which 3.3
+stores and the element's closed schema then cannot read. An open object
+(`FLEXIBLE`, or a schemaless table) accepts any key below it. The check
+descends only where the value's type differs from the schema's, and stops at
+a union. `.returning('none' | 'after' | 'before')` or a projection changes the
+result type with the `RETURN` clause. Builders are immutable, so a base
+query can be shared.
 
 ### Authored SurrealQL
 
