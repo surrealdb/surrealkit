@@ -47,21 +47,21 @@ export const step = sequence(counter.step).define({
 
 export const rejected = () => {
 	sequence(accounts.bindOwner, accounts.readProfile).define({
-		// @ts-expect-error `$boundOwner` has no codec
+		// @ts-expect-error [module/sequence-missing-binding] `$boundOwner` has no codec
 		params: {},
 		result: SurrealSchema.String,
 	});
 	sequence(accounts.bindOwner, accounts.readProfile).define({
 		params: {
 			boundOwner: SurrealSchema.RecordIdAny,
-			// @ts-expect-error bindOwner defines `$owner`, so nothing reads it from the caller
+			// @ts-expect-error [module/sequence-extra-binding] bindOwner defines `$owner`, so nothing reads it from the caller
 			owner: SurrealSchema.RecordIdAny,
 		},
 		result: SurrealSchema.String,
 	});
 	// Without bindOwner, the guard reads `$owner` and `$principal` from the caller.
 	sequence(accounts.requireOwner).define({
-		// @ts-expect-error `$principal` is missing
+		// @ts-expect-error [module/sequence-missing-principal] `$principal` is missing
 		params: { owner: SurrealSchema.RecordIdAny },
 		result: SurrealSchema.String,
 	});
@@ -73,5 +73,5 @@ export const filled: Effect.Effect<string, FillError> = fill(
 	{ __FILTER__: accounts.ownerFilter },
 );
 export const unfilled = () =>
-	// @ts-expect-error `__FILTER__` has no fill
+	// @ts-expect-error [module/template-missing-fill] `__FILTER__` has no fill
 	fill(accounts.listWhere, {});
