@@ -28,7 +28,7 @@ export type PCreate = typeof PCreate.Type;
 export type PCreateEncoded = typeof PCreate.Encoded;
 
 /** Input for `UPDATE p MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
-export const PMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
+export const PMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealMergeValue)]);
 export type PMerge = typeof PMerge.Type;
 export type PMergeEncoded = typeof PMerge.Encoded;
 

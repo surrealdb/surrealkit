@@ -63,7 +63,7 @@ export type SurrealValue =
 
 const NativeElement = Schema.suspend(() => SurrealValue);
 
-export const SurrealValue: Schema.Codec<SurrealValue> = Schema.Union([
+const nativeNonRecord = [
 	Schema.Null,
 	Schema.Boolean,
 	Schema.Number,
@@ -82,8 +82,23 @@ export const SurrealValue: Schema.Codec<SurrealValue> = Schema.Union([
 	Schema.instanceOf(Uint8Array),
 	Schema.ReadonlySet(NativeElement),
 	Schema.Array(NativeElement),
+] as const;
+
+export const SurrealValue: Schema.Codec<SurrealValue> = Schema.Union([
+	...nativeNonRecord,
 	plainRecord(NativeElement),
 ]).annotate({ identifier: 'SurrealValue' });
+
+/** A member of a MERGE object: NONE removes a key, including in a nested patch. */
+export type SurrealMergeValue =
+	| SurrealValue
+	| undefined
+	| { readonly [key: string]: SurrealMergeValue };
+export const SurrealMergeValue: Schema.Codec<SurrealMergeValue> = Schema.Union([
+	Schema.Undefined,
+	...nativeNonRecord,
+	plainRecord(Schema.suspend(() => SurrealMergeValue)),
+]).annotate({ identifier: 'SurrealMergeValue' });
 
 /** An open value in SurrealDB's JSON world (HTTP `/sql`). */
 export type SurrealJsonValue =

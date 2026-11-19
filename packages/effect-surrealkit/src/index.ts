@@ -122,4 +122,4 @@ export {
 	dateTimeFromString,
 	dateTimeToString,
 } from './temporal.js';
-export { SurrealJsonValue, SurrealValue } from './value.js';
+export { SurrealJsonValue, SurrealMergeValue, SurrealValue } from './value.js';

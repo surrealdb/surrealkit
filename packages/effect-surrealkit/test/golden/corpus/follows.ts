@@ -30,7 +30,7 @@ export type FollowsCreate = typeof FollowsCreate.Type;
 export type FollowsCreateEncoded = typeof FollowsCreate.Encoded;
 
 /** Input for `UPDATE follows MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
-export const FollowsMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
+export const FollowsMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealMergeValue)]);
 export type FollowsMerge = typeof FollowsMerge.Type;
 export type FollowsMergeEncoded = typeof FollowsMerge.Encoded;
 

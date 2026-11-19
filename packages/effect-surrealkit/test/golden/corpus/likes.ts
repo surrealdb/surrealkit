@@ -30,7 +30,7 @@ export type LikesCreate = typeof LikesCreate.Type;
 export type LikesCreateEncoded = typeof LikesCreate.Encoded;
 
 /** Input for `UPDATE likes MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
-export const LikesMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
+export const LikesMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealMergeValue)]);
 export type LikesMerge = typeof LikesMerge.Type;
 export type LikesMergeEncoded = typeof LikesMerge.Encoded;
 

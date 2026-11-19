@@ -86,7 +86,7 @@ export const MMerge = Schema.Struct({
 	dflt: Schema.optionalKey(MFields.dflt),
 	flex: Schema.optional(Schema.StructWithRest(Schema.Struct({
 		a: Schema.optional(SurrealSchema.Int),
-	}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)])),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealMergeValue)])),
 	nul: Schema.optionalKey(MFields.nul),
 	obj: Schema.optional(Schema.Struct({
 		a: Schema.optional(SurrealSchema.Int),

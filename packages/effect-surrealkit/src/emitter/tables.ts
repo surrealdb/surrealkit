@@ -203,6 +203,7 @@ const struct = (
 	indent: number,
 	open: boolean,
 	world: PrintContext['world'] = 'native',
+	merge = false,
 ): string => {
 	const body =
 		entries.length === 0
@@ -214,7 +215,7 @@ const struct = (
 					)
 					.join('\n')}\n${tabs(indent)}})`;
 	return open
-		? `Schema.StructWithRest(${body}, [${printOpenRecord(world)}])`
+		? `Schema.StructWithRest(${body}, [${printOpenRecord(world, merge)}])`
 		: body;
 };
 
@@ -330,7 +331,13 @@ class TablePrinter {
 				),
 			]);
 		}
-		return struct(entries, indent, open, this.world);
+		return struct(
+			entries,
+			indent,
+			open,
+			this.world,
+			operation === 'merge' && !element,
+		);
 	}
 
 	topLevel(): FieldNode[] {
@@ -538,7 +545,9 @@ export const printTable = (input: TableInput): string => {
 			entries.push([field.key, wrap(code, p)]);
 		}
 		lines.push(`/** ${VARIANT_DOCS[operation](table.name)} */`);
-		lines.push(`export const ${name} = ${struct(entries, 0, open)};`);
+		lines.push(
+			`export const ${name} = ${struct(entries, 0, open, 'native', operation === 'merge')};`,
+		);
 		exportType(name);
 		lines.push('');
 		if (operation === 'select') {

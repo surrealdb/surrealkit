@@ -98,7 +98,7 @@ export type PersonCreateEncoded = typeof PersonCreate.Encoded;
 export const PersonMerge = Schema.Struct({
 	address: Schema.optionalKey(Schema.StructWithRest(Schema.Struct({
 		city: Schema.optionalKey(SurrealSchema.String),
-	}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)])),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealMergeValue)])),
 	age: Schema.optional(PersonFields.age),
 	bio: Schema.optionalKey(PersonFields.bio),
 	email: Schema.optionalKey(PersonFields.email),

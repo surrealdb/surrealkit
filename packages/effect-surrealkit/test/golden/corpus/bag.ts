@@ -35,7 +35,7 @@ export type BagCreateEncoded = typeof BagCreate.Encoded;
 /** Input for `UPDATE bag MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
 export const BagMerge = Schema.StructWithRest(Schema.Struct({
 	label: Schema.optional(BagFields.label),
-}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealMergeValue)]);
 export type BagMerge = typeof BagMerge.Type;
 export type BagMergeEncoded = typeof BagMerge.Encoded;
 

@@ -130,8 +130,11 @@ const openValue = (world: PrintContext['world']): string =>
 		? 'SurrealSchema.SurrealJsonValue'
 		: 'SurrealSchema.SurrealValue';
 
-export const printOpenRecord = (world: PrintContext['world']): string =>
-	`Schema.Record(Schema.String, ${openValue(world)})`;
+export const printOpenRecord = (
+	world: PrintContext['world'],
+	merge = false,
+): string =>
+	`Schema.Record(Schema.String, ${merge && world !== 'json' ? 'SurrealSchema.SurrealMergeValue' : openValue(world)})`;
 
 // Collection items can be open values, but cannot be NONE.
 const printItem = (item: Kind, ctx: PrintContext): string =>

@@ -159,6 +159,11 @@ its reason in the comment above `PersonFields`. An object that is the same
 wherever it is used (a `READONLY` one, which Merge and Content exclude) is
 listed and refines like any other field.
 
+In an open struct's Merge schema, the rest record accepts `SurrealMergeValue`:
+a member can be `undefined` (NONE), including inside an object patch. This lets
+a declared removable child such as `address.zip` pass both its own codec and
+the rest-record codec. Array and set elements still use the stored-value codec.
+
 ### Interpretation notes
 
 - A field with no `TYPE` (and no declared children), or `TYPE any`, can hold

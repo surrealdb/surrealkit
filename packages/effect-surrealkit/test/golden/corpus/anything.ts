@@ -28,7 +28,7 @@ export type AnythingCreate = typeof AnythingCreate.Type;
 export type AnythingCreateEncoded = typeof AnythingCreate.Encoded;
 
 /** Input for `UPDATE anything MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
-export const AnythingMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
+export const AnythingMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealMergeValue)]);
 export type AnythingMerge = typeof AnythingMerge.Type;
 export type AnythingMergeEncoded = typeof AnythingMerge.Encoded;
 

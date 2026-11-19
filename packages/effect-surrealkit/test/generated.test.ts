@@ -7,6 +7,7 @@ import * as SurrealSchema from '../src/index.js';
 import {
 	AnythingFromJson,
 	AnythingRow,
+	PersonMerge as CorpusPersonMerge,
 	KindsFields,
 	KindsJsonFields,
 } from './golden/corpus/index.js';
@@ -45,6 +46,19 @@ const create = {
 };
 
 describe('generated table modules', () => {
+	it('encodes NONE in a flexible MERGE object while keeping stored array items strict', () => {
+		const patch = {
+			address: { zip: undefined, extra: { deep: undefined } },
+		} satisfies typeof CorpusPersonMerge.Type;
+		expect(Schema.encodeSync(CorpusPersonMerge)(patch)).toEqual(patch);
+		expect(
+			decodes(CorpusPersonMerge, { address: { extra: [undefined] } }),
+		).toBe(false);
+		expect(decodes(SurrealSchema.SurrealValue, { deep: undefined })).toBe(
+			false,
+		);
+	});
+
 	it('decode a stored row the SDK returned, NONE as absent', () => {
 		const row = Schema.decodeUnknownSync(PersonRow)({
 			id: new RecordId('person', 'ann'),

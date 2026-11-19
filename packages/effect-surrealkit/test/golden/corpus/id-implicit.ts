@@ -28,7 +28,7 @@ export type IdImplicitCreate = typeof IdImplicitCreate.Type;
 export type IdImplicitCreateEncoded = typeof IdImplicitCreate.Encoded;
 
 /** Input for `UPDATE id_implicit MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
-export const IdImplicitMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
+export const IdImplicitMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealMergeValue)]);
 export type IdImplicitMerge = typeof IdImplicitMerge.Type;
 export type IdImplicitMergeEncoded = typeof IdImplicitMerge.Encoded;
 

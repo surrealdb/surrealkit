@@ -165,7 +165,7 @@ export const PersonMerge = Schema.Struct({
 		city: Schema.optionalKey(SurrealSchema.String),
 		geo: Schema.optional(SurrealSchema.GeometryPoint),
 		zip: Schema.optional(SurrealSchema.String),
-	}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)])),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealMergeValue)])),
 	age: Schema.optional(PersonFields.age),
 	bio: Schema.optionalKey(PersonFields.bio),
 	buddy: Schema.optional(PersonFields.buddy),
