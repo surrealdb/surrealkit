@@ -48,12 +48,7 @@ import {
 	type TestDatabase,
 	thrown,
 } from '../src/testing/index.js';
-import {
-	type Engine,
-	engineConfigured,
-	engineSkipReason,
-	startEngine,
-} from './engine.js';
+import { type Engine, engineConfigured, startEngine } from './engine.js';
 
 const PersonId = SurrealSchema.RecordIdFor('person');
 const PersonTable = {
