@@ -51,8 +51,8 @@ const testingMarker = /the scripted client has no reply|@surrealdb\/node/u;
 describe('bundling the statement module', () => {
 	it('leaves the analyzer out of code that only uses builders', async () => {
 		const text = await bundle(
-			`import { eq, make, param, select } from ${JSON.stringify(statement)};
-			console.log(eq, make, param, select);`,
+			`import { block, eq, make, object, param, select } from ${JSON.stringify(statement)};
+			console.log(block, eq, make, object, param, select);`,
 		);
 		expect(text).toContain('SELECT');
 		expect(text).not.toMatch(analyzerMarker);

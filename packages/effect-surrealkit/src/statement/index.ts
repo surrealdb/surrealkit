@@ -7,6 +7,30 @@
  * statements.
  */
 export {
+	type Arm,
+	type Block,
+	type BlockResult,
+	BlockTypeId,
+	type Branches,
+	block,
+	type Ended,
+	type ForEffect,
+	type LetValue,
+	type Lifted,
+	type Local,
+	type LocalField,
+	type LocalName,
+	type Locals,
+	type Narrowed,
+	type NoLocals,
+	type ObjectCodec,
+	type ObjectFields,
+	object,
+	type Returned,
+	type Scope,
+	type SomeOf,
+} from './block.js';
+export {
 	and,
 	at,
 	type CallArguments,

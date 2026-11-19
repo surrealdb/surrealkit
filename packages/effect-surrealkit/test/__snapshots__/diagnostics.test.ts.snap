@@ -24,6 +24,90 @@ exports[`type diagnostics > bind/wrong-type 1`] = `
 ]
 `;
 
+exports[`type diagnostics > block/arm-local-outside 1`] = `
+[
+  "TS2339: Property 'inner' does not exist on type 'Scope<NoLocals>'.",
+]
+`;
+
+exports[`type diagnostics > block/condition-not-boolean 1`] = `
+[
+  "TS2322: Type 'LocalField<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "scripts/team"> & Codec, true>' is not assignable to type 'Condition<NoParams>'.
+  Types of property '[ExprTypeId]' are incompatible.
+    Type 'ExprData<UndefinedOr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "scripts/team"> & Codec>, NoParams>' is not assignable to type 'ExprData<Codec<unknown, boolean, never, never>, NoParams>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+      Type 'UndefinedOr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "scripts/team"> & Codec>' is not assignable to type 'Codec<unknown, boolean, never, never>'.
+        Types of property '"Encoded"' are incompatible.
+          Type '_RecordId<"team"> | undefined' is not assignable to type 'boolean'.
+            Type 'undefined' is not assignable to type 'boolean'.",
+]
+`;
+
+exports[`type diagnostics > block/do-with-result 1`] = `
+[
+  "TS2322: Type 'Statement<{}, $Array<declareConstructor<{ readonly id: _RecordId<"invite"> & Brand<"scripts/invite">; readonly expires_at: DateTime; readonly role: "member" | "admin"; readonly status: "open" | ... 1 more ... | "revoked"; readonly team: _RecordId<...> & Brand<...>; }, { ...; }, readonly [...], { ...; }>>, never>' is not assignable to type '"a step run for its effect returns NONE (a write by id with \`.returning(\\"none\\")\`); bind a result with \`let\`"'.",
+]
+`;
+
+exports[`type diagnostics > block/if-not-none-unknown 1`] = `
+[
+  "TS2345: Argument of type '"nope"' is not assignable to parameter of type '"invite"'.",
+]
+`;
+
+exports[`type diagnostics > block/local-engine-name 1`] = `
+[
+  "TS2345: Argument of type '"value"' is not assignable to parameter of type '"\`$value\` is set by SurrealDB, so a block cannot define it"'.",
+]
+`;
+
+exports[`type diagnostics > block/local-not-a-value 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type 'LetValue'.",
+]
+`;
+
+exports[`type diagnostics > block/local-redefined 1`] = `
+[
+  "TS2345: Argument of type '"a"' is not assignable to parameter of type '"local \`$a\` is already defined in this block"'.",
+]
+`;
+
+exports[`type diagnostics > block/local-shadows-binding 1`] = `
+[
+  "TS2345: Argument of type '"x"' is not assignable to parameter of type '"\`$x\` is a binding of this block, and a local of that name would shadow it"'.",
+]
+`;
+
+exports[`type diagnostics > block/object-extra-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<ObjectCodec<{ readonly team: LocalField<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "scripts/team"> & Codec, false>; readonly account: Expr<...>; readonly role: LocalField<...>; readonly ...' is not assignable to parameter of type '"\`bogus\` is not a field \`membership\` accepts in CREATE"'.",
+]
+`;
+
+exports[`type diagnostics > block/return-constant 1`] = `
+[
+  "TS2322: Type 'number' is not assignable to type 'Returned'.",
+]
+`;
+
+exports[`type diagnostics > block/throw-if-none-unknown 1`] = `
+[
+  "TS2345: Argument of type '"nope"' is not assignable to parameter of type '"invite"'.",
+]
+`;
+
+exports[`type diagnostics > block/unknown-field 1`] = `
+[
+  "TS2339: Property 'nope' does not exist on type 'Local<UndefinedOr<declareConstructor<{ readonly id: _RecordId<"invite"> & Brand<"scripts/invite">; readonly expires_at: DateTime; readonly role: "member" | "admin"; readonly status: "open" | "accepted" | "revoked"; readonly team: _RecordId<...> & Brand<...>; }, { ...; }, readonly [...], { ...; }>>>'.",
+]
+`;
+
+exports[`type diagnostics > block/unknown-local 1`] = `
+[
+  "TS2339: Property 'nope' does not exist on type 'Scope<NoLocals & { readonly invite: UndefinedOr<declareConstructor<{ readonly id: _RecordId<"invite"> & Brand<"scripts/invite">; readonly expires_at: DateTime; readonly role: "member" | "admin"; readonly status: "open" | ... 1 more ... | "revoked"; readonly team: _RecordId<...> & Brand<...>; }, { ...; }, readonly [....'.",
+]
+`;
+
 exports[`type diagnostics > bound/hand-built 1`] = `
 [
   "TS2322: Type '{ statement: Statement<{ readonly email: Schema.declareConstructor<string, string, readonly [], string>; }, Schema.$Array<Schema.declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 18 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { readonly id: _RecordId<"person"> & Br...' is not assignable to type '"a transaction takes statements paired with their input by \`bind\`"'.",
@@ -348,6 +432,12 @@ exports[`type diagnostics > module/template-missing-fill 1`] = `
 [
   "TS2345: Argument of type '{}' is not assignable to parameter of type '{ readonly __FILTER__: string | Text<string>; }'.
   Property '__FILTER__' is missing in type '{}' but required in type '{ readonly __FILTER__: string | Text<string>; }'.",
+]
+`;
+
+exports[`type diagnostics > object/not-an-expression 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'a' does not exist in type 'Expr<Codec, Params>'.",
 ]
 `;
 
@@ -816,6 +906,18 @@ exports[`type diagnostics > schema/unbranded-sdk-id 1`] = `
 [
   "TS2322: Type 'RecordId<"person", string, unknown>' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
   Property '[TypeId]' is missing in type 'RecordId<"person", string, unknown>' but required in type 'Brand<"corpus/person">'.",
+]
+`;
+
+exports[`type diagnostics > select/for-update-late 1`] = `
+[
+  "TS2339: Property 'forUpdate' does not exist on type 'Select<{ readonly name: "invite"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"invite">, _RecordId<"invite">, readonly [declareConstructor<...>], _RecordId<...>>, "scripts/invite">; ... 9 more ...; readonly indexes: {}; }, { ...; }, declar...'.",
+]
+`;
+
+exports[`type diagnostics > select/for-update-table 1`] = `
+[
+  "TS2339: Property 'forUpdate' does not exist on type 'Select<{ readonly name: "invite"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"invite">, _RecordId<"invite">, readonly [declareConstructor<...>], _RecordId<...>>, "scripts/invite">; ... 9 more ...; readonly indexes: {}; }, NoParams, declar...'.",
 ]
 `;
 
