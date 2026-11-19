@@ -80,6 +80,7 @@ export {
 } from './select.js';
 export {
 	type AnyStatement,
+	type CheckedInput,
 	type Codec,
 	type Input,
 	isStatement,

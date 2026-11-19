@@ -26,13 +26,13 @@ exports[`type diagnostics > bind/wrong-type 1`] = `
 
 exports[`type diagnostics > bound/hand-built 1`] = `
 [
-  "TS2322: Type '{ statement: Statement<NoParams & { readonly email: Schema.declareConstructor<string, string, readonly [], string>; }, Schema.$Array<Schema.declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 18 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { readonly id: _RecordId<"pe...' is not assignable to type '"a transaction takes statements paired with their input by \`bind\`"'.",
+  "TS2322: Type '{ statement: Statement<{ readonly email: Schema.declareConstructor<string, string, readonly [], string>; }, Schema.$Array<Schema.declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 18 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { readonly id: _RecordId<"person"> & Br...' is not assignable to type '"a transaction takes statements paired with their input by \`bind\`"'.",
 ]
 `;
 
 exports[`type diagnostics > bound/hand-built-wrong-value 1`] = `
 [
-  "TS2322: Type '{ statement: Statement<NoParams & { readonly email: Schema.declareConstructor<string, string, readonly [], string>; }, Schema.$Array<Schema.declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 18 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { readonly id: _RecordId<"pe...' is not assignable to type '"a transaction takes statements paired with their input by \`bind\`"'.",
+  "TS2322: Type '{ statement: Statement<{ readonly email: Schema.declareConstructor<string, string, readonly [], string>; }, Schema.$Array<Schema.declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 18 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { readonly id: _RecordId<"person"> & Br...' is not assignable to type '"a transaction takes statements paired with their input by \`bind\`"'.",
 ]
 `;
 
@@ -641,7 +641,7 @@ exports[`type diagnostics > sequence/missing-binding 1`] = `
 
 exports[`type diagnostics > transaction/unbound-statement 1`] = `
 [
-  "TS2322: Type 'Statement<NoParams & { readonly email: declareConstructor<string, string, readonly [], string>; }, $Array<declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 18 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { ...; }>>, never>' is not assignable to type '"a transaction takes statements paired with their input by \`bind\`"'.",
+  "TS2322: Type 'Statement<{ readonly email: declareConstructor<string, string, readonly [], string>; }, $Array<declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 18 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { ...; }>>, never>' is not assignable to type '"a transaction takes statements paired with their input by \`bind\`"'.",
 ]
 `;
 

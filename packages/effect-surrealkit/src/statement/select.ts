@@ -33,6 +33,7 @@ import {
 	make,
 	type NoParams,
 	type Params,
+	type Simplify,
 	type Statement,
 } from './statement.js';
 import {
@@ -216,7 +217,7 @@ export interface Select<
 	readonly build: (
 		name?: string,
 		options?: { readonly writes?: boolean },
-	) => Statement<P, SelectResult<Row, Only>>;
+	) => Statement<Simplify<P>, SelectResult<Row, Only>>;
 }
 
 const builder = <
@@ -319,7 +320,7 @@ const builder = <
 				...(writes !== undefined && { writes }),
 				name: name ?? `select ${state.table.name}`,
 				sql: `${render(state)};`,
-				params: state.params as P,
+				params: state.params as Simplify<P>,
 				result: resultOf(state) as SelectResult<Row, Only>,
 			});
 		},

@@ -61,5 +61,33 @@ export const compile = (
 	};
 };
 
+/**
+ * A language service over `rootNames` with the options of
+ * `test/types/tsconfig.json`: what an editor asks for a hover.
+ */
+export const languageService = (
+	rootNames: ReadonlyArray<string>,
+): ts.LanguageService => {
+	const options = typesOptions();
+	return ts.createLanguageService({
+		getCompilationSettings: () => options,
+		getScriptFileNames: () => [...rootNames],
+		getScriptVersion: () => '1',
+		getScriptSnapshot: (name) => {
+			const text = ts.sys.readFile(name);
+			return text === undefined
+				? undefined
+				: ts.ScriptSnapshot.fromString(text);
+		},
+		getCurrentDirectory: () => typesRoot,
+		getDefaultLibFileName: (settings) => ts.getDefaultLibFilePath(settings),
+		fileExists: ts.sys.fileExists,
+		readFile: ts.sys.readFile,
+		readDirectory: ts.sys.readDirectory,
+		directoryExists: ts.sys.directoryExists,
+		getDirectories: ts.sys.getDirectories,
+	});
+};
+
 /** A file's text as it is on disk. */
 export const textOf = (path: string): string => readFileSync(path, 'utf8');

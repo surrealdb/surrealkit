@@ -25,36 +25,46 @@ type OptionalNames<P extends Params> = {
 }[keyof P];
 
 /**
- * The values a caller supplies: one per binding, as the codec's decoded type.
- * A binding whose codec accepts `undefined` (NONE) may be omitted.
+ * The values a caller supplies: one per binding, as the codec's decoded type,
+ * in the order the statement reads them. A binding whose codec accepts
+ * `undefined` (NONE) may be omitted.
  */
 export type Input<P extends Params> = Simplify<
 	{
-		readonly [K in Exclude<keyof P, OptionalNames<P>>]: P[K]['Type'];
+		readonly [K in keyof P as undefined extends P[K]['Type']
+			? never
+			: K]: P[K]['Type'];
 	} & {
-		readonly [K in OptionalNames<P>]?: P[K]['Type'];
+		readonly [K in keyof P as undefined extends P[K]['Type']
+			? K
+			: never]?: P[K]['Type'];
 	}
 >;
 
 type RequiredNames<P extends Params> = Exclude<keyof P, OptionalNames<P>>;
 
 /**
- * The type `input`, as the caller wrote it (`I`), is checked against:
- * `I` itself when it is the statement's input, a message naming each
- * binding left without a value, and otherwise `Input<P>`, so the compiler
- * reports an unknown or misspelt name and a wrong value as it always does.
- * The first test is `I` against `Input<P>`, so generic code that forwards
- * an `Input<P>` passes it unchanged.
+ * The expected type of the input of a statement reading `P`, given the
+ * input as the caller wrote it, `I`: `Input<P>`, unless `I` leaves a
+ * binding without a value and names nothing else, when it is a message
+ * naming each such binding. The compiler reports an unknown or misspelt
+ * name and a wrong value against `Input<P>` as it always does.
+ *
+ * The first branch is never taken (no statement reads `never`); it is where
+ * the compiler infers `I` from the argument. It tests `P`, not `I`, because
+ * the compiler narrows `I` to `never` inside a branch that tests `I`
+ * against `never`. The second tests `I` against `Input<P>` itself, so
+ * generic code that forwards an `Input<P>` passes.
  */
-export type CheckedInput<P extends Params, I> = [I] extends [Input<P>]
-	? [Exclude<keyof I, keyof P>] extends [never]
-		? I
-		: Input<P>
-	: [Exclude<keyof I, keyof P>] extends [never]
-		? [Exclude<RequiredNames<P>, keyof I>] extends [never]
-			? Input<P>
-			: `binding \`${Exclude<RequiredNames<P>, keyof I> & string}\` has no value`
-		: Input<P>;
+export type CheckedInput<P extends Params, I> = [P] extends [never]
+	? I
+	: [I] extends [Input<P>]
+		? Input<P>
+		: [Exclude<keyof I, keyof P>] extends [never]
+			? [Exclude<RequiredNames<P>, keyof I>] extends [never]
+				? Input<P>
+				: `binding \`${Exclude<RequiredNames<P>, keyof I> & string}\` has no value`
+			: Input<P>;
 
 export const StatementTypeId = '~effect-surrealkit/Statement';
 

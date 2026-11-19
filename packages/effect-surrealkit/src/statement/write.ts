@@ -26,6 +26,7 @@ import {
 	make,
 	type NoParams,
 	type Params,
+	type Simplify,
 	type Statement,
 } from './statement.js';
 import {
@@ -177,11 +178,11 @@ const resultOf = (state: State): Codec => {
 const finish = <P extends Params, R extends Codec>(
 	state: State,
 	name: string | undefined,
-): Statement<P, R> =>
+): Statement<Simplify<P>, R> =>
 	make({
 		name: name ?? `${state.verb.toLowerCase()} ${state.table.name}`,
 		sql: `${render(state)};`,
-		params: state.params as P,
+		params: state.params as Simplify<P>,
 		result: resultOf(state) as R,
 		writes: true,
 		// CREATE ONLY and RELATE ONLY make one record whenever they apply;
@@ -289,7 +290,7 @@ export interface Create<
 	};
 
 	/** The finished statement. */
-	readonly build: (name?: string) => Statement<P, R>;
+	readonly build: (name?: string) => Statement<Simplify<P>, R>;
 }
 
 type Returning = 'none' | 'after' | 'before' | ((row: never) => Projection);
@@ -356,7 +357,7 @@ export interface Update<
 	};
 
 	/** The finished statement. */
-	readonly build: (name?: string) => Statement<P, R>;
+	readonly build: (name?: string) => Statement<Simplify<P>, R>;
 }
 
 const updating = <
@@ -452,7 +453,7 @@ export interface Delete<
 	};
 
 	/** The finished statement. */
-	readonly build: (name?: string) => Statement<P, R>;
+	readonly build: (name?: string) => Statement<Simplify<P>, R>;
 }
 
 const deleting = <
@@ -526,7 +527,7 @@ export interface Relate<
 	};
 
 	/** The finished statement. */
-	readonly build: (name?: string) => Statement<P, R>;
+	readonly build: (name?: string) => Statement<Simplify<P>, R>;
 }
 
 const relating = <T extends PureTable, P extends Params, R extends Codec>(
