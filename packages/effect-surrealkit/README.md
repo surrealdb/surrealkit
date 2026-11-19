@@ -353,6 +353,10 @@ two codecs is refused, as are names SurrealDB sets itself (`$auth`, `$this`,
 | `update(table).merge(x).where(…)` | every changed row |
 | `deleteFrom(table, id)`, `deleteFrom(table).where(…)` | nothing; `.returning('before')` for the deleted rows |
 | `relate(edgeTable, from, to)` | the edge (`RELATE ONLY`); the endpoints must be ids the relation declares |
+| `upsert(table, id).merge(x)` / `.content(x)` | the record, created or changed (`UPSERT ONLY`) |
+| `upsert(table).merge(x).where(…)` | every changed record, or the one it created |
+| `insert(table, rows)` | every inserted row; `rows` is one row or an array; `.onDuplicate(…)` for `ON DUPLICATE KEY UPDATE` |
+| `insertRelation(edgeTable, edges)` | every inserted edge (`INSERT RELATION`) |
 
 A record id of a table is built from its key parts by `recordId(table,
 key)`: one part, an array of parts for an array key, or an object of parts
@@ -435,9 +439,40 @@ child object at any depth, and 4.0 refuses one in an array element, which 3.3
 stores and the element's closed schema then cannot read. An open object
 (`FLEXIBLE`, or a schemaless table) accepts any key below it. The check
 descends only where the value's type differs from the schema's, and stops at
-a union. `.returning('none' | 'after' | 'before')` or a projection changes the
-result type with the `RETURN` clause. Builders are immutable, so a base
-query can be shared.
+a union. Builders are immutable, so a base query can be shared.
+
+The `RETURN` clause decides the result, per verb and subject:
+
+| `.returning(…)` | CREATE / RELATE | UPDATE | UPSERT | DELETE | INSERT |
+| --- | --- | --- | --- | --- | --- |
+| `'none'` | `undefined` | `undefined`, or `[]` for a table | the same | the same | `[]` |
+| `'after'` (the default but DELETE) | the record | the record, `undefined` if missing | the record | `undefined` per record | each record |
+| `'before'` | refused: always NONE | the record as it was | `undefined` for a record it created | the deleted record | `undefined` for a row it inserted |
+| `'diff'` | the record's `Diff` | `Diff` per record | `Diff` | `Diff` per record | `Diff` per row |
+| `(row) => ({ … })` | the projection | per record | per record | read from `$before.…` | per row |
+
+`.returningValue((row) => expr)` is `RETURN VALUE`, one expression per
+record (`$before.…` for a DELETE). `Diff` is an array of `PatchOperation`s,
+the four SurrealDB writes: `add`, `remove`, `replace` (path `""` with the
+whole record for one a statement created, NONE for one it deleted) and
+`change`, a text patch of a string.
+
+An `UPSERT` may create the record or change it, so its data must fit both
+the create schema and the merge (or content) schema: what CREATE requires,
+and nothing MERGE refuses, such as a READONLY field. An `UPSERT` of one
+record takes no condition (SurrealDB does not evaluate it) and renders
+nothing as `RETURN VALUE NONE`: SurrealDB 3.3 checks the data of
+`UPSERT <record> … RETURN NONE` against the schema as if the record were
+new, so a MERGE of some fields of an existing record fails there.
+
+An `INSERT` row is the create row with an optional `id`; an edge of
+`INSERT RELATION` also has its `in` and `out`, ids the relation declares.
+`.onDuplicate((input) => ({ field: value }))` sets fields of the record a
+row collides with, from the row the statement tried to insert (`$input.…`),
+bindings and constants; each field must be one the merge schema has. The
+stored record's own fields are not offered: SurrealDB 4.0 reads them there
+and 3.3 reads them as NONE. The conformance suite pins every cell of the
+table and both differences.
 
 ### Authored SurrealQL
 
@@ -744,8 +779,9 @@ empty results.
   messages, not its result type: a result codec that does not match the
   script fails when it runs, not when it compiles.
 - **Coverage.** `GROUP BY`, `SPLIT`, `FETCH`, graph traversal, full-text and
-  vector operators, `UPSERT`, `INSERT`, live queries and views have no typed
-  builder yet; use `unsafeExpr` or authored SurrealQL.
+  vector operators, live queries and views have no typed builder yet; use
+  `unsafeExpr` or authored SurrealQL. `ON DUPLICATE KEY UPDATE` takes plain
+  assignments only (no `+=`).
 
 The engine suite (`test/statement-engine.test.ts`) runs every builder against
 the corpus schema and the modules generated from it, and passes on SurrealDB

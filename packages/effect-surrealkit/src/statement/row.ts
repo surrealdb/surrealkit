@@ -136,6 +136,24 @@ export const rowOf = <R extends RowCodecIn>(schema: R): RowOf<FieldsOf<R>> => {
 	return build(fields, '', false, undefined) as RowOf<FieldsOf<R>>;
 };
 
+/**
+ * The row object of a row schema read through a parameter the engine sets,
+ * `$before.` in a `DELETE … RETURN` or `$input.` in `ON DUPLICATE KEY
+ * UPDATE`: every path starts with `prefix`.
+ *
+ * @internal
+ */
+export const rowAt = <R extends RowCodecIn>(
+	schema: R,
+	prefix: string,
+): RowOf<FieldsOf<R>> => {
+	const fields = fieldsOf(schema);
+	if (fields === undefined) {
+		throw new TypeError('rowAt takes a generated row schema (a struct)');
+	}
+	return build(fields, prefix, false, undefined) as RowOf<FieldsOf<R>>;
+};
+
 /** The codec stored rows decode with: NONE reads as an absent key. */
 export type RowCodec<S extends Codec> = ReturnType<typeof NoneAsAbsent<S>>;
 

@@ -21,6 +21,8 @@ import {
 	gte,
 	type IdRange,
 	idRange,
+	insert,
+	insertRelation,
 	inside,
 	isNone,
 	isNotNone,
@@ -46,12 +48,14 @@ import {
 	sqlOf,
 	unsafeExpr,
 	update,
+	upsert,
 } from '../src/statement/index.js';
 import * as Corpus from './golden/corpus/index.js';
 import {
 	fn_greet,
 	MemberOfTable,
 	Person,
+	PersonContent,
 	PersonCreate,
 	PersonId,
 	PersonMerge,
@@ -1138,5 +1142,189 @@ describe('record ids from their key parts, and id ranges', () => {
 		expect(() =>
 			untypedSelect(PersonTable, idRange(IdIntTable, {})),
 		).toThrow('a range of `id_int` is not a subject of `person`');
+	});
+});
+
+describe('UPSERT, INSERT and every RETURN mode', () => {
+	const id = param('id', PersonId);
+	// What an UPSERT may send: what CREATE requires, and nothing MERGE refuses.
+	const Upserted = Schema.Struct({
+		address: PersonCreate.fields.address,
+		bio: PersonCreate.fields.bio,
+		email: PersonCreate.fields.email,
+		name: PersonCreate.fields.name,
+		score: PersonCreate.fields.score,
+	});
+	const changes = param('changes', Upserted);
+	const person = param('person', PersonCreate);
+	const decode = (statement: { readonly result: Schema.Top }) =>
+		Schema.decodeUnknownSync(
+			statement.result as Schema.Codec<unknown, unknown>,
+		);
+
+	it('UPSERT one record, MERGE or CONTENT, with each RETURN mode', () => {
+		expect(upsert(PersonTable, id).merge(changes).build().sql).toBe(
+			'UPSERT ONLY $id MERGE $changes RETURN AFTER;',
+		);
+		// SurrealDB 3.3 checks `RETURN NONE` data as if the record were new.
+		expect(
+			upsert(PersonTable, id)
+				.content(param('content', PersonContent))
+				.returning('none')
+				.build().sql,
+		).toBe('UPSERT ONLY $id CONTENT $content RETURN VALUE NONE;');
+		const before = upsert(PersonTable, id)
+			.merge(changes)
+			.returning('before')
+			.build();
+		expect(before.sql).toBe(
+			'UPSERT ONLY $id MERGE $changes RETURN BEFORE;',
+		);
+		expect(decode(before)(undefined)).toBeUndefined();
+		expect(before.nonEmpty).toBe(false);
+		expect(upsert(PersonTable, id).merge(changes).build().nonEmpty).toBe(
+			true,
+		);
+		expect(
+			upsert(PersonTable, id).merge(changes).returning('diff').build()
+				.nonEmpty,
+		).toBe(false);
+	});
+
+	it('UPSERT a table by condition, returning every record', () => {
+		const statement = upsert(PersonTable)
+			.merge(changes)
+			.where((row) => eq(row.email, param('email', SurrealSchema.String)))
+			.returning('none')
+			.build();
+		expect(statement.sql).toBe(
+			'UPSERT ⟨person⟩ MERGE $changes WHERE email = $email RETURN NONE;',
+		);
+		expect(decode(statement)([])).toEqual([]);
+	});
+
+	it('INSERT one row or many, ON DUPLICATE KEY UPDATE from $input, INSERT RELATION', () => {
+		const people = param('people', Schema.Array(PersonCreate));
+		expect(insert(PersonTable, people).build().sql).toBe(
+			'INSERT INTO ⟨person⟩ $people RETURN AFTER;',
+		);
+		const upserting = insert(PersonTable, param('person', PersonCreate))
+			.onDuplicate((input) => ({
+				name: input.name,
+				bio: param('bio', SurrealSchema.String),
+				score: 1,
+			}))
+			.returning('before')
+			.build();
+		expect(upserting.sql).toBe(
+			'INSERT INTO ⟨person⟩ $person ON DUPLICATE KEY UPDATE name = $input.name, bio = $bio, score = 1 RETURN BEFORE;',
+		);
+		expect(Object.keys(upserting.params).sort()).toEqual(['bio', 'person']);
+		expect(decode(upserting)([undefined])).toEqual([undefined]);
+		const edges = param(
+			'edges',
+			Schema.Array(
+				Schema.Struct({
+					in: PersonId,
+					out: TeamId,
+					...MemberOfTable.create.fields,
+				}),
+			),
+		);
+		expect(
+			insertRelation(MemberOfTable, edges).returning('none').build().sql,
+		).toBe('INSERT RELATION INTO ⟨member_of⟩ $edges RETURN NONE;');
+	});
+
+	it('DIFF on every write, decoded as JSON Patch operations', () => {
+		const diff = update(PersonTable, id)
+			.merge(param('patch', PersonMerge))
+			.returning('diff')
+			.build();
+		expect(diff.sql).toBe('UPDATE ONLY $id MERGE $patch RETURN DIFF;');
+		expect(
+			decode(diff)([
+				{ op: 'add', path: '/nickname', value: 'an' },
+				{ op: 'remove', path: '/age' },
+				{ op: 'replace', path: '/score', value: 2 },
+				{ op: 'change', path: '/name', value: '@@ -1 +1 @@\n-a\n+b\n' },
+			]),
+		).toHaveLength(4);
+		expect(decode(diff)(undefined)).toBeUndefined();
+		expect(() =>
+			decode(diff)([{ op: 'move', path: '/a', from: '/b' }]),
+		).toThrow();
+		expect(
+			decode(deleteFrom(PersonTable, id).returning('diff').build())([
+				{ op: 'replace', path: '', value: undefined },
+			]),
+		).toEqual([{ op: 'replace', path: '', value: undefined }]);
+		for (const statement of [
+			create(PersonTable).returning('diff').build(),
+			relate(MemberOfTable, param('p', PersonId), param('t', TeamId))
+				.returning('diff')
+				.build(),
+			insert(PersonTable, person).returning('diff').build(),
+		]) {
+			expect(statement.sql).toMatch(/ RETURN DIFF;$/u);
+		}
+	});
+
+	it('DELETE returns NONE after, and reads the deleted record through $before', () => {
+		const gone = deleteFrom(PersonTable)
+			.where((row) => eq(row.role, 'admin'))
+			.returning((row) => ({ id: row.id, name: row.name }))
+			.build();
+		expect(gone.sql).toBe(
+			'DELETE ⟨person⟩ WHERE role = s"admin" RETURN $before.id AS id, $before.name AS name;',
+		);
+		const value = deleteFrom(PersonTable, id)
+			.returningValue((row) => row.email)
+			.build();
+		expect(value.sql).toBe('DELETE ONLY $id RETURN VALUE $before.email;');
+		const after = deleteFrom(PersonTable).returning('after').build();
+		expect(decode(after)([undefined, undefined])).toEqual([
+			undefined,
+			undefined,
+		]);
+	});
+
+	it('RETURN VALUE on every write', () => {
+		expect(
+			create(PersonTable)
+				.content(person)
+				.returningValue((row) => row.id)
+				.build().sql,
+		).toBe('CREATE ONLY ⟨person⟩ CONTENT $person RETURN VALUE id;');
+		expect(
+			update(PersonTable)
+				.merge(param('patch', PersonMerge))
+				.returningValue((row) => row.age)
+				.build().sql,
+		).toBe('UPDATE ⟨person⟩ MERGE $patch RETURN VALUE age;');
+		const created = create(PersonTable)
+			.returningValue((row) => row.tags)
+			.build();
+		// A value may be NONE or an empty list itself, so it is not checked.
+		expect(created.nonEmpty).toBe(false);
+	});
+
+	it('refuses at runtime what the types refuse', () => {
+		const untyped = insert(PersonTable, person) as unknown as {
+			onDuplicate: (set: (input: unknown) => unknown) => {
+				onDuplicate: (set: (input: unknown) => unknown) => unknown;
+			};
+		};
+		expect(() => untyped.onDuplicate(() => ({}))).toThrow(
+			/at least one assignment/,
+		);
+		expect(() => untyped.onDuplicate(() => ({ created_at: 1 }))).toThrow(
+			'`created_at` is not a field `person` accepts in ON DUPLICATE KEY UPDATE',
+		);
+		expect(() =>
+			untyped
+				.onDuplicate(() => ({ name: 'a' }))
+				.onDuplicate(() => ({ name: 'b' })),
+		).toThrow(/one ON DUPLICATE KEY UPDATE clause/);
 	});
 });

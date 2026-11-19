@@ -14,9 +14,12 @@ import {
 	cast,
 	contains,
 	create,
+	deleteFrom,
 	eq,
 	gt,
 	idRange,
+	insert,
+	insertRelation,
 	inside,
 	literal,
 	make,
@@ -29,6 +32,7 @@ import {
 	select,
 	sequence,
 	update,
+	upsert,
 } from '../../src/statement/index.js';
 import * as Corpus from '../golden/corpus/index.js';
 import {
@@ -418,4 +422,69 @@ export const rejectedRanges = () => {
 	select(PersonTable, idRange(TeamTable, {}));
 	// @ts-expect-error [range/not-a-record] UPDATE takes a record id, not a range
 	update(Corpus.IdIntTable, idRange(Corpus.IdIntTable, {}));
+};
+
+// UPSERT, INSERT and RETURN modes.
+export const rejectedWrites = () => {
+	const id = param('id', PersonId);
+	upsert(PersonTable, id).merge(
+		// @ts-expect-error [upsert/merge-missing-required] the record may be created, so CREATE's required fields are needed
+		param('changes', PersonMerge),
+	);
+	upsert(PersonTable, id).merge(
+		// @ts-expect-error [upsert/merge-readonly-field] the record may exist, and MERGE refuses a READONLY field
+		param('person', PersonCreate),
+	);
+	const Upserted = Schema.Struct({
+		address: PersonCreate.fields.address,
+		bio: PersonCreate.fields.bio,
+		email: PersonCreate.fields.email,
+		name: PersonCreate.fields.name,
+		score: PersonCreate.fields.score,
+	});
+	upsert(PersonTable, id)
+		.merge(param('changes', Upserted))
+		// @ts-expect-error [upsert/one-record-where] an UPSERT of one record takes no condition
+		.where((row) => eq(row.name, 'a'));
+	insert(
+		PersonTable,
+		// @ts-expect-error [insert/extra-field] `bogus` is not a field person accepts in INSERT
+		param(
+			'person',
+			Schema.Struct({
+				...PersonCreate.fields,
+				bogus: SurrealSchema.String,
+			}),
+		),
+	);
+	insert(
+		PersonTable,
+		// @ts-expect-error [insert/rows-missing-field] each row needs what CREATE requires
+		param(
+			'people',
+			Schema.Array(Schema.Struct({ name: SurrealSchema.String })),
+		),
+	);
+	insertRelation(
+		MemberOfTable,
+		// @ts-expect-error [insert-relation/no-endpoints] an edge needs `in` and `out`
+		param('edge', MemberOfTable.create),
+	);
+	insertRelation(
+		MemberOfTable,
+		// @ts-expect-error [insert-relation/wrong-endpoint] a team is not an `in` endpoint of member_of
+		param('edge', Schema.Struct({ in: TeamId, out: TeamId })),
+	);
+	insert(PersonTable, param('person', PersonCreate)).onDuplicate((input) => ({
+		// @ts-expect-error [duplicate/readonly-field] MERGE refuses `created_at`
+		created_at: input.created_at,
+	}));
+	insert(PersonTable, param('person', PersonCreate)).onDuplicate(() => ({
+		// @ts-expect-error [duplicate/wrong-value] `score` holds a number
+		score: 'high',
+	}));
+	// @ts-expect-error [relate/return-before] a new edge had no state before
+	relate(MemberOfTable, id, param('team', TeamId)).returning('before');
+	// @ts-expect-error [delete/unknown-mode] DELETE has no such RETURN mode
+	deleteFrom(PersonTable).returning('everything');
 };

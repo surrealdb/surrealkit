@@ -36,6 +36,8 @@ import {
 	gte,
 	type IdRange,
 	idRange,
+	insert,
+	insertRelation,
 	inside,
 	isNone,
 	literal,
@@ -51,6 +53,7 @@ import {
 	sequence,
 	sqlOf,
 	update,
+	upsert,
 } from '../src/statement/index.js';
 import { corpusPath, readJson } from './documents.js';
 import {
@@ -1168,6 +1171,314 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 			expect(rows.every((row) => row.id.id[0] === 'leeds')).toBe(true);
 			const one = await ok(client.run(week.only().build(), input));
 			expect(one?.id.id[0]).toBe('leeds');
+		});
+	});
+
+	describe('UPSERT, INSERT and every RETURN mode', () => {
+		const Upserted = Schema.Struct({
+			address: PersonCreate.fields.address,
+			bio: PersonCreate.fields.bio,
+			email: PersonCreate.fields.email,
+			name: PersonCreate.fields.name,
+			score: PersonCreate.fields.score,
+		});
+		const key = recordId(PersonTable, param('key', SurrealSchema.String));
+		const upserted = (name: string) => ({
+			address: { city: 'Leeds' },
+			bio: null,
+			email: `${name.toLowerCase()}@upsert.example.com`,
+			name,
+			score: 10,
+		});
+
+		it('UPSERT of a record creates it, then changes it, in every RETURN mode', async () => {
+			const one = upsert(PersonTable, key).merge(
+				param('changes', Upserted),
+			);
+			const created = await ok(
+				client.run(one.build(), {
+					key: 'up1',
+					changes: upserted('Up'),
+				}),
+			);
+			expect(created).toMatchObject({ name: 'Up', score: 10 });
+			const before = await ok(
+				client.run(one.returning('before').build(), {
+					key: 'up1',
+					changes: { ...upserted('Up'), score: 20 },
+				}),
+			);
+			expect(before).toMatchObject({ score: 10 });
+			expect(
+				await ok(
+					client.run(one.returning('before').build(), {
+						key: 'up2',
+						changes: upserted('Up2'),
+					}),
+				),
+			).toBe(undefined);
+			// A MERGE of some fields of an existing record (the types ask for
+			// what a create needs, so it is cast): with RETURN VALUE NONE it
+			// passes on SurrealDB 3.3, which refuses it with RETURN NONE.
+			const partial = upsert(PersonTable, key)
+				.merge(param('changes', PersonMerge) as never)
+				.returning('none')
+				.build();
+			expect(
+				await ok(
+					client.run(partial, {
+						key: 'up1',
+						changes: { score: 30 },
+					} as never),
+				),
+			).toBe(undefined);
+			expect(
+				(
+					await ok(
+						client.run(select(PersonTable, key).only().build(), {
+							key: 'up1',
+						}),
+					)
+				)?.score,
+			).toBe(30);
+			const diff = await ok(
+				client.run(one.returning('diff').build(), {
+					key: 'up1',
+					changes: { ...upserted('Up'), score: 40 },
+				}),
+			);
+			// Fields the corpus sets on every write (`touched_at`) change too.
+			expect(diff).toContainEqual({
+				op: 'replace',
+				path: '/score',
+				value: 40,
+			});
+			expect(
+				await ok(
+					client.run(one.returningValue((row) => row.score).build(), {
+						key: 'up1',
+						changes: { ...upserted('Up'), score: 41 },
+					}),
+				),
+			).toBe(41);
+		});
+
+		it('UPSERT of a table changes every match, or creates one record', async () => {
+			const byEmailUpsert = upsert(PersonTable)
+				.merge(param('changes', Upserted))
+				.where((row) =>
+					eq(row.email, param('email', SurrealSchema.String)),
+				)
+				.returningValue((row) => row.name)
+				.build();
+			const fresh = upserted('Fresh');
+			expect(
+				await ok(
+					client.run(byEmailUpsert, {
+						changes: fresh,
+						email: fresh.email,
+					}),
+				),
+			).toEqual(['Fresh']);
+			expect(
+				await ok(
+					client.run(byEmailUpsert, {
+						changes: { ...fresh, name: 'Fresher' },
+						email: fresh.email,
+					}),
+				),
+			).toEqual(['Fresher']);
+		});
+
+		it('INSERT one row or many; ON DUPLICATE KEY UPDATE from $input; BEFORE is NONE for a new row', async () => {
+			const insertOne = insert(PersonTable, param('person', PersonCreate))
+				.returningValue((row) => row.name)
+				.build();
+			expect(
+				await ok(client.run(insertOne, { person: person('Ivy') })),
+			).toEqual(['Ivy']);
+			const many = insert(
+				PersonTable,
+				param('people', Schema.Array(PersonCreate)),
+			).build();
+			const rows = await ok(
+				client.run(many, { people: [person('Jo'), person('Kai')] }),
+			);
+			expect(rows.map((row) => row.name)).toEqual(['Jo', 'Kai']);
+			const duplicate = insert(
+				PersonTable,
+				param('people', Schema.Array(PersonCreate)),
+			)
+				.onDuplicate((input) => ({ score: input.score }))
+				.returning('before')
+				.build();
+			const before = await ok(
+				client.run(duplicate, {
+					people: [{ ...person('Ivy'), score: 77 }, person('Lou')],
+				}),
+			);
+			expect(before[0]).toMatchObject({ name: 'Ivy', score: 50 });
+			expect(before[1]).toBe(undefined);
+			expect(
+				await ok(client.run(byEmail, { email: 'ivy@example.com' })),
+			).toMatchObject({ score: 77 });
+		});
+
+		it('INSERT RELATION takes edges with their endpoints', async () => {
+			const team = await ok(
+				client.run(
+					create(TeamTable)
+						.content(param('team', TeamCreate))
+						.build(),
+					{ team: { name: 'Inserted' } },
+				),
+			);
+			const edges = insertRelation(
+				MemberOfTable,
+				param(
+					'edges',
+					Schema.Array(
+						Schema.Struct({
+							in: PersonId,
+							out: TeamId,
+							...MemberOfCreate.fields,
+						}),
+					),
+				),
+			).build();
+			const made = await ok(
+				client.run(edges, {
+					edges: [
+						{ in: ann.id, out: team.id },
+						{ in: bob.id, out: team.id },
+					],
+				}),
+			);
+			expect(made.map((edge) => edge.in)).toEqual([ann.id, bob.id]);
+		});
+
+		it('DIFF decodes as JSON Patch operations, on UPDATE, CREATE and DELETE', async () => {
+			const created = await ok(
+				client.run(
+					create(PersonTable)
+						.content(param('person', PersonCreate))
+						.returning('diff')
+						.build(),
+					{ person: person('Dia', { nickname: 'd' }) },
+				),
+			);
+			expect(created).toHaveLength(1);
+			expect(created[0]).toMatchObject({ op: 'replace', path: '' });
+			const id = (created[0] as unknown as { value: { id: PersonId } })
+				.value.id;
+			const changed = await ok(
+				client.run(
+					update(PersonTable, param('id', PersonId))
+						.merge(param('patch', PersonMerge))
+						.returning('diff')
+						.build(),
+					{
+						id,
+						patch: { nickname: undefined, age: 3, name: 'Diana' },
+					},
+				),
+			);
+			expect(changed).toContainEqual({
+				op: 'add',
+				path: '/age',
+				value: 3,
+			});
+			expect(changed).toContainEqual({ op: 'remove', path: '/nickname' });
+			expect(changed?.find((op) => op.path === '/name')?.op).toBe(
+				'change',
+			);
+			const deleted = await ok(
+				client.run(
+					deleteFrom(PersonTable, param('id', PersonId))
+						.returning('diff')
+						.build(),
+					{ id },
+				),
+			);
+			expect(deleted).toEqual([
+				{ op: 'replace', path: '', value: undefined },
+			]);
+		});
+
+		it('DELETE returns NONE after, and the deleted record through $before', async () => {
+			const remove = (name: string) =>
+				ok(client.run(createPerson, { person: person(name) }));
+			const gone = await remove('Gus');
+			const after = await ok(
+				client.run(
+					deleteFrom(PersonTable)
+						.where((row) => eq(row.id, param('id', PersonId)))
+						.returning('after')
+						.build(),
+					{ id: gone.id },
+				),
+			);
+			expect(after).toEqual([undefined]);
+			const kept = await remove('Hal');
+			expect(
+				await ok(
+					client.run(
+						deleteFrom(PersonTable, param('id', PersonId))
+							.returning((row) => ({
+								name: row.name,
+								email: row.email,
+							}))
+							.build(),
+						{ id: kept.id },
+					),
+				),
+			).toEqual({ name: 'Hal', email: 'hal@example.com' });
+			const last = await remove('Ida');
+			expect(
+				await ok(
+					client.run(
+						deleteFrom(PersonTable, param('id', PersonId))
+							.returningValue((row) => row.name)
+							.build(),
+						{ id: last.id },
+					),
+				),
+			).toBe('Ida');
+		});
+
+		it('RETURN VALUE on CREATE and RELATE', async () => {
+			const name = await ok(
+				client.run(
+					create(PersonTable)
+						.content(param('person', PersonCreate))
+						.returningValue((row) => row.name)
+						.build(),
+					{ person: person('Val') },
+				),
+			);
+			expect(name).toBe('Val');
+			const team = await ok(
+				client.run(
+					create(TeamTable)
+						.content(param('team', TeamCreate))
+						.build(),
+					{ team: { name: 'Valued' } },
+				),
+			);
+			const edgeIn = await ok(
+				client.run(
+					relate(
+						MemberOfTable,
+						param('p', PersonId),
+						param('t', TeamId),
+					)
+						.content(param('m', MemberOfCreate))
+						.returningValue((row) => row.in)
+						.build(),
+					{ p: cy.id, t: team.id, m: {} },
+				),
+			);
+			expect(edgeIn).toEqual(cy.id);
 		});
 	});
 });

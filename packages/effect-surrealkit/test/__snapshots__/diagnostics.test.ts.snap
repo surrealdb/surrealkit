@@ -171,12 +171,32 @@ exports[`type diagnostics > create/not-an-object 1`] = `
 exports[`type diagnostics > create/return-before 1`] = `
 [
   "TS2769: No overload matches this call.
-  Overload 1 of 3, '(mode: "none"): Create<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, NoParams, Undefined>', gave the following error.
-    Argument of type '"before"' is not assignable to parameter of type '"none"'.
-  Overload 2 of 3, '(mode: "after"): Create<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, NoParams, declareConstructor<...>>', gave the following error.
-    Argument of type '"before"' is not assignable to parameter of type '"after"'.
-  Overload 3 of 3, '(fields: (row: RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }>) => CheckedProjection<...>): Create<...>', gave the following error.
+  Overload 1 of 2, '(mode: "CREATE has no RETURN BEFORE: a record it makes had no state before"): Create<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; ... 11 more ...; readonly indexes: { ...; }; }, NoParams, $Array<...>>', gave the following error.
+    Argument of type '"before"' is not assignable to parameter of type '"CREATE has no RETURN BEFORE: a record it makes had no state before"'.
+  Overload 2 of 2, '(fields: (row: RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }>) => CheckedProjection<...>): Create<...>', gave the following error.
     Argument of type 'string' is not assignable to parameter of type '(row: RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }>) => CheckedProjection<...'.",
+]
+`;
+
+exports[`type diagnostics > delete/unknown-mode 1`] = `
+[
+  "TS2769: No overload matches this call.
+  Overload 1 of 2, '(mode: "\`everything\` is not a RETURN mode of DELETE"): Delete<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<...>, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, NoParams, $Array<...>, "many">', gave the following error.
+    Argument of type '"everything"' is not assignable to parameter of type '"\`everything\` is not a RETURN mode of DELETE"'.
+  Overload 2 of 2, '(fields: (row: RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }>) => CheckedProjection<...>): Delete<...>', gave the following error.
+    Argument of type 'string' is not assignable to parameter of type '(row: RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }>) => CheckedProjection<...'.",
+]
+`;
+
+exports[`type diagnostics > duplicate/readonly-field 1`] = `
+[
+  "TS2322: Type 'Path<declareConstructor<DateTime, DateTime, readonly [], DateTime> & Codec>' is not assignable to type '"\`created_at\` is not a field \`person\` accepts in ON DUPLICATE KEY UPDATE"'.",
+]
+`;
+
+exports[`type diagnostics > duplicate/wrong-value 1`] = `
+[
+  "TS2322: Type '"high"' is not assignable to type '"\`score\` does not hold this value"'.",
 ]
 `;
 
@@ -207,6 +227,30 @@ exports[`type diagnostics > flag/define-read-only 1`] = `
 exports[`type diagnostics > flag/make-read-only 1`] = `
 [
   "TS2353: Object literal may only specify known properties, and 'readOnly' does not exist in type '{ readonly name?: string; readonly sql: string; readonly params: {}; readonly result: declareConstructor<number, number, readonly [], number>; readonly slots?: number; readonly throws?: readonly never[]; ... 5 more ...; readonly throwSites?: Readonly<...>; }'.",
+]
+`;
+
+exports[`type diagnostics > insert/extra-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly bogus: declareConstructor<string, string, readonly [], string>; readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [...]>; ... 15 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }>' is not assignable to parameter of type '"\`bogus\` is not a field \`person\` accepts in INSERT"'.",
+]
+`;
+
+exports[`type diagnostics > insert/rows-missing-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<$Array<Struct<{ readonly name: declareConstructor<string, string, readonly [], string>; }>>, { readonly people: $Array<Struct<{ readonly name: declareConstructor<string, string, readonly [], string>; }>>; }>' is not assignable to parameter of type '"\`address\` is required by \`person\` in INSERT" | "\`email\` is required by \`person\` in INSERT" | "\`bio\` is required by \`person\` in INSERT" | "\`score\` is required by \`person\` in INSERT"'.",
+]
+`;
+
+exports[`type diagnostics > insert-relation/no-endpoints 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly role: optionalKey<Literals<readonly ["lead", "member"]>>; readonly since: optionalKey<declareConstructor<DateTime, DateTime, readonly [], DateTime>>; }>, { ...; }>' is not assignable to parameter of type '"\`in\` is required by \`member_of\` in INSERT RELATION" | "\`out\` is required by \`member_of\` in INSERT RELATION"'.",
+]
+`;
+
+exports[`type diagnostics > insert-relation/wrong-endpoint 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly in: brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">; readonly out: brand<...>; }>, { ...; }>' is not assignable to parameter of type '"\`in\` is not a value \`member_of\` accepts in INSERT RELATION"'.",
 ]
 `;
 
@@ -417,6 +461,16 @@ exports[`type diagnostics > relate/not-a-relation 1`] = `
 [
   "TS2345: Argument of type '{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: Schema.brand<Schema.declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [Schema.declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/p...' is not assignable to parameter of type 'RelationTable'.
   Property 'edge' is missing in type '{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: Schema.brand<Schema.declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [Schema.declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/p...' but required in type '{ readonly edge: { readonly table: string; readonly in: readonly Codec[]; readonly out: readonly Codec[]; }; }'.",
+]
+`;
+
+exports[`type diagnostics > relate/return-before 1`] = `
+[
+  "TS2769: No overload matches this call.
+  Overload 1 of 2, '(mode: "RELATE has no RETURN BEFORE: a record it makes had no state before"): Relate<{ readonly name: "member_of"; readonly type: "relation"; readonly schemafull: true; readonly drop: false; ... 12 more ...; readonly edge: { ...; }; }, { ...; } & { ...; }, $Array<...>>', gave the following error.
+    Argument of type '"before"' is not assignable to parameter of type '"RELATE has no RETURN BEFORE: a record it makes had no state before"'.
+  Overload 2 of 2, '(fields: (row: RowExprs<{ readonly name: "member_of"; readonly type: "relation"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"member_of">, _RecordId<"member_of">, readonly [...], _RecordId<...>>, "corpus/member_of">; ... 11 more ...; readonly edge: { ...; }; }>) => CheckedProjection<...>): Relate<...>', gave the following error.
+    Argument of type 'string' is not assignable to parameter of type '(row: RowExprs<{ readonly name: "member_of"; readonly type: "relation"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"member_of">, _RecordId<"member_of">, readonly [...], _RecordId<...>>, "corpus/member_of">; ... 11 more ...; readonly edge: { ...; }; }>) => Checked...'.",
 ]
 `;
 
@@ -799,5 +853,24 @@ exports[`type diagnostics > update/id-of-other-table 1`] = `
     Types of property '"Encoded"' are incompatible.
       Type '_RecordId<"team">' is not assignable to type '_RecordId<"person">'.
         Type '"team"' is not assignable to type '"person"'.",
+]
+`;
+
+exports[`type diagnostics > upsert/merge-missing-required 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<SurrealMergeValue, SurrealMergeValue, never, never>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' is not assignable to parameter of type '"\`name\` is required by \`person\` in UPSERT … MERGE" | "\`address\` is required by \`person\` in UPSERT … MERGE" | "\`email\` is required by \`person\` in UPSERT … MERGE" | "\`bio\` is required by \`person\` in UPSERT … MERGE" | "\`score\` is required by \`person\` in UPSERT … MERGE"'.",
+]
+`;
+
+exports[`type diagnostics > upsert/merge-readonly-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [$Record<String, Codec<SurrealValue, SurrealValue, never, never>>]>; ... 15 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }>' is not assignable to parameter of type '"\`created_at\` is not a field \`person\` accepts in UPSERT … MERGE"'.",
+]
+`;
+
+exports[`type diagnostics > upsert/one-record-where 1`] = `
+[
+  "TS2345: Argument of type '(row: any) => Expr<Boolean, Params & NoParams>' is not assignable to parameter of type '"an UPSERT of one record creates or changes that record; it takes no condition"'.",
+  "TS7006: Parameter 'row' implicitly has an 'any' type.",
 ]
 `;

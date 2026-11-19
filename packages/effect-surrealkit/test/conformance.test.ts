@@ -9,7 +9,12 @@
  * version and asserts both, so a run on either engine fails when the engine
  * stops behaving as recorded here.
  */
-import { Duration, type Surreal, type SurrealSession } from 'surrealdb';
+import {
+	Duration,
+	RecordId,
+	type Surreal,
+	type SurrealSession,
+} from 'surrealdb';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
@@ -490,6 +495,232 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 		it('UPDATE … RETURN BEFORE yields the records as they were', async () => {
 			const [rows] = await query('UPDATE ret:e SET n = 7 RETURN BEFORE;');
 			expect(rows).toMatchObject([{ n: 6, extra: 'x' }]);
+		});
+	});
+
+	describe('RETURN modes of every write, UPSERT and INSERT', () => {
+		beforeAll(async () => {
+			await query(`
+				DEFINE TABLE rw SCHEMAFULL;
+				DEFINE FIELD name ON rw TYPE string;
+				DEFINE FIELD n ON rw TYPE int DEFAULT 0;
+				DEFINE FIELD opt ON rw TYPE option<string>;
+				DEFINE INDEX rw_name ON rw FIELDS name UNIQUE;
+				DEFINE TABLE rw_edge TYPE RELATION SCHEMAFULL;
+				DEFINE FIELD k ON rw_edge TYPE int DEFAULT 1;
+				CREATE rw:a CONTENT { name: 'a', n: 1, opt: 'o' };
+				CREATE rw:b CONTENT { name: 'b', n: 1 };
+				CREATE rw:c CONTENT { name: 'c', n: 1 };
+				CREATE rw:d CONTENT { name: 'd', n: 1 };
+			`);
+		});
+
+		it('CREATE: BEFORE is NONE, DIFF replaces the whole record, VALUE is one expression', async () => {
+			const [before, diff, value] = (await query(
+				[
+					"CREATE ONLY rw:c1 CONTENT { name: 'c1' } RETURN BEFORE;",
+					"CREATE ONLY rw:c2 CONTENT { name: 'c2' } RETURN DIFF;",
+					"CREATE ONLY rw:c3 CONTENT { name: 'c3' } RETURN VALUE n;",
+				].join('\n'),
+			)) as [unknown, Array<Record<string, unknown>>, unknown];
+			expect(before).toBeUndefined();
+			expect(diff).toHaveLength(1);
+			expect(diff[0]).toMatchObject({
+				op: 'replace',
+				path: '',
+				value: { name: 'c2', n: 0 },
+			});
+			expect(value).toBe(0);
+		});
+
+		it('DIFF writes add, remove, replace and change (a text patch of a string), and nothing for no change', async () => {
+			expect(
+				await query(
+					[
+						'UPDATE ONLY rw:a MERGE { opt: NONE } RETURN DIFF;',
+						'UPDATE ONLY rw:a SET n = 2 RETURN DIFF;',
+						"UPDATE ONLY rw:a SET name = 'a longer name' RETURN DIFF;",
+						"UPDATE ONLY rw:b SET opt = 'x' RETURN DIFF;",
+						'UPDATE ONLY rw:b SET n = n RETURN DIFF;',
+						'UPDATE ONLY rw:missing SET n = 1 RETURN DIFF;',
+					].join('\n'),
+				),
+			).toStrictEqual([
+				[{ op: 'remove', path: '/opt' }],
+				[{ op: 'replace', path: '/n', value: 2 }],
+				[
+					{
+						op: 'change',
+						path: '/name',
+						value: '@@ -1,1 +1,13 @@\n a\n+ longer name\n',
+					},
+				],
+				[{ op: 'add', path: '/opt', value: 'x' }],
+				[],
+				undefined,
+			]);
+		});
+
+		it('DELETE: AFTER is NONE per record, DIFF replaces the record with NONE, and a projection reads $before', async () => {
+			await query(
+				"CREATE rw:x1 CONTENT { name: 'x1', n: 5 }; CREATE rw:x2 CONTENT { name: 'x2', n: 6 }; CREATE rw:x3 CONTENT { name: 'x3', n: 7 }; CREATE rw:x4 CONTENT { name: 'x4', n: 8 };",
+			);
+			expect(
+				await query(
+					[
+						'DELETE rw:x1 RETURN AFTER;',
+						'DELETE ONLY rw:x2 RETURN DIFF;',
+						'DELETE ONLY rw:x3 RETURN n, $before.n AS was;',
+						'DELETE ONLY rw:x4 RETURN VALUE $before.name;',
+						'DELETE ONLY rw:missing RETURN DIFF;',
+					].join('\n'),
+				),
+			).toStrictEqual([
+				[undefined],
+				[{ op: 'replace', path: '', value: undefined }],
+				{ n: undefined, was: 7 },
+				'x4',
+				undefined,
+			]);
+		});
+
+		it('UPSERT of a record creates it or changes it; BEFORE is NONE for one it created', async () => {
+			const [created, changed, beforeNew, beforeOld] = (await query(
+				[
+					"UPSERT ONLY rw:u1 MERGE { name: 'u1' } RETURN AFTER;",
+					'UPSERT ONLY rw:u1 MERGE { n: 3 } RETURN AFTER;',
+					"UPSERT ONLY rw:u2 MERGE { name: 'u2' } RETURN BEFORE;",
+					'UPSERT ONLY rw:u2 MERGE { n: 4 } RETURN BEFORE;',
+				].join('\n'),
+			)) as Array<Record<string, unknown> | undefined>;
+			expect(created).toMatchObject({ name: 'u1', n: 0 });
+			expect(changed).toMatchObject({ name: 'u1', n: 3 });
+			expect(beforeNew).toBeUndefined();
+			expect(beforeOld).toMatchObject({ name: 'u2', n: 0 });
+			// By condition: every match changes, or one record is created.
+			expect(
+				await query(
+					[
+						"UPSERT rw MERGE { n: 9 } WHERE name = 'c' RETURN VALUE [name, n];",
+						"UPSERT rw MERGE { name: 'fresh', n: 1 } WHERE name = 'fresh' RETURN VALUE [name, n];",
+					].join('\n'),
+				),
+			).toStrictEqual([[['c', 9]], [['fresh', 1]]]);
+		});
+
+		it('UPSERT of an existing record with RETURN NONE checks a partial MERGE as if the record were new on SurrealDB 3, not on 4; RETURN VALUE NONE does not on either', async () => {
+			const none = query('UPSERT ONLY rw:d MERGE { n: 2 } RETURN NONE;');
+			if (engine.majorVersion >= 4) {
+				expect(await none).toStrictEqual([undefined]);
+			} else {
+				await expect(none).rejects.toThrow(
+					/Couldn't coerce value for field `name` of `rw:d`/,
+				);
+			}
+			expect(
+				await query(
+					'UPSERT ONLY rw:d MERGE { n: 3 } RETURN VALUE NONE; SELECT VALUE [name, n] FROM ONLY rw:d;',
+				),
+			).toStrictEqual([undefined, ['d', 3]]);
+		});
+
+		it('INSERT returns a list for one row or many, takes no ONLY, and fails on a taken unique value', async () => {
+			expect(
+				await query(
+					[
+						'INSERT INTO rw $row RETURN VALUE name;',
+						'INSERT INTO rw $rows RETURN VALUE name;',
+						'INSERT INTO rw $none RETURN VALUE name;',
+					].join('\n'),
+					{
+						row: { name: 'i1' },
+						rows: [{ name: 'i2' }, { name: 'i3' }],
+						none: [],
+					},
+				),
+			).toStrictEqual([['i1'], ['i2', 'i3'], []]);
+			await expect(
+				query('INSERT ONLY INTO rw $row;', { row: { name: 'i4' } }),
+			).rejects.toThrow(/Parse error/);
+			await expect(
+				query('INSERT INTO rw $row;', { row: { name: 'i1' } }),
+			).rejects.toThrow(/Database index `rw_name` already contains 'i1'/);
+		});
+
+		it('ON DUPLICATE KEY UPDATE reads the attempted row as $input; BEFORE is the stored record, or NONE for a new one', async () => {
+			const [rows] = (await query(
+				'INSERT INTO rw $rows ON DUPLICATE KEY UPDATE n = $input.n RETURN BEFORE;',
+				{
+					rows: [
+						{ name: 'i1', n: 10 },
+						{ name: 'i9', n: 1 },
+					],
+				},
+			)) as [Array<Record<string, unknown> | undefined>];
+			expect(rows).toHaveLength(2);
+			expect(rows[0]).toMatchObject({ name: 'i1', n: 0 });
+			expect(rows[1]).toBeUndefined();
+			expect(
+				await query(
+					"SELECT VALUE n FROM ONLY rw WHERE name = 'i1' LIMIT 1;",
+				),
+			).toStrictEqual([10]);
+		});
+
+		it('ON DUPLICATE KEY UPDATE reads the stored record by field name on SurrealDB 4 and as NONE on 3; `+=` works on both', async () => {
+			const bare = query(
+				'INSERT INTO rw $row ON DUPLICATE KEY UPDATE n = $input.n + n RETURN VALUE n;',
+				{ row: { name: 'i1', n: 1 } },
+			);
+			if (engine.majorVersion >= 4) {
+				expect(await bare).toStrictEqual([[11]]);
+			} else {
+				await expect(bare).rejects.toThrow(
+					/Cannot perform addition with 'int' and 'none'/,
+				);
+			}
+			const before = (
+				(await query(
+					"SELECT VALUE n FROM ONLY rw WHERE name = 'i1' LIMIT 1;",
+				)) as [number]
+			)[0];
+			expect(
+				await query(
+					'INSERT INTO rw $row ON DUPLICATE KEY UPDATE n += 1 RETURN VALUE n;',
+					{ row: { name: 'i1', n: 1 } },
+				),
+			).toStrictEqual([[before + 1]]);
+		});
+
+		it('INSERT RELATION takes each edge with its endpoints, and refuses one without', async () => {
+			expect(
+				await query(
+					'INSERT RELATION INTO rw_edge $edges RETURN VALUE [<string> in, k];',
+					{
+						edges: [
+							{
+								in: new RecordId('rw', 'a'),
+								out: new RecordId('rw', 'b'),
+								k: 5,
+							},
+							{
+								in: new RecordId('rw', 'b'),
+								out: new RecordId('rw', 'a'),
+							},
+						],
+					},
+				),
+			).toStrictEqual([
+				[
+					['rw:a', 5],
+					['rw:b', 1],
+				],
+			]);
+			await expect(
+				query('INSERT RELATION INTO rw_edge $edge;', {
+					edge: { out: new RecordId('rw', 'b') },
+				}),
+			).rejects.toThrow(/property 'in' is: NONE/);
 		});
 	});
 

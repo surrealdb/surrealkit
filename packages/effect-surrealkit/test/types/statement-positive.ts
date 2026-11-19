@@ -32,11 +32,14 @@ import {
 	cast,
 	contains,
 	create,
+	type Diff,
 	deleteFrom,
 	eq,
 	gte,
 	type Input,
 	idRange,
+	insert,
+	insertRelation,
 	inside,
 	isNone,
 	literal,
@@ -53,6 +56,7 @@ import {
 	select,
 	sequence,
 	update,
+	upsert,
 } from '../../src/statement/index.js';
 import * as Corpus from '../golden/corpus/index.js';
 import {
@@ -61,6 +65,7 @@ import {
 	type MemberOfRow,
 	MemberOfTable,
 	Person,
+	PersonContent,
 	PersonCreate,
 	PersonId,
 	PersonMerge,
@@ -586,3 +591,94 @@ export const cityWeek = select(
 	.only()
 	.build();
 same<keyof Input<(typeof cityWeek)['params']>, 'city' | 'start' | 'end'>(true);
+
+// ---- UPSERT, INSERT and every RETURN mode: the result follows the verb,
+// the subject and the mode.
+
+const Upserted = Schema.Struct({
+	address: PersonCreate.fields.address,
+	bio: PersonCreate.fields.bio,
+	email: PersonCreate.fields.email,
+	name: PersonCreate.fields.name,
+	score: PersonCreate.fields.score,
+});
+const upsertOne = upsert(PersonTable, param('id', PersonId)).merge(
+	param('changes', Upserted),
+);
+export const upsertAfter = upsertOne.build();
+same<Result<typeof upsertAfter>, PersonRow>(true);
+export const upsertBefore = upsertOne.returning('before').build();
+same<Result<typeof upsertBefore>, PersonRow | undefined>(true);
+export const upsertNone = upsertOne.returning('none').build();
+same<Result<typeof upsertNone>, undefined>(true);
+export const upsertDiff = upsertOne.returning('diff').build();
+same<Result<typeof upsertDiff>, Diff>(true);
+export const upsertValue = upsertOne.returningValue((row) => row.age).build();
+same<Result<typeof upsertValue>, number | undefined>(true);
+export const upsertMany = upsert(PersonTable)
+	.content(param('content', PersonContent))
+	.where((row) => eq(row.email, param('email', SurrealSchema.String)))
+	.returning((row) => ({ id: row.id }))
+	.build();
+same<Result<typeof upsertMany>, ReadonlyArray<{ readonly id: PersonId }>>(true);
+
+export const inserted = insert(
+	PersonTable,
+	param('people', Schema.Array(PersonCreate)),
+).build();
+same<Result<typeof inserted>, ReadonlyArray<PersonRow>>(true);
+export const insertedOrKept = insert(PersonTable, param('person', PersonCreate))
+	.onDuplicate((input) => ({ name: input.name, score: 1 }))
+	.returning('before')
+	.build();
+same<Result<typeof insertedOrKept>, ReadonlyArray<PersonRow | undefined>>(true);
+export const insertedEdges = insertRelation(
+	MemberOfTable,
+	param(
+		'edges',
+		Schema.Array(
+			Schema.Struct({
+				in: PersonId,
+				out: TeamId,
+				...MemberOfTable.create.fields,
+			}),
+		),
+	),
+)
+	.returningValue((row) => row.out)
+	.build();
+same<
+	Result<typeof insertedEdges>,
+	ReadonlyArray<typeof MemberOfTable.select.fields.out.Type>
+>(true);
+
+export const deletedAfter = deleteFrom(PersonTable).returning('after').build();
+same<Result<typeof deletedAfter>, ReadonlyArray<undefined>>(true);
+export const deletedDiff = deleteFrom(PersonTable, param('id', PersonId))
+	.returning('diff')
+	.build();
+same<Result<typeof deletedDiff>, Diff | undefined>(true);
+export const deletedNames = deleteFrom(PersonTable)
+	.returning((row) => ({ name: row.name }))
+	.build();
+same<Result<typeof deletedNames>, ReadonlyArray<{ readonly name: string }>>(
+	true,
+);
+export const createdDiff = create(PersonTable)
+	.content(param('person', PersonCreate))
+	.returning('diff')
+	.build();
+same<Result<typeof createdDiff>, Diff>(true);
+export const relatedValue = relate(
+	MemberOfTable,
+	param('p', PersonId),
+	param('t', TeamId),
+)
+	.returningValue((row) => row.in)
+	.build();
+same<Result<typeof relatedValue>, PersonId>(true);
+export const updatedDiff = update(PersonTable)
+	.merge(param('patch', PersonMerge))
+	.returning('diff')
+	.build();
+same<Result<typeof updatedDiff>, ReadonlyArray<Diff>>(true);
