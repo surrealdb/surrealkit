@@ -791,6 +791,10 @@ ignores the SurrealKit and engine versions), so a release does not mean
 regenerating them.
 `test/types` compiles the golden modules with positive and `@ts-expect-error`
 fixtures under `strict` and `exactOptionalPropertyTypes`.
+`test/budget.test.ts` type-checks 300 generated statements (`test/budget-fixture.ts`:
+selects with projections and conditions, writes, sequence contracts) and
+holds their cost, in the compiler's instantiation and type counters, under a
+fixed limit.
 
 The engine, statement, field-presence and conformance suites need a real
 engine. A plain `bun run test` runs them on the in-process, in-memory engine of
