@@ -8,7 +8,9 @@ import {
 	type CodecOfArg,
 	type In,
 	type ItemCodec,
+	type ItemsCodec,
 	item,
+	items,
 	same,
 } from '../internal.js';
 import * as C from './codecs.js';
@@ -178,14 +180,14 @@ export const complement = <
 	apply('array::complement', same(0, C.ArrayCodec), 2, [left, right]);
 
 /**
- * `array::concat(...arrays: array) -> array`
+ * `array::concat(...arrays: array) -> items:0`
  *
  * SurrealDB 3 and 4.
  */
 export const concat = <const A0 extends ReadonlyArray<Arg<In['array']>>>(
 	...arrays: A0
-): Expr<typeof C.ArrayCodec, ParamsOfAll<A0[number]>> =>
-	apply('array::concat', C.ArrayCodec, 0, [], arrays);
+): Expr<ItemsCodec<A0, typeof C.ArrayCodec>, ParamsOfAll<A0[number]>> =>
+	apply('array::concat', items(0, C.ArrayCodec), 0, [], arrays);
 
 /**
  * `array::difference(left: array, right: array) -> array`

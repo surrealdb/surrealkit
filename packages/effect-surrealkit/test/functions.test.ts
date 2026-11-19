@@ -29,9 +29,17 @@ import {
 	type,
 	vector,
 } from '../src/functions/index.js';
+import { ArrayCodec } from '../src/functions/internal.js';
 import * as SurrealSchema from '../src/index.js';
 import type { CodecOf } from '../src/statement/expr.js';
-import { codecOf, eq, param, paramsOf, sqlOf } from '../src/statement/index.js';
+import {
+	codecOf,
+	eq,
+	evaluate,
+	param,
+	paramsOf,
+	sqlOf,
+} from '../src/statement/index.js';
 
 type Exact<A, B> =
 	(<T>() => T extends A ? 1 : 2) extends <T>() => T extends B ? 1 : 2
@@ -232,5 +240,59 @@ describe('built-in functions', () => {
 		expect(sqlOf(string.repeat('a', count))).toBe(
 			'string::repeat(s"a", $count)',
 		);
+	});
+
+	it('type array.concat by the elements of its arguments when each is a typed array', () => {
+		const Note = Schema.Struct({
+			kind: SurrealSchema.String,
+			payload: SurrealSchema.String,
+		});
+		const Tally = Schema.Struct({
+			kind: SurrealSchema.String,
+			n: SurrealSchema.Int,
+		});
+		const early = param('early', Schema.Array(Note));
+		const late = param('late', Schema.Array(Note));
+		const tallies = param('tallies', Schema.Array(Tally));
+		const loose = param('loose', Schema.Array(SurrealSchema.SurrealValue));
+		const notes = evaluate(array.concat(early, late), 'notes');
+		const mixed = evaluate(array.concat(early, tallies), 'mixed');
+		const open = evaluate(array.concat(early, loose), 'open');
+		const inlined = array.concat(early, [1]);
+		const alone = array.concat(early);
+		type NoteRow = typeof Note.Type;
+		type TallyRow = typeof Tally.Type;
+		const types: ReadonlyArray<true> = [
+			true satisfies Exact<
+				(typeof notes)['result']['Type'],
+				ReadonlyArray<NoteRow>
+			>,
+			true satisfies Exact<
+				(typeof mixed)['result']['Type'],
+				ReadonlyArray<NoteRow | TallyRow>
+			>,
+			true satisfies Exact<(typeof open)['result'], typeof ArrayCodec>,
+			true satisfies Exact<CodecOf<typeof inlined>, typeof ArrayCodec>,
+			true satisfies Exact<CodecOf<typeof alone>, CodecOf<typeof early>>,
+		];
+		expect(types.length).toBe(5);
+		expect(notes.sql).toBe('RETURN array::concat($early, $late);');
+		const rows = [
+			{ kind: 'a', payload: 'x' },
+			{ kind: 'b', payload: 'y' },
+		];
+		expect(Schema.decodeUnknownSync(notes.result)(rows)).toEqual(rows);
+		expect(() =>
+			Schema.decodeUnknownSync(notes.result)([{ kind: 'a' }]),
+		).toThrow();
+		expect(
+			Schema.decodeUnknownSync(mixed.result)([
+				...rows,
+				{ kind: 'c', n: 2 },
+			]),
+		).toEqual([...rows, { kind: 'c', n: 2 }]);
+		expect(codecOf(alone)).toBe(codecOf(early));
+		expect(open.result).toBe(ArrayCodec);
+		expect(codecOf(inlined)).toBe(ArrayCodec);
 	});
 });

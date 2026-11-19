@@ -397,7 +397,10 @@ decoded by the package's codec of that name (`any`, and an element of
 `array`, may be NONE).
 A result `same:N` is argument `N`'s own codec, used where the result is a
 reordering or subset of an array (`array.sort`, `array.distinct`); `item:N`
-is an element of it or NONE (`array.first`, `time.max`). A result
+is an element of it or NONE (`array.first`, `time.max`). `items:N`, on the
+variadic argument `N`, is an array of the union of the arguments' element
+codecs when every argument is a typed array, the argument's own codec when
+it is the only one, and `array` otherwise (`array.concat`). A result
 `float|decimal:N,…` is a float, or `number | Decimal` when one of the
 arguments it names may hold a decimal (an element of it, for an array): the
 functions SurrealDB computes in the kind of their input (`math.sqrt`,

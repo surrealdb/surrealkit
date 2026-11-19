@@ -36,6 +36,7 @@ import {
 	sqlOf,
 	unsafeExpr,
 } from '../src/statement/expr.js';
+import { evaluate, param } from '../src/statement/index.js';
 import { type Codec, make } from '../src/statement/statement.js';
 import {
 	type Engine,
@@ -215,6 +216,37 @@ describe.skipIf(!engineConfigured)('built-in functions on the engine', () => {
 		}
 		return failures;
 	};
+
+	it('decodes array::concat of two typed lists as their rows', async () => {
+		const Note = Schema.Struct({
+			kind: Schema.String,
+			payload: Schema.String,
+		});
+		const statement = evaluate(
+			functions.array.concat(
+				param('early', Schema.Array(Note)),
+				param('late', Schema.Array(Note)),
+			),
+			'concat_notes',
+		);
+		const rows: ReadonlyArray<typeof Note.Type> = await within(
+			Effect.runPromise(
+				client.run(statement, {
+					early: [{ kind: 'a', payload: 'x' }],
+					late: [
+						{ kind: 'b', payload: 'y' },
+						{ kind: 'c', payload: 'z' },
+					],
+				}),
+			),
+			20_000,
+		);
+		expect(rows).toEqual([
+			{ kind: 'a', payload: 'x' },
+			{ kind: 'b', payload: 'y' },
+			{ kind: 'c', payload: 'z' },
+		]);
+	});
 
 	it('runs on an engine major the table knows', () => {
 		expect(majors).toContain(major);

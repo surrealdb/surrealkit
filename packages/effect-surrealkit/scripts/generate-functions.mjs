@@ -103,6 +103,7 @@ const taken = new Set([
 	'constant',
 	'floatOrDecimal',
 	'item',
+	'items',
 	'same',
 	'C',
 	'Arg',
@@ -113,6 +114,7 @@ const taken = new Set([
 	'CodecOfArg',
 	'FloatOrDecimalCodec',
 	'ItemCodec',
+	'ItemsCodec',
 ]);
 
 const fail = (message) => {
@@ -121,11 +123,11 @@ const fail = (message) => {
 
 /**
  * A kind as a tree: `{ base }`, `{ array: kind }` or `{ option: kind }`.
- * Results may also be `{ same: n }`, `{ item: n }` or
+ * Results may also be `{ same: n }`, `{ item: n }`, `{ items: n }` or
  * `{ floatOrDecimal: [n, …] }` (`float|decimal:n,…`).
  */
 export const parseKind = (text, where, result = false) => {
-	const derived = /^(same|item):(\d+)$/u.exec(text);
+	const derived = /^(same|item|items):(\d+)$/u.exec(text);
 	if (derived !== null) {
 		if (!result) fail(`${where}: \`${text}\` is a result kind only`);
 		return { [derived[1]]: Number(derived[2]) };
@@ -237,9 +239,15 @@ const validate = (table) => {
 				fail(`${where}: a variadic function has no optional argument`);
 		}
 		const result = parseKind(entry.result, `${where} result`, true);
-		const index = result.same ?? result.item;
+		const index = result.same ?? result.item ?? result.items;
 		if (index !== undefined && entry.args[index] === undefined) {
 			fail(`${where}: result \`${entry.result}\` names no argument`);
+		}
+		if (
+			result.items !== undefined &&
+			(entry.variadic !== true || result.items !== entry.args.length - 1)
+		) {
+			fail(`${where}: \`items:N\` names the variadic argument`);
 		}
 		for (const named of result.floatOrDecimal ?? []) {
 			const arg = entry.args[named];
@@ -397,6 +405,11 @@ const renderFunction = (entry) => {
 		const named = result.floatOrDecimal.map((index) => params[index].type);
 		codecType = `FloatOrDecimalCodec<${named.join(' | ')}>`;
 		codecValue = `floatOrDecimal([${result.floatOrDecimal.join(', ')}])`;
+	} else if ('items' in result) {
+		const source = params[result.items];
+		const fallback = `C.${codecName(source.kind)}`;
+		codecType = `ItemsCodec<${source.type}, typeof ${fallback}>`;
+		codecValue = `items(${result.items}, ${fallback})`;
 	} else if ('same' in result || 'item' in result) {
 		const index = result.same ?? result.item;
 		const source = params[index];
@@ -438,7 +451,9 @@ const renderFamily = (family, entries) => {
 		...(uses(/floatOrDecimal\(/u) ? ['floatOrDecimal'] : []),
 		...(uses(/In\['/u) ? ['type In'] : []),
 		...(uses(/ItemCodec</u) ? ['type ItemCodec'] : []),
+		...(uses(/ItemsCodec</u) ? ['type ItemsCodec'] : []),
 		...(uses(/\bitem\(/u) ? ['item'] : []),
+		...(uses(/\bitems\(/u) ? ['items'] : []),
 		...(uses(/\bsame\(/u) ? ['same'] : []),
 	];
 	const imports = [

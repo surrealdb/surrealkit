@@ -107,6 +107,46 @@ export type ItemCodec<S extends Codec> =
 			: typeof AnyCodec
 		: typeof AnyCodec;
 
+/**
+ * The element codec of argument `A` when it is an expression typed as an
+ * array of a closed element type; `never` for an inlined constant, an open
+ * value or an array of open values (any `SurrealValue`).
+ */
+type TypedItem<A> =
+	A extends Expr<infer S, Params>
+		? S['Encoded'] extends ReadonlyArray<unknown>
+			? S extends { readonly value: infer I extends Codec }
+				? unknown extends I['Type']
+					? never
+					: SurrealValue extends I['Type']
+						? never
+						: I
+				: never
+			: never
+		: never;
+
+/** `true` when some member of the union `A` is not a typed array. */
+type SomeOpen<A> = A extends unknown
+	? [TypedItem<A>] extends [never]
+		? true
+		: never
+	: never;
+
+/**
+ * The codec of an `items:N` result over the variadic arguments `A`: the
+ * argument's own codec when it is the only one, an array of the union of
+ * the element codecs when every argument is a typed array, else `D`.
+ */
+export type ItemsCodec<A extends ReadonlyArray<unknown>, D extends Codec> = [
+	A[number],
+] extends [never]
+	? D
+	: [SomeOpen<A[number]>] extends [never]
+		? A extends readonly [infer Only]
+			? CodecOfArg<Only, D>
+			: Schema.$Array<TypedItem<A[number]>>
+		: D;
+
 /** A result codec derived from the arguments as given. */
 class Derived {
 	constructor(readonly derive: (args: ReadonlyArray<unknown>) => Codec) {}
@@ -135,6 +175,42 @@ export const item = (index: number, fallback: Codec): ResultOf =>
 		return 'value' in codec && Schema.isSchema(codec.value)
 			? orNone(codec.value as Codec)
 			: AnyCodec;
+	});
+
+/** The element codec of a typed array codec; `undefined` when open. */
+const typedItem = (codec: Codec): Codec | undefined => {
+	if (codec.ast._tag !== 'Arrays' || !('value' in codec)) return undefined;
+	const element = codec.value;
+	if (!Schema.isSchema(element)) return undefined;
+	const { ast } = element;
+	const open =
+		ast._tag === 'Unknown' ||
+		ast._tag === 'Any' ||
+		ast === SurrealValue.ast ||
+		(ast._tag === 'Union' && ast.types.includes(SurrealValue.ast));
+	return open ? undefined : (element as Codec);
+};
+
+/**
+ * An array of the elements of every argument from `index` on (`array::concat`):
+ * the argument's own codec when it is the only one, an array of the union of
+ * the element codecs when every argument is a typed array, else `fallback`.
+ */
+export const items = (index: number, fallback: Codec): ResultOf =>
+	new Derived((args) => {
+		const given = args.slice(index);
+		const elements: Array<Codec> = [];
+		for (const arg of given) {
+			const element = isExpr(arg) ? typedItem(codecOf(arg)) : undefined;
+			if (element === undefined) return fallback;
+			if (!elements.includes(element)) elements.push(element);
+		}
+		const [only, ...others] = elements;
+		if (only === undefined) return fallback;
+		if (given.length === 1) return codecOf(given[0] as Expr);
+		return Schema.Array(
+			others.length === 0 ? only : Schema.Union(elements),
+		) as unknown as Codec;
 	});
 
 /** The stored type argument `A` holds: its codec's, or the constant's own. */
