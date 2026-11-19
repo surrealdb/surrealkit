@@ -35,6 +35,7 @@ import {
 	layerFrom,
 	type TestDatabase,
 } from '../src/testing/index.js';
+import { bestMatch } from './blocks.js';
 import { corpusPath, readJson } from './documents.js';
 import {
 	type Engine,
@@ -245,6 +246,32 @@ describe.skipIf(!engineConfigured)('search on a disposable engine', () => {
 			down.map((row) => row.id.id),
 		);
 		for (const hit of hits) expect(hit.distance).toBeTypeOf('number');
+	});
+
+	it('runs the README example: a hybrid search in a block, ordered by its score, with functions and a link', async () => {
+		const found = await runHere(
+			run(bestMatch, { terms: 'quick', query: [1, 0, 0, 0] }),
+		);
+		expect(found.matches).toBe(2);
+		expect(found.best?.owner).toBe('Owner');
+		expect(['FOX', 'DOG']).toContain(found.best?.title);
+		const ordered = await runHere(
+			run(
+				select(DocTable)
+					.where(() => words)
+					.project((row) => ({ id: row.id, score: score(words) }))
+					.orderByAlias('score', 'DESC')
+					.build(),
+				{ terms: 'quick' },
+			),
+		);
+		expect(found.best?.id).toEqual(ordered[0]?.id);
+		const none = await runHere(
+			Effect.flip(
+				run(bestMatch, { terms: 'zebra', query: [1, 0, 0, 0] }),
+			),
+		);
+		expect(none).toMatchObject({ message: 'No match' });
 	});
 
 	it('rrf and linear fuse the lists, rows merged by id, with their score', async () => {

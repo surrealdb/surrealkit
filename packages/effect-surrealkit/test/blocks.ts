@@ -16,12 +16,16 @@ import {
 	follow,
 	gte,
 	insert,
+	knn,
+	knnDistance,
 	lt,
+	match,
 	ne,
 	not,
 	object,
 	outgoing,
 	param,
+	score,
 	select,
 	sum,
 	update,
@@ -29,6 +33,7 @@ import {
 } from '../src/statement/index.js';
 import {
 	store as corpus,
+	DocTable,
 	PersonId,
 	PersonTable,
 } from './golden/corpus/index.js';
@@ -389,3 +394,32 @@ export const personAndTeams = block()
 	)
 	.return(($) => ({ boss: $.person.boss, teams: $.teams }))
 	.build('person and teams', { writes: false });
+
+const terms = match(DocTable, 'body', param('terms', SurrealSchema.String), {
+	ref: 1,
+});
+const near = knn(DocTable, 'embedding', 'query', { k: 3, ef: 40 });
+
+/**
+ * The README's combined example: a hybrid search ordered by its score, with
+ * a built-in function and a record link in its projection, bound in a block
+ * whose guard and result call built-in functions (`test/search-engine.test.ts`
+ * runs it).
+ */
+export const bestMatch = block()
+	.let('hits', () =>
+		select(DocTable)
+			.where(() => and(terms, near))
+			.project((row) => ({
+				id: row.id,
+				title: string.uppercase(row.title),
+				owner: follow(corpus, row.owner).name,
+				score: score(terms),
+				distance: knnDistance(near),
+			}))
+			.orderByAlias('score', 'DESC')
+			.build(),
+	)
+	.throwIf(($) => eq(array.len($.hits), 0), 'No match')
+	.return(($) => ({ best: array.first($.hits), matches: array.len($.hits) }))
+	.build('best match', { writes: false });

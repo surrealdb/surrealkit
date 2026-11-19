@@ -1210,6 +1210,55 @@ records a step reaches (`->member_of->(team WHERE …)`), `+path`, a step as
 the subject of a select (`SELECT … FROM $id->knows->?`), ordering by a
 field read through a link, and `FETCH` inside a step.
 
+### Putting it together
+
+A block binds a hybrid search ordered by its score, whose projection calls
+a built-in function and follows a record link, and guards and returns with
+built-in functions (`bestMatch` in `test/blocks.ts`, which
+`test/search-engine.test.ts` runs on SurrealDB 3.3.4 and 4.0.1):
+
+```ts
+import { array, string } from 'effect-surrealkit/functions';
+import {
+  and, block, eq, follow, knn, knnDistance, match, param, score, select,
+} from 'effect-surrealkit/statement';
+
+const terms = match(DocTable, 'body', param('terms', SurrealSchema.String), { ref: 1 });
+const near = knn(DocTable, 'embedding', 'query', { k: 3, ef: 40 });
+
+export const bestMatch = block()
+  .let('hits', () =>
+    select(DocTable)
+      .where(() => and(terms, near))
+      .project((row) => ({
+        id: row.id,
+        title: string.uppercase(row.title),
+        owner: follow(store, row.owner).name,
+        score: score(terms),
+        distance: knnDistance(near),
+      }))
+      .orderByAlias('score', 'DESC')
+      .build())
+  .throwIf(($) => eq(array.len($.hits), 0), 'No match')
+  .return(($) => ({ best: array.first($.hits), matches: array.len($.hits) }))
+  .build('best match', { writes: false });
+
+// Result<typeof bestMatch>: {
+//   best: { id: DocId; title: string; owner: string | undefined; score: number; distance: number } | undefined;
+//   matches: number;
+// }
+// Thrown<typeof bestMatch>: 'No match'
+// Input: { terms: string; query: ReadonlyArray<number> }
+```
+
+```sql
+{
+	LET $hits = (SELECT id AS id, string::uppercase(title) AS title, owner.name AS owner, search::score(1) AS score, vector::distance::knn() AS distance FROM ⟨doc⟩ WHERE body @1@ $terms AND embedding <|3,40|> $query ORDER BY score DESC);
+	IF array::len($hits) = 0 { THROW s"No match" };
+	{ best: array::first($hits), matches: array::len($hits) }
+};
+```
+
 ### What the statements do not know
 
 - **Permissions.** A generated `select` schema is the row a privileged
