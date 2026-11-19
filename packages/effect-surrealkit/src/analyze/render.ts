@@ -13,6 +13,7 @@ import {
 	lex,
 } from './lexer.js';
 import { analyzeTargets } from './targets.js';
+import type { BindingUse, BindingUses } from './uses.js';
 
 /** First line of every module {@link renderStatementModules} renders. */
 export const STATEMENTS_MARK =
@@ -53,6 +54,31 @@ export interface StatementScope {
 export interface DeclaredNames {
 	readonly tables: ReadonlyArray<string>;
 	readonly functions: ReadonlyArray<string>;
+	/**
+	 * What the schema says about each table and function, as
+	 * `declaredNames(document)` (`effect-surrealkit/emitter`) reads it. When
+	 * given, every use of a binding the analyzer finds must resolve (a field
+	 * the table declares or accepts, an argument the function takes), and
+	 * each part states, in `binds`, the simple kind of each binding whose
+	 * every use resolves to the same one.
+	 */
+	readonly detail?: DeclaredDetail;
+}
+
+/** The schema detail of {@link DeclaredNames}: kinds as SurrealQL text. */
+export interface DeclaredDetail {
+	readonly tables: Readonly<Record<string, DeclaredTable>>;
+	/** The kind text of each argument of each function, in order. */
+	readonly functions: Readonly<Record<string, ReadonlyArray<string>>>;
+}
+
+export interface DeclaredTable {
+	/** Each declared field (its path joined with `.`) and its kind text. */
+	readonly fields: Readonly<Record<string, { readonly kind?: string }>>;
+	/** The table accepts fields it does not declare (it is schemaless). */
+	readonly acceptsUndeclared: boolean;
+	/** The kind text of the id key, when the schema declares one. */
+	readonly idKey?: string;
 }
 
 export interface RenderStatementModulesInput {
@@ -87,7 +113,9 @@ export interface StatementWarning {
  * identifier, is a reserved word, or differs only in case from another in
  * its scope. `scope`: the same for the scope name (`file` absent).
  * `undeclared`: the file names a table or function its scope's `declared`
- * names do not include (`line` of the first use set).
+ * names do not include (`line` of the first use set), or, with `declared`
+ * detail, a binding used as a field the table does not declare or accept,
+ * or as an argument beyond the function's arguments (`line` of the use).
  */
 export interface StatementProblem {
 	readonly kind: 'analysis' | 'name' | 'scope' | 'undeclared';
@@ -150,10 +178,119 @@ const lines = (throwsAt: Analysis['throwsAt']): string => {
 		: `{ ${entries.map(([message, at]) => `${JSON.stringify(message)}: [${at.join(', ')}]`).join(', ')} }`;
 };
 
+const useEntry = (use: BindingUse): string =>
+	use.kind === 'argument'
+		? `{ kind: "argument", function: ${JSON.stringify(use.function)}, index: ${use.index}, line: ${use.line} }`
+		: use.kind === 'key'
+			? `{ kind: "key", table: ${JSON.stringify(use.table)}, line: ${use.line} }`
+			: `{ kind: "field", table: ${JSON.stringify(use.table)}, field: ${JSON.stringify(use.field)}, line: ${use.line} }`;
+
+const usesField = (uses: BindingUses): string =>
+	`{ ${Object.entries(uses)
+		.map(
+			([name, list]) =>
+				`${JSON.stringify(name)}: [${list.map(useEntry).join(', ')}]`,
+		)
+		.join(', ')} }`;
+
+const bindsField = (binds: Readonly<Record<string, string>>): string =>
+	`{ ${Object.entries(binds)
+		.map(
+			([name, kind]) =>
+				`${JSON.stringify(name)}: ${JSON.stringify(kind)}`,
+		)
+		.join(', ')} }`;
+
+/** A simple kind's text: one a codec's stored type can be checked against. */
+const SIMPLE =
+	/^(?:string|bool|int|float|number|decimal|datetime|duration|uuid|record<[^<>|,\s]+>)$/u;
+
+/** The simple kind a kind text is, `option<K>` read as `K`; else undefined. */
+const simpleKind = (kind: string | undefined): string | undefined => {
+	if (kind === undefined) return undefined;
+	const inner = /^option<(.*)>$/u.exec(kind)?.[1] ?? kind;
+	return SIMPLE.test(inner) ? inner : undefined;
+};
+
+/** How a problem names a use that does not resolve. */
+type Resolved =
+	| { readonly kind: 'kind'; readonly text: string | undefined }
+	| { readonly kind: 'problem'; readonly message: string }
+	| { readonly kind: 'unchecked' };
+
+/**
+ * What one use resolves to in the schema: the kind text of what it is
+ * used as (undefined when the schema gives none), a problem when it cannot
+ * resolve, or `unchecked` for a table or function the schema does not
+ * declare (reported elsewhere) or the text defines itself.
+ */
+const resolve = (use: BindingUse, detail: DeclaredDetail): Resolved => {
+	if (use.kind === 'argument') {
+		const args = Object.hasOwn(detail.functions, use.function)
+			? detail.functions[use.function]
+			: undefined;
+		if (args === undefined) return { kind: 'unchecked' };
+		return use.index < args.length
+			? { kind: 'kind', text: args[use.index] }
+			: {
+					kind: 'problem',
+					message: `passes argument ${use.index + 1} to \`${use.function}\`, which takes ${args.length === 1 ? '1 argument' : `${args.length} arguments`}`,
+				};
+	}
+	const table = Object.hasOwn(detail.tables, use.table)
+		? detail.tables[use.table]
+		: undefined;
+	if (table === undefined) return { kind: 'unchecked' };
+	if (use.kind === 'key') return { kind: 'kind', text: table.idKey };
+	if (Object.hasOwn(table.fields, use.field))
+		return { kind: 'kind', text: table.fields[use.field]?.kind };
+	if (use.field === 'id')
+		return { kind: 'kind', text: `record<${use.table}>` };
+	return table.acceptsUndeclared
+		? { kind: 'kind', text: undefined }
+		: {
+				kind: 'problem',
+				message: `compares \`${use.field}\` of \`${use.table}\`, which declares no such field`,
+			};
+};
+
+/**
+ * The uses that do not resolve in `detail`, and the simple kind of each
+ * binding whose every use resolves to the same one.
+ */
+const checkUses = (
+	uses: BindingUses,
+	detail: DeclaredDetail,
+): {
+	readonly problems: ReadonlyArray<{
+		readonly line: number;
+		readonly message: string;
+	}>;
+	readonly binds: Readonly<Record<string, string>>;
+} => {
+	const problems: Array<{ line: number; message: string }> = [];
+	const binds: Record<string, string> = {};
+	for (const [name, list] of Object.entries(uses)) {
+		const kinds = new Set<string | undefined>();
+		for (const use of list) {
+			const resolved = resolve(use, detail);
+			if (resolved.kind === 'problem') {
+				problems.push({ line: use.line, message: resolved.message });
+				kinds.add(undefined);
+			} else if (resolved.kind === 'unchecked') kinds.add(undefined);
+			else kinds.add(simpleKind(resolved.text));
+		}
+		const [only] = kinds;
+		if (kinds.size === 1 && only !== undefined) binds[name] = only;
+	}
+	return { problems, binds };
+};
+
 const renderConstant = (
 	scope: string,
 	name: string,
 	analysis: Analysis,
+	binds: Readonly<Record<string, string>> | undefined,
 ): string => {
 	const file = `${scope}/${name}.surql`;
 	const complete = analysis.kind === 'part' && analysis.holes.length === 0;
@@ -179,6 +316,12 @@ const renderConstant = (
 					`tables: { read: ${list(analysis.tables.read)}, written: ${list(analysis.tables.written)} }`,
 					`functions: ${list(analysis.functions)}`,
 					...(analysis.openTargets ? ['openTargets: true'] : []),
+					...(Object.keys(analysis.uses).length > 0
+						? [`uses: ${usesField(analysis.uses)}`]
+						: []),
+					...(binds !== undefined && Object.keys(binds).length > 0
+						? [`binds: ${bindsField(binds)}`]
+						: []),
 				]
 			: []),
 	];
@@ -310,12 +453,18 @@ export const renderStatementModulesSync = (
 			}
 			throw error;
 		}
+		let binds: Readonly<Record<string, string>> | undefined;
 		if (source.declared !== undefined) {
-			for (const problem of undeclared(
-				source.sql,
-				source.declared,
-				input.holes,
-			))
+			const detail = source.declared.detail;
+			const checked =
+				detail === undefined
+					? undefined
+					: checkUses(analysis.uses, detail);
+			binds = checked?.binds;
+			for (const problem of [
+				...undeclared(source.sql, source.declared, input.holes),
+				...(checked?.problems ?? []),
+			].sort((a, b) => a.line - b.line))
 				problems.push({
 					kind: 'undeclared',
 					scope: source.scope,
@@ -347,7 +496,9 @@ export const renderStatementModulesSync = (
 		);
 		imports.set(source.scope, used);
 		const constants = byScope.get(source.scope) ?? [];
-		constants.push(renderConstant(source.scope, source.name, analysis));
+		constants.push(
+			renderConstant(source.scope, source.name, analysis, binds),
+		);
 		byScope.set(source.scope, constants);
 	}
 	if (problems.length > 0) {

@@ -26,7 +26,9 @@ export {
 	renderPinnedStatements,
 } from './pin.js';
 export {
+	type DeclaredDetail,
 	type DeclaredNames,
+	type DeclaredTable,
 	type RenderStatementModulesInput,
 	renderStatementModules,
 	renderStatementModulesSync,
@@ -47,3 +49,4 @@ export {
 	type Text,
 	text,
 } from './text.js';
+export type { BindingUse, BindingUses } from './uses.js';

@@ -1,0 +1,298 @@
+{
+	"version": 2,
+	"semanticDigest": "sha256:9bb3a0a15eb772d737b5dd170653655b97e4833995b53d272207288b37ee0f37",
+	"provenance": {
+		"generator": {
+			"name": "surrealkit",
+			"version": "1.0.0-beta.6",
+			"commit": "fd7b075"
+		},
+		"engine": {
+			"version": "3.3.0",
+			"build": "surrealdb-3.3.0",
+			"mode": "embedded"
+		},
+		"adapter": "structure-3.3",
+		"source": {
+			"kind": "compile",
+			"modules": [
+				"default"
+			],
+			"files": [
+				{
+					"path": "schema-gated/20_experimental_files.surql",
+					"sha256": "8a08c443a2f82b6384d02e7fac3166117c9a1aa0dc425826bfd9b8330b2710bf"
+				},
+				{
+					"path": "schema-gated/30_relations.v3.3.surql",
+					"sha256": "5ffe85842402973ebe5f7973be87489bb6acbb73b0e0fd51d8ed3191800647ed"
+				},
+				{
+					"path": "schema-gated/31_module.v3.3.surql",
+					"sha256": "0d17cbec19b9e57eb150f9ce5d624e17316459b02cc056fd72b598781ab73864"
+				},
+				{
+					"path": "schema/01_tables.surql",
+					"sha256": "703fb8d51e56246b2da86b71259e8fd44177eda0512055c366533bc1da2a8c5d"
+				},
+				{
+					"path": "schema/02_kinds.surql",
+					"sha256": "ef65cdb43e975c216b85046c97ad126652366513f5c5d13a5a109197552fc8bf"
+				},
+				{
+					"path": "schema/03_ids.surql",
+					"sha256": "e20f6cecc6b1ac7b6f09ca2125c8c2f039e3ffd8e2bef9c6029b7dcbbdb155a8"
+				},
+				{
+					"path": "schema/04_fields.surql",
+					"sha256": "8d122e76ef2588a173eadf1448ab73b0f09662f94abb956e35ad7e4a216ddda9"
+				},
+				{
+					"path": "schema/05_nested.surql",
+					"sha256": "73f3c6fd2b44fbaf3779b7bd40d2e53330b998ae6cc7f071ed8088d008b90968"
+				},
+				{
+					"path": "schema/06_references.surql",
+					"sha256": "895febb394a2c1d5f722071de1f8038727f710de6931786a7d111c7c9b514a35"
+				},
+				{
+					"path": "schema/07_functions_params.surql",
+					"sha256": "131480fc9574642c1c95062911de093c761ec6492f2d06fbe63faaa50f31aa1f"
+				},
+				{
+					"path": "schema/08_indexes_events.surql",
+					"sha256": "6eb9b4391438cd4d593fc6a17e810546a189fc1d96517a652d551a5afe55dde5"
+				},
+				{
+					"path": "schema/09_access_sequences.surql",
+					"sha256": "ab4d0df21605b5215588ce03e9e0b295d47e339fe7666023c1bbf229067fbd94"
+				},
+				{
+					"path": "schema/10_api_config.surql",
+					"sha256": "2acf7cb8e175ad4c6a4bb728c558e29ec81bbdbb0f70931ab8d440f3b548a73b"
+				}
+			]
+		},
+		"capabilities": {
+			"experimental": [
+				"files",
+				"surrealism"
+			],
+			"network": false
+		}
+	},
+	"tables": [
+		{
+			"name": "gauge",
+			"type": {
+				"kind": "normal"
+			},
+			"schemafull": true,
+			"drop": false,
+			"permissions": {
+				"select": true,
+				"create": true,
+				"update": true,
+				"delete": true
+			},
+			"fields": [
+				{
+					"path": [
+						"station"
+					],
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": {
+						"select": true,
+						"create": true,
+						"update": true
+					},
+					"kind": {
+						"kind": "string"
+					}
+				},
+				{
+					"path": [
+						"reading"
+					],
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": {
+						"select": true,
+						"create": true,
+						"update": true
+					},
+					"kind": {
+						"kind": "float"
+					}
+				},
+				{
+					"path": [
+						"note"
+					],
+					"optional": true,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": {
+						"select": true,
+						"create": true,
+						"update": true
+					},
+					"kind": {
+						"kind": "option",
+						"item": {
+							"kind": "string"
+						}
+					}
+				},
+				{
+					"path": [
+						"site"
+					],
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": {
+						"select": true,
+						"create": true,
+						"update": true
+					},
+					"kind": {
+						"kind": "record",
+						"tables": [
+							"site"
+						]
+					}
+				},
+				{
+					"path": [
+						"tags"
+					],
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": {
+						"select": true,
+						"create": true,
+						"update": true
+					},
+					"kind": {
+						"kind": "array",
+						"item": {
+							"kind": "string"
+						}
+					}
+				}
+			],
+			"indexes": [],
+			"events": []
+		},
+		{
+			"name": "site",
+			"type": {
+				"kind": "normal"
+			},
+			"schemafull": true,
+			"drop": false,
+			"permissions": {
+				"select": true,
+				"create": true,
+				"update": true,
+				"delete": true
+			},
+			"fields": [
+				{
+					"path": [
+						"label"
+					],
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": {
+						"select": true,
+						"create": true,
+						"update": true
+					},
+					"kind": {
+						"kind": "string"
+					}
+				}
+			],
+			"indexes": [],
+			"events": [],
+			"idKey": {
+				"kind": "string"
+			}
+		},
+		{
+			"name": "scratch",
+			"type": {
+				"kind": "normal"
+			},
+			"schemafull": false,
+			"drop": false,
+			"permissions": {
+				"select": true,
+				"create": true,
+				"update": true,
+				"delete": true
+			},
+			"fields": [
+				{
+					"path": [
+						"anything"
+					],
+					"optional": false,
+					"flexible": false,
+					"readonly": false,
+					"inline": false,
+					"permissions": {
+						"select": true,
+						"create": true,
+						"update": true
+					}
+				}
+			],
+			"indexes": [],
+			"events": []
+		}
+	],
+	"functions": [
+		{
+			"name": "fn::scaled",
+			"args": [
+				{
+					"name": "value",
+					"kind": {
+						"kind": "float"
+					},
+					"optional": false,
+					"omittable": false
+				}
+			],
+			"returns": {
+				"kind": "float"
+			},
+			"block": "{ RETURN $value * 2 }",
+			"permissions": true
+		}
+	],
+	"params": [],
+	"accesses": [],
+	"analyzers": [],
+	"sequences": [],
+	"buckets": [],
+	"apis": [],
+	"modules": [],
+	"configs": [],
+	"users": [],
+	"diagnostics": []
+}

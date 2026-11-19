@@ -380,7 +380,7 @@ describe('declaredNames', () => {
 		const document = await Effect.runPromise(
 			decodeDocument(readJson(examplePath)),
 		);
-		expect(declaredNames(document)).toEqual({
+		expect(declaredNames(document)).toMatchObject({
 			tables: ['doc', 'id_object', 'member_of', 'person', 'team'],
 			functions: ['fn::double', 'fn::greet', 'fn::optional_first'],
 		});

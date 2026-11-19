@@ -42,6 +42,30 @@ exports[`type diagnostics > bind/wrong-type 1`] = `
 ]
 `;
 
+exports[`type diagnostics > binds/argument-wrong-representation 1`] = `
+[
+  "TS2322: Type 'declareConstructor<string, string, readonly [], string>' is not assignable to type '"binding \`weight\` is passed to \`fn::score\` at index 0 (float), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > binds/branded-wrong-representation 1`] = `
+[
+  "TS2322: Type 'brand<declareConstructor<string, string, readonly [], string>, "app/Ceiling">' is not assignable to type '"binding \`ceiling\` is compared with \`snapshot.tally\` (int), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > binds/field-wrong-representation 1`] = `
+[
+  "TS2322: Type 'declareConstructor<number, number, readonly [], number>' is not assignable to type '"binding \`producer\` is compared with \`snapshot.producer\` (string), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > binds/key-wrong-representation 1`] = `
+[
+  "TS2322: Type 'declareConstructor<string, string, readonly [], string>' is not assignable to type '"binding \`key\` is the key of a \`gadget\` record (uuid), which its codec cannot hold"'.",
+]
+`;
+
 exports[`type diagnostics > block/arm-local-outside 1`] = `
 [
   "TS2339: Property 'inner' does not exist on type 'Scope<NoLocals>'.",
@@ -378,7 +402,7 @@ exports[`type diagnostics > flag/define-read-only 1`] = `
 
 exports[`type diagnostics > flag/make-read-only 1`] = `
 [
-  "TS2353: Object literal may only specify known properties, and 'readOnly' does not exist in type '{ readonly name?: string; readonly sql: string; readonly params: {}; readonly result: declareConstructor<number, number, readonly [], number>; readonly slots?: number; readonly valueSlot?: number; ... 9 more ...; readonly openTargets?: boolean; }'.",
+  "TS2353: Object literal may only specify known properties, and 'readOnly' does not exist in type '{ readonly name?: string; readonly sql: string; readonly params: {}; readonly result: declareConstructor<number, number, readonly [], number>; readonly slots?: number; readonly valueSlot?: number; ... 10 more ...; readonly uses?: Readonly<...>; }'.",
 ]
 `;
 
@@ -505,6 +529,18 @@ exports[`type diagnostics > merge/extra-field 1`] = `
 exports[`type diagnostics > merge/nested-extra-field 1`] = `
 [
   "TS2345: Argument of type 'Expr<Struct<{ readonly settings: Struct<{ readonly theme: optionalKey<Literals<readonly ["dark", "light"]>>; readonly bogus: declareConstructor<number, number, readonly [], number>; }>; }>, { ...; }>' is not assignable to parameter of type '"\`settings.bogus\` is not a field \`person\` accepts in MERGE"'.",
+]
+`;
+
+exports[`type diagnostics > module/binds-wrong-record 1`] = `
+[
+  "TS2322: Type 'declareConstructor<string, string, readonly [], string>' is not assignable to type '"binding \`site\` is compared with \`gauge.site\` (record<site>), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > module/binds-wrong-representation 1`] = `
+[
+  "TS2322: Type 'declareConstructor<number, number, readonly [], number>' is not assignable to type '"binding \`siteKey\` is the key of a \`site\` record (string), which its codec cannot hold"'.",
 ]
 `;
 

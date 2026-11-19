@@ -1029,6 +1029,63 @@ that the document does not declare (edge tables included) and that the same
 file does not create with `DEFINE TABLE` or `DEFINE FUNCTION`. Any error stops
 generation with its file, line and column; warnings are printed.
 
+#### What bindings are used as
+
+`analyze(sql)` also reports `uses`: for each free binding (keyed without
+`$`), what the text uses it as, sorted and without duplicates. Three
+patterns are recognised, each on tokens outside strings and comments:
+
+```ts
+type BindingUse =
+  | { kind: 'argument'; function: string; index: number; line: number }
+  | { kind: 'key'; table: string; line: number }
+  | { kind: 'field'; table: string; field: string; line: number };
+```
+
+- `argument`: an argument of a custom function that is exactly one
+  parameter. `RETURN fn::scaled($raw);` uses `$raw` as argument 0 of
+  `fn::scaled`.
+- `key`: `type::record('table', $key)` (or `type::thing`) with a plain
+  string literal and exactly one parameter. `SELECT * FROM
+  type::record('site', $siteKey);` uses `$siteKey` as the key of `site`.
+- `field`: inside one query (a top-level statement or a parenthesised
+  subquery) whose targets are exactly one static table and not open, a
+  comparison (`=`, `==`, `!=`, `<`, `<=`, `>`, `>=`) in its `WHERE` between a
+  bare field name and a parameter, or an assignment `field = $name` in the
+  `SET` of an `UPDATE`, `UPSERT` or `CREATE`. `SELECT * FROM gauge WHERE
+  station = $station;` uses `$station` as `gauge.station`.
+
+`part` exposes the analysed `uses` (and checks declared ones against the
+text); `sequence(...).define` merges them into the statement's `uses` for
+the names that remain bindings.
+
+With `--schema` (or a scope's `declared` names from
+`declaredNames(document)`, whose `detail` holds each table's fields with
+their kind text, whether it accepts undeclared fields, its id key's kind,
+and each function's argument kinds), every use must resolve when the
+modules are generated: a field the table neither declares nor accepts
+(`compares \`utcDy\` of \`snapshot\`, which declares no such field`) or
+an argument beyond the function's arguments is an error with its file and
+line. `id` resolves to the table's own record kind. Tables and functions
+the schema does not declare are reported once, by the names check.
+
+A binding whose every use resolves to the same simple kind (`string`,
+`bool`, `int`, `float`, `number`, `decimal`, `datetime`, `duration`,
+`uuid`, or `record<table>` of one table; `option<K>` counts as `K`) is
+written into the part as `binds: { station: "string" }`. At compile time
+`sequence(...).define` then refuses a codec whose stored type cannot hold
+that kind, by the same rule that decides whether two operands compare: a
+branded or refined codec over the right representation is accepted, and
+anything else is an error such as ``binding `station` is compared with
+`gauge.station` (string), which its codec cannot hold``. Bindings without a
+`binds` entry are checked as before.
+
+The limits are plain: only these three patterns are read, by a lexer, not
+a parser, and nothing is recorded where it is not certain (a parameter in a
+longer expression, a path, two tables or an open target, a comparison
+inside a block). A binding with no recorded use is never checked against
+the schema.
+
 #### Rendering in process
 
 The command is a thin wrapper over `renderStatementModules` from

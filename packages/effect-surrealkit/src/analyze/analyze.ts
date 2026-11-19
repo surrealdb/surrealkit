@@ -13,6 +13,7 @@ import {
 	type Token,
 } from './lexer.js';
 import { analyzeTargets } from './targets.js';
+import { analyzeUses, type BindingUses } from './uses.js';
 
 export interface Diagnostic {
 	readonly severity: 'error' | 'warning';
@@ -88,6 +89,15 @@ export interface Analysis {
 	 * `tables` may be incomplete.
 	 */
 	readonly openTargets: boolean;
+	/**
+	 * What each free binding is used as, keyed by name without `$`, each
+	 * list sorted and without duplicates: an argument of a custom function,
+	 * the key of a `type::record`, or a comparison with (or, in `SET`, an
+	 * assignment to) a field of the one static table a query targets. Only
+	 * these patterns are recognised, and nothing is recorded where the lexer
+	 * is not certain; a binding with no such use is absent.
+	 */
+	readonly uses: BindingUses;
 	readonly diagnostics: ReadonlyArray<Diagnostic>;
 }
 
@@ -586,6 +596,7 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 		tables: { read: targets.read, written: targets.written },
 		functions: targets.functions,
 		openTargets: targets.openTargets,
+		uses: analyzeUses(tokens, sorted(free)),
 		diagnostics,
 	};
 };

@@ -8,6 +8,7 @@
  */
 import type { Schema } from 'effect';
 
+import type { BindingUses } from '../analyze/uses.js';
 import { assertResolved, withoutRefs } from './refs.js';
 
 /** A codec that needs no services, so a statement needs only a client. */
@@ -135,6 +136,14 @@ export interface Statement<
 	};
 	readonly functions?: ReadonlyArray<string>;
 	readonly openTargets?: boolean;
+	/**
+	 * What each binding is used as, where the analyzer could tell: an
+	 * argument of a custom function, the key of a `type::record`, or a
+	 * field of the one table a query targets. `sequence` sets it, merged
+	 * over its parts for the names that remain bindings, when there is any;
+	 * `make` takes it as declared.
+	 */
+	readonly uses?: BindingUses;
 }
 
 /** Where a declared `THROW` message comes from. */
@@ -399,6 +408,8 @@ export const make = <
 	readonly functions?: ReadonlyArray<string>;
 	/** Some target is not a static table name. Default unknown. */
 	readonly openTargets?: boolean;
+	/** What each binding is used as, where known. Default unknown. */
+	readonly uses?: BindingUses;
 }): Statement<P, R, Throws> => {
 	const statement: Statement<P, R, Throws> = {
 		[StatementTypeId]: StatementTypeId,
@@ -427,6 +438,7 @@ export const make = <
 		...(options.openTargets !== undefined && {
 			openTargets: options.openTargets,
 		}),
+		...(options.uses !== undefined && { uses: options.uses }),
 	};
 	assertStatement(statement);
 	assertResolved(options.params, `statement \`${statement.name}\``);

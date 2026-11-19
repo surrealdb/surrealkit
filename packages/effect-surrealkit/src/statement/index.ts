@@ -6,6 +6,8 @@
  * Everything here is pure and host-neutral. `effect-surrealkit/client` runs
  * statements.
  */
+
+export type { BindingUse, BindingUses } from '../analyze/uses.js';
 export {
 	type ArithmeticCodec,
 	add,
@@ -167,8 +169,12 @@ export {
 	variance,
 } from './group.js';
 export {
+	type Binds,
+	type BindsOf,
 	type Contract,
 	type Exactly,
+	type Fitting,
+	type KindStored,
 	type Part,
 	part,
 	sequence,

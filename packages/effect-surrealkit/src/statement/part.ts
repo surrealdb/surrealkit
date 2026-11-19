@@ -6,7 +6,15 @@
  * This is the only module of `effect-surrealkit/statement` that imports the
  * analyzer, so code that only uses the builders does not carry it.
  */
+import type { Decimal as SdkDecimal, RecordId as SdkRecordId } from 'surrealdb';
+
 import { type Analysis, analyzeSync } from '../analyze/analyze.js';
+import type { BindingUse, BindingUses } from '../analyze/uses.js';
+import type { SurrealNumber } from '../decimal.js';
+import type { Int, Int64 } from '../int.js';
+import type { Float, SurrealString, Uuid } from '../scalars.js';
+import type { DateTime, Duration } from '../temporal.js';
+import type { Comparable } from './expr.js';
 import {
 	assertIdentifier,
 	type Codec,
@@ -36,6 +44,14 @@ import {
  *   target is not a static name (so the lists may be incomplete). Optional
  *   in a declaration and checked against the text when given; {@link part}
  *   always sets them to what the analyzer derives.
+ * - `uses`: what each free binding is used as, where the analyzer can tell
+ *   (see `Analysis.uses` in `effect-surrealkit/analyze`). Checked against
+ *   the text when given; {@link part} always sets it.
+ * - `binds`: for a binding whose every use resolves, in the schema, to the
+ *   same simple kind, that kind's text (`string`, `int`, `record<t>`, …).
+ *   `effect-surrealkit statements` writes it when given the schema;
+ *   `sequence(...).define` then refuses, at compile time, a codec whose
+ *   stored type cannot hold it.
  *
  * `effect-surrealkit statements` derives these from `.surql` files
  * (`effect-surrealkit/analyze`). Written by hand they are checked against
@@ -65,7 +81,12 @@ export interface Part<
 	readonly tables?: Tables;
 	readonly functions?: ReadonlyArray<string>;
 	readonly openTargets?: boolean;
+	readonly uses?: BindingUses;
+	readonly binds?: Binds;
 }
+
+/** The kind text each binding's every use resolves to; see {@link Part}. */
+export type Binds = Readonly<Record<string, string>>;
 
 /** The static tables a text reads and writes. */
 export interface Tables {
@@ -110,6 +131,50 @@ const listDifferences = (
 		out.push(
 			`${field}: declared ${quoted(absent)}, which the text never ${verb}`,
 		);
+	return out;
+};
+
+const useText = (use: BindingUse): string =>
+	use.kind === 'argument'
+		? `argument ${use.index} of \`${use.function}\` on line ${use.line}`
+		: use.kind === 'key'
+			? `key of \`${use.table}\` on line ${use.line}`
+			: `field \`${use.table}.${use.field}\` on line ${use.line}`;
+
+/** One use as a key that does not depend on the order of its fields. */
+const useKey = (use: BindingUse): string =>
+	use.kind === 'argument'
+		? `a\u0000${use.function}\u0000${use.index}\u0000${use.line}`
+		: use.kind === 'key'
+			? `k\u0000${use.table}\u0000${use.line}`
+			: `f\u0000${use.table}\u0000${use.field}\u0000${use.line}`;
+
+/** The differences between declared and derived uses. */
+const usesDifferences = (
+	declared: BindingUses | undefined,
+	derived: BindingUses,
+): ReadonlyArray<string> => {
+	if (declared === undefined) return [];
+	const out: Array<string> = [];
+	const names = [
+		...new Set([...Object.keys(declared), ...Object.keys(derived)]),
+	].sort();
+	for (const name of names) {
+		const mine = declared[name] ?? [];
+		const theirs = derived[name] ?? [];
+		const own = new Set(mine.map(useKey));
+		const found = new Set(theirs.map(useKey));
+		const missing = theirs.filter((use) => !own.has(useKey(use)));
+		const extra = mine.filter((use) => !found.has(useKey(use)));
+		if (missing.length > 0)
+			out.push(
+				`uses: the text uses \`$${name}\` as ${missing.map(useText).join(', ')}, which is not declared`,
+			);
+		if (extra.length > 0)
+			out.push(
+				`uses: declared \`$${name}\` as ${extra.map(useText).join(', ')}, which the text does not use it as`,
+			);
+	}
 	return out;
 };
 
@@ -251,6 +316,13 @@ const verify = (item: Part, label: string): Analysis => {
 				: 'openTargets: declared true, every target of the text is a static table name',
 		);
 	}
+	differences.push(...usesDifferences(item.uses, analysis.uses));
+	for (const name of Object.keys(item.binds ?? {}).sort()) {
+		if (analysis.uses[name] === undefined)
+			differences.push(
+				`binds: declared \`$${name}\`, which the text never uses as an argument, a key or a field`,
+			);
+	}
 	if (differences.length > 0) {
 		throw new RangeError(
 			`${label} does not declare what its text does: ${differences.join('; ')}`,
@@ -276,6 +348,8 @@ export const part = <
 	const Free extends string = never,
 	const Defines extends string = never,
 	const Throws extends string = never,
+	const U extends BindingUses = Record<never, never>,
+	const B extends Binds = Record<never, never>,
 >(options: {
 	readonly name?: string;
 	readonly source?: string;
@@ -301,7 +375,14 @@ export const part = <
 	readonly functions?: ReadonlyArray<string>;
 	/** Checked against the text when given; see {@link Part}. */
 	readonly openTargets?: boolean;
-}): Part<Free, Defines, Throws> => {
+	/** Checked against the text when given; see {@link Part}. */
+	readonly uses?: U;
+	/**
+	 * The kind each binding's uses resolve to in the schema; see
+	 * {@link Part}. Each name must be a binding the text uses.
+	 */
+	readonly binds?: B;
+}): Part<Free, Defines, Throws> & Fitting<U, B> => {
 	const declared: Part<Free, Defines, Throws> = {
 		...(options.name !== undefined && { name: options.name }),
 		...(options.source !== undefined && { source: options.source }),
@@ -322,6 +403,8 @@ export const part = <
 		...(options.openTargets !== undefined && {
 			openTargets: options.openTargets,
 		}),
+		...(options.uses !== undefined && { uses: options.uses }),
+		...(options.binds !== undefined && { binds: options.binds }),
 	};
 	const analysis = verify(declared, nameOf(options.name, 'part'));
 	const result: Part<Free, Defines, Throws> = {
@@ -330,9 +413,10 @@ export const part = <
 		tables: analysis.tables,
 		functions: analysis.functions,
 		openTargets: analysis.openTargets,
+		uses: analysis.uses,
 	};
 	checked.set(result, analysis);
-	return result;
+	return result as Part<Free, Defines, Throws> & Fitting<U, B>;
 };
 
 /** The source and lines of the first part declaring each message with both. */
@@ -366,6 +450,131 @@ export type Unbound<
 			| Exclude<Head['free'][number], Defined>
 			| Unbound<Tail, Defined | Head['defines'][number]>
 	: never;
+
+/**
+ * What a part declared with `binds` carries at the type level: its uses
+ * and binds as literal types, which {@link Contract} checks codecs
+ * against. Nothing for a part without `binds`.
+ */
+export type Fitting<U, B> = [keyof B] extends [never]
+	? unknown
+	: { readonly uses: U; readonly binds: B };
+
+/**
+ * The stored type of each simple kind, as the package's own codec for it
+ * encodes it: the representation comparisons check (see `Comparable` in
+ * the builders). `int` is either profile's.
+ */
+interface KindStorage {
+	readonly string: (typeof SurrealString)['Encoded'];
+	readonly bool: boolean;
+	readonly int: (typeof Int)['Encoded'] | (typeof Int64)['Encoded'];
+	readonly float: (typeof Float)['Encoded'];
+	readonly number: (typeof SurrealNumber)['Encoded'];
+	readonly decimal: SdkDecimal;
+	readonly datetime: (typeof DateTime)['Encoded'];
+	readonly duration: (typeof Duration)['Encoded'];
+	readonly uuid: (typeof Uuid)['Encoded'];
+}
+
+/** The stored type of a simple kind's text. */
+export type KindStored<K> = K extends keyof KindStorage
+	? KindStorage[K]
+	: K extends `record<${infer T}>`
+		? SdkRecordId<T>
+		: never;
+
+/** One binding a part's `binds` states, with the uses it came from. */
+interface BindEntry {
+	readonly name: string;
+	readonly kind: string;
+	readonly use: unknown;
+}
+
+/**
+ * The entries of one part's `binds`, without the index signature `Part`
+ * declares and without the names in `Defined`.
+ */
+type Entries<B, U, Defined extends string> = {
+	[K in keyof B as string extends K
+		? never
+		: K extends Defined
+			? never
+			: K]: {
+		readonly name: K;
+		readonly kind: B[K];
+		readonly use: K extends keyof U
+			? U[K] extends readonly [infer First, ...unknown[]]
+				? First
+				: never
+			: never;
+	};
+} extends infer M
+	? M[keyof M]
+	: never;
+
+/**
+ * The `binds` entries of a sequence's parts, for the names that remain
+ * bindings: a name an earlier part defines is not one.
+ */
+export type BindsOf<
+	Parts extends ReadonlyArray<Part>,
+	Defined extends string = never,
+> = Parts extends readonly [
+	infer Head extends Part,
+	...infer Tail extends ReadonlyArray<Part>,
+]
+	?
+			| (Head extends {
+					readonly binds: infer B;
+					readonly uses: infer U;
+			  }
+					? Entries<B, U, Defined>
+					: never)
+			| BindsOf<Tail, Defined | Head['defines'][number]>
+	: never;
+
+/** How a message names a use. */
+type UseText<U> = U extends {
+	readonly kind: 'field';
+	readonly table: infer T extends string;
+	readonly field: infer F extends string;
+}
+	? `is compared with \`${T}.${F}\``
+	: U extends {
+				readonly kind: 'argument';
+				readonly function: infer F extends string;
+				readonly index: infer I extends number;
+			}
+		? `is passed to \`${F}\` at index ${I}`
+		: U extends {
+					readonly kind: 'key';
+					readonly table: infer T extends string;
+				}
+			? `is the key of a \`${T}\` record`
+			: 'is used';
+
+/**
+ * A message for each entry whose kind the codec `C` cannot hold: their
+ * stored types do not overlap, exactly as {@link Comparable} decides for
+ * two operands. `never` when every entry fits.
+ */
+type Misfits<E, C> = E extends BindEntry
+	? C extends Codec
+		? Comparable<KindStored<E['kind']>, C['Encoded'], true> extends true
+			? never
+			: `binding \`${E['name']}\` ${UseText<E['use']>} (${E['kind']}), which its codec cannot hold`
+		: never
+	: never;
+
+/** `P`, with each codec its binding's kind cannot be stored as replaced by a message. */
+type Fitted<P, E extends BindEntry> = {
+	readonly [K in keyof P]: K extends E['name']
+		? [Misfits<Extract<E, { readonly name: K }>, P[K]>] extends [never]
+			? P[K]
+			: Misfits<Extract<E, { readonly name: K }>, P[K]>
+		: P[K];
+};
 
 /** The messages any part of a sequence can `THROW`. */
 export type ThrownBy<Parts extends ReadonlyArray<Part>> =
@@ -402,7 +611,9 @@ export type Contract<
 	? P
 	: string extends Unbound<Parts>
 		? P
-		: Exactly<Unbound<Parts>, P>;
+		: [Extract<Parts[number], { readonly binds: object }>] extends [never]
+			? Exactly<Unbound<Parts>, P>
+			: Exactly<Unbound<Parts>, Fitted<P, BindsOf<Parts>>>;
 
 /**
  * What a sequence writes: `true` when any part certainly writes, `false`
@@ -418,6 +629,40 @@ const writesOf = (
 		: parts.every((item) => item.writes === false)
 			? false
 			: undefined;
+
+/** The uses of each part, for the names that remain bindings, merged. */
+const usesOf = (
+	analyses: ReadonlyArray<Analysis>,
+	parts: ReadonlyArray<Part>,
+): BindingUses | undefined => {
+	const defined = new Set<string>();
+	const merged = new Map<string, Map<string, BindingUse>>();
+	for (const [index, analysis] of analyses.entries()) {
+		for (const [name, uses] of Object.entries(analysis.uses)) {
+			if (defined.has(name)) continue;
+			const into = merged.get(name) ?? new Map<string, BindingUse>();
+			for (const use of uses) into.set(useKey(use), use);
+			merged.set(name, into);
+		}
+		for (const name of (parts[index] as Part).defines) defined.add(name);
+	}
+	if (merged.size === 0) return undefined;
+	const out: Record<string, ReadonlyArray<BindingUse>> = {};
+	for (const name of [...merged.keys()].sort()) {
+		out[name] = [...(merged.get(name) as Map<string, BindingUse>).entries()]
+			.sort(([a, x], [b, y]) =>
+				x.line !== y.line
+					? x.line - y.line
+					: a < b
+						? -1
+						: a > b
+							? 1
+							: 0,
+			)
+			.map(([, use]) => use);
+	}
+	return out;
+};
 
 const unboundOf = (parts: ReadonlyArray<Part>): ReadonlyArray<string> => {
 	const defined = new Set<string>();
@@ -500,6 +745,7 @@ export const sequence = <const Parts extends ReadonlyArray<Part>>(
 			);
 		}
 		const writes = contract.writes ?? derived;
+		const uses = usesOf(analyses, parts);
 		const slots = parts.reduce((total, item) => total + item.slots, 0);
 		// The last value-bearing result across the parts; `slots` when none.
 		let valueSlot = slots;
@@ -532,6 +778,7 @@ export const sequence = <const Parts extends ReadonlyArray<Part>>(
 				...new Set(analyses.flatMap((a) => a.functions)),
 			].sort(),
 			openTargets: analyses.some((analysis) => analysis.openTargets),
+			...(uses !== undefined && { uses }),
 			...(writes !== undefined && { writes }),
 			sources: [
 				...new Set(

@@ -6,6 +6,8 @@
  */
 import { Data, Effect, Schema, SchemaIssue } from 'effect';
 
+import type { DeclaredNames } from '../analyze/render.js';
+
 const Name = Schema.String.check(Schema.isMinLength(1));
 const Expr = Schema.String;
 const Path = Schema.Array(Name).check(Schema.isMinLength(1));
@@ -523,17 +525,96 @@ export const SchemaDocument = Schema.Struct({
 export type SchemaDocument = typeof SchemaDocument.Type;
 
 /**
- * The tables (edge tables included) and custom functions a schema document
- * declares, each sorted: the `declared` names of a statement scope.
+ * The SurrealQL text of a kind, printed from the document's structure:
+ * `string`, `record<person | team>`, `option<int>`, `array<string, 3>`, …
  */
-export const declaredNames = (
-	document: SchemaDocument,
-): {
-	readonly tables: ReadonlyArray<string>;
-	readonly functions: ReadonlyArray<string>;
-} => ({
+export const kindText = (kind: Kind): string => {
+	const params = (names: ReadonlyArray<string>, word: string) =>
+		names.length === 0 ? word : `${word}<${names.join(' | ')}>`;
+	switch (kind.kind) {
+		case 'record':
+		case 'table':
+			return params(kind.tables, kind.kind);
+		case 'file':
+			return params(kind.buckets, 'file');
+		case 'geometry':
+			return params(kind.types, 'geometry');
+		case 'array':
+		case 'set':
+			return kind.length === undefined
+				? `${kind.kind}<${kindText(kind.item)}>`
+				: `${kind.kind}<${kindText(kind.item)}, ${kind.length}>`;
+		case 'tuple':
+			return `[${kind.items.map(kindText).join(', ')}]`;
+		case 'objectLiteral':
+			return `{ ${kind.fields
+				.map(
+					(field) =>
+						`${field.name}${field.optional ? '?' : ''}: ${kindText(field.kind)}`,
+				)
+				.join(', ')} }`;
+		case 'literal':
+			return kind.type === 'string'
+				? JSON.stringify(kind.value)
+				: String(kind.value);
+		case 'option':
+			return `option<${kindText(kind.item)}>`;
+		case 'union':
+			return kind.variants.map(kindText).join(' | ');
+		case 'unknown':
+			return kind.source;
+		default:
+			return kind.kind;
+	}
+};
+
+/**
+ * The tables (edge tables included) and custom functions a schema document
+ * declares, each sorted: the `declared` names of a statement scope. Its
+ * `detail` holds, for each table, its declared fields (each path joined
+ * with `.`) with each field's kind text, whether it accepts undeclared
+ * fields (it is not schemafull) and the kind text of its id key; and for
+ * each function the kind texts of its arguments, in order. A field or key
+ * the document gives no kind has none.
+ */
+export const declaredNames = (document: SchemaDocument): DeclaredNames => ({
 	tables: [...new Set(document.tables.map((table) => table.name))].sort(),
 	functions: [...new Set(document.functions.map((fn) => fn.name))].sort(),
+	detail: {
+		tables: Object.fromEntries(
+			[...document.tables]
+				.sort((a, b) =>
+					a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+				)
+				.map((table) => [
+					table.name,
+					{
+						fields: Object.fromEntries(
+							table.fields.map((field) => [
+								field.path.join('.'),
+								field.kind === undefined
+									? {}
+									: { kind: kindText(field.kind) },
+							]),
+						),
+						acceptsUndeclared: !table.schemafull,
+						...(table.idKey !== undefined && {
+							idKey: kindText(table.idKey),
+						}),
+					},
+				]),
+		),
+		functions: Object.fromEntries(
+			[...document.functions]
+				.sort((a, b) =>
+					a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+				)
+				.map((fn) => [
+					fn.name,
+					fn.args.map((arg) => kindText(arg.kind)),
+				]),
+		),
+	},
 });
 
 /** A document that failed strict decoding. */
