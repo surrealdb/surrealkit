@@ -5,6 +5,7 @@
  * transaction tests use.
  */
 import { Schema } from 'effect';
+import { RecordId } from 'surrealdb';
 
 import { array, math, string } from '../src/functions/index.js';
 import * as SurrealSchema from '../src/index.js';
@@ -20,6 +21,7 @@ import {
 	insert,
 	knn,
 	knnDistance,
+	literal,
 	lt,
 	match,
 	ne,
@@ -27,6 +29,7 @@ import {
 	object,
 	outgoing,
 	param,
+	recordId,
 	score,
 	select,
 	sum,
@@ -454,6 +457,54 @@ const recording = (locked: boolean) => {
 		.return(($) => ({ seen: $.wallet.balance }));
 };
 
+/** {@link recording} from the literal id `wallet:held`. */
+const recordingByLiteral = (locked: boolean) => {
+	const read = select(
+		WalletTable,
+		literal(new RecordId('wallet', 'held') as WalletId, WalletId),
+	);
+	return block()
+		.let('wallet', () => (locked ? read.forUpdate() : read).only().build())
+		.throwIfNone('wallet', 'Wallet not found')
+		.let('pause', () => pause)
+		.let('payment', ($) =>
+			create(PaymentTable)
+				.content(
+					object({
+						wallet: $.wallet.id,
+						amount: $.wallet.balance,
+						key: param('key', SurrealSchema.String),
+					}),
+				)
+				.build(),
+		)
+		.return(($) => ({ seen: $.wallet.balance }));
+};
+
+/** {@link recording} from `type::record(s"wallet", $wallet_key)`. */
+const recordingByBuiltId = (locked: boolean) => {
+	const read = select(
+		WalletTable,
+		recordId(WalletTable, param('wallet_key', SurrealSchema.String)),
+	);
+	return block()
+		.let('wallet', () => (locked ? read.forUpdate() : read).only().build())
+		.throwIfNone('wallet', 'Wallet not found')
+		.let('pause', () => pause)
+		.let('payment', ($) =>
+			create(PaymentTable)
+				.content(
+					object({
+						wallet: $.wallet.id,
+						amount: $.wallet.balance,
+						key: param('key', SurrealSchema.String),
+					}),
+				)
+				.build(),
+		)
+		.return(($) => ({ seen: $.wallet.balance }));
+};
+
 /**
  * Reads a wallet `FOR UPDATE`, pauses, and records the balance it read in
  * another record: a write to the wallet during the pause conflicts with the
@@ -464,4 +515,24 @@ export const recordBalance = recording(true).build('record balance');
 /** The same without the lock: it records a balance that has since changed. */
 export const recordBalanceUnlocked = recording(false).build(
 	'record balance, unlocked',
+);
+
+/** {@link recordBalance} from the literal id `wallet:held`. */
+export const recordBalanceByLiteral = recordingByLiteral(true).build(
+	'record balance by a literal id',
+);
+
+/** {@link recordBalanceByLiteral} without the lock. */
+export const recordBalanceByLiteralUnlocked = recordingByLiteral(false).build(
+	'record balance by a literal id, unlocked',
+);
+
+/** {@link recordBalance} from a record id built from its key. */
+export const recordBalanceByBuiltId = recordingByBuiltId(true).build(
+	'record balance by a built id',
+);
+
+/** {@link recordBalanceByBuiltId} without the lock. */
+export const recordBalanceByBuiltIdUnlocked = recordingByBuiltId(false).build(
+	'record balance by a built id, unlocked',
 );

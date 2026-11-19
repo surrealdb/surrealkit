@@ -28,6 +28,10 @@ import {
 	pay,
 	payAndRead,
 	recordBalance,
+	recordBalanceByBuiltId,
+	recordBalanceByBuiltIdUnlocked,
+	recordBalanceByLiteral,
+	recordBalanceByLiteralUnlocked,
 	recordBalanceUnlocked,
 	summarise,
 	topUp,
@@ -346,6 +350,68 @@ describe.skipIf(!engineConfigured)('blocks on a disposable engine', () => {
 			expect(error).toBeInstanceOf(StatementConflict);
 			expect(error?.message).toMatch(/Transaction conflict/u);
 			expect(await recorded('locked')).toEqual([]);
+			expect(await balance()).toBe((before ?? 0) + 1);
+		});
+
+		// The same race with the wallet read through a literal id and
+		// through a record id built from its key: both take part in the
+		// conflict as a binding does.
+		const bySubject = [
+			{
+				form: 'a literal record id',
+				locked: () =>
+					bind(recordBalanceByLiteral, { key: 'literal locked' }),
+				unlocked: () =>
+					bind(recordBalanceByLiteralUnlocked, {
+						key: 'literal unlocked',
+					}),
+				key: 'literal',
+			},
+			{
+				form: 'a record id built from its key',
+				locked: () =>
+					bind(recordBalanceByBuiltId, {
+						wallet_key: 'held',
+						key: 'built locked',
+					}),
+				unlocked: () =>
+					bind(recordBalanceByBuiltIdUnlocked, {
+						wallet_key: 'held',
+						key: 'built unlocked',
+					}),
+				key: 'built',
+			},
+		] as const;
+
+		it.each(
+			bySubject,
+		)('read by $form without the lock, the block commits a balance that changed under it', async ({
+			unlocked,
+			key,
+		}) => {
+			const before = await balance();
+			const outcome = await raced(client.transaction([unlocked()]));
+			expect(outcome).toMatchObject({
+				_tag: 'Success',
+				success: [{ seen: before }],
+			});
+			expect(await recorded(`${key} unlocked`)).toEqual([before]);
+			expect(await balance()).toBe((before ?? 0) + 1);
+		});
+
+		it.each(
+			bySubject,
+		)('read by $form FOR UPDATE in a transaction, the client reports a StatementConflict and nothing is written', async ({
+			locked,
+			key,
+		}) => {
+			const before = await balance();
+			const outcome = await raced(client.transaction([locked()]));
+			expect(outcome._tag).toBe('Failure');
+			const error = outcome._tag === 'Failure' ? outcome.failure : null;
+			expect(error).toBeInstanceOf(StatementConflict);
+			expect(error?.message).toMatch(/Transaction conflict/u);
+			expect(await recorded(`${key} locked`)).toEqual([]);
 			expect(await balance()).toBe((before ?? 0) + 1);
 		});
 

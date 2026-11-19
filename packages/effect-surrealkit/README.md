@@ -752,9 +752,11 @@ a binding only a later step reads, which is refused when the block is built
 with a `StatementConflict` when a concurrent write changes the record before
 it commits; no lock is held. SurrealDB 3.3 and 4.0 accept it only on one
 record id given as a parameter (a binding or a local), a literal record id
-or a `recordId(table, key)` (`type::record(…)`). They refuse a field path,
-a subquery, a table and a range, so `LET` a field such as `$.invite.team`
-first.
+or a `recordId(table, key)` (`type::record(…)`), and a concurrent write
+conflicts with the read through each of the three
+(`test/block-engine.test.ts` races one against each). They refuse a field
+path, a subquery, a table and a range, so `LET` a field such as
+`$.invite.team` first.
 
 `test/block-engine.test.ts` races a write against a block that reads a
 wallet `FOR UPDATE` and then records its balance elsewhere. Without the
