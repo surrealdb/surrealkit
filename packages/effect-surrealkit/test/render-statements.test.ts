@@ -46,6 +46,7 @@ describe('renderStatementModules', () => {
 		);
 		expect(files.map((file) => file.path)).toEqual([
 			'accounts/statements.ts',
+			'catalog/statements.ts',
 			'counter/statements.ts',
 			'index.ts',
 		]);

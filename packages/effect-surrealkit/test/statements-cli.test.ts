@@ -99,7 +99,7 @@ describe('effect-surrealkit statements', () => {
 		const [a, b] = [input(), input()];
 		const first = await cli(['--input', 'queries', '--out', 'gen'], a);
 		expect(first.code, first.stderr).toBe(0);
-		expect(first.stderr).toMatch(/3 modules in .*gen \(3 updated\)/);
+		expect(first.stderr).toMatch(/4 modules in .*gen \(4 updated\)/);
 		await cli(['--input', 'queries', '--out', 'gen'], b);
 		expect(tree(join(a, 'gen'))).toEqual(tree(join(b, 'gen')));
 		expect(tree(join(a, 'gen'))).toEqual(tree(golden));

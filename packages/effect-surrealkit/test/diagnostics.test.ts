@@ -21,6 +21,7 @@ const fixtures = [
 	'graph-negative.ts',
 	'binds-negative.ts',
 	'generated-binds.ts',
+	'family-negative.ts',
 ].map((file) => join(typesRoot, file));
 
 const directive = /^\s*\/\/ @ts-expect-error(?: \[([^\]\s]+)\])?/u;

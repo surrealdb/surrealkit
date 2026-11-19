@@ -374,6 +374,49 @@ exports[`type diagnostics > expr/index-non-array 1`] = `
 ]
 `;
 
+exports[`type diagnostics > family/binding-constant-fill 1`] = `
+[
+  "TS2322: Type 'Expr<declareConstructor<number, number, readonly [], number>, { readonly limit: declareConstructor<number, number, readonly [], number>; }>' is not assignable to type '"a constant fill binds nothing: put the binding in a \`.surql\` fragment"'.",
+]
+`;
+
+exports[`type diagnostics > family/extra-fill 1`] = `
+[
+  "TS2322: Type 'Empty' is not assignable to type '"\`__COLOUR__\` is not a hole of this template"'.",
+]
+`;
+
+exports[`type diagnostics > family/missing-fill 1`] = `
+[
+  "TS2345: Argument of type '{ __PRICE__: Empty; }' is not assignable to parameter of type '"hole \`__REGION__\` has no fill"'.",
+]
+`;
+
+exports[`type diagnostics > family/raw-string-fill 1`] = `
+[
+  "TS2322: Type '"AND price < 3"' is not assignable to type '"a hole takes a generated text or part, \`compose(…)\`, \`choose(…)\`, \`literal(…)\` or \`empty\`, not raw SurrealQL"'.",
+]
+`;
+
+exports[`type diagnostics > family/raw-string-option 1`] = `
+[
+  "TS2322: Type '"AND TRUE"' is not assignable to type '"a hole takes a generated text or part, \`compose(…)\`, \`choose(…)\`, \`literal(…)\` or \`empty\`, not raw SurrealQL"'.",
+]
+`;
+
+exports[`type diagnostics > family/template-fill 1`] = `
+[
+  "TS2322: Type 'Text<"__NEAR__" | "__READINESS__" | "__WORDS__", never, never, never, { readonly __NEAR__: { readonly bound: readonly ["readiness", "words"]; readonly binds: readonly []; }; readonly __READINESS__: { readonly bound: readonly ["words"]; readonly binds: readonly []; }; readonly __WORDS__: { ...; }; }>' is not assignable to type '"this fill is a template with holes (__NEAR__): compose it first" | "this fill is a template with holes (__READINESS__): compose it first" | "this fill is a template with holes (__WORDS__): compose it first"'.",
+]
+`;
+
+exports[`type diagnostics > family/union-typed-fill 1`] = `
+[
+  "TS2322: Type 'Text<never, "maxPrice", never, never, Record<never, never>> | Text<never, "region", never, never, Record<never, never>>' is not assignable to type '"this fill is typed as one of several texts, so the compiler cannot tell which a variant holds: choose between them with \`choose(…)\`"'.
+  Type 'Text<never, "maxPrice", never, never, Record<never, never>>' is not assignable to type '"this fill is typed as one of several texts, so the compiler cannot tell which a variant holds: choose between them with \`choose(…)\`"'.",
+]
+`;
+
 exports[`type diagnostics > fetch/any-table 1`] = `
 [
   "TS2345: Argument of type '"k_record_any"' is not assignable to parameter of type '"\`k_record_any\` can point at any table (\`record\`), so FETCH has no row type for it"'.",

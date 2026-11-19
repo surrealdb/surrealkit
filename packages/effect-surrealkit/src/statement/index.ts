@@ -86,6 +86,21 @@ export {
 	sqlOf,
 	unsafeExpr,
 } from './expr.js';
+export {
+	type CheckedFills,
+	type CheckedOptions,
+	type Choice,
+	type ChoiceOptions,
+	type Composite,
+	type CompositeFills,
+	choose,
+	compose,
+	type Empty,
+	empty,
+	type StringKeyed,
+	type TextNode,
+	TextNodeTypeId,
+} from './family.js';
 export type {
 	CheckedFetch,
 	Fetched,
