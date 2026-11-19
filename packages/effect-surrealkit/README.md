@@ -503,7 +503,8 @@ value, for an application that names its own services, one per session.
 | `StatementConflict` | a transaction conflict that `retry` did not resolve | no; send it again |
 | `StatementRequestError` | any other failure of the request: transport, authentication, a SurrealQL error, or the SDK refusing to send (a `RETURN` followed by another statement in a transaction), with the SDK's error as `cause` | unknown for a transport failure; otherwise no |
 | `StatementEmptyResult` | a `create` or `relate` that returns rows (`nonEmpty`) returned NONE or an empty list: SurrealDB reports a write the session may not make as an empty result, without an error, so the session may lack permission | not by that statement |
-| `StatementDecodeError` | the answer is not what the statement declares: the number of results, a value where NONE belongs, or a last result its codec refuses | when `committed` is true (the statement `writes`), yes: the request succeeded and its writes are committed, so do not resend it |
+| `StatementDecodeError` | the answer of a `readOnly` statement or transaction is not what it declares: the number of results, a value where NONE belongs, or a last result its codec refuses | no |
+| `StatementWriteOutcomeError` | the same, for a request that may write; `request` names the statement or transaction and `cause` is the `StatementDecodeError` (naming the statement and result), with `committed: true` and a message saying the request succeeded and its writes are committed | yes, whatever it wrote is committed: read it back before resending |
 
 An `update` or `delete` by condition may match nothing, so its empty list is
 a result, not an error; so is a denied one (the conformance suite pins
@@ -561,6 +562,23 @@ anything is sent it refuses:
 
 The SDK refuses a top-level `RETURN` followed by another statement inside a
 transaction, so put such a statement last.
+
+If a write request succeeds but decoding fails, the client returns
+`StatementWriteOutcomeError`. Its `request` names the statement or atomic batch,
+and its `cause` identifies the failing statement and result slot. Read back the
+receipt or record before deciding to replay. This outcome does not prove that
+a row changed: permissions and conditional writes can yield empty results.
+A simple field-only table select is classified as read-only. For SELECTs that
+accept arbitrary expressions (including predicates and stored function calls),
+the builder conservatively assumes they may write. A caller that knows the
+complete query is read-only can use `.build(name, { readOnly: true })`.
+Authored statements and sequences default to potentially writing. Specify
+`readOnly: true` only for known reads to retain `StatementDecodeError`; a
+statement declared `readOnly` that the analyzer or a builder says
+`writes` is refused when it is made. When a statement certainly writes (a
+write builder, or text the analyzer finds a write in), the message says
+its writes are committed; otherwise it says any writes it made are.
+
 
 ### What the statements do not know
 

@@ -29,4 +29,5 @@ export {
 	StatementScopeError,
 	StatementThrown,
 	StatementUnexpectedThrow,
+	StatementWriteOutcomeError,
 } from './errors.js';

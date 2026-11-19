@@ -37,6 +37,7 @@ import {
 	StatementScopeError,
 	StatementThrown,
 	StatementUnexpectedThrow,
+	StatementWriteOutcomeError,
 } from './errors.js';
 import { pathText, valueProblem } from './values.js';
 
@@ -267,17 +268,44 @@ const checkValues = (
 	return Effect.void;
 };
 
-const committedNote = (writes: boolean): string =>
-	writes
+/**
+ * What a request may have changed: statements that certainly write, ones
+ * that may (authored text can call a function that writes), or none, when
+ * every statement is declared or derived `readOnly`.
+ */
+type Changes = 'writes' | 'maybe' | 'none';
+
+const changesOf = (statements: ReadonlyArray<AnyStatement>): Changes =>
+	statements.some((statement) => statement.writes === true)
+		? 'writes'
+		: statements.every((statement) => statement.readOnly === true)
+			? 'none'
+			: 'maybe';
+
+const committedNote = (changes: Changes): string =>
+	changes === 'writes'
 		? '. The request succeeded and its writes are committed, so do not send it again to retry'
-		: '';
+		: changes === 'maybe'
+			? '. The request succeeded, so any writes it made are committed; read the data back before sending it again'
+			: '';
+
+/**
+ * A decode failure of a request that may have written is reported as a
+ * {@link StatementWriteOutcomeError} around it; a read-only one as itself.
+ */
+const decodeOutcome =
+	(request: string, changes: Changes) =>
+	<E>(error: E): E | StatementWriteOutcomeError =>
+		changes !== 'none' && error instanceof StatementDecodeError
+			? new StatementWriteOutcomeError({ request, cause: error })
+			: error;
 
 /** Decodes the results of one statement out of `results`, from `offset`. */
 const decode = (
 	statement: AnyStatement,
 	results: ReadonlyArray<unknown>,
 	offset: number,
-	writes: boolean,
+	writes: Changes,
 ): Effect.Effect<unknown, StatementDecodeError | StatementEmptyResult> => {
 	const last = offset + statement.slots - 1;
 	for (let slot = offset; slot < last; slot++) {
@@ -286,7 +314,7 @@ const decode = (
 				new StatementDecodeError({
 					statement: statement.name,
 					slot: slot - offset + 1,
-					committed: writes,
+					committed: writes !== 'none',
 					message: `result ${slot - offset + 1} of ${statement.slots} must be NONE; only the last result of a statement is decoded${committedNote(writes)}`,
 				}),
 			);
@@ -315,7 +343,7 @@ const decode = (
 				new StatementDecodeError({
 					statement: statement.name,
 					slot: statement.slots,
-					committed: writes,
+					committed: writes !== 'none',
 					message: `${error.message}${committedNote(writes)}`,
 				}),
 		),
@@ -326,7 +354,7 @@ const countOf = (
 	name: string,
 	results: unknown,
 	expected: number,
-	writes: boolean,
+	writes: Changes,
 ): Effect.Effect<ReadonlyArray<unknown>, StatementDecodeError> =>
 	Array.isArray(results) && results.length === expected
 		? Effect.succeed(results)
@@ -334,7 +362,7 @@ const countOf = (
 				new StatementDecodeError({
 					statement: name,
 					slot: 0,
-					committed: writes,
+					committed: writes !== 'none',
 					message: `expected ${expected} results, one per SurrealQL statement, and received ${
 						Array.isArray(results) ? results.length : 'no list'
 					}${committedNote(writes)}`,
@@ -527,7 +555,7 @@ export const make = (db: Queryable): Client => ({
 	) => {
 		const input: Readonly<Record<string, unknown>> = args[0] ?? {};
 		const options = args[1];
-		const writes = statement.writes === true;
+		const writes = changesOf([statement]);
 		const sent = { count: 0 };
 		return traced(
 			statement.name,
@@ -560,8 +588,10 @@ export const make = (db: Queryable): Client => ({
 					results,
 					statement.slots,
 					writes,
+				).pipe(Effect.mapError(decodeOutcome(statement.name, writes)));
+				return yield* decode(statement, slots, 0, writes).pipe(
+					Effect.mapError(decodeOutcome(statement.name, writes)),
 				);
-				return yield* decode(statement, slots, 0, writes);
 			}),
 		) as Effect.Effect<R['Type'], StatementError<Throws>>;
 	},
@@ -578,9 +608,7 @@ export const make = (db: Queryable): Client => ({
 				statements.flatMap(({ statement }) => statement.sources ?? []),
 			),
 		];
-		const writes = statements.some(
-			({ statement }) => statement.writes === true,
-		);
+		const writes = changesOf(statements.map(({ statement }) => statement));
 		const sent = { count: 0 };
 		return traced(
 			name,
@@ -648,12 +676,14 @@ export const make = (db: Queryable): Client => ({
 						0,
 					),
 					writes,
-				);
+				).pipe(Effect.mapError(decodeOutcome(name, writes)));
 				const decoded: Array<unknown> = [];
 				let offset = 0;
 				for (const { statement } of statements) {
 					decoded.push(
-						yield* decode(statement, slots, offset, writes),
+						yield* decode(statement, slots, offset, writes).pipe(
+							Effect.mapError(decodeOutcome(name, writes)),
+						),
 					);
 					offset += statement.slots;
 				}

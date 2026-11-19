@@ -98,7 +98,8 @@ export class StatementConflict extends Data.TaggedError('StatementConflict')<{
  * The engine answered, and the answer is not what the statement declares:
  * a different number of results, a value where NONE was required, or a
  * final result its codec refuses. The request itself succeeded, so when
- * the statement writes (`committed`), its writes are committed.
+ * the statement may write (`committed`), whatever it wrote is committed;
+ * the client then reports it inside a {@link StatementWriteOutcomeError}.
  */
 export class StatementDecodeError extends Data.TaggedError(
 	'StatementDecodeError',
@@ -107,8 +108,9 @@ export class StatementDecodeError extends Data.TaggedError(
 	/** The 1-based result that failed, or 0 for the count of results. */
 	readonly slot: number;
 	/**
-	 * The statement writes and the request succeeded, so its writes are
-	 * committed although the result could not be decoded.
+	 * The request succeeded and the statement may write, so whatever it
+	 * wrote is committed although the result could not be decoded. The
+	 * message says so too.
 	 */
 	readonly committed: boolean;
 	readonly message: string;
@@ -130,6 +132,25 @@ export class StatementEmptyResult extends Data.TaggedError(
 	readonly message: string;
 }> {}
 
+/**
+ * The request succeeded but its result failed validation, and the
+ * statement or batch may write: whatever it wrote is committed. `cause` is
+ * the {@link StatementDecodeError}, naming the statement and the result.
+ * Reconcile (read the data back) before replaying. A statement declared or
+ * derived `readOnly` fails with the decode error itself.
+ */
+export class StatementWriteOutcomeError extends Data.TaggedError(
+	'StatementWriteOutcomeError',
+)<{
+	/** The statement, or the transaction, that was sent. */
+	readonly request: string;
+	readonly cause: StatementDecodeError;
+}> {
+	override get message(): string {
+		return this.cause.message;
+	}
+}
+
 /** Every error of running a statement that can `THROW` the messages `T`. */
 export type StatementError<Throws extends string = never> =
 	| StatementEncodeError
@@ -139,4 +160,5 @@ export type StatementError<Throws extends string = never> =
 	| StatementConflict
 	| StatementDecodeError
 	| StatementEmptyResult
+	| StatementWriteOutcomeError
 	| ([Throws] extends [never] ? never : StatementThrown<Throws>);

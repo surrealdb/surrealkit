@@ -69,6 +69,7 @@ interface State {
 	readonly order: ReadonlyArray<Order>;
 	/** The projection's aliases and the text each stands for. */
 	readonly aliases: ReadonlyMap<string, string>;
+	readonly readOnly: boolean;
 	readonly limit: string | undefined;
 	readonly start: string | undefined;
 	readonly only: boolean;
@@ -194,7 +195,10 @@ export interface Select<
 	readonly toExpr: () => Expr<SelectResult<Row, Only>, P>;
 
 	/** The finished statement. */
-	readonly build: (name?: string) => Statement<P, SelectResult<Row, Only>>;
+	readonly build: (
+		name?: string,
+		options?: { readonly readOnly?: boolean },
+	) => Statement<P, SelectResult<Row, Only>>;
 }
 
 const builder = <
@@ -214,6 +218,7 @@ const builder = <
 			return builder({
 				...state,
 				where: [...state.where, condition],
+				readOnly: false,
 				params: mergeParams(state.params, paramsOf(condition)),
 			});
 		},
@@ -243,6 +248,7 @@ const builder = <
 				...state,
 				limit: count(rows, 'LIMIT'),
 				params: bounded(rows),
+				readOnly: state.readOnly && !isExpr(rows),
 			});
 		},
 		start: (rows) =>
@@ -250,13 +256,17 @@ const builder = <
 				...state,
 				start: count(rows, 'START'),
 				params: bounded(rows),
+				readOnly: state.readOnly && !isExpr(rows),
 			}),
 		project: (fields) => {
-			const projected = project(fields(row));
+			const projection = fields(row);
+			const projected = project(projection);
 			return builder({
 				...state,
 				fields: projected.sql,
 				aliases: projected.aliases,
+				readOnly:
+					state.readOnly && Object.values(projection).every(isPath),
 				out: projected.codec,
 				params: mergeParams(state.params, projected.params),
 			});
@@ -267,6 +277,7 @@ const builder = <
 				...state,
 				fields: `VALUE ${sqlOf(picked)}`,
 				aliases: new Map(),
+				readOnly: state.readOnly && isPath(picked),
 				out: rowCodec(codecOf(picked)),
 				params: mergeParams(state.params, paramsOf(picked)),
 			});
@@ -285,8 +296,9 @@ const builder = <
 				render(state),
 				state.params as P,
 			),
-		build: (name) =>
+		build: (name, options) =>
 			make({
+				readOnly: options?.readOnly ?? state.readOnly,
 				name: name ?? `select ${state.table.name}`,
 				sql: `${render(state)};`,
 				params: state.params as P,
@@ -320,6 +332,7 @@ export const select: {
 		out: storedRow(table),
 		fields: '*',
 		where: [],
+		readOnly: id === undefined,
 		order: [],
 		aliases: new Map(),
 		limit: undefined,

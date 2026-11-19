@@ -21,6 +21,7 @@ import {
 	StatementScopeError,
 	StatementThrown,
 	StatementUnexpectedThrow,
+	StatementWriteOutcomeError,
 } from '../src/client/index.js';
 import * as SurrealSchema from '../src/index.js';
 import {
@@ -160,6 +161,36 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 
 	afterAll(async () => {
 		await engine?.stop();
+	});
+
+	it.each([
+		'single',
+		'transaction',
+	])('reconciles a successful %s write after decoding fails', async (mode) => {
+		const record = new RecordId('tally', mode);
+		await engine.db.query('CREATE $record SET n = 0', { record });
+		const write = make({
+			name: 'increment',
+			sql: 'UPDATE ONLY $record SET n += 1 RETURN VALUE n;',
+			params: { record: SurrealSchema.RecordIdAny },
+			result: Schema.String,
+		});
+		const error = await failure(
+			mode === 'single'
+				? client.run(write, { record }).pipe(Effect.asVoid)
+				: client
+						.transaction([bind(write, { record })])
+						.pipe(Effect.asVoid),
+		);
+		expect(error).toBeInstanceOf(StatementWriteOutcomeError);
+		expect(error).toMatchObject({
+			cause: { statement: 'increment', slot: 1 },
+		});
+		expect(
+			await engine.db.query('SELECT VALUE n FROM ONLY $record', {
+				record,
+			}),
+		).toEqual([1]);
 	});
 
 	it('creates a row and reads it back through the generated schema', async () => {
@@ -938,9 +969,11 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 		const error = await failure(
 			client.run(wrong, { person: person('Eve') }),
 		);
-		expect(error).toBeInstanceOf(StatementDecodeError);
-		expect(error).toMatchObject({ committed: true });
-		expect(error.message).toMatch(/writes are committed/);
+		expect(error).toBeInstanceOf(StatementWriteOutcomeError);
+		const cause = (error as StatementWriteOutcomeError).cause;
+		expect(cause).toBeInstanceOf(StatementDecodeError);
+		expect(cause).toMatchObject({ committed: true });
+		expect(cause.message).toMatch(/writes are committed/);
 		expect(
 			await ok(client.run(byEmail, { email: 'eve@example.com' })),
 		).toMatchObject({ name: 'Eve' });

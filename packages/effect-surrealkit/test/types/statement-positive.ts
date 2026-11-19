@@ -19,6 +19,7 @@ import {
 	type StatementScopeError,
 	type StatementThrown,
 	type StatementUnexpectedThrow,
+	type StatementWriteOutcomeError,
 	type SurrealClient,
 	transaction,
 } from '../../src/client/index.js';
@@ -318,6 +319,7 @@ same<
 		| StatementConflict
 		| StatementDecodeError
 		| StatementEmptyResult
+		| StatementWriteOutcomeError
 		| StatementThrown<'Not the owner'>,
 		SurrealClient
 	>

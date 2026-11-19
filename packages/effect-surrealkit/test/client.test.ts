@@ -32,6 +32,7 @@ import {
 	StatementScopeError,
 	StatementThrown,
 	StatementUnexpectedThrow,
+	StatementWriteOutcomeError,
 	transaction,
 } from '../src/client/index.js';
 import * as SurrealSchema from '../src/index.js';
@@ -169,6 +170,7 @@ const serverError = (message: string, fields: Record<string, unknown>) =>
 
 const add = make({
 	name: 'add',
+	readOnly: true,
 	sql: 'RETURN $a + $b;',
 	params: { a: SurrealSchema.Int, b: SurrealSchema.Int },
 	result: SurrealSchema.Int,
@@ -188,6 +190,7 @@ const guarded = sequence(
 	part({ sql: 'RETURN $owner;', free: ['owner'] }),
 ).define({
 	name: 'guarded',
+	readOnly: true,
 	params: { boundOwner: SurrealSchema.String },
 	result: SurrealSchema.String,
 });
@@ -267,6 +270,7 @@ describe('run', () => {
 
 		const strict = make({
 			sql: 'RETURN {};',
+			readOnly: true,
 			params: {},
 			result: Schema.Struct({ a: SurrealSchema.Int }),
 		});
@@ -612,6 +616,7 @@ describe('run', () => {
 describe('transaction', () => {
 	const double = make({
 		name: 'double',
+		readOnly: true,
 		sql: 'SELECT VALUE $n * 2 FROM ONLY $n;',
 		params: { n: SurrealSchema.Int },
 		result: SurrealSchema.Int,
@@ -953,6 +958,24 @@ describe('transaction', () => {
 		});
 	});
 
+	it('reports an acknowledged mixed batch when only its read result fails', async () => {
+		const write = make({
+			name: 'change',
+			sql: 'UPDATE tally SET n += 1 RETURN NONE;',
+			params: {},
+			result: Schema.Undefined,
+		});
+		const { client, calls } = fake(async () => [undefined, 'invalid']);
+		const error = await failure(
+			client.transaction([bind(write), bind(double, { n: 2 })]),
+		);
+		expect(error).toBeInstanceOf(StatementWriteOutcomeError);
+		expect(error).toMatchObject({
+			request: 'transaction(change, double)',
+			cause: { statement: 'double', slot: 1 },
+		});
+		expect(calls).toHaveLength(1);
+	});
 	it('refuses an answer with the wrong number of results', async () => {
 		const error = await failure(
 			fake(async () => [4]).client.transaction([
@@ -1060,13 +1083,58 @@ describe('a result that does not decode', () => {
 		const error = await failure(
 			fake(async () => [[{ n: 'x' }]]).client.run(writing),
 		);
-		expect(error).toBeInstanceOf(StatementDecodeError);
-		expect(error).toMatchObject({ committed: true, slot: 1 });
-		expect(error.message).toMatch(
+		// A request that may write reports the decode error inside a
+		// write outcome, so it is never mistaken for nothing having run.
+		expect(error).toBeInstanceOf(StatementWriteOutcomeError);
+		const cause = (error as StatementWriteOutcomeError).cause;
+		expect(cause).toBeInstanceOf(StatementDecodeError);
+		expect(cause).toMatchObject({ committed: true, slot: 1 });
+		expect(cause.message).toMatch(
 			/request succeeded and its writes are committed/,
 		);
+		expect(error.message).toBe(cause.message);
 		const count = await failure(fake(async () => []).client.run(writing));
-		expect(count).toMatchObject({ committed: true, slot: 0 });
+		expect(count).toMatchObject({
+			request: 'write',
+			cause: { committed: true, slot: 0 },
+		});
+	});
+
+	it('says any writes are committed when it cannot know whether the statement wrote', async () => {
+		const unknown = make({
+			name: 'unknown',
+			sql: 'RETURN fn::maybe_writes();',
+			params: {},
+			result: SurrealSchema.Int,
+		});
+		const error = await failure(
+			fake(async () => ['x']).client.run(unknown),
+		);
+		expect(error).toMatchObject({
+			_tag: 'StatementWriteOutcomeError',
+			cause: { committed: true },
+		});
+		expect(error.message).toMatch(/any writes it made are committed/);
+	});
+
+	it('refuses a statement declared read-only that writes', () => {
+		expect(() =>
+			make({
+				name: 'contradiction',
+				sql: 'UPDATE t SET n = 1;',
+				params: {},
+				result: Schema.Unknown,
+				writes: true,
+				readOnly: true,
+			}),
+		).toThrow(/declared readOnly, but it writes/);
+		expect(() =>
+			sequence(part({ sql: 'UPDATE t SET n = 1;' })).define({
+				readOnly: true,
+				params: {},
+				result: Schema.Unknown,
+			}),
+		).toThrow(/declared readOnly, but it writes/);
 	});
 
 	it('does not claim a commit for a statement that does not write', async () => {
@@ -1087,7 +1155,11 @@ describe('a result that does not decode', () => {
 		const error = await failure(
 			fake(async () => [undefined, 'x']).client.run(authored),
 		);
-		expect(error).toMatchObject({ committed: true });
+		expect(error).toMatchObject({
+			_tag: 'StatementWriteOutcomeError',
+			cause: { committed: true },
+		});
+		expect(error.message).toMatch(/its writes are committed/);
 		const reading = sequence(part({ sql: "RETURN 'update';" })).define({
 			params: {},
 			result: SurrealSchema.Int,
@@ -1115,7 +1187,11 @@ describe('a result that does not decode', () => {
 				bind(sum, { a: 1, b: 2 }),
 			]),
 		);
-		expect(error).toMatchObject({ statement: 'sum', committed: true });
+		expect(error).toMatchObject({
+			_tag: 'StatementWriteOutcomeError',
+			request: 'transaction(write, sum)',
+			cause: { statement: 'sum', committed: true },
+		});
 	});
 });
 

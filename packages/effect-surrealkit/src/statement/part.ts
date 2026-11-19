@@ -321,6 +321,7 @@ export const sequence = <const Parts extends ReadonlyArray<Part>>(
 ) => ({
 	define: <const P extends Params, R extends Codec>(contract: {
 		readonly name?: string;
+		readonly readOnly?: boolean;
 		readonly params: P & Contract<Parts, P>;
 		readonly result: R;
 	}): Statement<P, R, ThrownBy<Parts>> => {
@@ -350,6 +351,7 @@ export const sequence = <const Parts extends ReadonlyArray<Part>>(
 		}
 		return make({
 			name: contract.name ?? 'sequence',
+			readOnly: contract.readOnly ?? false,
 			sql: parts.map((item) => item.sql.trim()).join('\n'),
 			params: contract.params as P,
 			result: contract.result,
