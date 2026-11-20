@@ -19,7 +19,7 @@ export interface Store {
 		readonly person: typeof PersonTable;
 		readonly team: typeof TeamTable;
 	};
-	readonly views: Record<never, never>;
+	readonly views: SurrealSchema.NoEntries;
 	readonly edges: {
 		readonly member_of: typeof MemberOfEdge;
 	};

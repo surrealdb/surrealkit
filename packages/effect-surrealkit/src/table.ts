@@ -190,6 +190,13 @@ export interface StoreDescriptor {
 	readonly functions: { readonly [name: string]: FunctionDescriptor };
 }
 
+/**
+ * A group of a store registry with no entries. A generated registry names
+ * this type instead of writing the empty object type, which lint rules against
+ * that type report in the generated module.
+ */
+export type NoEntries = Record<never, never>;
+
 /** Declares a generated store registry (identity at runtime). */
 export const store = <const S extends StoreDescriptor>(descriptor: S): S =>
 	descriptor;

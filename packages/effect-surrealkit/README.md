@@ -118,9 +118,10 @@ target. Its file name has a leading underscore because table modules are
 kebab-case words, so no table can be written there. The module also exports
 the registry's type, `Store`, whose entries are `typeof PersonTable` and the
 like: a declaration file then names the descriptors, where an inferred type
-would copy every one of them and fail with TS7056 on a large schema. `Store`
-is not re-exported from `index.ts`, where a table named `store` owns that
-name.
+would copy every one of them and fail with TS7056 on a large schema. A group
+with no entries is typed `SurrealSchema.NoEntries`, a named empty type, so
+the module does not write `{}` where lint rules report it. `Store` is not
+re-exported from `index.ts`, where a table named `store` owns that name.
 
 Each table gets one schema per operation, derived from the field-presence
 matrix of the contract (section 7):

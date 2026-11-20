@@ -21,8 +21,8 @@ export interface Store {
 		readonly team: typeof TeamTable;
 		readonly wallet: typeof WalletTable;
 	};
-	readonly views: Record<never, never>;
-	readonly edges: Record<never, never>;
+	readonly views: SurrealSchema.NoEntries;
+	readonly edges: SurrealSchema.NoEntries;
 	readonly functions: {
 		readonly "fn::debit": typeof fn_debit;
 		readonly "fn::membership_key": typeof fn_membership_key;

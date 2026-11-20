@@ -406,13 +406,13 @@ const printStore = (
 	// The registry's type names each descriptor with `typeof`. Left to inference,
 	// a declaration file has to print every descriptor's whole type inside this
 	// one, which fails with TS7056 on a large store (seen at 171 entries). A
-	// group with no entries is `Record<never, never>`: the same type as `{}`,
-	// which lint rules against the empty object type report.
+	// group with no entries is named, `SurrealSchema.NoEntries`: writing the
+	// empty object type here would be reported by lint rules against it.
 	const typeEntries = (
 		pairs: ReadonlyArray<readonly [string, string]>,
 	): string =>
 		pairs.length === 0
-			? 'Record<never, never>'
+			? 'SurrealSchema.NoEntries'
 			: `{\n${pairs.map(([key, value]) => `\t\treadonly ${propertyKey(key)}: typeof ${value};`).join('\n')}\n\t}`;
 	const tableEntries: Array<readonly [string, string]> = [];
 	const viewEntries: Array<readonly [string, string]> = [];

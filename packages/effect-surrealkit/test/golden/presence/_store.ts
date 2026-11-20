@@ -20,11 +20,11 @@ export interface Store {
 		readonly p: typeof PTable;
 		readonly up: typeof UpTable;
 	};
-	readonly views: Record<never, never>;
+	readonly views: SurrealSchema.NoEntries;
 	readonly edges: {
 		readonly e: typeof EEdge;
 	};
-	readonly functions: Record<never, never>;
+	readonly functions: SurrealSchema.NoEntries;
 }
 
 /** Every table, view, relation endpoint and function of store `presence`, by its SurrealDB name. */

@@ -99,6 +99,7 @@ export {
 	type IndexDescriptor,
 	type IndexType,
 	type Narrowing,
+	type NoEntries,
 	type Operation,
 	type Permission,
 	type Presence,
