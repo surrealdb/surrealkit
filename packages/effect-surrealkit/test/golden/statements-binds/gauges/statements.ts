@@ -36,6 +36,7 @@ CREATE gauge SET station = $station, reading = fn::scaled($raw), site = $site, t
 	functions: ["fn::scaled"],
 	uses: { "raw": [{ kind: "argument", function: "fn::scaled", index: 0, line: 2 }], "site": [{ kind: "field", table: "gauge", field: "site", role: "assign", line: 2 }], "station": [{ kind: "field", table: "gauge", field: "station", role: "assign", line: 2 }], "tags": [{ kind: "field", table: "gauge", field: "tags", role: "assign", line: 2 }] },
 	binds: { "raw": "float", "site": "record<site>", "station": "string" },
+	rejectsNone: { "site": { table: "gauge", field: "site", kind: "record<site>" }, "station": { table: "gauge", field: "station", kind: "string" }, "tags": { table: "gauge", field: "tags", kind: "array<string>" } },
 } as const);
 
 /** `gauges/site.surql`: a part. */

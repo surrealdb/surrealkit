@@ -569,10 +569,67 @@ export const kindText = (kind: Kind): string => {
 };
 
 /**
+ * Whether a value of `kind` can never be NONE: every kind but `any`,
+ * `none`, `option<…>` and those whose NONE handling is not established
+ * (`regex`, `function`, `file`, `table` and kinds the document does not
+ * recognise). A union qualifies when each variant does.
+ */
+const excludesNone = (kind: Kind): boolean => {
+	switch (kind.kind) {
+		case 'any':
+		case 'none':
+		case 'option':
+		case 'unknown':
+		case 'regex':
+		case 'function':
+		case 'file':
+		case 'table':
+			return false;
+		case 'union':
+			return kind.variants.every(excludesNone);
+		default:
+			return true;
+	}
+};
+
+/**
+ * Whether the engine rejects NONE assigned to `field` (`SET field = NONE`)
+ * in every statement that can assign it: `CREATE`, `UPDATE` and `UPSERT`,
+ * creating or updating. That holds for a top-level field that declares a
+ * kind without NONE and no clause that supplies a value: no `DEFAULT`
+ * (applied when a record is created), no `VALUE` (its expression may
+ * accept NONE) and not `COMPUTED`. `READONLY`, `ASSERT` and a schemaless
+ * table do not change it. The `id`, a relation's `in` and `out`, and the
+ * fields of a view, a `DROP` table or a lightweight relation are never
+ * stored as written, so they do not qualify.
+ */
+const rejectsNone = (table: Table, field: Field): boolean => {
+	const [name, ...rest] = field.path;
+	return (
+		rest.length === 0 &&
+		name !== 'id' &&
+		!(
+			table.type.kind === 'relation' &&
+			(name === 'in' || name === 'out')
+		) &&
+		!(table.type.kind === 'relation' && table.type.lightweight) &&
+		table.view === undefined &&
+		!table.drop &&
+		field.kind !== undefined &&
+		!field.optional &&
+		excludesNone(field.kind) &&
+		field.default === undefined &&
+		field.value === undefined &&
+		field.computed === undefined
+	);
+};
+
+/**
  * The tables (edge tables included) and custom functions a schema document
  * declares, each sorted: the `declared` names of a statement scope. Its
  * `detail` holds, for each table, its declared fields (each path joined
- * with `.`) with each field's kind text, whether it accepts undeclared
+ * with `.`) with each field's kind text and whether the engine rejects
+ * NONE assigned to it (see `DeclaredTable`), whether it accepts undeclared
  * fields (it is not schemafull) and the kind text of its id key; and for
  * each function the kind texts of its arguments, in order. A field or key
  * the document gives no kind has none.
@@ -592,9 +649,14 @@ export const declaredNames = (document: SchemaDocument): DeclaredNames => ({
 						fields: Object.fromEntries(
 							table.fields.map((field) => [
 								field.path.join('.'),
-								field.kind === undefined
-									? {}
-									: { kind: kindText(field.kind) },
+								{
+									...(field.kind !== undefined && {
+										kind: kindText(field.kind),
+									}),
+									...(rejectsNone(table, field) && {
+										rejectsNone: true as const,
+									}),
+								},
 							]),
 						),
 						acceptsUndeclared: !table.schemafull,

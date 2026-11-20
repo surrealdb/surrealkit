@@ -15,7 +15,7 @@ import { run } from '../src/cli/run.js';
 import { declaredNames, decodeDocument } from '../src/emitter/index.js';
 import * as SurrealSchema from '../src/index.js';
 import { part, sequence } from '../src/statement/index.js';
-import { goldenDir, readJson } from './documents.js';
+import { corpusPath, goldenDir, readJson } from './documents.js';
 
 const uses = (sql: string) => analyzeSync(sql).uses;
 
@@ -257,6 +257,26 @@ describe('part and sequence: uses', () => {
 		).toThrow(
 			'binds: declared `$a`, which the text never uses as an argument, a key or a field',
 		);
+		expect(() =>
+			part({
+				sql: 'SELECT * FROM gizmo WHERE a = $a;',
+				free: ['a'],
+				rejectsNone: {
+					a: { table: 'gizmo', field: 'a', kind: 'string' },
+				},
+			}),
+		).toThrow(
+			'rejectsNone: declared `$a` as assigned to `gizmo.a`, which the text never assigns it to',
+		);
+		expect(
+			part({
+				sql: 'UPDATE gizmo SET a = $a;',
+				free: ['a'],
+				rejectsNone: {
+					a: { table: 'gizmo', field: 'a', kind: 'string' },
+				},
+			}).rejectsNone,
+		).toEqual({ a: { table: 'gizmo', field: 'a', kind: 'string' } });
 	});
 
 	it('sequence merges the uses of the names that remain bindings', () => {
@@ -293,21 +313,47 @@ describe('declaredNames: detail', () => {
 				gauge: {
 					fields: {
 						note: { kind: 'option<string>' },
-						reading: { kind: 'float' },
-						site: { kind: 'record<site>' },
-						station: { kind: 'string' },
-						tags: { kind: 'array<string>' },
+						reading: { kind: 'float', rejectsNone: true },
+						site: { kind: 'record<site>', rejectsNone: true },
+						station: { kind: 'string', rejectsNone: true },
+						tags: { kind: 'array<string>', rejectsNone: true },
 					},
 					acceptsUndeclared: false,
 				},
 				scratch: { fields: { anything: {} }, acceptsUndeclared: true },
 				site: {
-					fields: { label: { kind: 'string' } },
+					fields: { label: { kind: 'string', rejectsNone: true } },
 					acceptsUndeclared: false,
 					idKey: 'string',
 				},
 			},
 			functions: { 'fn::scaled': ['float'] },
+		});
+	});
+});
+
+describe('declaredNames: fields that reject NONE', () => {
+	it('marks a top-level field whose kind excludes NONE and that no clause supplies', async () => {
+		// The engine's own document for the field-presence corpus.
+		const document = await Effect.runPromise(
+			decodeDocument(
+				readJson(corpusPath('compiled', 'field-presence.v2.json')),
+			),
+		);
+		const tables = declaredNames(document).detail?.tables ?? {};
+		const marked = Object.entries(tables).flatMap(([table, detail]) =>
+			Object.entries(detail.fields)
+				.filter(([, entry]) => entry.rejectsNone === true)
+				.map(([name]) => `${table}.${name}`),
+		);
+		// Not marked: `option<…>` fields (`opt`, `obj`, `flex`, `roopt`,
+		// `oa.x`), every DEFAULT (`dflt`, `dalw`, `optd`, `ro`, `e.w`,
+		// `ip.pref`), every VALUE (`vin`, `vfall`, `vout`), COMPUTED
+		// (`comp`), a relation's `in` and `out`, and nested fields.
+		expect(marked.sort()).toEqual(['ip.need', 'm.nul', 'm.req', 'up.obj']);
+		expect(tables.m?.fields.nul).toEqual({
+			kind: 'null | string',
+			rejectsNone: true,
 		});
 	});
 });
@@ -368,6 +414,46 @@ describe('statements with schema detail', () => {
 				'SELECT * FROM gauge WHERE note = $n;\nUPDATE gauge SET note = $n;',
 			),
 		).toBe('{ "n": "option<string>" }');
+	});
+
+	it('records the first field that rejects NONE each binding is assigned to', async () => {
+		const rejects = async (sql: string) =>
+			/\trejectsNone: (.*),\n/u.exec(
+				(await render(sql)).files[0]?.content ?? '',
+			)?.[1];
+		expect(await rejects('UPDATE gauge SET station = $s, note = $n;')).toBe(
+			'{ "s": { table: "gauge", field: "station", kind: "string" } }',
+		);
+		// Any kind that excludes NONE, simple or not.
+		expect(await rejects('CREATE gauge SET tags = $t;')).toBe(
+			'{ "t": { table: "gauge", field: "tags", kind: "array<string>" } }',
+		);
+		// A comparison records nothing, beside an assignment or alone.
+		expect(
+			await rejects(
+				'SELECT * FROM gauge WHERE station = $s;\nUPSERT gauge SET reading = $s;',
+			),
+		).toBe('{ "s": { table: "gauge", field: "reading", kind: "float" } }');
+		expect(
+			await rejects('SELECT * FROM gauge WHERE station = $s;'),
+		).toBeUndefined();
+		// An option field, an undeclared field of a schemaless table.
+		expect(await rejects('UPDATE gauge SET note = $n;')).toBeUndefined();
+		expect(
+			await rejects('UPDATE scratch SET odd = $o, anything = $a;'),
+		).toBeUndefined();
+		// A text that changes the schema itself may change the field.
+		expect(
+			await rejects(
+				"DEFINE FIELD OVERWRITE station ON gauge TYPE string DEFAULT 'x';\nUPDATE gauge SET station = $s;",
+			),
+		).toBeUndefined();
+		// The first such assignment, in the order of the uses.
+		expect(
+			await rejects(
+				'UPDATE gauge SET station = $s;\nUPDATE gauge SET tags = $s;',
+			),
+		).toBe('{ "s": { table: "gauge", field: "station", kind: "string" } }');
 	});
 
 	it('an argument accepts NONE only when its kind is an option', () => {

@@ -74,8 +74,19 @@ export interface DeclaredDetail {
 }
 
 export interface DeclaredTable {
-	/** Each declared field (its path joined with `.`) and its kind text. */
-	readonly fields: Readonly<Record<string, { readonly kind?: string }>>;
+	/**
+	 * Each declared field (its path joined with `.`): its kind text, and
+	 * `rejectsNone` when the engine rejects NONE assigned to it in every
+	 * statement that can assign it (`CREATE`, `UPDATE` and `UPSERT`): a
+	 * top-level field whose kind excludes NONE, without `DEFAULT`, `VALUE`
+	 * or `COMPUTED`. Left out, nothing is refused for the field.
+	 */
+	readonly fields: Readonly<
+		Record<
+			string,
+			{ readonly kind?: string; readonly rejectsNone?: boolean }
+		>
+	>;
 	/** The table accepts fields it does not declare (it is schemaless). */
 	readonly acceptsUndeclared: boolean;
 	/** The kind text of the id key, when the schema declares one. */
@@ -202,6 +213,16 @@ const usesField = (uses: BindingUses): string =>
 		)
 		.join(', ')} }`;
 
+const rejectsNoneField = (
+	fields: Readonly<Record<string, RejectedNone>>,
+): string =>
+	`{ ${Object.entries(fields)
+		.map(
+			([name, at]) =>
+				`${JSON.stringify(name)}: { table: ${JSON.stringify(at.table)}, field: ${JSON.stringify(at.field)}, kind: ${JSON.stringify(at.kind)} }`,
+		)
+		.join(', ')} }`;
+
 const bindsField = (binds: Readonly<Record<string, string>>): string =>
 	`{ ${Object.entries(binds)
 		.map(
@@ -235,7 +256,12 @@ const acceptsNone = (use: BindingUse, kind: string | undefined): boolean =>
 
 /** How a problem names a use that does not resolve. */
 type Resolved =
-	| { readonly kind: 'kind'; readonly text: string | undefined }
+	| {
+			readonly kind: 'kind';
+			readonly text: string | undefined;
+			/** The use is a field that rejects NONE; see {@link DeclaredTable}. */
+			readonly rejectsNone?: boolean;
+	  }
 	| { readonly kind: 'problem'; readonly message: string }
 	| { readonly kind: 'unchecked' };
 
@@ -263,8 +289,14 @@ const resolve = (use: BindingUse, detail: DeclaredDetail): Resolved => {
 		: undefined;
 	if (table === undefined) return { kind: 'unchecked' };
 	if (use.kind === 'key') return { kind: 'kind', text: table.idKey };
-	if (Object.hasOwn(table.fields, use.field))
-		return { kind: 'kind', text: table.fields[use.field]?.kind };
+	if (Object.hasOwn(table.fields, use.field)) {
+		const field = table.fields[use.field];
+		return {
+			kind: 'kind',
+			text: field?.kind,
+			rejectsNone: field?.rejectsNone === true,
+		};
+	}
 	if (use.field === 'id')
 		return { kind: 'kind', text: `record<${use.table}>` };
 	return table.acceptsUndeclared
@@ -275,22 +307,37 @@ const resolve = (use: BindingUse, detail: DeclaredDetail): Resolved => {
 			};
 };
 
+/** The field a binding is assigned to that rejects NONE; see `Part`. */
+interface RejectedNone {
+	readonly table: string;
+	readonly field: string;
+	/** The field's kind text. */
+	readonly kind: string;
+}
+
 /**
- * The uses that do not resolve in `detail`, and the simple kind of each
- * binding whose every use resolves to the same one.
+ * The uses that do not resolve in `detail`, the simple kind of each
+ * binding whose every use resolves to the same one, and, for each binding
+ * assigned to a field that rejects NONE, the first such field. With
+ * `schemaChanges`, the text defines, alters or removes a table or field
+ * itself, so the schema may not hold when its assignments run and no
+ * field is recorded.
  */
 const checkUses = (
 	uses: BindingUses,
 	detail: DeclaredDetail,
+	schemaChanges: boolean,
 ): {
 	readonly problems: ReadonlyArray<{
 		readonly line: number;
 		readonly message: string;
 	}>;
 	readonly binds: Readonly<Record<string, string>>;
+	readonly rejectsNone: Readonly<Record<string, RejectedNone>>;
 } => {
 	const problems: Array<{ line: number; message: string }> = [];
 	const binds: Record<string, string> = {};
+	const rejectsNone: Record<string, RejectedNone> = {};
 	for (const [name, list] of Object.entries(uses)) {
 		const kinds = new Set<string | undefined>();
 		let none = true;
@@ -303,13 +350,43 @@ const checkUses = (
 			else {
 				kinds.add(simpleKind(resolved.text));
 				if (!acceptsNone(use, resolved.text)) none = false;
+				if (
+					!schemaChanges &&
+					use.kind === 'field' &&
+					use.role === 'assign' &&
+					resolved.rejectsNone === true &&
+					resolved.text !== undefined &&
+					!Object.hasOwn(rejectsNone, name)
+				)
+					rejectsNone[name] = {
+						table: use.table,
+						field: use.field,
+						kind: resolved.text,
+					};
 			}
 		}
 		const [only] = kinds;
 		if (kinds.size === 1 && only !== undefined)
 			binds[name] = none ? `option<${only}>` : only;
 	}
-	return { problems, binds };
+	return { problems, binds, rejectsNone };
+};
+
+/** Whether `sql` defines, alters or removes a table or a field. */
+const changesSchema = (
+	sql: string,
+	holes: HoleDelimiters | undefined,
+): boolean => {
+	const tokens = lex(sql, holeDelimiters(holes)).tokens;
+	return tokens.some(
+		(token, i) =>
+			token.kind === 'word' &&
+			['DEFINE', 'ALTER', 'REMOVE'].includes(token.value.toUpperCase()) &&
+			tokens[i + 1]?.kind === 'word' &&
+			['TABLE', 'FIELD'].includes(
+				(tokens[i + 1]?.value ?? '').toUpperCase(),
+			),
+	);
 };
 
 const renderConstant = (
@@ -317,6 +394,7 @@ const renderConstant = (
 	name: string,
 	analysis: Analysis,
 	binds: Readonly<Record<string, string>> | undefined,
+	rejectsNone: Readonly<Record<string, RejectedNone>> | undefined,
 ): string => {
 	const file = `${scope}/${name}.surql`;
 	const complete = analysis.kind === 'part' && analysis.holes.length === 0;
@@ -350,6 +428,10 @@ const renderConstant = (
 						: []),
 					...(binds !== undefined && Object.keys(binds).length > 0
 						? [`binds: ${bindsField(binds)}`]
+						: []),
+					...(rejectsNone !== undefined &&
+					Object.keys(rejectsNone).length > 0
+						? [`rejectsNone: ${rejectsNoneField(rejectsNone)}`]
 						: []),
 				]
 			: []),
@@ -483,13 +565,19 @@ export const renderStatementModulesSync = (
 			throw error;
 		}
 		let binds: Readonly<Record<string, string>> | undefined;
+		let rejectsNone: Readonly<Record<string, RejectedNone>> | undefined;
 		if (source.declared !== undefined) {
 			const detail = source.declared.detail;
 			const checked =
 				detail === undefined
 					? undefined
-					: checkUses(analysis.uses, detail);
+					: checkUses(
+							analysis.uses,
+							detail,
+							changesSchema(source.sql, input.holes),
+						);
 			binds = checked?.binds;
+			rejectsNone = checked?.rejectsNone;
 			for (const problem of [
 				...undeclared(source.sql, source.declared, input.holes),
 				...(checked?.problems ?? []),
@@ -526,7 +614,13 @@ export const renderStatementModulesSync = (
 		imports.set(source.scope, used);
 		const constants = byScope.get(source.scope) ?? [];
 		constants.push(
-			renderConstant(source.scope, source.name, analysis, binds),
+			renderConstant(
+				source.scope,
+				source.name,
+				analysis,
+				binds,
+				rejectsNone,
+			),
 		);
 		byScope.set(source.scope, constants);
 	}

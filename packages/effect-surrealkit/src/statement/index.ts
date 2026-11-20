@@ -204,6 +204,7 @@ export {
 	type KindStored,
 	type Part,
 	part,
+	type RejectsNone,
 	sequence,
 	type Tables,
 	type ThrownBy,

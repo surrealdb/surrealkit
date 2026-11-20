@@ -53,6 +53,13 @@ import {
  *   `effect-surrealkit statements` writes it when given the schema;
  *   `sequence(...).define` then refuses, at compile time, a codec whose
  *   stored type cannot hold it.
+ * - `rejectsNone`: for a binding the text assigns (`SET field = $name`) to
+ *   a field the engine never accepts NONE in (its kind excludes NONE and
+ *   no `DEFAULT`, `VALUE` or `COMPUTED` supplies a value), that field's
+ *   table, name and kind text. `effect-surrealkit statements` writes it
+ *   when given the schema; `sequence(...).define` then refuses, at compile
+ *   time, a codec that can hold NONE (`undefined`) for the binding. Each
+ *   entry must be an assignment the text makes.
  *
  * `effect-surrealkit statements` derives these from `.surql` files
  * (`effect-surrealkit/analyze`). Written by hand they are checked against
@@ -84,10 +91,23 @@ export interface Part<
 	readonly openTargets?: boolean;
 	readonly uses?: BindingUses;
 	readonly binds?: Binds;
+	readonly rejectsNone?: RejectsNone;
 }
 
 /** The kind text each binding's every use resolves to; see {@link Part}. */
 export type Binds = Readonly<Record<string, string>>;
+
+/** The field each binding is assigned to that rejects NONE; see {@link Part}. */
+export type RejectsNone = Readonly<
+	Record<
+		string,
+		{
+			readonly table: string;
+			readonly field: string;
+			readonly kind: string;
+		}
+	>
+>;
 
 /** The static tables a text reads and writes. */
 export interface Tables {
@@ -332,6 +352,21 @@ const verify = (item: Part, label: string): Analysis => {
 				`binds: declared \`$${name}\`, which the text never uses as an argument, a key or a field`,
 			);
 	}
+	for (const [name, at] of Object.entries(item.rejectsNone ?? {}).sort(
+		([a], [b]) => (a < b ? -1 : a > b ? 1 : 0),
+	)) {
+		const assigned = (analysis.uses[name] ?? []).some(
+			(use) =>
+				use.kind === 'field' &&
+				use.role === 'assign' &&
+				use.table === at.table &&
+				use.field === at.field,
+		);
+		if (!assigned)
+			differences.push(
+				`rejectsNone: declared \`$${name}\` as assigned to \`${at.table}.${at.field}\`, which the text never assigns it to`,
+			);
+	}
 	if (differences.length > 0) {
 		throw new RangeError(
 			`${label} does not declare what its text does: ${differences.join('; ')}`,
@@ -359,6 +394,7 @@ export const part = <
 	const Throws extends string = never,
 	const U extends BindingUses = Record<never, never>,
 	const B extends Binds = Record<never, never>,
+	const N extends RejectsNone = Record<never, never>,
 >(options: {
 	readonly name?: string;
 	readonly source?: string;
@@ -391,7 +427,12 @@ export const part = <
 	 * {@link Part}. Each name must be a binding the text uses.
 	 */
 	readonly binds?: B;
-}): Part<Free, Defines, Throws> & Fitting<U, B> => {
+	/**
+	 * The fields that reject NONE each binding is assigned to; see
+	 * {@link Part}. Each must be an assignment the text makes.
+	 */
+	readonly rejectsNone?: N;
+}): Part<Free, Defines, Throws> & Fitting<U, B, N> => {
 	const declared: Part<Free, Defines, Throws> = {
 		...(options.name !== undefined && { name: options.name }),
 		...(options.source !== undefined && { source: options.source }),
@@ -414,6 +455,9 @@ export const part = <
 		}),
 		...(options.uses !== undefined && { uses: options.uses }),
 		...(options.binds !== undefined && { binds: options.binds }),
+		...(options.rejectsNone !== undefined && {
+			rejectsNone: options.rejectsNone,
+		}),
 	};
 	const analysis = verify(declared, nameOf(options.name, 'part'));
 	const result: Part<Free, Defines, Throws> = {
@@ -425,7 +469,7 @@ export const part = <
 		uses: analysis.uses,
 	};
 	checked.set(result, analysis);
-	return result as Part<Free, Defines, Throws> & Fitting<U, B>;
+	return result as Part<Free, Defines, Throws> & Fitting<U, B, N>;
 };
 
 /** The source and lines of the first part declaring each message with both. */
@@ -461,13 +505,15 @@ export type Unbound<
 	: never;
 
 /**
- * What a part declared with `binds` carries at the type level: its uses
- * and binds as literal types, which {@link Contract} checks codecs
- * against. Nothing for a part without `binds`.
+ * What a part declared with `binds` or `rejectsNone` carries at the type
+ * level: its uses and binds, and the fields that reject NONE, as literal
+ * types, which {@link Contract} checks codecs against. Nothing for a part
+ * without either.
  */
-export type Fitting<U, B> = [keyof B] extends [never]
+export type Fitting<U, B, N = Record<never, never>> = ([keyof B] extends [never]
 	? unknown
-	: { readonly uses: U; readonly binds: B };
+	: { readonly uses: U; readonly binds: B }) &
+	([keyof N] extends [never] ? unknown : { readonly rejectsNone: N });
 
 /**
  * The stored type of each simple kind, as the package's own codec for it
