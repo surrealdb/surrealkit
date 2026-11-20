@@ -248,6 +248,225 @@ describe.skipIf(!engineConfigured)('built-in functions on the engine', () => {
 		]);
 	});
 
+	/** Runs a statement and returns its result, decoded by its codec. */
+	const result = <A>(effect: Effect.Effect<A, unknown>): Promise<A> =>
+		within(Effect.runPromise(effect), 20_000);
+
+	const Tag = Schema.Struct({ name: Schema.String });
+	const tags = param('tags', Schema.Array(Tag));
+	const scores = param('scores', Schema.Array(Int));
+	const labels = param('labels', Schema.Array(Schema.String));
+	const label = param('label', Schema.String);
+
+	it('decodes array::add, append, push, prepend, insert and fill as the elements and the value', async () => {
+		const added: ReadonlyArray<typeof Tag.Type> = await result(
+			client.run(
+				evaluate(
+					functions.array.add(tags, param('tag', Tag)),
+					'add_tag',
+				),
+				{ tags: [{ name: 'a' }], tag: { name: 'a' } },
+			),
+		);
+		expect(added).toEqual([{ name: 'a' }]);
+		const merged: ReadonlyArray<number | string> = await result(
+			client.run(
+				evaluate(functions.array.add(scores, labels), 'add_all'),
+				{
+					scores: [],
+					labels: ['x', 'y'],
+				},
+			),
+		);
+		expect(merged).toEqual(['x', 'y']);
+		const values = { scores: [1, 2], label: 'x' };
+		const appended: ReadonlyArray<number | string> = await result(
+			client.run(
+				evaluate(functions.array.append(scores, label), 'append'),
+				values,
+			),
+		);
+		expect(appended).toEqual([1, 2, 'x']);
+		const pushed: ReadonlyArray<number | string> = await result(
+			client.run(evaluate(functions.array.push(scores, label), 'push'), {
+				scores: [],
+				label: 'x',
+			}),
+		);
+		expect(pushed).toEqual(['x']);
+		const prepended: ReadonlyArray<number | string> = await result(
+			client.run(
+				evaluate(functions.array.prepend(scores, label), 'prepend'),
+				values,
+			),
+		);
+		expect(prepended).toEqual(['x', 1, 2]);
+		const inserted: ReadonlyArray<number | string> = await result(
+			client.run(
+				evaluate(functions.array.insert(scores, label, 1), 'insert'),
+				values,
+			),
+		);
+		expect(inserted).toEqual([1, 'x', 2]);
+		const nested: ReadonlyArray<number | ReadonlyArray<number>> =
+			await result(
+				client.run(
+					evaluate(
+						functions.array.append(
+							scores,
+							param('more', Schema.Array(Int)),
+						),
+						'append_array',
+					),
+					{ scores: [1], more: [2, 3] },
+				),
+			);
+		expect(nested).toEqual([1, [2, 3]]);
+		const filled: ReadonlyArray<number | string> = await result(
+			client.run(
+				evaluate(functions.array.fill(scores, label, 0, 1), 'fill'),
+				values,
+			),
+		);
+		expect(filled).toEqual(['x', 2]);
+	});
+
+	it('decodes array::difference and array::union as the elements of both', async () => {
+		const values = { scores: [1, 2], labels: ['a'] };
+		const difference: ReadonlyArray<number | string> = await result(
+			client.run(
+				evaluate(
+					functions.array.difference(scores, labels),
+					'difference',
+				),
+				values,
+			),
+		);
+		expect(difference).toEqual([1, 2, 'a']);
+		const union: ReadonlyArray<number | string> = await result(
+			client.run(
+				evaluate(functions.array.union(scores, labels), 'union'),
+				{ scores: [], labels: ['a', 'a'] },
+			),
+		);
+		expect(union).toEqual(['a']);
+	});
+
+	it('decodes array::logical_and, logical_or and logical_xor with NULL past the shorter array', async () => {
+		const values = { scores: [0, 2, 3], labels: ['a'] };
+		const and: ReadonlyArray<number | string | null> = await result(
+			client.run(
+				evaluate(functions.array.logicalAnd(scores, labels), 'and'),
+				values,
+			),
+		);
+		expect(and).toEqual([0, null, null]);
+		const or: ReadonlyArray<number | string | null> = await result(
+			client.run(
+				evaluate(functions.array.logicalOr(scores, labels), 'or'),
+				values,
+			),
+		);
+		expect(or).toEqual(['a', 2, 3]);
+		const xor: ReadonlyArray<number | string | null> = await result(
+			client.run(
+				evaluate(functions.array.logicalXor(scores, labels), 'xor'),
+				{ scores: [], labels: ['a'] },
+			),
+		);
+		expect(xor).toEqual(['a']);
+	});
+
+	it('decodes array::flatten and array::group as the inner elements', async () => {
+		const groups = param('groups', Schema.Array(Schema.Array(Int)));
+		const values = { groups: [[1, 2], [], [2, 3]] };
+		const flat: ReadonlyArray<number> = await result(
+			client.run(
+				evaluate(functions.array.flatten(groups), 'flat'),
+				values,
+			),
+		);
+		expect(flat).toEqual([1, 2, 2, 3]);
+		const grouped: ReadonlyArray<number> = await result(
+			client.run(
+				evaluate(functions.array.group(groups), 'group'),
+				values,
+			),
+		);
+		expect(grouped).toEqual([1, 2, 3]);
+	});
+
+	it('decodes array::clump, array::windows and array::combine as arrays of the elements', async () => {
+		const clumps: ReadonlyArray<ReadonlyArray<typeof Tag.Type>> =
+			await result(
+				client.run(evaluate(functions.array.clump(tags, 2), 'clump'), {
+					tags: [{ name: 'a' }, { name: 'b' }, { name: 'c' }],
+				}),
+			);
+		expect(clumps).toEqual([
+			[{ name: 'a' }, { name: 'b' }],
+			[{ name: 'c' }],
+		]);
+		const windows: ReadonlyArray<ReadonlyArray<number>> = await result(
+			client.run(
+				evaluate(functions.array.windows(scores, 2), 'windows'),
+				{
+					scores: [1],
+				},
+			),
+		);
+		expect(windows).toEqual([]);
+		const pairs: ReadonlyArray<readonly [number, string]> = await result(
+			client.run(
+				evaluate(functions.array.combine(scores, labels), 'pairs'),
+				{
+					scores: [1, 2],
+					labels: ['a'],
+				},
+			),
+		);
+		expect(pairs).toEqual([
+			[1, 'a'],
+			[2, 'a'],
+		]);
+	});
+
+	it('decodes array::transpose of ragged arrays with NONE for the missing elements', async () => {
+		const rows = param('rows', Schema.Array(Schema.Array(Int)));
+		const columns: ReadonlyArray<ReadonlyArray<number | undefined>> =
+			await result(
+				client.run(
+					evaluate(functions.array.transpose(rows), 'transpose'),
+					{
+						rows: [[1, 2], [3]],
+					},
+				),
+			);
+		expect(columns).toEqual([
+			[1, 3],
+			[2, undefined],
+		]);
+	});
+
+	it('decodes array::repeat as the value repeated', async () => {
+		const tag = param('tag', Tag);
+		const repeated: ReadonlyArray<typeof Tag.Type> = await result(
+			client.run(evaluate(functions.array.repeat(tag, 2), 'repeat'), {
+				tag: { name: 'a' },
+			}),
+		);
+		expect(repeated).toEqual([{ name: 'a' }, { name: 'a' }]);
+		const none: ReadonlyArray<typeof Tag.Type> = await result(
+			client.run(
+				evaluate(functions.array.repeat(tag, 0), 'repeat_none'),
+				{
+					tag: { name: 'a' },
+				},
+			),
+		);
+		expect(none).toEqual([]);
+	});
+
 	it('runs on an engine major the table knows', () => {
 		expect(majors).toContain(major);
 	});

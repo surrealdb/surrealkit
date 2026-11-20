@@ -3,20 +3,38 @@
 
 import type { Expr, ParamsOfAll } from '../../statement/expr.js';
 import {
+	type AddsCodec,
 	type Arg,
+	addsValue,
 	apply,
+	type ChunksCodec,
 	type CodecOfArg,
+	chunksOf,
+	type ElementsCodec,
+	elementsOf,
+	type FlatCodec,
+	flattened,
 	type In,
 	type ItemCodec,
 	type ItemsCodec,
 	item,
 	items,
+	nullPadded,
+	type PaddedCodec,
+	type PairsCodec,
+	pairsOf,
+	type RepeatsCodec,
+	repeated,
 	same,
+	type TransposedCodec,
+	transposed,
+	type WithCodec,
+	withValue,
 } from '../internal.js';
 import * as C from './codecs.js';
 
 /**
- * `array::add(array: array, value: any) -> array`
+ * `array::add(array: array, value: any) -> adds:0,1`
  *
  * SurrealDB 3 and 4.
  */
@@ -26,8 +44,8 @@ export const add = <
 >(
 	array: A0,
 	value: A1,
-): Expr<typeof C.ArrayCodec, ParamsOfAll<A0 | A1>> =>
-	apply('array::add', C.ArrayCodec, 2, [array, value]);
+): Expr<AddsCodec<[A0, A1], typeof C.ArrayCodec>, ParamsOfAll<A0 | A1>> =>
+	apply('array::add', addsValue([0, 1], C.ArrayCodec), 2, [array, value]);
 
 /**
  * `array::all(array: array, predicate?: any) -> bool`
@@ -58,7 +76,7 @@ export const any = <
 	apply('array::any', C.BoolCodec, 1, [array, predicate]);
 
 /**
- * `array::append(array: array, value: any) -> array`
+ * `array::append(array: array, value: any) -> with:0,1`
  *
  * SurrealDB 3 and 4.
  */
@@ -68,8 +86,8 @@ export const append = <
 >(
 	array: A0,
 	value: A1,
-): Expr<typeof C.ArrayCodec, ParamsOfAll<A0 | A1>> =>
-	apply('array::append', C.ArrayCodec, 2, [array, value]);
+): Expr<WithCodec<[A0, A1], typeof C.ArrayCodec>, ParamsOfAll<A0 | A1>> =>
+	apply('array::append', withValue([0, 1], C.ArrayCodec), 2, [array, value]);
 
 /**
  * `array::at(array: array, index: int) -> item:0`
@@ -138,7 +156,7 @@ export const booleanXor = <
 	apply('array::boolean_xor', C.ArrayOfBoolCodec, 2, [left, right]);
 
 /**
- * `array::clump(array: array, size: int) -> array<array>`
+ * `array::clump(array: array, size: int) -> chunks:0`
  *
  * SurrealDB 3 and 4.
  */
@@ -148,11 +166,11 @@ export const clump = <
 >(
 	array: A0,
 	size: A1,
-): Expr<typeof C.ArrayOfArrayCodec, ParamsOfAll<A0 | A1>> =>
-	apply('array::clump', C.ArrayOfArrayCodec, 2, [array, size]);
+): Expr<ChunksCodec<[A0], typeof C.ArrayOfArrayCodec>, ParamsOfAll<A0 | A1>> =>
+	apply('array::clump', chunksOf([0], C.ArrayOfArrayCodec), 2, [array, size]);
 
 /**
- * `array::combine(left: array, right: array) -> array<array>`
+ * `array::combine(left: array, right: array) -> pairs:0,1`
  *
  * SurrealDB 3 and 4.
  */
@@ -162,8 +180,14 @@ export const combine = <
 >(
 	left: A0,
 	right: A1,
-): Expr<typeof C.ArrayOfArrayCodec, ParamsOfAll<A0 | A1>> =>
-	apply('array::combine', C.ArrayOfArrayCodec, 2, [left, right]);
+): Expr<
+	PairsCodec<[A0, A1], typeof C.ArrayOfArrayCodec>,
+	ParamsOfAll<A0 | A1>
+> =>
+	apply('array::combine', pairsOf([0, 1], C.ArrayOfArrayCodec), 2, [
+		left,
+		right,
+	]);
 
 /**
  * `array::complement(left: array, right: array) -> same:0`
@@ -190,7 +214,7 @@ export const concat = <const A0 extends ReadonlyArray<Arg<In['array']>>>(
 	apply('array::concat', items(0, C.ArrayCodec), 0, [], arrays);
 
 /**
- * `array::difference(left: array, right: array) -> array`
+ * `array::difference(left: array, right: array) -> elements:0,1`
  *
  * SurrealDB 3 and 4.
  */
@@ -200,8 +224,11 @@ export const difference = <
 >(
 	left: A0,
 	right: A1,
-): Expr<typeof C.ArrayCodec, ParamsOfAll<A0 | A1>> =>
-	apply('array::difference', C.ArrayCodec, 2, [left, right]);
+): Expr<ElementsCodec<[A0, A1], typeof C.ArrayCodec>, ParamsOfAll<A0 | A1>> =>
+	apply('array::difference', elementsOf([0, 1], C.ArrayCodec), 2, [
+		left,
+		right,
+	]);
 
 /**
  * `array::distinct(array: array) -> same:0`
@@ -228,7 +255,7 @@ export const every = <
 	apply('array::every', C.BoolCodec, 1, [array, predicate]);
 
 /**
- * `array::fill(array: array, value: any, start?: int, end?: int) -> array`
+ * `array::fill(array: array, value: any, start?: int, end?: int) -> with:0,1`
  *
  * SurrealDB 3 and 4.
  */
@@ -242,8 +269,16 @@ export const fill = <
 	value: A1,
 	start?: A2,
 	end?: A3,
-): Expr<typeof C.ArrayCodec, ParamsOfAll<A0 | A1 | A2 | A3>> =>
-	apply('array::fill', C.ArrayCodec, 2, [array, value, start, end]);
+): Expr<
+	WithCodec<[A0, A1], typeof C.ArrayCodec>,
+	ParamsOfAll<A0 | A1 | A2 | A3>
+> =>
+	apply('array::fill', withValue([0, 1], C.ArrayCodec), 2, [
+		array,
+		value,
+		start,
+		end,
+	]);
 
 /**
  * `array::filter(array: array, predicate: any) -> same:0`
@@ -312,24 +347,24 @@ export const first = <const A0 extends Arg<In['array']>>(
 	apply('array::first', item(0, C.ArrayCodec), 1, [array]);
 
 /**
- * `array::flatten(array: array) -> array`
+ * `array::flatten(array: array) -> flat:0`
  *
  * SurrealDB 3 and 4.
  */
 export const flatten = <const A0 extends Arg<In['array']>>(
 	array: A0,
-): Expr<typeof C.ArrayCodec, ParamsOfAll<A0>> =>
-	apply('array::flatten', C.ArrayCodec, 1, [array]);
+): Expr<FlatCodec<[A0], typeof C.ArrayCodec>, ParamsOfAll<A0>> =>
+	apply('array::flatten', flattened([0], C.ArrayCodec), 1, [array]);
 
 /**
- * `array::group(array: array) -> array`
+ * `array::group(array: array) -> flat:0`
  *
  * SurrealDB 3 and 4.
  */
 export const group = <const A0 extends Arg<In['array']>>(
 	array: A0,
-): Expr<typeof C.ArrayCodec, ParamsOfAll<A0>> =>
-	apply('array::group', C.ArrayCodec, 1, [array]);
+): Expr<FlatCodec<[A0], typeof C.ArrayCodec>, ParamsOfAll<A0>> =>
+	apply('array::group', flattened([0], C.ArrayCodec), 1, [array]);
 
 /**
  * `array::includes(array: array, value?: any) -> bool`
@@ -360,7 +395,7 @@ export const indexOf = <
 	apply('array::index_of', C.OptionOfIntCodec, 2, [array, value]);
 
 /**
- * `array::insert(array: array, value: any, index?: int) -> array`
+ * `array::insert(array: array, value: any, index?: int) -> with:0,1`
  *
  * SurrealDB 3 and 4.
  */
@@ -372,8 +407,12 @@ export const insert = <
 	array: A0,
 	value: A1,
 	index?: A2,
-): Expr<typeof C.ArrayCodec, ParamsOfAll<A0 | A1 | A2>> =>
-	apply('array::insert', C.ArrayCodec, 2, [array, value, index]);
+): Expr<WithCodec<[A0, A1], typeof C.ArrayCodec>, ParamsOfAll<A0 | A1 | A2>> =>
+	apply('array::insert', withValue([0, 1], C.ArrayCodec), 2, [
+		array,
+		value,
+		index,
+	]);
 
 /**
  * `array::intersect(left: array, right: array) -> same:0`
@@ -434,7 +473,7 @@ export const len = <const A0 extends Arg<In['array']>>(
 	apply('array::len', C.IntCodec, 1, [array]);
 
 /**
- * `array::logical_and(left: array, right: array) -> array`
+ * `array::logical_and(left: array, right: array) -> padded:0,1`
  *
  * SurrealDB 3 and 4.
  */
@@ -444,11 +483,14 @@ export const logicalAnd = <
 >(
 	left: A0,
 	right: A1,
-): Expr<typeof C.ArrayCodec, ParamsOfAll<A0 | A1>> =>
-	apply('array::logical_and', C.ArrayCodec, 2, [left, right]);
+): Expr<PaddedCodec<[A0, A1], typeof C.ArrayCodec>, ParamsOfAll<A0 | A1>> =>
+	apply('array::logical_and', nullPadded([0, 1], C.ArrayCodec), 2, [
+		left,
+		right,
+	]);
 
 /**
- * `array::logical_or(left: array, right: array) -> array`
+ * `array::logical_or(left: array, right: array) -> padded:0,1`
  *
  * SurrealDB 3 and 4.
  */
@@ -458,11 +500,14 @@ export const logicalOr = <
 >(
 	left: A0,
 	right: A1,
-): Expr<typeof C.ArrayCodec, ParamsOfAll<A0 | A1>> =>
-	apply('array::logical_or', C.ArrayCodec, 2, [left, right]);
+): Expr<PaddedCodec<[A0, A1], typeof C.ArrayCodec>, ParamsOfAll<A0 | A1>> =>
+	apply('array::logical_or', nullPadded([0, 1], C.ArrayCodec), 2, [
+		left,
+		right,
+	]);
 
 /**
- * `array::logical_xor(left: array, right: array) -> array`
+ * `array::logical_xor(left: array, right: array) -> padded:0,1`
  *
  * SurrealDB 3 and 4.
  */
@@ -472,8 +517,11 @@ export const logicalXor = <
 >(
 	left: A0,
 	right: A1,
-): Expr<typeof C.ArrayCodec, ParamsOfAll<A0 | A1>> =>
-	apply('array::logical_xor', C.ArrayCodec, 2, [left, right]);
+): Expr<PaddedCodec<[A0, A1], typeof C.ArrayCodec>, ParamsOfAll<A0 | A1>> =>
+	apply('array::logical_xor', nullPadded([0, 1], C.ArrayCodec), 2, [
+		left,
+		right,
+	]);
 
 /**
  * `array::matches(array: array, value: any) -> array<bool>`
@@ -520,7 +568,7 @@ export const pop = <const A0 extends Arg<In['array']>>(
 	apply('array::pop', item(0, C.ArrayCodec), 1, [array]);
 
 /**
- * `array::prepend(array: array, value: any) -> array`
+ * `array::prepend(array: array, value: any) -> with:0,1`
  *
  * SurrealDB 3 and 4.
  */
@@ -530,11 +578,11 @@ export const prepend = <
 >(
 	array: A0,
 	value: A1,
-): Expr<typeof C.ArrayCodec, ParamsOfAll<A0 | A1>> =>
-	apply('array::prepend', C.ArrayCodec, 2, [array, value]);
+): Expr<WithCodec<[A0, A1], typeof C.ArrayCodec>, ParamsOfAll<A0 | A1>> =>
+	apply('array::prepend', withValue([0, 1], C.ArrayCodec), 2, [array, value]);
 
 /**
- * `array::push(array: array, value: any) -> array`
+ * `array::push(array: array, value: any) -> with:0,1`
  *
  * SurrealDB 3 and 4.
  */
@@ -544,8 +592,8 @@ export const push = <
 >(
 	array: A0,
 	value: A1,
-): Expr<typeof C.ArrayCodec, ParamsOfAll<A0 | A1>> =>
-	apply('array::push', C.ArrayCodec, 2, [array, value]);
+): Expr<WithCodec<[A0, A1], typeof C.ArrayCodec>, ParamsOfAll<A0 | A1>> =>
+	apply('array::push', withValue([0, 1], C.ArrayCodec), 2, [array, value]);
 
 /**
  * `array::range(start: int, count?: int) -> array<int>`
@@ -576,7 +624,7 @@ export const remove = <
 	apply('array::remove', same(0, C.ArrayCodec), 2, [array, index]);
 
 /**
- * `array::repeat(value: any, count: int) -> array`
+ * `array::repeat(value: any, count: int) -> repeats:0`
  *
  * SurrealDB 3 and 4.
  */
@@ -586,8 +634,8 @@ export const repeat = <
 >(
 	value: A0,
 	count: A1,
-): Expr<typeof C.ArrayCodec, ParamsOfAll<A0 | A1>> =>
-	apply('array::repeat', C.ArrayCodec, 2, [value, count]);
+): Expr<RepeatsCodec<[A0], typeof C.ArrayCodec>, ParamsOfAll<A0 | A1>> =>
+	apply('array::repeat', repeated([0], C.ArrayCodec), 2, [value, count]);
 
 /**
  * `array::reverse(array: array) -> same:0`
@@ -749,17 +797,17 @@ export const swap = <
 	apply('array::swap', same(0, C.ArrayCodec), 3, [array, from, to]);
 
 /**
- * `array::transpose(array: array) -> array<array>`
+ * `array::transpose(array: array) -> transposed:0`
  *
  * SurrealDB 3 and 4.
  */
 export const transpose = <const A0 extends Arg<In['array']>>(
 	array: A0,
-): Expr<typeof C.ArrayOfArrayCodec, ParamsOfAll<A0>> =>
-	apply('array::transpose', C.ArrayOfArrayCodec, 1, [array]);
+): Expr<TransposedCodec<[A0], typeof C.ArrayOfArrayCodec>, ParamsOfAll<A0>> =>
+	apply('array::transpose', transposed([0], C.ArrayOfArrayCodec), 1, [array]);
 
 /**
- * `array::union(left: array, right: array) -> array`
+ * `array::union(left: array, right: array) -> elements:0,1`
  *
  * SurrealDB 3 and 4.
  */
@@ -769,11 +817,11 @@ export const union = <
 >(
 	left: A0,
 	right: A1,
-): Expr<typeof C.ArrayCodec, ParamsOfAll<A0 | A1>> =>
-	apply('array::union', C.ArrayCodec, 2, [left, right]);
+): Expr<ElementsCodec<[A0, A1], typeof C.ArrayCodec>, ParamsOfAll<A0 | A1>> =>
+	apply('array::union', elementsOf([0, 1], C.ArrayCodec), 2, [left, right]);
 
 /**
- * `array::windows(array: array, size: int) -> array<array>`
+ * `array::windows(array: array, size: int) -> chunks:0`
  *
  * SurrealDB 3 and 4.
  */
@@ -783,5 +831,8 @@ export const windows = <
 >(
 	array: A0,
 	size: A1,
-): Expr<typeof C.ArrayOfArrayCodec, ParamsOfAll<A0 | A1>> =>
-	apply('array::windows', C.ArrayOfArrayCodec, 2, [array, size]);
+): Expr<ChunksCodec<[A0], typeof C.ArrayOfArrayCodec>, ParamsOfAll<A0 | A1>> =>
+	apply('array::windows', chunksOf([0], C.ArrayOfArrayCodec), 2, [
+		array,
+		size,
+	]);

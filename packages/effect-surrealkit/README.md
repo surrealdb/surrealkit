@@ -406,7 +406,20 @@ reordering or subset of an array (`array.sort`, `array.distinct`); `item:N`
 is an element of it or NONE (`array.first`, `time.max`). `items:N`, on the
 variadic argument `N`, is an array of the union of the arguments' element
 codecs when every argument is a typed array, the argument's own codec when
-it is the only one, and `array` otherwise (`array.concat`). A result
+it is the only one, and `array` otherwise (`array.concat`). The other
+array builders are typed the same way: `with:N,M` is an array of argument
+`N`'s elements and the value `M` (`array.append`, `push`, `prepend`,
+`insert`, `fill`), `adds:N,M` the same with an array `M` adding its
+elements (`array.add`), `elements:N,M` the elements of both arrays
+(`array.union`, `difference`), `padded:N,M` those or `null` past the
+shorter one (`array.logicalAnd`, `logicalOr`, `logicalXor`), `pairs:N,M`
+tuples of one element of each (`array.combine`), `flat:N` the elements of
+the arrays `N` holds (`array.flatten`, `group`), `chunks:N` arrays of `N`'s
+elements (`array.clump`, `windows`), `transposed:N` arrays of the inner
+elements or NONE (`array.transpose`) and `repeats:N` an array of the value
+`N` (`array.repeat`). When an argument they name is not a typed expression
+(an inlined constant, or an open value or array of open values), the
+result is the plain `array` or `array<array>` it was. A result
 `float|decimal:N,…` is a float, or `number | Decimal` when one of the
 arguments it names may hold a decimal (an element of it, for an array): the
 functions SurrealDB computes in the kind of their input (`math.sqrt`,

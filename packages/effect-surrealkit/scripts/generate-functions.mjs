@@ -91,6 +91,68 @@ const baseCodecs = {
 	uuid: { name: 'UuidCodec', from: '../../scalars.js', source: 'Uuid' },
 };
 
+/**
+ * The result kinds that build an array from the arguments they name
+ * (`with:0,1`): how many they name, the helper and type that derive the
+ * codec, and the kind of the result when an argument is untyped.
+ */
+const shapes = {
+	adds: {
+		arity: 2,
+		helper: 'addsValue',
+		type: 'AddsCodec',
+		fallback: 'array',
+	},
+	chunks: {
+		arity: 1,
+		helper: 'chunksOf',
+		type: 'ChunksCodec',
+		fallback: 'array<array>',
+	},
+	elements: {
+		arity: 2,
+		helper: 'elementsOf',
+		type: 'ElementsCodec',
+		fallback: 'array',
+	},
+	flat: {
+		arity: 1,
+		helper: 'flattened',
+		type: 'FlatCodec',
+		fallback: 'array',
+	},
+	padded: {
+		arity: 2,
+		helper: 'nullPadded',
+		type: 'PaddedCodec',
+		fallback: 'array',
+	},
+	pairs: {
+		arity: 2,
+		helper: 'pairsOf',
+		type: 'PairsCodec',
+		fallback: 'array<array>',
+	},
+	repeats: {
+		arity: 1,
+		helper: 'repeated',
+		type: 'RepeatsCodec',
+		fallback: 'array',
+	},
+	transposed: {
+		arity: 1,
+		helper: 'transposed',
+		type: 'TransposedCodec',
+		fallback: 'array<array>',
+	},
+	with: {
+		arity: 2,
+		helper: 'withValue',
+		type: 'WithCodec',
+		fallback: 'array',
+	},
+};
+
 const reserved = new Set(
 	'break case catch class const continue debugger default delete do else enum export extends false finally for function if import in instanceof new null return super switch this throw true try typeof var void while with yield let static implements interface package private protected public await'.split(
 		' ',
@@ -115,6 +177,7 @@ const taken = new Set([
 	'FloatOrDecimalCodec',
 	'ItemCodec',
 	'ItemsCodec',
+	...Object.values(shapes).flatMap((shape) => [shape.helper, shape.type]),
 ]);
 
 const fail = (message) => {
@@ -124,13 +187,25 @@ const fail = (message) => {
 /**
  * A kind as a tree: `{ base }`, `{ array: kind }` or `{ option: kind }`.
  * Results may also be `{ same: n }`, `{ item: n }`, `{ items: n }` or
- * `{ floatOrDecimal: [n, …] }` (`float|decimal:n,…`).
+ * `{ floatOrDecimal: [n, …] }` (`float|decimal:n,…`) or
+ * `{ shape, args: [n, …] }` (`with:n,m`, one of `shapes`).
  */
 export const parseKind = (text, where, result = false) => {
 	const derived = /^(same|item|items):(\d+)$/u.exec(text);
 	if (derived !== null) {
 		if (!result) fail(`${where}: \`${text}\` is a result kind only`);
 		return { [derived[1]]: Number(derived[2]) };
+	}
+	const shaped = /^([a-z]+):(\d+(?:,\d+)*)$/u.exec(text);
+	if (shaped !== null && Object.hasOwn(shapes, shaped[1])) {
+		if (!result) fail(`${where}: \`${text}\` is a result kind only`);
+		const args = shaped[2].split(',').map(Number);
+		if (args.length !== shapes[shaped[1]].arity) {
+			fail(
+				`${where}: \`${text}\` names ${shapes[shaped[1]].arity} arguments`,
+			);
+		}
+		return { shape: shaped[1], args };
 	}
 	const widened = /^float\|decimal:(\d+(?:,\d+)*)$/u.exec(text);
 	if (widened !== null) {
@@ -249,6 +324,16 @@ const validate = (table) => {
 		) {
 			fail(`${where}: \`items:N\` names the variadic argument`);
 		}
+		for (const named of result.args ?? []) {
+			if (entry.args[named] === undefined) {
+				fail(`${where}: result \`${entry.result}\` names no argument`);
+			}
+			if (entry.variadic === true && named === entry.args.length - 1) {
+				fail(
+					`${where}: \`${entry.result}\` names the variadic argument`,
+				);
+			}
+		}
 		for (const named of result.floatOrDecimal ?? []) {
 			const arg = entry.args[named];
 			if (arg === undefined) {
@@ -342,6 +427,10 @@ const signatureText = (entry) => {
 
 /** Every kind a codec is needed for, nested kinds included. */
 const collectKinds = (kind, into) => {
+	if ('shape' in kind) {
+		collectKinds(parseKind(shapes[kind.shape].fallback, kind.shape), into);
+		return;
+	}
 	if ('array' in kind) collectKinds(kind.array, into);
 	if ('option' in kind) collectKinds(kind.option, into);
 	if ('base' in kind || 'array' in kind || 'option' in kind) {
@@ -405,6 +494,12 @@ const renderFunction = (entry) => {
 		const named = result.floatOrDecimal.map((index) => params[index].type);
 		codecType = `FloatOrDecimalCodec<${named.join(' | ')}>`;
 		codecValue = `floatOrDecimal([${result.floatOrDecimal.join(', ')}])`;
+	} else if ('shape' in result) {
+		const shape = shapes[result.shape];
+		const fallback = `C.${codecName(parseKind(shape.fallback, entry.name))}`;
+		const named = result.args.map((index) => params[index].type);
+		codecType = `${shape.type}<[${named.join(', ')}], typeof ${fallback}>`;
+		codecValue = `${shape.helper}([${result.args.join(', ')}], ${fallback})`;
 	} else if ('items' in result) {
 		const source = params[result.items];
 		const fallback = `C.${codecName(source.kind)}`;
@@ -442,6 +537,14 @@ const renderFamily = (family, entries) => {
 		'Expr',
 		...(uses(/ParamsOfAll</u) ? ['ParamsOfAll'] : []),
 	];
+	const shaped = Object.values(shapes).flatMap((shape) => [
+		...(uses(new RegExp(`\\b${shape.type}<`, 'u'))
+			? [`type ${shape.type}`]
+			: []),
+		...(uses(new RegExp(`\\b${shape.helper}\\(`, 'u'))
+			? [shape.helper]
+			: []),
+	]);
 	const internal = [
 		...(uses(/\bArg</u) ? ['type Arg'] : []),
 		...(uses(/apply\(/u) ? ['apply'] : []),
@@ -455,7 +558,10 @@ const renderFamily = (family, entries) => {
 		...(uses(/\bitem\(/u) ? ['item'] : []),
 		...(uses(/\bitems\(/u) ? ['items'] : []),
 		...(uses(/\bsame\(/u) ? ['same'] : []),
-	];
+		...shaped,
+	].sort((a, b) =>
+		a.replace(/^type /u, '').localeCompare(b.replace(/^type /u, '')),
+	);
 	const imports = [
 		`import type { ${exprTypes.join(', ')} } from '../../statement/expr.js';`,
 		...(uses(/NoParams/u)

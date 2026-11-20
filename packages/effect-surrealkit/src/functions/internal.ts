@@ -112,18 +112,128 @@ export type ItemCodec<S extends Codec> =
  * array of a closed element type; `never` for an inlined constant, an open
  * value or an array of open values (any `SurrealValue`).
  */
-type TypedItem<A> =
-	A extends Expr<infer S, Params>
-		? S['Encoded'] extends ReadonlyArray<unknown>
-			? S extends { readonly value: infer I extends Codec }
-				? unknown extends I['Type']
-					? never
-					: SurrealValue extends I['Type']
-						? never
-						: I
-				: never
+type TypedItem<A> = A extends Expr<infer S, Params> ? ClosedItem<S> : never;
+
+/** `true` when codec `S` may hold any value (`unknown` or a `SurrealValue`). */
+type IsOpen<S extends Codec> = unknown extends S['Type']
+	? true
+	: SurrealValue extends S['Type']
+		? true
+		: false;
+
+/** The element codec of array codec `S` when it is closed; else `never`. */
+type ClosedItem<S> = S extends Codec
+	? S['Encoded'] extends ReadonlyArray<unknown>
+		? S extends { readonly value: infer I extends Codec }
+			? IsOpen<I> extends true
+				? never
+				: I
 			: never
+		: never
+	: never;
+
+/** The codec of argument `A` when it is a closed expression; else `never`. */
+type TypedValue<A> =
+	A extends Expr<infer S, Params>
+		? IsOpen<S> extends true
+			? never
+			: S
 		: never;
+
+/** `R`, or `D` when one of the codecs `T` it is built from is `never`. */
+type Built<T extends ReadonlyArray<unknown>, R, D> = true extends {
+	[K in keyof T]: [T[K]] extends [never] ? true : false;
+}[number]
+	? D
+	: R;
+
+/** `elements:N,M`: an array of the union of the arguments' element codecs. */
+export type ElementsCodec<A extends ReadonlyArray<unknown>, D extends Codec> = [
+	SomeOpen<A[number]>,
+] extends [never]
+	? Schema.$Array<TypedItem<A[number]>>
+	: D;
+
+/** `with:N,M`: the elements of array `N` and the value `M` itself. */
+export type WithCodec<
+	A extends readonly [unknown, unknown],
+	D extends Codec,
+> = Built<
+	[TypedItem<A[0]>, TypedValue<A[1]>],
+	Schema.$Array<TypedItem<A[0]> | TypedValue<A[1]>>,
+	D
+>;
+
+/** The elements value `V` adds: its own for an array, else `V` itself. */
+type Added<V> =
+	TypedValue<V> extends infer S extends Codec
+		? S['Encoded'] extends ReadonlyArray<unknown>
+			? ClosedItem<S>
+			: [Extract<S['Encoded'], ReadonlyArray<unknown>>] extends [never]
+				? S
+				: never
+		: never;
+
+/** `adds:N,M`: the elements of array `N` and those value `M` adds. */
+export type AddsCodec<
+	A extends readonly [unknown, unknown],
+	D extends Codec,
+> = Built<
+	[TypedItem<A[0]>, Added<A[1]>],
+	Schema.$Array<TypedItem<A[0]> | Added<A[1]>>,
+	D
+>;
+
+/** `padded:N,M`: an element of either array, or NULL past the shorter. */
+export type PaddedCodec<
+	A extends readonly [unknown, unknown],
+	D extends Codec,
+> = Built<
+	[TypedItem<A[0]>, TypedItem<A[1]>],
+	Schema.$Array<TypedItem<A[0]> | TypedItem<A[1]> | Schema.Null>,
+	D
+>;
+
+/** `pairs:N,M`: every pair of an element of `N` and one of `M`. */
+export type PairsCodec<
+	A extends readonly [unknown, unknown],
+	D extends Codec,
+> = Built<
+	[TypedItem<A[0]>, TypedItem<A[1]>],
+	Schema.$Array<Schema.Tuple<readonly [TypedItem<A[0]>, TypedItem<A[1]>]>>,
+	D
+>;
+
+/** `flat:N`: the elements of the arrays array `N` holds. */
+export type FlatCodec<A extends readonly [unknown], D extends Codec> = Built<
+	[ClosedItem<TypedItem<A[0]>>],
+	Schema.$Array<ClosedItem<TypedItem<A[0]>>>,
+	D
+>;
+
+/** `chunks:N`: arrays of the elements of array `N`. */
+export type ChunksCodec<A extends readonly [unknown], D extends Codec> = Built<
+	[TypedItem<A[0]>],
+	Schema.$Array<Schema.$Array<TypedItem<A[0]>>>,
+	D
+>;
+
+/** `transposed:N`: arrays of the inner elements of `N`, or NONE (ragged). */
+export type TransposedCodec<
+	A extends readonly [unknown],
+	D extends Codec,
+> = Built<
+	[ClosedItem<TypedItem<A[0]>>],
+	Schema.$Array<Schema.$Array<OrNone<ClosedItem<TypedItem<A[0]>>>>>,
+	D
+>;
+
+/** `repeats:N`: an array of the value `N`. */
+export type RepeatsCodec<A extends readonly [unknown], D extends Codec> = Built<
+	[TypedValue<A[0]>],
+	Schema.$Array<TypedValue<A[0]>>,
+	D
+>;
 
 /** `true` when some member of the union `A` is not a typed array. */
 type SomeOpen<A> = A extends unknown
@@ -177,18 +287,19 @@ export const item = (index: number, fallback: Codec): ResultOf =>
 			: AnyCodec;
 	});
 
+/** Whether a codec may hold any value (`unknown` or a `SurrealValue`). */
+const isOpen = ({ ast }: Codec): boolean =>
+	ast._tag === 'Unknown' ||
+	ast._tag === 'Any' ||
+	ast === SurrealValue.ast ||
+	(ast._tag === 'Union' && ast.types.includes(SurrealValue.ast));
+
 /** The element codec of a typed array codec; `undefined` when open. */
 const typedItem = (codec: Codec): Codec | undefined => {
 	if (codec.ast._tag !== 'Arrays' || !('value' in codec)) return undefined;
 	const element = codec.value;
 	if (!Schema.isSchema(element)) return undefined;
-	const { ast } = element;
-	const open =
-		ast._tag === 'Unknown' ||
-		ast._tag === 'Any' ||
-		ast === SurrealValue.ast ||
-		(ast._tag === 'Union' && ast.types.includes(SurrealValue.ast));
-	return open ? undefined : (element as Codec);
+	return isOpen(element as Codec) ? undefined : (element as Codec);
 };
 
 /**
@@ -212,6 +323,126 @@ export const items = (index: number, fallback: Codec): ResultOf =>
 			others.length === 0 ? only : Schema.Union(elements),
 		) as unknown as Codec;
 	});
+
+/** The element codec of an argument typed as a closed array, if it is one. */
+const elementOf = (arg: unknown): Codec | undefined =>
+	isExpr(arg) ? typedItem(codecOf(arg)) : undefined;
+
+/** The codec of an argument that is a closed expression, if it is one. */
+const typedValue = (arg: unknown): Codec | undefined =>
+	isExpr(arg) && !isOpen(codecOf(arg)) ? codecOf(arg) : undefined;
+
+/** One codec for every value of the given ones: the only one, or a union. */
+const unionOf = (codecs: ReadonlyArray<Codec>): Codec => {
+	const distinct = [...new Set(codecs)];
+	const [only] = distinct;
+	return (
+		distinct.length === 1 && only !== undefined
+			? only
+			: Schema.Union(distinct)
+	) as Codec;
+};
+
+const arrayOf = (codec: Codec): Codec =>
+	Schema.Array(codec) as unknown as Codec;
+
+/**
+ * A result built from the arguments at `indices` by `build`, or `fallback`
+ * when `build` finds one of them untyped (it returns `undefined`).
+ */
+const shaped =
+	(
+		build: (args: ReadonlyArray<unknown>) => Codec | undefined,
+	): ((indices: ReadonlyArray<number>, fallback: Codec) => ResultOf) =>
+	(indices, fallback) =>
+		new Derived(
+			(args) => build(indices.map((index) => args[index])) ?? fallback,
+		);
+
+/** Every codec given, or `undefined` when one is missing. */
+const all = (
+	codecs: ReadonlyArray<Codec | undefined>,
+): ReadonlyArray<Codec> | undefined =>
+	codecs.every((codec) => codec !== undefined) ? codecs : undefined;
+
+/** `elements:N,M` (`array::union`): an array of the arguments' elements. */
+export const elementsOf = shaped((args) => {
+	const elements = all(args.map(elementOf));
+	return elements && arrayOf(unionOf(elements));
+});
+
+/** `with:N,M` (`array::append`): the elements of `N` and the value `M`. */
+export const withValue = shaped(([array, value]) => {
+	const codecs = all([elementOf(array), typedValue(value)]);
+	return codecs && arrayOf(unionOf(codecs));
+});
+
+/** The elements value `codec` adds: its own for an array, else itself. */
+const added = (codec: Codec | undefined): Codec | undefined => {
+	if (codec === undefined) return undefined;
+	if (codec.ast._tag === 'Arrays') return typedItem(codec);
+	const mayBeArray =
+		codec.ast._tag === 'Union' &&
+		codec.ast.types.some((member) => member._tag === 'Arrays');
+	return mayBeArray ? undefined : codec;
+};
+
+/**
+ * `adds:N,M` (`array::add`): the elements of `N` and those `M` adds, which
+ * are its elements when it is an array.
+ */
+export const addsValue = shaped(([array, value]) => {
+	const codecs = all([elementOf(array), added(typedValue(value))]);
+	return codecs && arrayOf(unionOf(codecs));
+});
+
+/**
+ * `padded:N,M` (`array::logical_and`): an element of either array, or NULL
+ * where the shorter one has none.
+ */
+export const nullPadded = shaped(([left, right]) => {
+	const codecs = all([elementOf(left), elementOf(right)]);
+	return codecs && arrayOf(unionOf([...codecs, Schema.Null as Codec]));
+});
+
+/** `pairs:N,M` (`array::combine`): pairs of an element of each array. */
+export const pairsOf = shaped(([left, right]) => {
+	const codecs = all([elementOf(left), elementOf(right)]);
+	return codecs && arrayOf(Schema.Tuple(codecs) as unknown as Codec);
+});
+
+/** The closed inner element codec of an array of closed arrays, if any. */
+const innerOf = (arg: unknown): Codec | undefined => {
+	const element = elementOf(arg);
+	return element && typedItem(element);
+};
+
+/** `flat:N` (`array::flatten`): the elements of the arrays `N` holds. */
+export const flattened = shaped(([array]) => {
+	const inner = innerOf(array);
+	return inner && arrayOf(inner);
+});
+
+/** `chunks:N` (`array::windows`): arrays of the elements of `N`. */
+export const chunksOf = shaped(([array]) => {
+	const element = elementOf(array);
+	return element && arrayOf(arrayOf(element));
+});
+
+/**
+ * `transposed:N` (`array::transpose`): arrays of the inner elements of `N`,
+ * each of which may be NONE where an inner array is shorter.
+ */
+export const transposed = shaped(([array]) => {
+	const inner = innerOf(array);
+	return inner && arrayOf(arrayOf(orNone(inner)));
+});
+
+/** `repeats:N` (`array::repeat`): an array of the value `N`. */
+export const repeated = shaped(([value]) => {
+	const codec = typedValue(value);
+	return codec && arrayOf(codec);
+});
 
 /** The stored type argument `A` holds: its codec's, or the constant's own. */
 type EncodedOfArg<A> = A extends Expr<infer S, Params> ? S['Encoded'] : A;

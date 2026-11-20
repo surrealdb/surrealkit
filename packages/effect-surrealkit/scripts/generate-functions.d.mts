@@ -32,7 +32,8 @@ export type ResultKind =
 	| { readonly same: number }
 	| { readonly item: number }
 	| { readonly items: number }
-	| { readonly floatOrDecimal: ReadonlyArray<number> };
+	| { readonly floatOrDecimal: ReadonlyArray<number> }
+	| { readonly shape: string; readonly args: ReadonlyArray<number> };
 
 export const packageRoot: string;
 export const tablePath: string;

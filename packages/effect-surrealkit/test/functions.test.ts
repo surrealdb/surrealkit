@@ -18,6 +18,7 @@ import {
 	loadTable,
 	packageRoot,
 } from '../scripts/generate-functions.mjs';
+import * as C from '../src/functions/generated/codecs.js';
 import {
 	array,
 	math,
@@ -31,7 +32,7 @@ import {
 } from '../src/functions/index.js';
 import { ArrayCodec } from '../src/functions/internal.js';
 import * as SurrealSchema from '../src/index.js';
-import type { CodecOf } from '../src/statement/expr.js';
+import type { CodecOf, Expr } from '../src/statement/expr.js';
 import {
 	codecOf,
 	eq,
@@ -294,5 +295,194 @@ describe('built-in functions', () => {
 		expect(codecOf(alone)).toBe(codecOf(early));
 		expect(open.result).toBe(ArrayCodec);
 		expect(codecOf(inlined)).toBe(ArrayCodec);
+	});
+	it('type the array functions that build arrays from their arguments by those arguments', () => {
+		const Tag = Schema.Struct({ name: SurrealSchema.String });
+		const tags = param('tags', Schema.Array(Tag));
+		const scores = param('scores', Schema.Array(SurrealSchema.Int));
+		const groups = param(
+			'groups',
+			Schema.Array(Schema.Array(SurrealSchema.Int)),
+		);
+		const tag = param('tag', Tag);
+		const loose = param('loose', Schema.Array(SurrealSchema.SurrealValue));
+		const anything = param('anything', SurrealSchema.SurrealValue);
+		type TagRow = typeof Tag.Type;
+		type TypeOf<E> = CodecOf<E>['Type'];
+		const appended = array.append(tags, tag);
+		const mixed = array.push(scores, tag);
+		const added = array.add(tags, scores);
+		const union = array.union(tags, scores);
+		const and = array.logicalAnd(tags, scores);
+		const flat = array.flatten(groups);
+		const windows = array.windows(tags, 2);
+		const pairs = array.combine(tags, scores);
+		const columns = array.transpose(groups);
+		const repeated = array.repeat(tag, 3);
+		const types: ReadonlyArray<true> = [
+			true satisfies Exact<
+				TypeOf<typeof appended>,
+				ReadonlyArray<TagRow>
+			>,
+			true satisfies Exact<
+				TypeOf<typeof mixed>,
+				ReadonlyArray<number | TagRow>
+			>,
+			true satisfies Exact<
+				TypeOf<
+					ReturnType<typeof array.prepend<typeof tags, typeof tag>>
+				>,
+				ReadonlyArray<TagRow>
+			>,
+			true satisfies Exact<
+				TypeOf<
+					ReturnType<typeof array.insert<typeof tags, typeof tag>>
+				>,
+				ReadonlyArray<TagRow>
+			>,
+			true satisfies Exact<
+				TypeOf<ReturnType<typeof array.fill<typeof tags, typeof tag>>>,
+				ReadonlyArray<TagRow>
+			>,
+			true satisfies Exact<
+				TypeOf<typeof added>,
+				ReadonlyArray<number | TagRow>
+			>,
+			true satisfies Exact<
+				TypeOf<ReturnType<typeof array.add<typeof tags, typeof tag>>>,
+				ReadonlyArray<TagRow>
+			>,
+			true satisfies Exact<
+				TypeOf<typeof union>,
+				ReadonlyArray<number | TagRow>
+			>,
+			true satisfies Exact<
+				TypeOf<
+					ReturnType<
+						typeof array.difference<typeof tags, typeof tags>
+					>
+				>,
+				ReadonlyArray<TagRow>
+			>,
+			true satisfies Exact<
+				TypeOf<typeof and>,
+				ReadonlyArray<number | TagRow | null>
+			>,
+			true satisfies Exact<
+				TypeOf<
+					ReturnType<typeof array.logicalOr<typeof tags, typeof tags>>
+				>,
+				ReadonlyArray<TagRow | null>
+			>,
+			true satisfies Exact<
+				TypeOf<
+					ReturnType<
+						typeof array.logicalXor<typeof tags, typeof tags>
+					>
+				>,
+				ReadonlyArray<TagRow | null>
+			>,
+			true satisfies Exact<TypeOf<typeof flat>, ReadonlyArray<number>>,
+			true satisfies Exact<
+				TypeOf<ReturnType<typeof array.group<typeof groups>>>,
+				ReadonlyArray<number>
+			>,
+			true satisfies Exact<
+				TypeOf<typeof windows>,
+				ReadonlyArray<ReadonlyArray<TagRow>>
+			>,
+			true satisfies Exact<
+				TypeOf<ReturnType<typeof array.clump<typeof tags, 2>>>,
+				ReadonlyArray<ReadonlyArray<TagRow>>
+			>,
+			true satisfies Exact<
+				TypeOf<typeof pairs>,
+				ReadonlyArray<readonly [TagRow, number]>
+			>,
+			true satisfies Exact<
+				TypeOf<typeof columns>,
+				ReadonlyArray<ReadonlyArray<number | undefined>>
+			>,
+			true satisfies Exact<
+				TypeOf<typeof repeated>,
+				ReadonlyArray<TagRow>
+			>,
+		];
+		expect(types.length).toBe(19);
+		const fallbacks = {
+			append: array.append(loose, tag),
+			appendOpen: array.append(tags, anything),
+			appendInlined: array.append(tags, 1),
+			add: array.add(tags, loose),
+			union: array.union(tags, loose),
+			and: array.logicalAnd(tags, [1]),
+			flat: array.flatten(tags),
+			flatOpen: array.flatten(loose),
+			windows: array.windows(loose, 2),
+			pairs: array.combine(loose, tags),
+			columns: array.transpose(tags),
+			repeated: array.repeat(anything, 3),
+			repeatedInlined: array.repeat('a', 3),
+		};
+		type F = typeof fallbacks;
+		const untyped: ReadonlyArray<true> = [
+			true satisfies Exact<CodecOf<F['append']>, typeof ArrayCodec>,
+			true satisfies Exact<CodecOf<F['appendOpen']>, typeof ArrayCodec>,
+			true satisfies Exact<
+				CodecOf<F['appendInlined']>,
+				typeof ArrayCodec
+			>,
+			true satisfies Exact<CodecOf<F['add']>, typeof ArrayCodec>,
+			true satisfies Exact<CodecOf<F['union']>, typeof ArrayCodec>,
+			true satisfies Exact<CodecOf<F['and']>, typeof ArrayCodec>,
+			true satisfies Exact<CodecOf<F['flat']>, typeof ArrayCodec>,
+			true satisfies Exact<CodecOf<F['flatOpen']>, typeof ArrayCodec>,
+			true satisfies Exact<
+				CodecOf<F['windows']>,
+				typeof C.ArrayOfArrayCodec
+			>,
+			true satisfies Exact<
+				CodecOf<F['pairs']>,
+				typeof C.ArrayOfArrayCodec
+			>,
+			true satisfies Exact<
+				CodecOf<F['columns']>,
+				typeof C.ArrayOfArrayCodec
+			>,
+			true satisfies Exact<CodecOf<F['repeated']>, typeof ArrayCodec>,
+			true satisfies Exact<
+				CodecOf<F['repeatedInlined']>,
+				typeof ArrayCodec
+			>,
+		];
+		expect(untyped.length).toBe(13);
+		for (const [name, expr] of Object.entries(fallbacks) as ReadonlyArray<
+			[string, Expr]
+		>) {
+			const expected = ['windows', 'pairs', 'columns'].includes(name)
+				? C.ArrayOfArrayCodec
+				: ArrayCodec;
+			expect(codecOf(expr), name).toBe(expected);
+		}
+		expect(sqlOf(appended)).toBe('array::append($tags, $tag)');
+		expect(sqlOf(and)).toBe('array::logical_and($tags, $scores)');
+		expect(sqlOf(fallbacks.appendInlined)).toBe('array::append($tags, 1)');
+		const decode = (expr: Expr) =>
+			Schema.decodeUnknownSync(codecOf(expr) as Schema.Codec<unknown>);
+		expect(decode(mixed)([1, { name: 'a' }])).toEqual([1, { name: 'a' }]);
+		expect(() => decode(mixed)(['a'])).toThrow();
+		expect(() => decode(appended)([1])).toThrow();
+		expect(decode(and)([{ name: 'a' }, null])).toEqual([
+			{ name: 'a' },
+			null,
+		]);
+		expect(() => decode(and)([undefined])).toThrow();
+		expect(decode(columns)([[1, undefined]])).toEqual([[1, undefined]]);
+		expect(() => decode(flat)([[1]])).toThrow();
+		expect(decode(pairs)([[{ name: 'a' }, 1]])).toEqual([
+			[{ name: 'a' }, 1],
+		]);
+		expect(() => decode(pairs)([[1, { name: 'a' }]])).toThrow();
+		expect(decode(repeated)([])).toEqual([]);
 	});
 });
