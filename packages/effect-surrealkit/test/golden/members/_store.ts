@@ -12,9 +12,9 @@ export interface Store {
 		readonly member: typeof MemberTable;
 		readonly viewer: typeof ViewerTable;
 	};
-	readonly views: {};
-	readonly edges: {};
-	readonly functions: {};
+	readonly views: Record<never, never>;
+	readonly edges: Record<never, never>;
+	readonly functions: Record<never, never>;
 }
 
 /** Every table, view, relation endpoint and function of store `members`, by its SurrealDB name. */

@@ -13,8 +13,8 @@ export interface Store {
 		readonly id_int: typeof IdIntTable;
 		readonly id_union: typeof IdUnionTable;
 	};
-	readonly views: {};
-	readonly edges: {};
+	readonly views: Record<never, never>;
+	readonly edges: Record<never, never>;
 	readonly functions: {
 		readonly "fn::optional_first": typeof fn_optional_first;
 	};
