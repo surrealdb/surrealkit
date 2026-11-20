@@ -3,6 +3,7 @@
  * and FETCH: each `@ts-expect-error` must be an actual error, and
  * `test/diagnostics.test.ts` pins the first lines of its diagnostic.
  */
+import { run } from '../../src/client/index.js';
 import {
 	collect,
 	destructure,
@@ -31,6 +32,7 @@ import {
 	TeamId,
 	TeamTable,
 } from '../golden/corpus/index.js';
+import { evaluated, projected } from './graph-origins.js';
 
 const person = rowOf(Person);
 const kinds = rowOf(Kinds);
@@ -189,4 +191,99 @@ export const rejectedFetches = () => {
 		.value((row) => row.name);
 	// @ts-expect-error [fetch/group-after] grouping comes before FETCH
 	select(PersonTable).fetch(store, 'manager').groupAll();
+};
+
+// ---- a statement from a step that starts at a binding asks for it
+
+export const rejectedOrigins = (who: PersonId) => {
+	// @ts-expect-error [origin/evaluated-outgoing-missing] the step starts at `$who`
+	run(evaluated.outgoing, {});
+	// @ts-expect-error [origin/evaluated-outgoing-wrong-type] `$who` is a person id
+	run(evaluated.outgoing, { who: 'person:ann' });
+	run(evaluated.outgoing, { who });
+	// @ts-expect-error [origin/evaluated-incoming-missing] the step starts at `$who`
+	run(evaluated.incoming, {});
+	// @ts-expect-error [origin/evaluated-incoming-wrong-type] `$who` is a person id
+	run(evaluated.incoming, { who: 'person:ann' });
+	run(evaluated.incoming, { who });
+	// @ts-expect-error [origin/evaluated-nested-missing] the step starts at `$who`
+	run(evaluated.nested, {});
+	// @ts-expect-error [origin/evaluated-nested-wrong-type] `$who` is a person id
+	run(evaluated.nested, { who: 'person:ann' });
+	run(evaluated.nested, { who });
+	// @ts-expect-error [origin/evaluated-follow-missing] the step starts at `$who`
+	run(evaluated.follow, {});
+	// @ts-expect-error [origin/evaluated-follow-wrong-type] `$who` is a person id
+	run(evaluated.follow, { who: 'person:ann' });
+	run(evaluated.follow, { who });
+	// @ts-expect-error [origin/evaluated-followTwice-missing] the step starts at `$who`
+	run(evaluated.followTwice, {});
+	// @ts-expect-error [origin/evaluated-followTwice-wrong-type] `$who` is a person id
+	run(evaluated.followTwice, { who: 'person:ann' });
+	run(evaluated.followTwice, { who });
+	// @ts-expect-error [origin/evaluated-destructure-missing] the step starts at `$who`
+	run(evaluated.destructure, {});
+	// @ts-expect-error [origin/evaluated-destructure-wrong-type] `$who` is a person id
+	run(evaluated.destructure, { who: 'person:ann' });
+	run(evaluated.destructure, { who });
+	// @ts-expect-error [origin/evaluated-destructureStep-missing] the step starts at `$who`
+	run(evaluated.destructureStep, {});
+	// @ts-expect-error [origin/evaluated-destructureStep-wrong-type] `$who` is a person id
+	run(evaluated.destructureStep, { who: 'person:ann' });
+	run(evaluated.destructureStep, { who });
+	// @ts-expect-error [origin/evaluated-edges-missing] the step starts at `$who`
+	run(evaluated.edges, {});
+	// @ts-expect-error [origin/evaluated-edges-wrong-type] `$who` is a person id
+	run(evaluated.edges, { who: 'person:ann' });
+	run(evaluated.edges, { who });
+	// @ts-expect-error [origin/evaluated-rows-missing] the step starts at `$who`
+	run(evaluated.rows, {});
+	// @ts-expect-error [origin/evaluated-rows-wrong-type] `$who` is a person id
+	run(evaluated.rows, { who: 'person:ann' });
+	run(evaluated.rows, { who });
+	// @ts-expect-error [origin/evaluated-collect-missing] the step starts at `$who`
+	run(evaluated.collect, {});
+	// @ts-expect-error [origin/evaluated-collect-wrong-type] `$who` is a person id
+	run(evaluated.collect, { who: 'person:ann' });
+	run(evaluated.collect, { who });
+	// @ts-expect-error [origin/projected-outgoing-missing] the step starts at `$who`
+	run(projected.outgoing, {});
+	// @ts-expect-error [origin/projected-outgoing-wrong-type] `$who` is a person id
+	run(projected.outgoing, { who: 'person:ann' });
+	run(projected.outgoing, { who });
+	// @ts-expect-error [origin/projected-incoming-missing] the step starts at `$who`
+	run(projected.incoming, {});
+	// @ts-expect-error [origin/projected-incoming-wrong-type] `$who` is a person id
+	run(projected.incoming, { who: 'person:ann' });
+	run(projected.incoming, { who });
+	// @ts-expect-error [origin/projected-nested-missing] the step starts at `$who`
+	run(projected.nested, {});
+	// @ts-expect-error [origin/projected-nested-wrong-type] `$who` is a person id
+	run(projected.nested, { who: 'person:ann' });
+	run(projected.nested, { who });
+	// @ts-expect-error [origin/projected-follow-missing] the step starts at `$who`
+	run(projected.follow, {});
+	// @ts-expect-error [origin/projected-follow-wrong-type] `$who` is a person id
+	run(projected.follow, { who: 'person:ann' });
+	run(projected.follow, { who });
+	// @ts-expect-error [origin/projected-followTwice-missing] the step starts at `$who`
+	run(projected.followTwice, {});
+	// @ts-expect-error [origin/projected-followTwice-wrong-type] `$who` is a person id
+	run(projected.followTwice, { who: 'person:ann' });
+	run(projected.followTwice, { who });
+	// @ts-expect-error [origin/projected-destructure-missing] the step starts at `$who`
+	run(projected.destructure, {});
+	// @ts-expect-error [origin/projected-destructure-wrong-type] `$who` is a person id
+	run(projected.destructure, { who: 'person:ann' });
+	run(projected.destructure, { who });
+	// @ts-expect-error [origin/projected-destructureStep-missing] the step starts at `$who`
+	run(projected.destructureStep, {});
+	// @ts-expect-error [origin/projected-destructureStep-wrong-type] `$who` is a person id
+	run(projected.destructureStep, { who: 'person:ann' });
+	run(projected.destructureStep, { who });
+	// @ts-expect-error [origin/projected-selectFrom-missing] the step starts at `$who`
+	run(projected.selectFrom, {});
+	// @ts-expect-error [origin/projected-selectFrom-wrong-type] `$who` is a person id
+	run(projected.selectFrom, { who: 'person:ann' });
+	run(projected.selectFrom, { who });
 };

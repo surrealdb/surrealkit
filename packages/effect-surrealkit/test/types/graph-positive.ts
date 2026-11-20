@@ -41,6 +41,7 @@ import {
 	type TeamRow,
 	TeamTable,
 } from '../golden/corpus/index.js';
+import type { evaluated, projected } from './graph-origins.js';
 
 /** Fails to compile unless `A` and `B` are the same type. */
 type Same<A, B> =
@@ -297,3 +298,40 @@ same<
 	Input<typeof adultPeers.params>,
 	{ readonly who: PersonId; readonly name: string }
 >(true);
+
+// ---- a statement from a step that starts at a binding reads that binding.
+
+same<Input<typeof evaluated.outgoing.params>, { readonly who: PersonId }>(true);
+same<Input<typeof evaluated.incoming.params>, { readonly who: PersonId }>(true);
+same<Input<typeof evaluated.nested.params>, { readonly who: PersonId }>(true);
+same<Input<typeof evaluated.follow.params>, { readonly who: PersonId }>(true);
+same<Input<typeof evaluated.followTwice.params>, { readonly who: PersonId }>(
+	true,
+);
+same<Input<typeof evaluated.destructure.params>, { readonly who: PersonId }>(
+	true,
+);
+same<
+	Input<typeof evaluated.destructureStep.params>,
+	{ readonly who: PersonId }
+>(true);
+same<Input<typeof evaluated.edges.params>, { readonly who: PersonId }>(true);
+same<Input<typeof evaluated.rows.params>, { readonly who: PersonId }>(true);
+same<Input<typeof evaluated.collect.params>, { readonly who: PersonId }>(true);
+same<Input<typeof projected.outgoing.params>, { readonly who: PersonId }>(true);
+same<Input<typeof projected.incoming.params>, { readonly who: PersonId }>(true);
+same<Input<typeof projected.nested.params>, { readonly who: PersonId }>(true);
+same<Input<typeof projected.follow.params>, { readonly who: PersonId }>(true);
+same<Input<typeof projected.followTwice.params>, { readonly who: PersonId }>(
+	true,
+);
+same<Input<typeof projected.destructure.params>, { readonly who: PersonId }>(
+	true,
+);
+same<
+	Input<typeof projected.destructureStep.params>,
+	{ readonly who: PersonId }
+>(true);
+same<Input<typeof projected.selectFrom.params>, { readonly who: PersonId }>(
+	true,
+);

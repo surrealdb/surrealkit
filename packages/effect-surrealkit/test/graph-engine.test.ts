@@ -20,6 +20,7 @@ import {
 	destructure,
 	edges,
 	eq,
+	evaluate,
 	follow,
 	incoming,
 	ne,
@@ -366,6 +367,43 @@ describe.skipIf(!engineConfigured)(
 				const result = await ok(client.run(statement, from(dan)));
 				expect(keys(result?.ids)).toEqual(['person:ghost']);
 				expect(result?.rows).toEqual([undefined]);
+			});
+			it('start at a binding and read it through follow, destructure and RETURN', async () => {
+				const who = param('who', PersonId);
+				const names = evaluate(
+					follow(store, outgoing(store, who, 'knows')).name,
+					'people.friend-names',
+				);
+				const reached = select(PersonTable)
+					.where((row) => eq(row.id, who))
+					.project(() => ({
+						friends: destructure(
+							store,
+							outgoing(store, who, 'knows'),
+							(peer) => ({
+								name: peer.name,
+								peers: outgoing(store, peer.id, 'knows'),
+							}),
+						),
+					}))
+					.build();
+				expect(
+					[
+						...((await ok(client.run(names, from(ann)))) ?? []),
+					].sort(),
+				).toEqual(['Bob', 'Cy']);
+				const [row] = await ok(client.run(reached, from(ann)));
+				expect(
+					row?.friends
+						.map((friend) => ({
+							name: friend.name,
+							peers: keys(friend.peers),
+						}))
+						.sort((a, b) => a.name.localeCompare(b.name)),
+				).toEqual([
+					{ name: 'Bob', peers: ['person:dan'] },
+					{ name: 'Cy', peers: ['person:dan'] },
+				]);
 			});
 		});
 

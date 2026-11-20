@@ -229,13 +229,15 @@ type Base<C> = AsCodec<Unwrapped<C>>;
  * The fields of a link's target(s), one expression each: every field the
  * targets have in common, with the codecs of all of them. A field read
  * through a link may be NONE (the target may be missing or unreadable, or
- * the field optional); through a list of links it is a list.
+ * the field optional); through a list of links it is a list. Each field
+ * reads the bindings `P` the link reads.
  */
 export type Linked<
 	F,
 	E,
 	Present extends boolean,
 	Optional extends boolean = false,
+	P extends Params = NoParams,
 > = {
 	readonly [K in Keys<F>]: LinkedField<
 		F[K],
@@ -245,7 +247,8 @@ export type Linked<
 			? true
 			: true extends IsOptional<F[K]>
 				? true
-				: false
+				: false,
+		P
 	>;
 };
 
@@ -254,21 +257,24 @@ type LinkedField<
 	E,
 	Present extends boolean,
 	Optional extends boolean,
+	P extends Params,
 > = Expr<
 	AsCodec<
 		Lift<E, Present, Optional extends true ? OrNone<Base<C>> : Base<C>>
 	>,
-	NoParams
+	P
 > &
 	([Base<C>] extends [RowCodecIn]
-		? Linked<FieldsOf<Base<C>>, E, Present, Optional>
+		? Linked<FieldsOf<Base<C>>, E, Present, Optional, P>
 		: unknown);
 
 /** The fields {@link follow} yields for the link `R`. */
 export type FollowedOf<S, R> = Linked<
 	TargetFields<S, EncodedOf<R>>,
 	EncodedOf<R>,
-	PresentOf<R>
+	PresentOf<R>,
+	false,
+	ParamsOf<R>
 >;
 
 // ---- what a link is, at run time

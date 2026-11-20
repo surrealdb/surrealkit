@@ -775,6 +775,240 @@ exports[`type diagnostics > order/param 1`] = `
 ]
 `;
 
+exports[`type diagnostics > origin/evaluated-collect-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-collect-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-destructure-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-destructure-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-destructureStep-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-destructureStep-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-edges-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-edges-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-follow-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-follow-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-followTwice-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-followTwice-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-incoming-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-incoming-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-nested-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-nested-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-outgoing-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-outgoing-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-rows-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-rows-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-destructure-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-destructure-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-destructureStep-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-destructureStep-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-follow-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-follow-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-followTwice-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-followTwice-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-incoming-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-incoming-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-nested-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-nested-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-outgoing-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-outgoing-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-selectFrom-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-selectFrom-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
 exports[`type diagnostics > project/alias-number 1`] = `
 [
   "TS2322: Type '1' is not assignable to type '"a projected field is an expression: inline a constant with \`literal\`"'.",
