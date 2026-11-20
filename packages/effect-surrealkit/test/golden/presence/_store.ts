@@ -9,8 +9,26 @@ import { OaTable } from "./oa.js";
 import { PTable } from "./p.js";
 import { UpTable } from "./up.js";
 
+/** The type of `store`. Each entry names its descriptor, so a declaration file refers to the descriptors instead of copying them. */
+export interface Store {
+	readonly name: "presence";
+	readonly tables: {
+		readonly e: typeof ETable;
+		readonly ip: typeof IpTable;
+		readonly m: typeof MTable;
+		readonly oa: typeof OaTable;
+		readonly p: typeof PTable;
+		readonly up: typeof UpTable;
+	};
+	readonly views: {};
+	readonly edges: {
+		readonly e: typeof EEdge;
+	};
+	readonly functions: {};
+}
+
 /** Every table, view, relation endpoint and function of store `presence`, by its SurrealDB name. */
-export const store = SurrealSchema.store({
+export const store: Store = SurrealSchema.store({
 	name: "presence",
 	tables: {
 		e: ETable,

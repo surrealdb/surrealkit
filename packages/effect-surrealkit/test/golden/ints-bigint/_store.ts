@@ -6,8 +6,22 @@ import { fn_optional_first } from "./functions.js";
 import { IdIntTable } from "./id-int.js";
 import { IdUnionTable } from "./id-union.js";
 
+/** The type of `store`. Each entry names its descriptor, so a declaration file refers to the descriptors instead of copying them. */
+export interface Store {
+	readonly name: "corpus";
+	readonly tables: {
+		readonly id_int: typeof IdIntTable;
+		readonly id_union: typeof IdUnionTable;
+	};
+	readonly views: {};
+	readonly edges: {};
+	readonly functions: {
+		readonly "fn::optional_first": typeof fn_optional_first;
+	};
+}
+
 /** Every table, view, relation endpoint and function of store `corpus`, by its SurrealDB name. */
-export const store = SurrealSchema.store({
+export const store: Store = SurrealSchema.store({
 	name: "corpus",
 	tables: {
 		id_int: IdIntTable,

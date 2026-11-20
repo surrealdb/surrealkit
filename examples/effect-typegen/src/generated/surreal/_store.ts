@@ -7,8 +7,25 @@ import { MemberOfEdge, MemberOfTable } from "./member-of.js";
 import { PersonTable } from "./person.js";
 import { TeamTable } from "./team.js";
 
+/** The type of `store`. Each entry names its descriptor, so a declaration file refers to the descriptors instead of copying them. */
+export interface Store {
+	readonly name: "app";
+	readonly tables: {
+		readonly member_of: typeof MemberOfTable;
+		readonly person: typeof PersonTable;
+		readonly team: typeof TeamTable;
+	};
+	readonly views: {};
+	readonly edges: {
+		readonly member_of: typeof MemberOfEdge;
+	};
+	readonly functions: {
+		readonly "fn::greet": typeof fn_greet;
+	};
+}
+
 /** Every table, view, relation endpoint and function of store `app`, by its SurrealDB name. */
-export const store = SurrealSchema.store({
+export const store: Store = SurrealSchema.store({
 	name: "app",
 	tables: {
 		member_of: MemberOfTable,

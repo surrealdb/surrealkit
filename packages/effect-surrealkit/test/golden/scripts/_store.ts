@@ -10,8 +10,29 @@ import { PaymentTable } from "./payment.js";
 import { TeamTable } from "./team.js";
 import { WalletTable } from "./wallet.js";
 
+/** The type of `store`. Each entry names its descriptor, so a declaration file refers to the descriptors instead of copying them. */
+export interface Store {
+	readonly name: "scripts";
+	readonly tables: {
+		readonly account: typeof AccountTable;
+		readonly invite: typeof InviteTable;
+		readonly membership: typeof MembershipTable;
+		readonly payment: typeof PaymentTable;
+		readonly team: typeof TeamTable;
+		readonly wallet: typeof WalletTable;
+	};
+	readonly views: {};
+	readonly edges: {};
+	readonly functions: {
+		readonly "fn::debit": typeof fn_debit;
+		readonly "fn::membership_key": typeof fn_membership_key;
+		readonly "fn::payment_key": typeof fn_payment_key;
+		readonly "fn::seats_taken": typeof fn_seats_taken;
+	};
+}
+
 /** Every table, view, relation endpoint and function of store `scripts`, by its SurrealDB name. */
-export const store = SurrealSchema.store({
+export const store: Store = SurrealSchema.store({
 	name: "scripts",
 	tables: {
 		account: AccountTable,

@@ -403,6 +403,15 @@ const printStore = (
 		pairs.length === 0
 			? '{}'
 			: `{\n${pairs.map(([key, value]) => `\t\t${propertyKey(key)}: ${value},`).join('\n')}\n\t}`;
+	// The registry's type names each descriptor with `typeof`. Left to inference,
+	// a declaration file has to print every descriptor's whole type inside this
+	// one, which fails with TS7056 on a large store (seen at 171 entries).
+	const typeEntries = (
+		pairs: ReadonlyArray<readonly [string, string]>,
+	): string =>
+		pairs.length === 0
+			? '{}'
+			: `{\n${pairs.map(([key, value]) => `\t\treadonly ${propertyKey(key)}: typeof ${value};`).join('\n')}\n\t}`;
 	const tableEntries: Array<readonly [string, string]> = [];
 	const viewEntries: Array<readonly [string, string]> = [];
 	const edgeEntries: Array<readonly [string, string]> = [];
@@ -433,8 +442,17 @@ const printStore = (
 				`import { ${[...names].sort(compare).join(', ')} } from "${module}";`,
 		);
 	const body = [
+		'/** The type of `store`. Each entry names its descriptor, so a declaration file refers to the descriptors instead of copying them. */',
+		'export interface Store {',
+		`\treadonly name: ${json(options.store)};`,
+		`\treadonly tables: ${typeEntries(tableEntries)};`,
+		`\treadonly views: ${typeEntries(viewEntries)};`,
+		`\treadonly edges: ${typeEntries(edgeEntries)};`,
+		`\treadonly functions: ${typeEntries(functionEntries)};`,
+		'}',
+		'',
 		`/** Every table, view, relation endpoint and function of store \`${options.store}\`, by its SurrealDB name. */`,
-		'export const store = SurrealSchema.store({',
+		'export const store: Store = SurrealSchema.store({',
 		`\tname: ${json(options.store)},`,
 		`\ttables: ${entries(tableEntries)},`,
 		`\tviews: ${entries(viewEntries)},`,

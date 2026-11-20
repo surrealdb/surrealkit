@@ -30,8 +30,58 @@ import { SinkTable } from "./sink.js";
 import { TeamSizeTable } from "./team-size.js";
 import { TeamTable } from "./team.js";
 
+/** The type of `store`. Each entry names its descriptor, so a declaration file refers to the descriptors instead of copying them. */
+export interface Store {
+	readonly name: "corpus";
+	readonly tables: {
+		readonly anything: typeof AnythingTable;
+		readonly attachment: typeof AttachmentTable;
+		readonly audit_log: typeof AuditLogTable;
+		readonly bag: typeof BagTable;
+		readonly doc: typeof DocTable;
+		readonly follows: typeof FollowsTable;
+		readonly id_array: typeof IdArrayTable;
+		readonly id_implicit: typeof IdImplicitTable;
+		readonly id_int: typeof IdIntTable;
+		readonly id_object: typeof IdObjectTable;
+		readonly id_string: typeof IdStringTable;
+		readonly id_union: typeof IdUnionTable;
+		readonly id_uuid: typeof IdUuidTable;
+		readonly kinds: typeof KindsTable;
+		readonly knows: typeof KnowsTable;
+		readonly ledger: typeof LedgerTable;
+		readonly likes: typeof LikesTable;
+		readonly member_of: typeof MemberOfTable;
+		readonly org: typeof OrgTable;
+		readonly person: typeof PersonTable;
+		readonly purchase: typeof PurchaseTable;
+		readonly rates: typeof RatesTable;
+		readonly sink: typeof SinkTable;
+		readonly team: typeof TeamTable;
+	};
+	readonly views: {
+		readonly adults: typeof AdultsTable;
+		readonly team_size: typeof TeamSizeTable;
+	};
+	readonly edges: {
+		readonly follows: typeof FollowsEdge;
+		readonly knows: typeof KnowsEdge;
+		readonly likes: typeof LikesEdge;
+		readonly member_of: typeof MemberOfEdge;
+		readonly rates: typeof RatesEdge;
+	};
+	readonly functions: {
+		readonly "fn::doc::related": typeof fn_doc_related;
+		readonly "fn::double": typeof fn_double;
+		readonly "fn::greet": typeof fn_greet;
+		readonly "fn::now": typeof fn_now;
+		readonly "fn::optional_first": typeof fn_optional_first;
+		readonly "fn::prep": typeof fn_prep;
+	};
+}
+
 /** Every table, view, relation endpoint and function of store `corpus`, by its SurrealDB name. */
-export const store = SurrealSchema.store({
+export const store: Store = SurrealSchema.store({
 	name: "corpus",
 	tables: {
 		anything: AnythingTable,

@@ -5,8 +5,20 @@ import type {} from "surrealdb";
 import { MemberTable } from "./member.js";
 import { ViewerTable } from "./viewer.js";
 
+/** The type of `store`. Each entry names its descriptor, so a declaration file refers to the descriptors instead of copying them. */
+export interface Store {
+	readonly name: "members";
+	readonly tables: {
+		readonly member: typeof MemberTable;
+		readonly viewer: typeof ViewerTable;
+	};
+	readonly views: {};
+	readonly edges: {};
+	readonly functions: {};
+}
+
 /** Every table, view, relation endpoint and function of store `members`, by its SurrealDB name. */
-export const store = SurrealSchema.store({
+export const store: Store = SurrealSchema.store({
 	name: "members",
 	tables: {
 		member: MemberTable,

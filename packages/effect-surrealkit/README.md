@@ -115,7 +115,12 @@ store under its SurrealDB name (`store.tables.person`,
 `store.edges.member_of`, `store.functions["fn::greet"]`), so a record link
 (`RecordId<"person">`) or a graph step resolves to the descriptor of its
 target. Its file name has a leading underscore because table modules are
-kebab-case words, so no table can be written there.
+kebab-case words, so no table can be written there. The module also exports
+the registry's type, `Store`, whose entries are `typeof PersonTable` and the
+like: a declaration file then names the descriptors, where an inferred type
+would copy every one of them and fail with TS7056 on a large schema. `Store`
+is not re-exported from `index.ts`, where a table named `store` owns that
+name.
 
 Each table gets one schema per operation, derived from the field-presence
 matrix of the contract (section 7):
@@ -160,7 +165,8 @@ export keeps its name, its schema and its type:
   and every table module a `<Table>Visible` export (with its `Type` and
   `Encoded` types), so a table whose PascalCase name is another table's
   plus `Visible` (`person` and `person_visible`) now needs a `names` entry;
-- a new module, `_store.ts`, exports `store`, and `index.ts` re-exports it.
+- a new module, `_store.ts`, exports `store` and its type `Store`, and
+  `index.ts` re-exports `store`.
   A SurrealKit-run emitter records the new file in `.surrealkit-emit.json`
   as it does every generated file.
 
