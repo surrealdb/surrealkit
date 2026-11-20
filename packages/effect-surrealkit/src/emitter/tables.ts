@@ -197,7 +197,13 @@ const wrap = (code: string, presence: Presence): string => {
 
 const tabs = (indent: number): string => '\t'.repeat(indent);
 
-/** A struct literal over printed entries, multi-line. */
+/**
+ * A struct literal over printed entries, multi-line. A closed object without
+ * entries is exactly `{}` (`SurrealSchema.EmptyObject`): SurrealDB refuses
+ * any key a schemafull table or closed object does not declare, while
+ * `Schema.Struct({})` would accept any non-nullish value. An open one keeps
+ * `Schema.Struct({})` as the base of its record rest, which holds the keys.
+ */
 const struct = (
 	entries: ReadonlyArray<readonly [string, string]>,
 	indent: number,
@@ -205,6 +211,7 @@ const struct = (
 	world: PrintContext['world'] = 'native',
 	merge = false,
 ): string => {
+	if (entries.length === 0 && !open) return 'SurrealSchema.EmptyObject';
 	const body =
 		entries.length === 0
 			? 'Schema.Struct({})'

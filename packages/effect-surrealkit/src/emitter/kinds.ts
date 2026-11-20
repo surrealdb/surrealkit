@@ -301,7 +301,7 @@ export const printKind = (
 		case 'tuple':
 			return `Schema.Tuple([${kind.items.map((item) => printKind(item, ctx)).join(', ')}])`;
 		case 'objectLiteral': {
-			if (kind.fields.length === 0) return 'Schema.Struct({})';
+			if (kind.fields.length === 0) return 'SurrealSchema.EmptyObject';
 			const entries = kind.fields.map((field) => {
 				const value = printKind(field.kind, ctx);
 				return `${propertyKey(field.name)}: ${field.optional ? `Schema.optionalKey(${value})` : value}`;

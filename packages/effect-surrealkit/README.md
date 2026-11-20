@@ -159,8 +159,8 @@ ranges stay server-side.
 
 ### What changes for existing users of the emitter
 
-Regenerating with this version only adds to the output; every existing
-export keeps its name, its schema and its type:
+Regenerating with this version adds to the output and tightens one schema
+(below); every existing export keeps its name and its type:
 
 - every table descriptor gains `fieldPermissions`, `indexes` and `visible`,
   and every table module a `<Table>Visible` export (with its `Type` and
@@ -174,6 +174,14 @@ export keeps its name, its schema and its type:
 Code that spells out a descriptor's full type, or compares one with
 `toEqual`, sees the new keys. Hand-written descriptors without them keep
 working with every builder.
+
+One schema is stricter at run time, with the same type: a closed object with
+no fields (the Create, Merge and Content of a SCHEMAFULL table whose only
+field is its id, or a `{}` literal kind) is now `SurrealSchema.EmptyObject`
+instead of `Schema.Struct({})`, so a value other than `{}` fails to decode or
+encode instead of reaching SurrealDB (see
+[Interpretation notes](#interpretation-notes)). The generated modules need
+an `effect-surrealkit` that exports `EmptyObject`.
 
 ### Refinements
 
@@ -243,6 +251,21 @@ the rest-record codec. Array and set elements still use the stored-value codec.
   table keep their keys and are open records. Open records, flexible structs
   and schemaless rows use `SurrealValue` for extra keys in native schemas and
   `SurrealJsonValue` in JSON schemas.
+- A closed object with no fields to print is `SurrealSchema.EmptyObject`,
+  never `Schema.Struct({})`: the Create, Merge and Content inputs of a
+  SCHEMAFULL table with no writable fields, a declared object whose children
+  are all excluded from an operation, and the `{}` literal kind. Effect 4's
+  `Schema.Struct({})` checks only that a value is not `null` or `undefined`,
+  so it would pass `{ stray: 1 }`, a string or an array through unchanged
+  (even with `onExcessProperty: "error"`), and an encoded binding would carry
+  the stray keys to SurrealDB, which refuses them (`Found field 'stray', but
+  no such field exists`; ``Expected `{  }` ``). `EmptyObject` is
+  `Schema.Struct({}).check(isEmptyObject())`: it accepts exactly `{}` in both
+  directions, its JSON Schema requires `{ "type": "object",
+  "additionalProperties": false }`, and it stays a `Schema.Struct` whose type is `{}`, so a caller
+  that passes `{}` and `refine` work as before. An open row keeps
+  `Schema.Struct({})` as the base of its `Schema.StructWithRest`, where the
+  record rest holds the keys.
 - `regex` and `function` kinds become `Unsupported(kind)` (with a warning):
   the values have no SDK representation.
 

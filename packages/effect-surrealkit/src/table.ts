@@ -306,6 +306,15 @@ const replaceInRow = (
 	replacements: { readonly [key: string]: Schema.Top },
 ): RowSchema => {
 	const struct = isStructWithRest(row) ? row.schema : row;
+	// A row no replacement reaches is kept as it is, with its checks
+	// (`EmptyObject` refuses every key; a rebuilt `Schema.Struct({})` would not).
+	if (
+		!Object.keys(struct.fields).some((key) =>
+			Object.hasOwn(replacements, key),
+		)
+	) {
+		return row;
+	}
 	const fields: Record<string, Schema.Constraint> = {};
 	for (const [key, field] of Object.entries(struct.fields)) {
 		const replacement = replacements[key];

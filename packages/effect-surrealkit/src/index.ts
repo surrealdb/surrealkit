@@ -20,6 +20,7 @@ export {
 	decimalFromString,
 	SurrealNumber,
 } from './decimal.js';
+export { EmptyObject, isEmptyObject } from './empty.js';
 export {
 	Geometry,
 	GeometryCollection,

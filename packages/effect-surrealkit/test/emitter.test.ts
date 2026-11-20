@@ -1038,6 +1038,53 @@ describe('generation rules', () => {
 		);
 	});
 
+	it('prints a closed object with no fields as SurrealSchema.EmptyObject, never Schema.Struct({})', async () => {
+		const document = example();
+		const team = document.tables.find((t) => t.name === 'team') as {
+			fields: Array<Record<string, unknown>>;
+		};
+		const name = team.fields.find(
+			(f) => (f.path as string[])[0] === 'name',
+		) as Record<string, unknown>;
+		team.fields.push({
+			...structuredClone(name),
+			path: ['nothing'],
+			kind: { kind: 'objectLiteral', fields: [] },
+		});
+		team.fields.sort((x, y) =>
+			JSON.stringify(x.path) < JSON.stringify(y.path) ? -1 : 1,
+		);
+		const result = await run(
+			generate(withDigest(document), { ...corpusOptions }),
+		);
+		const team_ts =
+			result.files.find((f) => f.path === 'team.ts')?.content ?? '';
+		// The `{}` literal kind: SurrealDB 3.3 refuses `{ a: 1 }` for it.
+		expect(team_ts).toMatch(/\tnothing: SurrealSchema\.EmptyObject,/);
+		expect(team_ts).not.toContain('Schema.Struct({})');
+
+		// The corpus: tables with only an id take exactly {} as their content;
+		// open rows keep the empty base of their record rest.
+		const corpus = await run(
+			generate(readJson(compiledPath('corpus')), corpusOptions),
+		);
+		const sink =
+			corpus.files.find((f) => f.path === 'sink.ts')?.content ?? '';
+		for (const operation of ['Create', 'Merge', 'Content']) {
+			expect(sink).toContain(
+				`export const Sink${operation} = SurrealSchema.EmptyObject;`,
+			);
+		}
+		for (const file of corpus.files) {
+			for (const line of file.content.split('\n')) {
+				if (!line.includes('Schema.Struct({})')) continue;
+				expect(line, file.path).toMatch(
+					/Schema\.StructWithRest\(Schema\.Struct\(\{\}\), \[Schema\.Record\(/,
+				);
+			}
+		}
+	});
+
 	it('shares a nested object that is the same in every variant, and names the ones that are not', async () => {
 		const document = example();
 		const team = document.tables.find((t) => t.name === 'team') as {

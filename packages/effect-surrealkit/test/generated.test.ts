@@ -1,4 +1,5 @@
 /** Runtime behaviour of the golden generated modules. */
+import Ajv2020 from 'ajv/dist/2020.js';
 import { DateTime as EffectDateTime, Exit, Schema } from 'effect';
 import { DateTime, RecordId } from 'surrealdb';
 import { describe, expect, it } from 'vitest';
@@ -15,6 +16,10 @@ import {
 	store as corpusStore,
 	KindsFields,
 	KindsJsonFields,
+	SinkContent,
+	SinkCreate,
+	SinkMerge,
+	SinkTable,
 } from './golden/corpus/index.js';
 import {
 	fn_double,
@@ -50,6 +55,86 @@ const create = {
 	name: 'Ann',
 	score: 50,
 };
+
+const encodes = (schema: Schema.Top, value: unknown) =>
+	Exit.isSuccess(
+		Schema.encodeUnknownExit(schema as Schema.Codec<unknown, unknown>)(
+			value,
+			strict,
+		),
+	);
+
+describe('a closed object with no fields is exactly {}', () => {
+	// `sink` is SCHEMAFULL with only its id: SurrealDB refuses any key in its
+	// content (`Found field 'stray', but no such field exists`).
+	const inputs = [
+		['SinkCreate', SinkCreate],
+		['SinkMerge', SinkMerge],
+		['SinkContent', SinkContent],
+		['EmptyObject', SurrealSchema.EmptyObject],
+	] as const;
+
+	it.each(inputs)('%s accepts {} in both directions', (_, schema) => {
+		expect(decodes(schema, {})).toBe(true);
+		expect(encodes(schema, {})).toBe(true);
+		expect(decodes(schema, Object.create(null))).toBe(true);
+		expect(Schema.encodeSync(schema)({})).toEqual({});
+	});
+
+	it.each(
+		inputs,
+	)('%s refuses a stray key, a string, a number and an array in both directions', (_, schema) => {
+		for (const value of [{ stray: 1 }, 'x', 1, [], [1], new Date(0)]) {
+			expect(decodes(schema, value), JSON.stringify(value)).toBe(false);
+			expect(encodes(schema, value), JSON.stringify(value)).toBe(false);
+			// Also without `onExcessProperty: "error"`.
+			expect(
+				Exit.isSuccess(
+					Schema.encodeUnknownExit(
+						schema as Schema.Codec<unknown, unknown>,
+					)(value),
+				),
+			).toBe(false);
+		}
+	});
+
+	it('Schema.Struct({}) is what it replaces: it passes every non-nullish value through', () => {
+		const bare = Schema.Struct({});
+		for (const value of [{ stray: 1 }, 'x', []]) {
+			expect(encodes(bare, value)).toBe(true);
+		}
+	});
+
+	it('is the descriptor’s operation schema, and refine keeps it', () => {
+		expect(SinkTable.create).toBe(SurrealSchema.EmptyObject);
+		expect(SinkTable.merge).toBe(SurrealSchema.EmptyObject);
+		expect(SinkTable.content).toBe(SurrealSchema.EmptyObject);
+		const refined = SurrealSchema.refine(SinkTable, {});
+		expect(refined.create).toBe(SurrealSchema.EmptyObject);
+		expect(decodes(refined.create, { stray: 1 })).toBe(false);
+		// Its fields are none, as before: a `Schema.Struct`.
+		expect(SinkTable.create.fields).toEqual({});
+	});
+
+	it('has the JSON Schema of an exactly empty object', () => {
+		const { schema } = Schema.toJsonSchemaDocument(
+			SurrealSchema.EmptyObject,
+		);
+		expect(schema).toMatchObject({
+			allOf: [{ type: 'object', additionalProperties: false }],
+		});
+		const validate = new Ajv2020({ strict: false }).compile(schema);
+		expect(validate({})).toBe(true);
+		for (const value of [{ stray: 1 }, 'x', [], 1, null]) {
+			expect(validate(value), JSON.stringify(value)).toBe(false);
+		}
+	});
+
+	it('keeps the type {}: a caller that passes {} compiles', () => {
+		const value: typeof SinkCreate.Type = {};
+		expect(Schema.decodeUnknownSync(SinkCreate)(value)).toEqual({});
+	});
+});
 
 describe('generated table modules', () => {
 	it('encodes NONE in a flexible MERGE object while keeping stored array items strict', () => {
