@@ -10,7 +10,6 @@ export {
 	type InputOf,
 	layer,
 	make,
-	metrics,
 	type Queryable,
 	type Results,
 	type RunArgs,
@@ -32,3 +31,4 @@ export {
 	StatementUnexpectedThrow,
 	StatementWriteOutcomeError,
 } from './errors.js';
+export { metrics } from './internal/trace.js';

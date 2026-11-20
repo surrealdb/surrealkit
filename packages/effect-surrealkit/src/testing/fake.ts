@@ -11,12 +11,8 @@
  */
 import { Layer } from 'effect';
 
-import {
-	type Client,
-	makeWith,
-	SurrealClient,
-	type Transport,
-} from '../client/client.js';
+import { type Client, makeWith, SurrealClient } from '../client/client.js';
+import type { Transport } from '../client/internal/transport.js';
 import { type AnyStatement, scanTopLevel } from '../statement/statement.js';
 
 const ReplyTypeId = '~effect-surrealkit/testing/Reply';
