@@ -90,6 +90,118 @@ const keyMeter = part({
 	binds: { key: 'string' },
 });
 
+// `rejectsNone`: a binding assigned to a field that rejects NONE.
+const assignName = {
+	kind: 'field',
+	table: 'person',
+	field: 'name',
+	role: 'assign',
+	line: 1,
+} as const;
+
+const renamePerson = part({
+	sql: 'UPDATE person SET name = $name;',
+	free: ['name'],
+	uses: { name: [assignName] },
+	binds: { name: 'string' },
+	rejectsNone: { name: { table: 'person', field: 'name', kind: 'string' } },
+});
+
+// Its uses resolve to different kinds, so it has no `binds` entry.
+const renameByAge = part({
+	sql: 'UPDATE person SET name = $name WHERE age = $name;',
+	free: ['name'],
+	uses: {
+		name: [
+			assignName,
+			{
+				kind: 'field',
+				table: 'person',
+				field: 'age',
+				role: 'compare',
+				line: 1,
+			},
+		],
+	},
+	rejectsNone: { name: { table: 'person', field: 'name', kind: 'string' } },
+});
+
+// Compared with an optional field and assigned to one that rejects NONE.
+const renameByNick = part({
+	sql: 'UPDATE person SET name = $name WHERE nick = $name;',
+	free: ['name'],
+	uses: {
+		name: [
+			assignName,
+			{
+				kind: 'field',
+				table: 'person',
+				field: 'nick',
+				role: 'compare',
+				line: 1,
+			},
+		],
+	},
+	binds: { name: 'string' },
+	rejectsNone: { name: { table: 'person', field: 'name', kind: 'string' } },
+});
+
+const tagPerson = part({
+	sql: 'UPDATE person SET tags = $tags;',
+	free: ['tags'],
+	uses: {
+		tags: [{ ...assignName, field: 'tags' }],
+	},
+	rejectsNone: {
+		tags: { table: 'person', field: 'tags', kind: 'array<string>' },
+	},
+});
+
+export const refusedNone = () => {
+	sequence(renamePerson).define({
+		// @ts-expect-error [none/assigned-undefined-or] NONE assigned to a string field is rejected by the engine
+		params: { name: Schema.UndefinedOr(SurrealSchema.String) },
+		result: Schema.Unknown,
+	});
+	sequence(renamePerson).define({
+		// @ts-expect-error [none/assigned-undefined-or-branded] a brand does not take NONE away
+		params: {
+			name: Schema.UndefinedOr(
+				SurrealSchema.String.pipe(Schema.brand('app/Name')),
+			),
+		},
+		result: Schema.Unknown,
+	});
+	sequence(renameByAge).define({
+		// @ts-expect-error [none/assigned-without-binds] refused without a `binds` entry too
+		params: { name: Schema.UndefinedOr(SurrealSchema.String) },
+		result: Schema.Unknown,
+	});
+	sequence(renameByNick).define({
+		// @ts-expect-error [none/assigned-and-compared] one assignment that rejects NONE decides it
+		params: { name: Schema.UndefinedOr(SurrealSchema.String) },
+		result: Schema.Unknown,
+	});
+	sequence(tagPerson).define({
+		// @ts-expect-error [none/assigned-array] the kind need not be simple
+		params: {
+			tags: Schema.UndefinedOr(Schema.Array(SurrealSchema.String)),
+		},
+		result: Schema.Unknown,
+	});
+	sequence(
+		part({ sql: 'SELECT * FROM person WHERE age > $age;', free: ['age'] }),
+		renamePerson,
+	).define({
+		// @ts-expect-error [none/assigned-in-sequence] refused in a sequence of parts
+		params: {
+			age: SurrealSchema.Int,
+			name: Schema.UndefinedOr(SurrealSchema.String),
+		},
+		result: Schema.Unknown,
+	});
+};
+
 export const rejected = () => {
 	sequence(readMeter).define({
 		// @ts-expect-error [binds/option-wrong-representation] a number inside `UndefinedOr` for an optional string

@@ -162,3 +162,114 @@ export const plainNullOr = sequence(writeMeter).define({
 	params: { model: Schema.NullOr(Schema.String) },
 	result: Schema.Unknown,
 });
+
+// `rejectsNone` refuses only a codec that can hold NONE for a binding
+// assigned to a field that rejects it.
+const renamePerson = part({
+	sql: 'UPDATE person SET name = $name;',
+	free: ['name'],
+	uses: {
+		name: [
+			{
+				kind: 'field',
+				table: 'person',
+				field: 'name',
+				role: 'assign',
+				line: 1,
+			},
+		],
+	},
+	binds: { name: 'string' },
+	rejectsNone: { name: { table: 'person', field: 'name', kind: 'string' } },
+});
+export const assignedPlain = sequence(renamePerson).define({
+	params: { name: SurrealSchema.String },
+	result: Schema.Unknown,
+});
+export const assignedLiteral = sequence(renamePerson).define({
+	params: { name: Schema.Literal('a') },
+	result: Schema.Unknown,
+});
+export const assignedBranded = sequence(renamePerson).define({
+	params: { name: SurrealSchema.String.pipe(Schema.brand('app/Name')) },
+	result: Schema.Unknown,
+});
+// `unknown` holds everything, so it is not taken to hold NONE.
+export const assignedUnknown = sequence(renamePerson).define({
+	params: { name: Schema.Unknown },
+	result: Schema.Unknown,
+});
+// A part that defines the name binds it itself: no codec, nothing refused.
+export const assignedDefined = sequence(
+	part({ sql: "LET $name = 'a';", defines: ['name'] }),
+	renamePerson,
+).define({
+	params: {},
+	result: Schema.Unknown,
+});
+
+// Compared, never assigned, with a field that rejects NONE: NONE compares
+// (`WHERE $name = NONE OR name = $name`), so nothing is refused.
+const findPerson = part({
+	sql: 'SELECT * FROM person WHERE $name = NONE OR name = $name;',
+	free: ['name'],
+	uses: {
+		name: [
+			{
+				kind: 'field',
+				table: 'person',
+				field: 'name',
+				role: 'compare',
+				line: 1,
+			},
+		],
+	},
+	binds: { name: 'option<string>' },
+});
+export const comparedUndefinedOr = sequence(findPerson).define({
+	params: { name: Schema.UndefinedOr(SurrealSchema.String) },
+	result: Schema.Unknown,
+});
+
+// Assigned to a field that accepts NONE (`option<string>`, or one with a
+// DEFAULT): the generator writes no `rejectsNone` entry for it.
+const renameNick = part({
+	sql: 'UPDATE person SET nick = $nick;',
+	free: ['nick'],
+	uses: {
+		nick: [
+			{
+				kind: 'field',
+				table: 'person',
+				field: 'nick',
+				role: 'assign',
+				line: 1,
+			},
+		],
+	},
+	binds: { nick: 'option<string>' },
+});
+export const assignedOptional = sequence(renameNick).define({
+	params: { nick: Schema.UndefinedOr(SurrealSchema.String) },
+	result: Schema.Unknown,
+});
+const retitlePerson = part({
+	sql: 'UPDATE person SET title = $title;',
+	free: ['title'],
+	uses: {
+		title: [
+			{
+				kind: 'field',
+				table: 'person',
+				field: 'title',
+				role: 'assign',
+				line: 1,
+			},
+		],
+	},
+	binds: { title: 'string' },
+});
+export const assignedDefaulted = sequence(retitlePerson).define({
+	params: { title: Schema.UndefinedOr(SurrealSchema.String) },
+	result: Schema.Unknown,
+});

@@ -205,6 +205,7 @@ export {
 	type Part,
 	part,
 	type RejectsNone,
+	type RejectsNoneOf,
 	sequence,
 	type Tables,
 	type ThrownBy,

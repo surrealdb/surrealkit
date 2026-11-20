@@ -589,6 +589,57 @@ export type BindsOf<
 			| BindsOf<Tail, Defined | Head['defines'][number]>
 	: never;
 
+/** One binding a part's `rejectsNone` states. */
+interface NoneEntry {
+	readonly name: string;
+	readonly table: string;
+	readonly field: string;
+	readonly kind: string;
+}
+
+/**
+ * The entries of one part's `rejectsNone`, without the index signature
+ * and without the names in `Defined`.
+ */
+type NoneEntries<N, Defined extends string> = {
+	[K in keyof N as string extends K
+		? never
+		: K extends Defined
+			? never
+			: K]: N[K] extends {
+		readonly table: infer T extends string;
+		readonly field: infer F extends string;
+		readonly kind: infer I extends string;
+	}
+		? {
+				readonly name: K;
+				readonly table: T;
+				readonly field: F;
+				readonly kind: I;
+			}
+		: never;
+} extends infer M
+	? M[keyof M]
+	: never;
+
+/**
+ * The `rejectsNone` entries of a sequence's parts, for the names that
+ * remain bindings: a name an earlier part defines is not one.
+ */
+export type RejectsNoneOf<
+	Parts extends ReadonlyArray<Part>,
+	Defined extends string = never,
+> = Parts extends readonly [
+	infer Head extends Part,
+	...infer Tail extends ReadonlyArray<Part>,
+]
+	?
+			| (Head extends { readonly rejectsNone: infer N }
+					? NoneEntries<N, Defined>
+					: never)
+			| RejectsNoneOf<Tail, Defined | Head['defines'][number]>
+	: never;
+
 /** How a message names a use. */
 type UseText<U> = U extends {
 	readonly kind: 'field';
@@ -633,11 +684,33 @@ type Misfits<E, C> = E extends BindEntry
 		: never
 	: never;
 
-/** The message of each binding in `P` whose codec cannot hold its kind. */
-type MisfitsIn<P, E extends BindEntry> = {
-	readonly [K in keyof P]: K extends E['name']
-		? Misfits<Extract<E, { readonly name: K }>, P[K]>
-		: never;
+/**
+ * A message for each entry whose codec `C` can hold NONE: `undefined` is a
+ * member of its encoded type (`unknown` and `any`, which hold everything,
+ * are not refused). `never` otherwise.
+ */
+type HoldsNone<E, C> = E extends NoneEntry
+	? C extends Codec
+		? unknown extends C['Encoded']
+			? never
+			: undefined extends C['Encoded']
+				? `binding \`${E['name']}\` is assigned to \`${E['table']}.${E['field']}\` (${E['kind']}), which rejects NONE, and its codec can hold NONE`
+				: never
+		: never
+	: never;
+
+/**
+ * The message of each binding in `P` whose codec cannot hold its kind, or
+ * can hold NONE where it is assigned to a field that rejects NONE.
+ */
+type MisfitsIn<P, E extends BindEntry, N extends NoneEntry> = {
+	readonly [K in keyof P]:
+		| (K extends E['name']
+				? Misfits<Extract<E, { readonly name: K }>, P[K]>
+				: never)
+		| (K extends N['name']
+				? HoldsNone<Extract<N, { readonly name: K }>, P[K]>
+				: never);
 }[keyof P];
 
 /** One member of a union, so a message names one binding. */
@@ -652,12 +725,16 @@ type OneOf<U> = (
 	: never;
 
 /**
- * `P`, when each codec can hold its binding's kind. Otherwise the message
- * for one binding whose codec cannot, so the compiler's first line names it.
+ * `P`, when each codec can hold its binding's kind and none that can hold
+ * NONE is assigned to a field that rejects it. Otherwise the message for
+ * one binding whose codec does not fit, so the compiler's first line names
+ * it.
  */
-type Fitted<P, E extends BindEntry> = [MisfitsIn<P, E>] extends [never]
+type Fitted<P, E extends BindEntry, N extends NoneEntry = never> = [
+	MisfitsIn<P, E, N>,
+] extends [never]
 	? P
-	: OneOf<MisfitsIn<P, E>>;
+	: OneOf<MisfitsIn<P, E, N>>;
 
 /** The messages any part of a sequence can `THROW`. */
 export type ThrownBy<Parts extends ReadonlyArray<Part>> =
@@ -694,10 +771,16 @@ export type Contract<
 	? P
 	: string extends Unbound<Parts>
 		? P
-		: [Extract<Parts[number], { readonly binds: object }>] extends [never]
+		: [
+					Extract<
+						Parts[number],
+						| { readonly binds: object }
+						| { readonly rejectsNone: object }
+					>,
+				] extends [never]
 			? Exactly<Unbound<Parts>, P>
 			: [Exactly<Unbound<Parts>, P>] extends [P]
-				? Fitted<P, BindsOf<Parts>>
+				? Fitted<P, BindsOf<Parts>, RejectsNoneOf<Parts>>
 				: Exactly<Unbound<Parts>, P>;
 
 /**

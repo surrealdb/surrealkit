@@ -702,6 +702,12 @@ exports[`type diagnostics > module/binds-wrong-representation 1`] = `
 ]
 `;
 
+exports[`type diagnostics > module/none-assigned 1`] = `
+[
+  "TS2322: Type '{ raw: Schema.declareConstructor<number, number, readonly [], number>; site: Schema.declareConstructor<_RecordId<"site">, _RecordId<"site">, readonly [Schema.declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>; station: Schema.UndefinedOr<...>; tags: Schema.Unknown; }' is not assignable to type '"binding \`station\` is assigned to \`gauge.station\` (string), which rejects NONE, and its codec can hold NONE"'.",
+]
+`;
+
 exports[`type diagnostics > module/sequence-extra-binding 1`] = `
 [
   "TS2322: Type 'declareConstructor<_RecordId, _RecordId, readonly [], _RecordId>' is not assignable to type '"binding \`$owner\` is not read by this sequence"'.",
@@ -724,6 +730,42 @@ exports[`type diagnostics > module/template-missing-fill 1`] = `
 [
   "TS2345: Argument of type '{}' is not assignable to parameter of type '{ readonly __FILTER__: string | Text<string, string, string, string, TextHoleScopes>; }'.
   Property '__FILTER__' is missing in type '{}' but required in type '{ readonly __FILTER__: string | Text<string, string, string, string, TextHoleScopes>; }'.",
+]
+`;
+
+exports[`type diagnostics > none/assigned-and-compared 1`] = `
+[
+  "TS2322: Type '{ name: Schema.UndefinedOr<Schema.declareConstructor<string, string, readonly [], string>>; }' is not assignable to type '"binding \`name\` is assigned to \`person.name\` (string), which rejects NONE, and its codec can hold NONE"'.",
+]
+`;
+
+exports[`type diagnostics > none/assigned-array 1`] = `
+[
+  "TS2322: Type '{ tags: Schema.UndefinedOr<Schema.$Array<Schema.declareConstructor<string, string, readonly [], string>>>; }' is not assignable to type '"binding \`tags\` is assigned to \`person.tags\` (array<string>), which rejects NONE, and its codec can hold NONE"'.",
+]
+`;
+
+exports[`type diagnostics > none/assigned-in-sequence 1`] = `
+[
+  "TS2322: Type '{ age: Schema.declareConstructor<number, number, readonly [], number>; name: Schema.UndefinedOr<Schema.declareConstructor<string, string, readonly [], string>>; }' is not assignable to type '"binding \`name\` is assigned to \`person.name\` (string), which rejects NONE, and its codec can hold NONE"'.",
+]
+`;
+
+exports[`type diagnostics > none/assigned-undefined-or 1`] = `
+[
+  "TS2322: Type '{ name: Schema.UndefinedOr<Schema.declareConstructor<string, string, readonly [], string>>; }' is not assignable to type '"binding \`name\` is assigned to \`person.name\` (string), which rejects NONE, and its codec can hold NONE"'.",
+]
+`;
+
+exports[`type diagnostics > none/assigned-undefined-or-branded 1`] = `
+[
+  "TS2322: Type '{ name: Schema.UndefinedOr<Schema.brand<Schema.declareConstructor<string, string, readonly [], string>, "app/Name">>; }' is not assignable to type '"binding \`name\` is assigned to \`person.name\` (string), which rejects NONE, and its codec can hold NONE"'.",
+]
+`;
+
+exports[`type diagnostics > none/assigned-without-binds 1`] = `
+[
+  "TS2322: Type '{ name: Schema.UndefinedOr<Schema.declareConstructor<string, string, readonly [], string>>; }' is not assignable to type '"binding \`name\` is assigned to \`person.name\` (string), which rejects NONE, and its codec can hold NONE"'.",
 ]
 `;
 

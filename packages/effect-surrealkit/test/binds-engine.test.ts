@@ -154,6 +154,34 @@ describe.skipIf(!engineConfigured)('parts with binds on an engine', () => {
 		).toEqual(['North']);
 	});
 
+	it('rejects NONE assigned to a field its rejectsNone names', async () => {
+		// The codec is refused at compile time; forced through, the engine
+		// rejects the write.
+		const record = sequence(gauges.record).define({
+			name: 'gauges.record',
+			// @ts-expect-error `station` is assigned to `gauge.station` (string), which rejects NONE
+			params: {
+				raw: SurrealSchema.Float,
+				site: SurrealSchema.RecordIdFor('site'),
+				station: Schema.UndefinedOr(SurrealSchema.String),
+				tags: Schema.Array(SurrealSchema.String),
+			},
+			result: Schema.Unknown,
+		});
+		const exit = await within(
+			Effect.runPromiseExit(
+				client.run(record, {
+					raw: 1,
+					site: new RecordId('site', 'north'),
+					station: undefined,
+					tags: [],
+				}),
+			),
+		);
+		expect(exit._tag).toBe('Failure');
+		expect(String(exit)).toContain('found `NONE`');
+	});
+
 	it('compares an optional field with a NONE binding', async () => {
 		// SurrealDB answers `note = NONE` true on a row whose `note` is
 		// absent, and false on one that holds a string, on the embedded

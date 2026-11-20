@@ -18,6 +18,14 @@ const same = <A, B>(_: Same<A, B>): void => undefined;
 same<(typeof gauges.readings.binds)['station'], 'option<string>'>(true);
 same<(typeof gauges.record.binds)['station'], 'string'>(true);
 same<(typeof gauges.record.binds)['site'], 'record<site>'>(true);
+same<
+	(typeof gauges.record.rejectsNone)['station'],
+	{
+		readonly table: 'gauge';
+		readonly field: 'station';
+		readonly kind: 'string';
+	}
+>(true);
 
 export const readings = sequence(gauges.readings).define({
 	params: {
@@ -50,6 +58,16 @@ export const misfit = () => {
 			raw: SurrealSchema.Float,
 			site: SurrealSchema.String,
 			station: SurrealSchema.String,
+			tags: Schema.Unknown,
+		},
+		result: Schema.Unknown,
+	});
+	sequence(gauges.record).define({
+		// @ts-expect-error [module/none-assigned] `station` is created as a string: NONE is rejected
+		params: {
+			raw: SurrealSchema.Float,
+			site: SurrealSchema.RecordIdFor('site'),
+			station: Schema.UndefinedOr(SurrealSchema.String),
 			tags: Schema.Unknown,
 		},
 		result: Schema.Unknown,
