@@ -569,6 +569,17 @@ export const kindText = (kind: Kind): string => {
 };
 
 /**
+ * The kind text of a value whose kind is `kind` and that the document
+ * records as `optional` (the engine's `option<K>`, its `none` variant
+ * removed): `option<K>`. A kind that already is `option<…>`, or `none`
+ * itself, is printed as it is, and so is any kind that is not optional.
+ */
+const optionalKindText = (kind: Kind, optional: boolean): string =>
+	optional && kind.kind !== 'option' && kind.kind !== 'none'
+		? `option<${kindText(kind)}>`
+		: kindText(kind);
+
+/**
  * Whether a value of `kind` can never be NONE: every kind but `any`,
  * `none`, `option<…>` and those whose NONE handling is not established
  * (`regex`, `function`, `file`, `table` and kinds the document does not
@@ -628,10 +639,12 @@ const rejectsNone = (table: Table, field: Field): boolean => {
  * The tables (edge tables included) and custom functions a schema document
  * declares, each sorted: the `declared` names of a statement scope. Its
  * `detail` holds, for each table, its declared fields (each path joined
- * with `.`) with each field's kind text and whether the engine rejects
+ * with `.`) with each field's kind text (`option<K>` for a field the
+ * document records as optional) and whether the engine rejects
  * NONE assigned to it (see `DeclaredTable`), whether it accepts undeclared
  * fields (it is not schemafull) and the kind text of its id key; and for
- * each function the kind texts of its arguments, in order. A field or key
+ * each function the kind texts of its arguments, in order (`option<K>`
+ * for an optional one). An id key has no optional flag. A field or key
  * the document gives no kind has none.
  */
 export const declaredNames = (document: SchemaDocument): DeclaredNames => ({
@@ -651,7 +664,10 @@ export const declaredNames = (document: SchemaDocument): DeclaredNames => ({
 								field.path.join('.'),
 								{
 									...(field.kind !== undefined && {
-										kind: kindText(field.kind),
+										kind: optionalKindText(
+											field.kind,
+											field.optional,
+										),
 									}),
 									...(rejectsNone(table, field) && {
 										rejectsNone: true as const,
@@ -673,7 +689,9 @@ export const declaredNames = (document: SchemaDocument): DeclaredNames => ({
 				)
 				.map((fn) => [
 					fn.name,
-					fn.args.map((arg) => kindText(arg.kind)),
+					fn.args.map((arg) =>
+						optionalKindText(arg.kind, arg.optional),
+					),
 				]),
 		),
 	},

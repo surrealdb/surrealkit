@@ -1093,7 +1093,8 @@ With `--schema` (or a scope's `declared` names from
 `declaredNames(document)`, whose `detail` holds each table's fields with
 their kind text and whether they reject NONE, whether it accepts
 undeclared fields, its id key's kind,
-and each function's argument kinds), every use must resolve when the
+and each function's argument kinds; a field or argument the document
+records as optional has the kind text `option<K>`), every use must resolve when the
 modules are generated: a field the table neither declares nor accepts
 (`compares \`utcDy\` of \`snapshot\`, which declares no such field`) or
 an argument beyond the function's arguments is an error with its file and

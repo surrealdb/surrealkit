@@ -21,6 +21,7 @@ const fixtures = [
 	'graph-negative.ts',
 	'binds-negative.ts',
 	'generated-binds.ts',
+	'generated-presence.ts',
 	'family-negative.ts',
 ].map((file) => join(typesRoot, file));
 

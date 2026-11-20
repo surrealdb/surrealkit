@@ -708,6 +708,12 @@ exports[`type diagnostics > module/none-assigned 1`] = `
 ]
 `;
 
+exports[`type diagnostics > module/presence-required-narrow-undefined-or 1`] = `
+[
+  "TS2322: Type '{ opt: Schema.declareConstructor<string, string, readonly [], string>; req: Schema.UndefinedOr<Schema.Literal<"a">>; }' is not assignable to type '"binding \`req\` is assigned to \`m.req\` (string), which rejects NONE, and its codec can hold NONE"'.",
+]
+`;
+
 exports[`type diagnostics > module/sequence-extra-binding 1`] = `
 [
   "TS2322: Type 'declareConstructor<_RecordId, _RecordId, readonly [], _RecordId>' is not assignable to type '"binding \`$owner\` is not read by this sequence"'.",

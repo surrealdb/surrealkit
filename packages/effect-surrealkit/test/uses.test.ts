@@ -332,6 +332,82 @@ describe('declaredNames: detail', () => {
 	});
 });
 
+const compiled = async (name: string) =>
+	declaredNames(
+		await Effect.runPromise(
+			decodeDocument(readJson(corpusPath('compiled', name))),
+		),
+	);
+
+describe('declaredNames: optional kinds', () => {
+	it('gives a field the document records as optional its option kind', async () => {
+		// The document records `TYPE option<string>` as kind `string` with
+		// `optional: true`.
+		const fields = (await compiled('field-presence.v2.json')).detail?.tables
+			.m?.fields;
+		expect(fields?.opt).toEqual({ kind: 'option<string>' });
+		expect(fields?.optd).toEqual({ kind: 'option<string>' });
+		expect(fields?.obj).toEqual({ kind: 'option<object>' });
+		expect(fields?.['obj.a']).toEqual({ kind: 'option<int>' });
+		// Not optional: unchanged.
+		expect(fields?.req).toEqual({ kind: 'string', rejectsNone: true });
+		expect(fields?.nul).toEqual({
+			kind: 'null | string',
+			rejectsNone: true,
+		});
+		expect(fields?.dflt).toEqual({ kind: 'string' });
+	});
+
+	it('gives an optional function argument its option kind, and keeps id keys', async () => {
+		const detail = (await compiled('corpus.v2.json')).detail;
+		expect(detail?.functions['fn::optional_first']).toEqual([
+			'option<int>',
+			'int',
+		]);
+		expect(detail?.functions['fn::greet']).toEqual([
+			'string',
+			'option<string>',
+			'option<int>',
+		]);
+		// An id key carries no optional flag: a key is never NONE.
+		expect(detail?.tables.id_int?.idKey).toBe('int');
+		expect(detail?.tables.id_union?.idKey).toBe('int | string');
+	});
+
+	it('keeps a kind that already is an option', () => {
+		// A document may give the option kind and the flag both, as the
+		// hand-written binds fixture does.
+		return declared().then((names) =>
+			expect(names.detail?.tables.gauge?.fields.note).toEqual({
+				kind: 'option<string>',
+			}),
+		);
+	});
+
+	it('binds an assignment to an optional field of a real document as option<K>', async () => {
+		const { files } = renderStatementModulesSync({
+			scopes: [
+				{
+					name: 'presence',
+					files: [
+						{
+							name: 'q',
+							sql: 'UPDATE m SET opt = $o, req = $r, dflt = $d;',
+						},
+					],
+					declared: await compiled('field-presence.v2.json'),
+				},
+			],
+		});
+		expect(files[0]?.content).toContain(
+			'\tbinds: { "d": "string", "o": "option<string>", "r": "string" },\n',
+		);
+		expect(files[0]?.content).toContain(
+			'\trejectsNone: { "r": { table: "m", field: "req", kind: "string" } },\n',
+		);
+	});
+});
+
 describe('declaredNames: fields that reject NONE', () => {
 	it('marks a top-level field whose kind excludes NONE and that no clause supplies', async () => {
 		// The engine's own document for the field-presence corpus.
@@ -580,6 +656,40 @@ describe('statements with binds: goldens', () => {
 				golden,
 				'--schema',
 				bindsDocument,
+				'--check',
+			],
+			{
+				cwd: import.meta.dirname,
+				stdin: async () => '',
+				stdout: () => {},
+				stderr: (text) => {
+					stderr += text;
+				},
+			},
+		);
+		expect(code, stderr).toBe(0);
+	});
+});
+
+const presenceFixtures = join(
+	import.meta.dirname,
+	'fixtures',
+	'statements-presence',
+);
+const presenceGolden = goldenDir('statements-presence');
+
+describe('statements from the field-presence document: goldens', () => {
+	it('the command with --schema writes the same modules', async () => {
+		let stderr = '';
+		const code = await run(
+			[
+				'statements',
+				'--input',
+				presenceFixtures,
+				'--out',
+				presenceGolden,
+				'--schema',
+				corpusPath('compiled', 'field-presence.v2.json'),
 				'--check',
 			],
 			{

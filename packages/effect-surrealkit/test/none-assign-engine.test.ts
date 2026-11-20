@@ -6,7 +6,12 @@
  * the facts the compile-time NONE refusal rests on: a codec that can hold
  * NONE is refused only for a field that rejects NONE in every one of them.
  */
+import { Effect, Schema } from 'effect';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { make as makeClient } from '../src/client/index.js';
+import * as SurrealSchema from '../src/index.js';
+import { sequence } from '../src/statement/index.js';
 
 import {
 	type Engine,
@@ -15,6 +20,7 @@ import {
 	startEngine,
 	within,
 } from './engine.js';
+import { presence } from './golden/statements-presence/index.js';
 
 if (!engineConfigured) {
 	console.warn(
@@ -368,3 +374,57 @@ describe.skipIf(!engineConfigured)('a NONE binding assigned to a field', () => {
 		expect(found).toEqual(expected);
 	});
 });
+
+describe.skipIf(!engineConfigured)(
+	'a generated part assigning an optional field',
+	() => {
+		let engine: Engine;
+
+		beforeAll(async () => {
+			engine = await startEngine();
+			// The `m` fields of the field-presence corpus the part reads.
+			await within(
+				Promise.resolve(
+					engine.db.query(
+						"DEFINE TABLE m SCHEMAFULL; DEFINE FIELD req ON m TYPE string; DEFINE FIELD opt ON m TYPE option<string>; CREATE m:one SET req = 'x';",
+					),
+				),
+			);
+		});
+		afterAll(async () => {
+			await engine?.stop();
+		});
+
+		it('runs with a narrow codec that can hold NONE', async () => {
+			const client = makeClient(engine.db);
+			const assign = sequence(presence.assign).define({
+				name: 'presence.assign',
+				params: {
+					opt: Schema.UndefinedOr(Schema.Literal('a')),
+					req: SurrealSchema.String,
+				},
+				result: Schema.Unknown,
+			});
+			const opt = async () => {
+				const [value] = await within(
+					Promise.resolve(
+						engine.db.query<[unknown]>(
+							'RETURN <string> (SELECT VALUE opt FROM ONLY m:one);',
+						),
+					),
+				);
+				return value;
+			};
+			await within(
+				Effect.runPromise(client.run(assign, { opt: 'a', req: 'y' })),
+			);
+			expect(await opt()).toBe('a');
+			await within(
+				Effect.runPromise(
+					client.run(assign, { opt: undefined, req: 'y' }),
+				),
+			);
+			expect(await opt()).toBe('NONE');
+		});
+	},
+);
