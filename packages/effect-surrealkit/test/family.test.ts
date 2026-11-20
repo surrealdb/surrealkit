@@ -14,14 +14,7 @@ import * as SurrealSchema from '../src/index.js';
 import { choose, compose, empty, family } from '../src/statement/index.js';
 import { fake } from '../src/testing/index.js';
 import { catalog } from './golden/statements/index.js';
-import {
-	body,
-	codecs,
-	listings,
-	sized,
-	summary,
-	visibility,
-} from './types/family.js';
+import { body, codecs, listings, sized, summary } from './types/family.js';
 
 describe('a statement family', () => {
 	it('builds one statement per key, each reading exactly what its text reads', () => {
