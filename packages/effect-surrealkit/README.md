@@ -1507,6 +1507,19 @@ parts, and `make` takes it as `valueSlot` (default: the last).
 session's authentication. `make(db)` returns the same client as a plain
 value, for an application that names its own services, one per session.
 
+For replay-sensitive WebSocket writes and for live queries that must report a
+lost connection, connect with `reconnect: false` on the root SDK connection.
+Forked sessions inherit that setting. With automatic reconnect enabled, SDK
+2.1.1 can resend a buffered request whose acknowledgement was lost, even
+with conflict retries disabled. An unmanaged live listener can also keep
+waiting after its original socket is gone. The client counts its own sends;
+the SDK can make additional physical sends inside one attempt.
+
+```ts
+await db.connect(endpoint, { reconnect: false });
+const client = make(db);
+```
+
 | Error | When | Was anything written? |
 | --- | --- | --- |
 | `StatementEncodeError` | a binding failed its codec, or its encoded value is not one the SDK sends without loss (`path` says where inside it) | no, nothing was sent |
