@@ -42,6 +42,7 @@ import type {
 	StatementRequestError,
 	StatementScopeError,
 	StatementUnsupported,
+	TransactionOutcomeUnknown,
 } from './errors.js';
 import {
 	makeWithTransaction,
@@ -241,7 +242,11 @@ export interface Client {
 		options: BulkOptions<K, ElementOf<P[K]['Type']>, E, C>,
 	) => Effect.Effect<
 		BulkSummary<R['Type']>,
-		StatementError<T> | BulkWriteError<T> | StatementUnsupported | E,
+		| StatementError<T>
+		| BulkWriteError<T>
+		| StatementUnsupported
+		| TransactionOutcomeUnknown
+		| E,
 		C
 	>;
 

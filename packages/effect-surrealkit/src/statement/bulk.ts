@@ -1,6 +1,21 @@
-import type { Expr } from './expr.js';
-import type { Codec, Params, Simplify, Statement } from './statement.js';
-import type { PureTable } from './table.js';
+import { Schema } from 'effect';
+
+import {
+	admit,
+	assertReader,
+	type Expr,
+	operand,
+	paramsOf,
+	settle,
+} from './expr.js';
+import {
+	type Codec,
+	make,
+	type Params,
+	type Simplify,
+	type Statement,
+} from './statement.js';
+import { type PureTable, readerOf } from './table.js';
 import type { FitsRows, NoResult, OperationOf } from './write.js';
 
 /** One record id and the fields to merge into its row. */
@@ -50,11 +65,38 @@ export function updateEach<
 	options?: { readonly missing?: Missing },
 ): UpdateEach<T, P>;
 export function updateEach(
-	_table: PureTable,
-	_rows: unknown,
-	_options?: { readonly missing?: Missing },
-): never {
-	throw new Error(
-		'effect-surrealkit: updateEach is not implemented yet (lane L5)',
-	);
+	table: PureTable,
+	rows: unknown,
+	options?: { readonly missing?: Missing },
+): UpdateEach<PureTable, Params, Missing> {
+	const data = rows as Expr;
+	const missing = options?.missing ?? 'error';
+	return {
+		build: (name = `update each ${table.name}`) => {
+			const params = paramsOf(data);
+			if (Object.hasOwn(params, 'row')) {
+				throw new RangeError(
+					'UPDATE EACH reserves the binding name `row` for its loop variable',
+				);
+			}
+			const what = `statement \`${name}\``;
+			const context = admit({ own: undefined, what, parents: 'refuse' }, [
+				data,
+			]);
+			assertReader(readerOf(table), settle(context, what), what);
+			const guard =
+				missing === 'error'
+					? "IF !record::exists($row.id) { THROW 'Record not found'; }; "
+					: '';
+			return make({
+				name,
+				// FOR itself returns NONE. The block provides the empty list of a many-row write.
+				sql: `{ FOR $row IN ${operand(data)} { ${guard}UPDATE $row.id MERGE $row.set RETURN NONE; }; [] };`,
+				params,
+				result: Schema.Tuple([]),
+				throws: missing === 'error' ? ['Record not found'] : [],
+				writes: true,
+			});
+		},
+	};
 }

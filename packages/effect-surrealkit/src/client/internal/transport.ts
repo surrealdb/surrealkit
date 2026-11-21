@@ -26,6 +26,8 @@ export interface RequestPart {
 
 export interface Request {
 	readonly mode: 'query' | 'atomic';
+	/** Bulk owns replay and disables SDK-level retries on its collected writes. */
+	readonly sdkRetry?: false;
 	readonly sql: string;
 	readonly bindings: Readonly<Record<string, unknown>>;
 	readonly parts: ReadonlyArray<RequestPart>;
@@ -130,10 +132,15 @@ export const sdkTransport = (db: Queryable): Transport => {
 			bound = new BoundQuery(request.sql, request.bindings);
 			requests.set(request, bound);
 		}
-		return db.transaction([bound], { signal });
+		return db.transaction([bound], {
+			signal,
+			...(request.sdkRetry === false && { retry: false }),
+		});
 	};
-	const query = (request: Request, signal: Signal) =>
-		db.query(request.sql, request.bindings).signal(signal);
+	const query = (request: Request, signal: Signal) => {
+		const pending = db.query(request.sql, request.bindings).signal(signal);
+		return request.sdkRetry === false ? pending.retry(false) : pending;
+	};
 	const beginTransaction = db.beginTransaction?.bind(db);
 	const liveOf = db.liveOf?.bind(db);
 	return {

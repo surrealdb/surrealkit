@@ -261,6 +261,7 @@ export const clientContract = (session: Queryable, client: Client): void => {
 			| StatementError<'miss'>
 			| BulkWriteError<'miss'>
 			| StatementUnsupported
+			| TransactionOutcomeUnknown
 			| 'source',
 			SurrealClient
 		>

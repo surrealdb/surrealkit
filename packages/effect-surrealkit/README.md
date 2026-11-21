@@ -1816,7 +1816,55 @@ Read the data back before deciding whether to run the body again.
 
 #### Bulk writes
 
-Written by lane L5.
+Pass an iterable or an Effect `Stream` for a statement's list binding.
+Every chunk is encoded through that binding's schema. Other bindings are
+included unchanged. The default chunk size is 500 and the result holds the
+decoded answer for each chunk in input order.
+
+```ts
+import { Schema } from 'effect';
+import { insert, param } from 'effect-surrealkit/statement';
+import { PersonCreate, PersonTable } from './generated/surreal/index.js';
+
+const insertPeople = insert(
+  PersonTable,
+  param('people', Schema.Array(PersonCreate)),
+).returning('none').build('insert people');
+
+const wrote = client.bulk(insertPeople, { people }, { over: 'people', chunk: 250 });
+```
+
+By default, embedded and WebSocket sessions begin one interactive
+transaction, send each chunk, then commit. An HTTP session sends one
+atomic batch containing **every chunk**, so the request size is unbounded
+by `chunk`. A stream is collected before sending that batch. The client
+peeks one chunk so empty input sends nothing. If begin is unsupported it
+reuses that chunk and runs the hooks only on the fallback. Inside an
+existing transaction, `tx.bulk` uses its handle.
+
+With `atomic: false`, each chunk is a separate request. The client waits
+for its acknowledgement before pulling the next chunk. A
+`BulkWriteError` reports the zero-based failed chunk and the confirmed
+counts for preceding chunks. A chunk can have written if its response was
+lost, if a committed result fails decoding, or if its text contains multiple
+SurrealQL statements and a later one fails. Read back before replaying.
+In atomic mode a lost commit acknowledgement is
+`TransactionOutcomeUnknown`. The client never retries an unknown outcome.
+
+`beforeChunk` sees the original rows and can stop the operation with its
+own error. `onProgress` runs after acknowledgement, with a total for
+arrays and sized collections. Progress inside an open transaction
+describes provisional work. With an explicit retry schedule, a confirmed
+conflict retries the affected non-atomic chunk or the whole atomic write.
+Interactive retries retain the original chunks already pulled from
+one-shot sources. Callback effects may run again. A connection's SDK
+retry policy does not replay collector-backed bulk requests.
+
+Use `updateEach(table, param('rows', Rows))` to merge a different
+`{ id, set }` into each existing record. The codec must use ids for that
+table and fields its merge schema accepts. A missing record raises
+`StatementThrown<'Record not found'>` unless you pass
+`{ missing: 'ignore' }`.
 
 #### Rows as a stream
 

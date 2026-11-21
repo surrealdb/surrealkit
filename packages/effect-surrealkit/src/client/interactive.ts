@@ -412,7 +412,7 @@ const attempt = <A, E, R>(
 	);
 
 export const makeWithTransaction =
-	(transport: Transport): Client['withTransaction'] =>
+	(transport: Pick<Transport, 'begin'>): Client['withTransaction'] =>
 	<A, E, R>(
 		body: (tx: TransactionClient) => Effect.Effect<A, E, R>,
 		options?: TransactionOptions,
