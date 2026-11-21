@@ -1472,6 +1472,13 @@ What a family does not do:
 
 ### Running statements
 
+Use `run` for one typed statement, `transaction` for an atomic batch,
+and `pipeline` for a separate result per statement in one request.
+`withTransaction` makes several requests on an open transaction.
+`client.bulk` writes a list binding in chunks, `stream` emits decoded
+rows, and `client.liveScoped` and `client.live` subscribe to typed
+changes. `timed` returns request measurements alongside the result.
+
 ```ts
 import { bind, layer, run, SurrealClient, transaction } from 'effect-surrealkit/client';
 
@@ -1506,11 +1513,15 @@ value, for an application that names its own services, one per session.
 | `StatementScopeError` | the client could not safely rename a shared variable, the SDK would discard an atomic binding, or a statement contains transaction control inside a transaction | no, nothing was sent |
 | `StatementThrown<Message>` | a `THROW` the statement declares; in a transaction, `statement` names the one that declares it (`one of …` when several do); `source` and `lines` say where, when the part records them | not by a transaction; a single statement's earlier statements commit on their own |
 | `StatementUnexpectedThrow` | a `THROW` whose message the statement does not declare (a dynamic message), with the thrown text as `reason` and the SDK's error as `cause` | as for `StatementThrown` |
-| `StatementConflict` | a transaction conflict that `retry` did not resolve | no; send it again |
+| `StatementConflict` | a transaction conflict that `retry` did not resolve | the conflicting transaction rolled back. Earlier independent statements may have committed |
 | `StatementRequestError` | any other failure of the request: transport, authentication, a SurrealQL error, or the SDK refusing to send (a `RETURN` followed by another statement in a transaction), with the SDK's error as `cause` | unknown for a transport failure; otherwise no |
 | `StatementEmptyResult` | a `create` or `relate` that returns rows (`nonEmpty`) returned NONE or an empty list: SurrealDB reports a write the session may not make as an empty result, without an error, so the session may lack permission | not by that statement |
 | `StatementDecodeError` | the answer of a statement or transaction known not to write (`writes: false`) is not what it declares: the number of results, a value where NONE belongs, or a last result its codec refuses | no |
 | `StatementWriteOutcomeError` | the same, for a request not known to be read-only; `request` names the statement or transaction and `cause` is the `StatementDecodeError` (naming the statement and result), with `committed: true` and a message saying the request succeeded and either its writes are committed (`writes: true`) or it may have written (`writes` unknown) | yes, whatever it wrote is committed: read it back before resending |
+| `StatementUnsupported` | the connection or engine refuses the requested feature | the feature did not start |
+| `TransactionOutcomeUnknown` | an interactive or atomic bulk commit lacked an acknowledgement | unknown. Read back before replaying |
+| `BulkWriteError` | a non-atomic bulk chunk failed. Carries the failed chunk, confirmed preceding counts and the statement error | preceding chunks completed. The cause describes the failed chunk's outcome |
+| `LiveQueryClosed` | the engine killed the live query or the connection was lost | closing the subscription does not write data |
 
 An `update` or `delete` by condition may match nothing, so its empty list is
 a result, not an error; so is a denied one (the conformance suite pins
@@ -2000,7 +2011,38 @@ path. `unsafeSkipValueCheck` allows the SDK to encode it.
 
 #### Measured costs
 
-Written by lane L9.
+Five fresh Node processes and databases per case on macOS, Apple M2
+Ultra with 128 GiB RAM. Runs used Node 26.13.1, SurrealDB SDK 2.1.1 and
+Effect 4.0.6. WebSocket connected to a local in-memory server.
+
+| Workload | Embedded 4.0.1 | WebSocket 3.3.4 |
+| --- | ---: | ---: |
+| 5,000 inserts, sequential `run` | 1,275 ms | 1,218 ms |
+| 5,000 inserts, `run` with concurrency 64 | 636 ms | 444 ms |
+| 5,000 inserts, non-atomic `bulk` | 51 ms | 69 ms |
+| 5,000 inserts, atomic `bulk` | 56 ms | 219 ms |
+| Eight sequential reads with `run` | 10.0 ms | 10.9 ms |
+| Eight reads in one `pipeline` | 8.1 ms | 7.1 ms |
+| 20,000 generated `doc` rows with `run` | 137 ms, 209 MiB | 126 ms, 179 MiB |
+| 20,000 generated `doc` rows with `stream` | 328 ms, 220 MiB | 338 ms, 194 MiB |
+| Strict decoding of pre-fetched `doc` rows | 2.59 μs/row | 2.86 μs/row |
+| Two writes in one `transaction` | 1.12 ms | 0.77 ms |
+| Two writes using `withTransaction` | 1.85 ms | 1.40 ms |
+
+The table reports medians. Bulk used chunks of 500. The two-write
+figures are per transaction from 100 repetitions in each sample.
+Peak RSS includes setup and the embedded engine when it shares the
+client process. Stream timing includes consuming all 20,000 rows.
+The streamed read had higher peak process RSS in this workload.
+
+```sh
+npm run build
+npm run --silent bench
+SURREAL_BIN=/path/to/surreal npm run --silent bench > benchmark.json
+```
+
+The binary adds a WebSocket run. The JSON includes all five samples for
+each case. The benchmark runs separately from the test suite.
 
 ### Record links and graph traversal
 
@@ -2256,8 +2298,13 @@ export const bestMatch = block()
 - **Authored text.** The analyzer derives a part's names, result count and
   messages, not its result type: a result codec that does not match the
   script fails when it runs, not when it compiles.
-- **Coverage.** Live queries and views have no typed builder yet; use
-  `unsafeExpr` or authored SurrealQL. `ON DUPLICATE KEY UPDATE` takes plain
+- **Change feeds.** A bound `SINCE $since` in `SHOW CHANGES` fails on
+  SurrealDB 3.3.4 and 4.0.1 with a parse error beginning
+  ``Unexpected token `a parameter`, expected a version stamp``.
+  `LIMIT $limit` is also refused. A dynamic change-feed cursor would
+  require putting an input value into the statement text.
+- **Coverage.** Views have no typed builder yet. Use `unsafeExpr` or
+  authored SurrealQL. `ON DUPLICATE KEY UPDATE` takes plain
   assignments only (no `+=`), and an aggregate takes a field, not an
   expression over fields. For graph traversal, see [what is not covered
   yet](#record-links-and-graph-traversal).
@@ -2299,7 +2346,10 @@ const test = Effect.gen(function* () {
 | `recordUser({ access, variables? })` | Signs a new record user up through a `DEFINE ACCESS … TYPE RECORD` and returns `{ session, client }`, a client running as that session, closed with the scope: what a restricted session sees, row and field permissions included. |
 | `schemaDrift(store)` | The differences between what a store registry declares and what the `TestDatabase` defines, as a list (empty for a match): a declared table that is missing or of another kind, a relation whose `ENFORCED` flag or endpoint tables differ, and a declared index that is missing, of another kind or over other fields. It reads `INFO FOR DB STRUCTURE` and `INFO FOR TABLE … STRUCTURE`, which SurrealDB 3.3 and 4.0 answer alike. |
 | `expectIndex(statement, input, index)`, `expectNoIndex(…)` | Succeed when the engine's plan of a `SELECT` does (does not) read `index`; otherwise an `IndexExpectationError` naming the indexes it does read. `explain(statement, input)` returns the plan and its indexes. |
-| `fake(script)`, `fakeLayer(script)` | A client with no engine that answers each statement by name: a value (the last result, as the SDK returns it), `result(value)`, `thrown(message)`, `conflict()`, `failure(message)`, or a function of the encoded bindings returning one. `calls` records every request. |
+| `fake(script)`, `fakeLayer(script)` | A client without an engine. It answers each statement by name with a value, a scripted reply, or a function of its encoded bindings. `calls` records requests and lifecycle operations. |
+| `result(value)`, `thrown(message)`, `conflict()`, `failure(message)` | Reply constructors for ordinary result slots and failures. |
+| `events(list)`, `unsupported(feature)` | Script a live subscription's events or a feature refusal, such as `{ begin: unsupported('interactive transaction') }`. |
+| `conflictingSession(session, { marker, times })` | Wraps an SDK session, injecting a transaction conflict into the first `times` sent requests with matching text. Returns the wrapped `session` and the `matched.count` readback. |
 
 `expectIndex` runs the statement with `EXPLAIN` appended, which plans it
 without running it. SurrealDB 3.3 and 4.0 answer with the same plan format, a
@@ -2315,7 +2365,12 @@ with the SDK's own message, a transaction whose text has `BEGIN`, `COMMIT` or
 `CANCEL` or a `RETURN` followed by another statement. A canned result is
 decoded by the statement's codec, so a result of the wrong shape fails as it
 would against an engine; a statement the script does not name fails as a
-request.
+request. Recorded calls use each statement's original binding names.
+
+`conflictingSession` leaves the injected request unsent. When a request
+has several response slots, the first matching slot has the conflict
+and the others report that they did not execute. Later matching requests
+pass through to the engine and continue incrementing `matched.count`.
 
 ## Two codec worlds
 
@@ -2473,7 +2528,9 @@ fixtures under `strict` and `exactOptionalPropertyTypes`.
 `test/budget.test.ts` type-checks 300 generated statements (`test/budget-fixture.ts`:
 selects with projections and conditions, writes, sequence contracts) and
 holds their cost, in the compiler's instantiation and type counters, under a
-fixed limit.
+fixed limit. `test/execution-budget.test.ts` adds separate compiler budgets
+for 30 eight-member pipelines and 30 bulk calls. `test/requests.test.ts`
+counts transport calls for each execution method.
 
 The engine, statement, field-presence and conformance suites need a real
 engine. A plain `bun run test` runs them on the in-process, in-memory engine of
