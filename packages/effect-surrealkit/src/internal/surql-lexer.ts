@@ -154,6 +154,7 @@ export interface Lexed {
 export const lex = (
 	sql: string,
 	holeEndingAt?: (start: number) => number,
+	options?: { readonly unambiguousLineComments?: boolean },
 ): Lexed => {
 	const lineStarts = [0];
 	for (let i = 0; i < sql.length; i++) {
@@ -288,7 +289,23 @@ export const lex = (
 			c === '#'
 		) {
 			const end = sql.indexOf('\n', i);
-			i = end === -1 ? sql.length : end + 1;
+			const nextLine = end === -1 ? sql.length : end + 1;
+			if (options?.unambiguousLineComments) {
+				// Some engine versions also end comments at these separators.
+				const text = sql.slice(i, nextLine);
+				const separator = text.search(/[\r\u0085\u2028\u2029]/u);
+				if (
+					separator !== -1 &&
+					text.slice(separator + 1).trim() !== ''
+				) {
+					fail(
+						'ambiguousComment',
+						'ambiguous line comment ending',
+						i + separator,
+					);
+				}
+			}
+			i = nextLine;
 			continue;
 		}
 		if (c === '/' && next === '*') {

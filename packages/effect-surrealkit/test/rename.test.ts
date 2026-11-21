@@ -63,6 +63,16 @@ it('renames around a record literal that only references unrelated names', () =>
 	).toBe("[$id__1, r'thing:[$id2, $other]'];");
 });
 
+it('refuses an ambiguous slash expression that can hide a record literal', () => {
+	const sql = "({ return: 12 }.return / record::id(r'thing:[$id]')[0] / 2);";
+	expect(renameNames(sql, { id: 'id__1' })).toBeUndefined();
+});
+
+it('refuses a record literal where engines disagree on the end of a comment', () => {
+	const sql = "# comment\r r'thing:[$id]';\n";
+	expect(renameNames(sql, { id: 'id__1' })).toBeUndefined();
+});
+
 it('renames declarations, typed closure parameters, and references inside scopes', () => {
 	const sql = 'FOR $id IN [$id] { LET $id = $id; }; |$id: int| $id;';
 	expect(renameNames(sql, { id: 'id__3' })).toBe(

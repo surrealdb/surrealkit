@@ -8,11 +8,13 @@ interface ParameterScan {
 }
 
 const possibleParameter = /[$\\]/u;
+const lexForRename = (sql: string) =>
+	lex(sql, undefined, { unambiguousLineComments: true }).tokens;
 
 /** Reads rewritable variable spans and read-only names in record literals. */
 export const scanParameters = (sql: string): ParameterScan | undefined => {
 	try {
-		const { tokens } = lex(sql);
+		const tokens = lexForRename(sql);
 		const writable: ParameterToken[] = [];
 		const recordNames = new Set<string>();
 		const records: Array<ReadonlyArray<Token>> = [];
@@ -34,12 +36,12 @@ export const scanParameters = (sql: string): ParameterScan | undefined => {
 					if (insideRecord) recordNames.add(token.value);
 					else writable.push(token);
 				}
-				// Slash classification is heuristic. In a record key, a division
-				// expression mistaken for a regex could hide a variable reference.
+				// Slash classification is heuristic. A division expression mistaken
+				// for a regex could hide a whole record literal or part of its key.
 				if (
-					insideRecord &&
 					token.kind === 'regex' &&
-					possibleParameter.test(token.value)
+					(/\br['"]/u.test(token.value) ||
+						(insideRecord && possibleParameter.test(token.value)))
 				) {
 					return undefined;
 				}
@@ -48,16 +50,9 @@ export const scanParameters = (sql: string): ParameterScan | undefined => {
 					token.prefix === 'r' &&
 					possibleParameter.test(token.value)
 				) {
-					// The engines differ on non-LF line endings in comments.
-					if (
-						/--|\/\/|#/u.test(token.value) &&
-						/\r(?!\n)|[\u0085\u2028\u2029]/u.test(token.value)
-					) {
-						return undefined;
-					}
 					// The engine parses the decoded body as SurrealQL. Its spans
 					// refer to the body, so none enter the rewrite list.
-					records.push(lex(token.value).tokens);
+					records.push(lexForRename(token.value));
 				}
 			}
 		}
