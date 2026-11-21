@@ -33,6 +33,7 @@ export { expectIndex, expectNoIndex, explain, indexesOf } from './explain.js';
 export {
 	type Call,
 	conflict,
+	events,
 	type FakeClient,
 	failure,
 	fake,
@@ -41,4 +42,6 @@ export {
 	result,
 	type Script,
 	thrown,
+	unsupported,
 } from './fake.js';
+export { conflictingSession } from './session.js';
