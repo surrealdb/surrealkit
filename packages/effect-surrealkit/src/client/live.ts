@@ -6,6 +6,7 @@ import type {
 	StatementDecodeError,
 	StatementEncodeError,
 	StatementRequestError,
+	StatementScopeError,
 	StatementUnsupported,
 } from './errors.js';
 import type { Transport } from './internal/transport.js';
@@ -20,6 +21,7 @@ export interface LiveEvent<Row, Id> {
 export type LiveError =
 	| StatementEncodeError
 	| StatementRequestError
+	| StatementScopeError
 	| StatementDecodeError
 	| StatementUnsupported
 	| LiveQueryClosed;

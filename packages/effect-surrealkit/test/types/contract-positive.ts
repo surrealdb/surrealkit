@@ -219,6 +219,7 @@ export const clientContract = (session: Queryable, client: Client): void => {
 		TransactionError,
 		| StatementConflict
 		| StatementRequestError
+		| StatementScopeError
 		| StatementUnsupported
 		| TransactionOutcomeUnknown
 	>(true);
@@ -329,6 +330,7 @@ export const statementContract = (client: Client): void => {
 		LiveError,
 		| StatementEncodeError
 		| StatementRequestError
+		| StatementScopeError
 		| StatementDecodeError
 		| StatementUnsupported
 		| LiveQueryClosed

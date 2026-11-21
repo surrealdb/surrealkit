@@ -26,6 +26,7 @@ import type {
 	StatementConflict,
 	StatementError,
 	StatementRequestError,
+	StatementScopeError,
 	StatementUnsupported,
 	TransactionOutcomeUnknown,
 } from './errors.js';
@@ -78,6 +79,7 @@ export interface TransactionClient {
 export type TransactionError =
 	| StatementConflict
 	| StatementRequestError
+	| StatementScopeError
 	| StatementUnsupported
 	| TransactionOutcomeUnknown;
 
