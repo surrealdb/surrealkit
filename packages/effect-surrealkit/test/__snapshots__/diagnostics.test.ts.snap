@@ -636,6 +636,60 @@ exports[`type diagnostics > insert-relation/wrong-endpoint 1`] = `
 ]
 `;
 
+exports[`type diagnostics > interactive-no-bulk-atomic 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'atomic' does not exist in type 'Omit<BulkOptions<"values", number, never, never>, "atomic" | "retry">'.",
+]
+`;
+
+exports[`type diagnostics > interactive-no-bulk-retry 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'retry' does not exist in type 'Omit<BulkOptions<"values", number, never, never>, "atomic" | "retry">'.",
+]
+`;
+
+exports[`type diagnostics > interactive-no-join-retry 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'retry' does not exist in type 'TransactionRunOptions'.",
+]
+`;
+
+exports[`type diagnostics > interactive-no-live 1`] = `
+[
+  "TS2339: Property 'live' does not exist on type 'TransactionClient'.",
+]
+`;
+
+exports[`type diagnostics > interactive-no-live-scoped 1`] = `
+[
+  "TS2339: Property 'liveScoped' does not exist on type 'TransactionClient'.",
+]
+`;
+
+exports[`type diagnostics > interactive-no-pipeline 1`] = `
+[
+  "TS2339: Property 'pipeline' does not exist on type 'TransactionClient'.",
+]
+`;
+
+exports[`type diagnostics > interactive-no-run-retry 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'retry' does not exist in type 'TransactionRunOptions'.",
+]
+`;
+
+exports[`type diagnostics > interactive-no-savepoint 1`] = `
+[
+  "TS2551: Property 'withTransaction' does not exist on type 'TransactionClient'. Did you mean 'transaction'?",
+]
+`;
+
+exports[`type diagnostics > interactive-no-stream 1`] = `
+[
+  "TS2339: Property 'stream' does not exist on type 'TransactionClient'.",
+]
+`;
+
 exports[`type diagnostics > link/any-table 1`] = `
 [
   "TS2345: Argument of type 'Path<declareConstructor<_RecordId, _RecordId, readonly [], _RecordId> & Codec>' is not assignable to parameter of type '"this link can point at any table (\`record\`), so its target has no known fields; declare it \`record<table>\`"'.",
@@ -1054,6 +1108,18 @@ exports[`type diagnostics > origin/projected-selectFrom-wrong-type 1`] = `
 [
   "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
   Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > pipeline/item-must-be-bound 1`] = `
+[
+  "TS2322: Type 'Statement<{}, Number, never>' is not assignable to type '"statements that run together are paired with their input by \`bind\`"'.",
+]
+`;
+
+exports[`type diagnostics > pipeline/retry-is-not-an-option 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'retry' does not exist in type 'PipelineOptions'.",
 ]
 `;
 

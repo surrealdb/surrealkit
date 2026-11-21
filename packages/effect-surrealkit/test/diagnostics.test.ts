@@ -23,6 +23,8 @@ const fixtures = [
 	'generated-binds.ts',
 	'generated-presence.ts',
 	'family-negative.ts',
+	'pipeline-negative.ts',
+	'interactive-negative.ts',
 ].map((file) => join(typesRoot, file));
 
 const directive = /^\s*\/\/ @ts-expect-error(?: \[([^\]\s]+)\])?/u;
