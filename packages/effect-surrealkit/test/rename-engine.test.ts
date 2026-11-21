@@ -10,6 +10,7 @@ import {
 	type InputOf,
 	make as makeClient,
 	StatementRequestError,
+	StatementScopeError,
 	StatementThrown,
 } from '../src/client/index.js';
 import * as S from '../src/index.js';
@@ -401,6 +402,67 @@ describe.skipIf(!engineConfigured)(
 			expect(outcomes).toEqual([
 				Result.succeed(ann),
 				Result.succeed(bob),
+			]);
+		});
+
+		it('preserves record key bindings on their own and refuses a rename before composition', async () => {
+			const record = make({
+				name: 'record with bound key',
+				sql: "r'thing:[$x]';",
+				params: { x: S.Int },
+				result: Schema.Unknown,
+			});
+			const members = [
+				bind(record, { x: 7 }),
+				bind(record, { x: 8 }),
+			] as const;
+			for (const x of [7, 8]) {
+				expect(
+					await Effect.runPromise(client.run(record, { x })),
+				).toEqual(new RecordId('thing', [x]));
+			}
+			for (const execution of [
+				client.transaction(members),
+				client.pipeline(members),
+				client.pipeline(members, { each: 'transaction' }),
+			]) {
+				const result = await Effect.runPromise(
+					Effect.result(execution),
+				);
+				expect(result).toEqual(
+					Result.fail(expect.any(StatementScopeError)),
+				);
+			}
+		});
+
+		it('keeps a new binding alias from capturing a record key elsewhere in the list', async () => {
+			const read = make({
+				sql: '$x;',
+				params: { x: S.Int },
+				result: S.Int,
+			});
+			const record = make({
+				sql: `r'thing:[$x__1, $other, "$x"]';`,
+				params: { other: S.Int },
+				result: Schema.Unknown,
+			});
+			const input = { other: 9 };
+			const expected = await Effect.runPromise(client.run(record, input));
+			expect(expected).toEqual(
+				new RecordId('thing', [undefined, 9, '$x']),
+			);
+			const members = [
+				bind(read, { x: 7 }),
+				bind(read, { x: 8 }),
+				bind(record, input),
+			] as const;
+			expect(
+				await Effect.runPromise(client.transaction(members)),
+			).toEqual([7, 8, expected]);
+			expect(await Effect.runPromise(client.pipeline(members))).toEqual([
+				Result.succeed(7),
+				Result.succeed(8),
+				Result.succeed(expected),
 			]);
 		});
 

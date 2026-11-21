@@ -1,8 +1,8 @@
 import { Effect } from 'effect';
 
 import {
-	parameterTokens,
 	renameParameterTokens,
+	scanParameters,
 } from '../../statement/rename.js';
 import {
 	type AnyStatement,
@@ -69,8 +69,8 @@ const planRenames = (statements: ReadonlyArray<Entry<unknown>>) =>
 		}
 		const scanned = [];
 		for (const { statement } of statements) {
-			const tokens = parameterTokens(statement.sql);
-			if (tokens === undefined) {
+			const scan = scanParameters(statement.sql);
+			if (scan === undefined) {
 				return yield* Effect.fail(
 					new StatementScopeError({
 						statement: statement.name,
@@ -78,7 +78,20 @@ const planRenames = (statements: ReadonlyArray<Entry<unknown>>) =>
 					}),
 				);
 			}
+			const { tokens, recordNames } = scan;
 			for (const token of tokens) used.add(token.value);
+			for (const binding of recordNames) {
+				if (shared.has(binding)) {
+					return yield* Effect.fail(
+						new StatementScopeError({
+							statement: statement.name,
+							binding,
+							message: `cannot rename shared parameter \`$${binding}\` inside a quoted record literal in \`${statement.name}\``,
+						}),
+					);
+				}
+				used.add(binding);
+			}
 			scanned.push({ statement, tokens });
 		}
 		for (const [index, { statement, tokens }] of scanned.entries()) {

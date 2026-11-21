@@ -1713,6 +1713,11 @@ bind `$__proto__`. Atomic requests refuse it when it would still be sent
 under that name, because the SDK would drop it. A shared `$__proto__`
 binding can be sent under its generated name.
 
+A quoted record literal such as `r'thing:[$id]'` can evaluate a variable
+inside its record key. If that variable needs renaming, composition raises
+`StatementScopeError` before sending. Generated aliases also skip names
+referenced inside quoted record literals.
+
 #### Timing
 
 `timed(effect)` returns the effect's value and one `RequestTiming` for each

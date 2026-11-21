@@ -24,7 +24,9 @@ it('changes only parameter tokens, preserving every byte of literals and comment
 		'"$id"',
 		"'a\\'$id'",
 		'"a\\"$id"',
-		...['r', 'd', 'u', 's', 'f', 'b'].flatMap((prefix) => [
+		`r'thing:["$id", "$id__1"]'`,
+		'r"thing:static"',
+		...['d', 'u', 's', 'f', 'b'].flatMap((prefix) => [
 			`${prefix}'$id'`,
 			`${prefix}"$id"`,
 		]),
@@ -37,6 +39,28 @@ it('changes only parameter tokens, preserving every byte of literals and comment
 	expect(renameNames(source, names)).toBe(
 		`${comment}\n[${opaque}, $id__1.field, $id__1[0], $id__1::name, $id2, $id__1 / 2, $id__1, $id__1];`,
 	);
+});
+
+it.each([
+	"r'thing:[$id]'",
+	'r"thing:[$id]"',
+	"r'thing:[$`id`]'",
+	"r'thing:[$⟨id⟩]'",
+	String.raw`r'thing:[\u0024\u0069d]'`,
+	`r'thing:[r"nested:[$id]"]'`,
+	"r'thing:[$id__1]'",
+	"r'thing:[{ return: 12 }.return / $id / 2]'",
+	String.raw`r'thing:[1 # comment\r, $id\n]'`,
+])('refuses to rewrite around a record literal referencing a changed name (%s)', (record) => {
+	const sql = `[$id, ${record}];`;
+	expect(renameNames(sql, { id: 'id__1' })).toBeUndefined();
+	expect(renameNames(sql, { id: 'id' })).toBe(sql);
+});
+
+it('renames around a record literal that only references unrelated names', () => {
+	expect(
+		renameNames("[$id, r'thing:[$id2, $other]'];", { id: 'id__1' }),
+	).toBe("[$id__1, r'thing:[$id2, $other]'];");
 });
 
 it('renames declarations, typed closure parameters, and references inside scopes', () => {
@@ -59,10 +83,10 @@ it.each([
 it('extends a suffix past locals and quoted variables anywhere in the list', async () => {
 	const first = read('id');
 	const reserve = make({
-		sql: '{ LET $id__1 = 7; $id__1; }; $⟨id__1_⟩;',
+		sql: "{ LET $id__1 = 7; $id__1; }; $⟨id__1_⟩; r'thing:[$`id__1__`]';",
 		params: {},
 		result: Schema.Unknown,
-		slots: 2,
+		slots: 3,
 	});
 	const joined = await Effect.runPromise(
 		join(
@@ -74,13 +98,38 @@ it('extends a suffix past locals and quoted variables anywhere in the list', asy
 			query,
 		),
 	);
-	expect(joined.sql).toBe(`$id__1__;\n$id__2;\n${reserve.sql}`);
-	expect(joined.bindings).toEqual({ id__1__: 1, id__2: 2 });
+	expect(joined.sql).toBe(`$id__1___;\n$id__2;\n${reserve.sql}`);
+	expect(joined.bindings).toEqual({ id__1___: 1, id__2: 2 });
 	expect(joined.parts.map(({ sent }) => sent)).toEqual([
-		{ id: 'id__1__' },
+		{ id: 'id__1___' },
 		{ id: 'id__2' },
 		{},
 	]);
+});
+
+it('refuses record literal scope before invoking codecs or dispatching a transaction or pipeline', async () => {
+	const record = make({
+		name: 'record key',
+		sql: "r'thing:[$id]';",
+		params: { id: Schema.Number },
+		result: Schema.Number,
+	});
+	const client = fake({ 'record key': 7 });
+	const members = [bind(record, { id: 7 }), bind(record, { id: 8 })] as const;
+	const refused = (error: unknown) => {
+		expect(error).toBeInstanceOf(StatementScopeError);
+		expect(error).toMatchObject({ statement: record.name, binding: 'id' });
+	};
+	refused(await Effect.runPromise(Effect.flip(client.transaction(members))));
+	refused(await Effect.runPromise(Effect.flip(client.pipeline(members))));
+	expect(client.calls).toEqual([]);
+	const input = {
+		statement: record,
+		bindings: Effect.die('codec must not run'),
+	};
+	refused(
+		await Effect.runPromise(Effect.flip(joinWith([input, input], atomic))),
+	);
 });
 
 it('refuses engine-set collisions before evaluating codecs', async () => {
