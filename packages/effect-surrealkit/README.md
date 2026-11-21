@@ -1526,7 +1526,7 @@ sends without loss: the package's `SurrealValue` shape (plus `undefined`
 for NONE, `ArrayBuffer` for bytes and the SDK's record id and range
 values), with well-formed strings and integers the SDK can encode. The SDK
 would otherwise send a class instance as its own fields, a `Map` as a
-document, or a lone surrogate as U+FFFD. The check never throws; `{
+document, a lone surrogate as U+FFFD, or a bound negative zero as positive zero. The check never throws; `{
 unsafeSkipValueCheck: true }` turns it off.
 
 `{ retry: schedule }` takes an Effect `Schedule` and sends the same,
@@ -1828,7 +1828,37 @@ Written by lane L7.
 
 #### Transports
 
-Written by lane L8.
+The matrix uses the SDK's native values on embedded SurrealDB, WebSocket
+RPC, and HTTP RPC at `/rpc`. Tested kinds include integers beyond
+JavaScript's safe range, decimals, NaN and infinities, datetimes and
+durations with nanoseconds, UUIDs, bytes, sets, geometry, composite
+record IDs, and nested lists and objects.
+
+| Capability | 4.0.1 embedded | 4.0.0 WebSocket | 4.0.0 HTTP | 3.3.4 WebSocket | 3.3.4 HTTP |
+| --- | --- | --- | --- | --- | --- |
+| JavaScript SDK | 2.1.1 | 2.1.1 | 2.1.1 | 2.1.1 | 2.1.1 |
+| `run` | 1 request, client timing only | 1 request, client timing only | 1 request, client timing only | 1 request, client timing only | 1 request, client timing only |
+| `transaction` | 1 request, client timing only | 1 request, client timing only | 1 request, client timing only | 1 request, client timing only | 1 request, client timing only |
+| `pipeline`, each statement | 1 request, server timing | 1 request, server timing | 1 request, server timing | 1 request, server timing | 1 request, server timing |
+| `pipeline`, each transaction | 1 request, server timing | 1 request, server timing | 1 request, server timing | 1 request, server timing | 1 request, server timing |
+| `stream` | 1 request, server timing | 1 request, server timing | 1 request, server timing | 1 request, server timing | 1 request, server timing |
+| `withTransaction`, one statement | 3 requests, server timing | 3 requests, server timing | Unsupported | 3 requests, server timing | Unsupported |
+| `liveScoped`, start and kill | 2 requests, client timing only | 2 requests, client timing only | Unsupported | 2 requests, client timing only | Unsupported |
+| `bulk`, two chunks, atomic | 4 requests, server timing | 4 requests, server timing | 1 request, client timing only | 4 requests, server timing | 1 request, client timing only |
+| `bulk`, two chunks, non-atomic | 2 requests, client timing only | 2 requests, client timing only | 2 requests, client timing only | 2 requests, client timing only | 2 requests, client timing only |
+| Checked `-0` binding | refused before dispatch | refused before dispatch | refused before dispatch | refused before dispatch | refused before dispatch |
+| Unchecked `-0` binding | returned +0 | returned +0 | returned +0 | returned +0 | returned +0 |
+| Engine float literal `-0.0f` | preserved | preserved | preserved | preserved | preserved |
+
+The counts include begin and commit for an interactive transaction, and
+start and kill for a live query. The interactive example runs one
+statement. Each bulk example writes two chunks. Timing describes what
+the client reports for these requests.
+
+The SDK's CBOR encoder writes both signs of JavaScript zero as integer
+zero. With value checking enabled, a bound `-0` raises
+`StatementEncodeError` before dispatch and names the original binding
+path. `unsafeSkipValueCheck` allows the SDK to encode it.
 
 #### Measured costs
 
@@ -2210,7 +2240,7 @@ const people = rows.map(Schema.decodeUnknownSync(Person));
 | SurrealQL | Schema | Decoded type |
 | --- | --- | --- |
 | `int` | `Int` (`int: "safe-number"`, default) / `Int64` (`int: "bigint"`) | `number` / branded `bigint` |
-| `float` | `Float` (native IEEE-754, including NaN, infinities and signed zero) / `Schema.Finite` (JSON) | `number` |
+| `float` | `Float` (native IEEE-754, including NaN, infinities and signed zero on reads; checked bindings refuse negative zero) / `Schema.Finite` (JSON) | `number` |
 | `decimal` | `Decimal` | SDK `Decimal` |
 | `number` | `SurrealNumber` / `SurrealNumberFromJson` (finite JSON numbers or decimal strings) | `number \| bigint \| Decimal` |
 | `any` | `Schema.UndefinedOr(SurrealValue)` / `SurrealJsonValue` (JSON) | `SurrealValue \| undefined` / `SurrealJsonValue` |

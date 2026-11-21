@@ -13,10 +13,12 @@ import {
 	DateTime,
 	Decimal,
 	Duration,
+	Features,
 	RecordId,
 	type Surreal,
 	type SurrealSession,
 	Table,
+	UnsupportedFeatureError,
 } from 'surrealdb';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -24,9 +26,11 @@ import {
 	type Engine,
 	engineConfigured,
 	engineSkipReason,
+	interactiveTransactions,
 	startEngine,
 	within,
 } from './engine.js';
+import { openRecordSession } from './record-session.js';
 
 if (!engineConfigured) {
 	console.warn(
@@ -1184,7 +1188,7 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 				DEFINE FUNCTION fn::denied() { RETURN 1; } PERMISSIONS NONE;
 				DEFINE FUNCTION fn::allowed() { RETURN 1; } PERMISSIONS FULL;
 			`);
-			user = await within(db.newSession());
+			user = await within(openRecordSession(engine));
 			const scope = {
 				namespace: engine.namespace,
 				database: engine.namespace,
@@ -1746,7 +1750,16 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 			).rejects.toThrow(refused);
 		});
 
-		it('a transaction that read a record FOR UPDATE conflicts at commit with a concurrent write to it; without, it commits', async () => {
+		it('pins FOR UPDATE conflicts at interactive commit and refusal on unsupported transports', async () => {
+			if (!interactiveTransactions) {
+				await expect(
+					within(db.beginTransaction()),
+				).rejects.toMatchObject({
+					constructor: UnsupportedFeatureError,
+					feature: Features.Transactions,
+				});
+				return;
+			}
 			await query(
 				'DEFINE TABLE held; CREATE held:a SET n = 1; CREATE held:b SET n = 1;',
 			);
@@ -2124,7 +2137,7 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 				RELATE g_person:a->g_loose->g_person:ghost;
 				CREATE g_holder:one SET l = r"g_nosuch:1";
 			`);
-			user = await within(db.newSession());
+			user = await within(openRecordSession(engine));
 			const scope = {
 				namespace: engine.namespace,
 				database: engine.namespace,

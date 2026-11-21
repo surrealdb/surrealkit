@@ -23,19 +23,16 @@ import {
 	type Engine,
 	engineConfigured,
 	engineSkipReason,
+	interactiveTransactions,
 	startEngine,
 } from './engine.js';
-
-const usingHttp =
-	process.env.SURREAL_TRANSPORT === 'http' ||
-	/^https?:\/\//u.test(process.env.SURREAL_URL ?? '');
 
 if (!engineConfigured) {
 	console.warn(
 		`[effect-surrealkit] interactive engine suite skipped: ${engineSkipReason}`,
 	);
 }
-if (usingHttp) {
+if (!interactiveTransactions) {
 	console.warn(
 		'[effect-surrealkit] HTTP does not support interactive transactions; testing its refusal',
 	);
@@ -91,7 +88,7 @@ const readLocal = make({
 	result: Schema.Undefined,
 });
 
-describe.skipIf(!engineConfigured || usingHttp)(
+describe.skipIf(!engineConfigured || !interactiveTransactions)(
 	'interactive transactions on a disposable engine',
 	() => {
 		let engine: Engine;
@@ -291,7 +288,7 @@ describe.skipIf(!engineConfigured || usingHttp)(
 	},
 );
 
-describe.skipIf(!engineConfigured || !usingHttp)(
+describe.skipIf(!engineConfigured || interactiveTransactions)(
 	'interactive transactions over HTTP',
 	() => {
 		it('returns StatementUnsupported without invoking the body', async () => {

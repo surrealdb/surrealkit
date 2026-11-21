@@ -34,11 +34,7 @@ import {
 	rows,
 	select,
 } from '../src/statement/index.js';
-import {
-	layerFrom,
-	recordUser,
-	type TestDatabase,
-} from '../src/testing/index.js';
+import { recordUser, type TestDatabase } from '../src/testing/index.js';
 import {
 	type Engine,
 	engineConfigured,
@@ -47,6 +43,7 @@ import {
 	within,
 } from './engine.js';
 import { store as corpus, PersonTable } from './golden/corpus/index.js';
+import { recordUserLayer } from './record-session.js';
 
 const ItemId = SurrealSchema.RecordIdFor('rd_item');
 const VaultId = SurrealSchema.RecordIdFor('rd_vault');
@@ -246,10 +243,7 @@ describe.skipIf(!engineConfigured)(
 		beforeAll(async () => {
 			engine = await startEngine();
 			await within(engine.db.query(schema), 20_000);
-			database = layerFrom(engine.db, {
-				namespace: engine.namespace,
-				database: engine.namespace,
-			});
+			database = recordUserLayer(engine);
 		});
 		afterAll(async () => {
 			await engine?.stop();

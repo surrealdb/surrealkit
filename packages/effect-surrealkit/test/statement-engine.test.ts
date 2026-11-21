@@ -88,6 +88,7 @@ import {
 	TeamId,
 	TeamTable,
 } from './golden/corpus/index.js';
+import { openRecordSession } from './record-session.js';
 
 if (!engineConfigured) {
 	console.warn(
@@ -946,7 +947,7 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 				SIGNUP (CREATE account SET name = $name)
 				SIGNIN (SELECT * FROM account WHERE name = $name);
 		`);
-		const session = await within(engine.db.newSession());
+		const session = await within(openRecordSession(engine));
 		try {
 			const scope = {
 				namespace: engine.namespace,

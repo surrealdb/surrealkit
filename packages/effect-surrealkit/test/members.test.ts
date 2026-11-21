@@ -19,7 +19,6 @@ import * as SurrealSchema from '../src/index.js';
 import { param, readAs, select } from '../src/statement/index.js';
 import {
 	expectIndex,
-	layerFrom,
 	recordUser,
 	type TestDatabase,
 } from '../src/testing/index.js';
@@ -32,6 +31,7 @@ import {
 	within,
 } from './engine.js';
 import { MemberTable } from './golden/members/index.js';
+import { recordUserLayer } from './record-session.js';
 
 if (!engineConfigured) {
 	console.warn(
@@ -61,10 +61,7 @@ describe.skipIf(!engineConfigured)('the members golden on an engine', () => {
 				};
 			`),
 		);
-		database = layerFrom(engine.db, {
-			namespace: engine.namespace,
-			database: engine.namespace,
-		});
+		database = recordUserLayer(engine);
 	});
 	afterAll(async () => {
 		await engine?.stop();

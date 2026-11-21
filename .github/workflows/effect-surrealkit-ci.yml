@@ -231,6 +231,12 @@ jobs:
                   SURREAL_URL: ws://127.0.0.1:8000/rpc
               run: npm test
 
+            - name: Engine suites over HTTP RPC
+              env:
+                  SURREAL_URL: http://127.0.0.1:8000/rpc
+                  SURREAL_TRANSPORT: http
+              run: npm test
+
             # create → select → merge → select, relate and call for the generated
             # corpus modules (Arbitrary.schema + Arbitrary.checkEffect, Passed), in a
             # database `surrealkit test --exec` prepares and removes.

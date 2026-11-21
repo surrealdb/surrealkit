@@ -12,7 +12,13 @@ import {
 	Tracer,
 } from 'effect';
 import { TestClock } from 'effect/testing';
-import { DateTime, ExpressionError, RecordId } from 'surrealdb';
+import {
+	DateTime,
+	ExpressionError,
+	GeometryCollection,
+	GeometryPoint,
+	RecordId,
+} from 'surrealdb';
 import { describe, expect, it } from 'vitest';
 
 import { DEFAULT_HOLE_DELIMITERS, lex } from '../src/analyze/lexer.js';
@@ -888,7 +894,7 @@ describe('transaction', () => {
 				[unknown, new Uint8Array([3, 4]).buffer],
 			);
 			await accepted([unknown, 1], [unknown, 1n]);
-			await accepted([unknown, 0], [unknown, -0]);
+			await refused([unknown, 0], [unknown, -0]);
 			await accepted([unknown, '1'], [unknown, 1]);
 			await accepted([unknown, null], [unknown, undefined]);
 			await accepted(
@@ -1315,6 +1321,15 @@ describe('outgoing values', () => {
 			[{ m: new Map([['k', 1]]) }, ['m'], /a Map/],
 			[[new Point(1)], [0], /a Point/],
 			[{ 'k\uDC00': 1 }, ['k\uDC00'], /a key with a lone/],
+			[-0, [], /negative zero/],
+			[{ samples: [0, -0] }, ['samples', 1], /negative zero/],
+			[new RecordId('sample', [-0]), ['id', 0], /negative zero/],
+			[new GeometryPoint([-0, 1]), ['coordinates', 0], /negative zero/],
+			[
+				new GeometryCollection([new GeometryPoint([1, -0])]),
+				['geometries', 0, 'coordinates', 1],
+				/negative zero/,
+			],
 			[{ n: 2 ** 60 }, ['n'], /beyond ±2\^53/],
 			[{ n: 2n ** 70n }, ['n'], /beyond 64 bits/],
 			[{ f: () => 1 }, ['f'], /a function/],
@@ -1351,13 +1366,13 @@ describe('outgoing values', () => {
 		expect(error.message).toMatch(/^\$v\["a b"\]\[0\]\.c is a string/);
 	});
 
-	it('accepts every SurrealValue, NONE and bytes', async () => {
+	it('accepts representable SurrealDB values, NONE and bytes', async () => {
 		const values = [
 			undefined,
 			null,
 			true,
 			1.5,
-			-0,
+			0,
 			Number.NaN,
 			2 ** 53,
 			2n ** 63n,

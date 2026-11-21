@@ -1,0 +1,53 @@
+{
+	"sdk": "2.1.1",
+	"engine": "3.3.4",
+	"transport": "http",
+	"signedZero": {
+		"checkedBinding": "refused before dispatch",
+		"unsafeBinding": "returned +0",
+		"engineLiteral": "preserved"
+	},
+	"operations": {
+		"run": {
+			"supported": true,
+			"requests": 1,
+			"serverTiming": false
+		},
+		"transaction": {
+			"supported": true,
+			"requests": 1,
+			"serverTiming": false
+		},
+		"pipelineStatement": {
+			"supported": true,
+			"requests": 1,
+			"serverTiming": true
+		},
+		"pipelineTransaction": {
+			"supported": true,
+			"requests": 1,
+			"serverTiming": true
+		},
+		"stream": {
+			"supported": true,
+			"requests": 1,
+			"serverTiming": true
+		},
+		"withTransaction": {
+			"supported": false
+		},
+		"live": {
+			"supported": false
+		},
+		"bulkAtomic": {
+			"supported": true,
+			"requests": 1,
+			"serverTiming": false
+		},
+		"bulkNonAtomic": {
+			"supported": true,
+			"requests": 2,
+			"serverTiming": false
+		}
+	}
+}

@@ -5,6 +5,7 @@
  *   else started (a throwaway container); root/root credentials.
  * - `SURREAL_BIN` (e.g. `/usr/local/bin/surreal`): start
  *   `surreal start --bind 127.0.0.1:<free port> memory` and stop it after.
+ * - `SURREAL_TRANSPORT=http`: use HTTP RPC with either server option.
  * - With neither set: the embedded engine of `@surrealdb/node`, in process and
  *   in memory, so the engine suites run on a plain `npm test`.
  *
@@ -20,13 +21,45 @@ import { type ConnectOptions, Surreal } from 'surrealdb';
 
 /** How the engine is provided. */
 export type EngineMode = 'embedded' | 'binary' | 'remote';
+export type EngineTransport = 'embedded' | 'ws' | 'http';
+
+const remoteUrl = process.env.SURREAL_URL;
+const binary = process.env.SURREAL_BIN;
+const requestedTransport = process.env.SURREAL_TRANSPORT;
 
 export const engineMode: EngineMode =
-	process.env.SURREAL_URL !== undefined
+	remoteUrl !== undefined
 		? 'remote'
-		: process.env.SURREAL_BIN !== undefined
+		: binary !== undefined
 			? 'binary'
 			: 'embedded';
+
+if (
+	requestedTransport !== undefined &&
+	requestedTransport !== 'http' &&
+	requestedTransport !== 'ws'
+) {
+	throw new Error('SURREAL_TRANSPORT must be http or ws');
+}
+if (requestedTransport !== undefined && engineMode === 'embedded') {
+	throw new Error('SURREAL_TRANSPORT requires SURREAL_BIN or SURREAL_URL');
+}
+
+export const transport: EngineTransport =
+	engineMode === 'embedded'
+		? 'embedded'
+		: (requestedTransport ??
+			(/^https?:\/\//iu.test(remoteUrl ?? '') ? 'http' : 'ws'));
+
+export const interactiveTransactions = transport !== 'http';
+export const liveQueries = transport !== 'http';
+
+const withTransport = (rpc: string, via: 'ws' | 'http'): URL => {
+	const url = new URL(rpc);
+	const secure = url.protocol === 'wss:' || url.protocol === 'https:';
+	url.protocol = `${via}${secure ? 's' : ''}:`;
+	return url;
+};
 
 const embeddedEngine = async (): Promise<Surreal> => {
 	const { createNodeEngines } = await import('@surrealdb/node');
@@ -88,6 +121,9 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export interface Engine {
 	readonly db: Surreal;
 	readonly mode: EngineMode;
+	readonly transport: EngineTransport;
+	/** RPC address of the disposable server, when the engine runs out of process. */
+	readonly rpcUrl?: string;
 	/** As the engine reports it, e.g. `surrealdb-4.0.1`. */
 	readonly version: string;
 	readonly majorVersion: number;
@@ -104,8 +140,7 @@ export interface Engine {
 const httpSql =
 	(rpc: string, namespace: string) =>
 	async (sql: string): Promise<unknown> => {
-		const url = new URL(rpc);
-		url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+		const url = withTransport(rpc, 'http');
 		url.pathname = '/sql';
 		const response = await fetch(url, {
 			method: 'POST',
@@ -172,6 +207,7 @@ const startEmbedded = async (
 		return {
 			db,
 			mode: 'embedded',
+			transport: 'embedded',
 			namespace,
 			...(await engineVersion(db)),
 			http: async () => {
@@ -194,13 +230,12 @@ export const startEngine = async (
 	if (engineMode === 'embedded') return startEmbedded(namespace, options);
 
 	let child: ChildProcess | undefined;
-	let url = process.env.SURREAL_URL;
+	let url = remoteUrl;
 	if (url === undefined) {
-		const bin = process.env.SURREAL_BIN;
-		if (bin === undefined) throw new Error(engineSkipReason);
+		if (binary === undefined) throw new Error(engineSkipReason);
 		const port = await freePort();
 		child = spawn(
-			bin,
+			binary,
 			[
 				'start',
 				'--bind',
@@ -215,7 +250,9 @@ export const startEngine = async (
 			],
 			{ stdio: 'ignore' },
 		);
-		url = `ws://127.0.0.1:${port}/rpc`;
+		url = `${transport}://127.0.0.1:${port}/rpc`;
+	} else if (transport !== 'embedded') {
+		url = withTransport(url, transport).href;
 	}
 	let db: Surreal | undefined;
 	let lastError: unknown;
@@ -237,6 +274,8 @@ export const startEngine = async (
 	return {
 		db: connected,
 		mode: engineMode,
+		transport,
+		rpcUrl: url,
 		namespace,
 		...(await engineVersion(connected)),
 		http: httpSql(url, namespace),

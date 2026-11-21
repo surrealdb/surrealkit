@@ -40,7 +40,6 @@ import {
 	failure,
 	fake,
 	IndexExpectationError,
-	layerFrom,
 	loadSchema,
 	memoryLayer,
 	recordUser,
@@ -49,6 +48,7 @@ import {
 	thrown,
 } from '../src/testing/index.js';
 import { type Engine, engineConfigured, startEngine } from './engine.js';
+import { recordUserLayer } from './record-session.js';
 
 const PersonId = SurrealSchema.RecordIdFor('person');
 const PersonTable = {
@@ -138,10 +138,7 @@ describe.skipIf(!engineConfigured)('against the engine', () => {
 	beforeAll(async () => {
 		engine = await startEngine();
 		await engine.db.query(schema);
-		database = layerFrom(engine.db, {
-			namespace: engine.namespace,
-			database: engine.namespace,
-		});
+		database = recordUserLayer(engine);
 	});
 	afterAll(async () => {
 		await engine?.stop();
@@ -164,7 +161,7 @@ describe.skipIf(!engineConfigured)('against the engine', () => {
 				}),
 			);
 			const visible = select(Visible).build('visible people');
-			const { asRoot, asUser } = await runHere(
+			const { asRoot, asUser, session } = await runHere(
 				Effect.scoped(
 					Effect.gen(function* () {
 						const user = yield* recordUser({
@@ -172,6 +169,7 @@ describe.skipIf(!engineConfigured)('against the engine', () => {
 							variables: { name: 'dee' },
 						});
 						return {
+							session: user.session,
 							asRoot: yield* run(visible),
 							asUser: yield* user.client.run(visible),
 						};
@@ -186,6 +184,12 @@ describe.skipIf(!engineConfigured)('against the engine', () => {
 			expect(asUser).toEqual([
 				{ id: expect.anything(), name: 'Ann', age: 30 },
 			]);
+			expect(session).toMatchObject(
+				engine.transport === 'http'
+					? { isConnected: false }
+					: { isValid: false },
+			);
+			expect(await runHere(run(visible))).toEqual(asRoot);
 		});
 
 		it('reports an access method the engine refuses as a TestingError', async () => {

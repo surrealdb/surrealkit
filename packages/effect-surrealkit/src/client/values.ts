@@ -58,7 +58,6 @@ const leaves = [
 	Duration,
 	Decimal,
 	Uuid,
-	Geometry,
 	Table,
 	FileRef,
 	StringRecordId,
@@ -141,6 +140,11 @@ const checkObject = (
 			? fail(path, 'an invalid Date')
 			: undefined;
 	}
+	if (value instanceof Geometry) {
+		// The SDK encodes each coordinate as a number, including coordinates
+		// inside a GeometryCollection.
+		return check(value.toJSON(), path, seen);
+	}
 	if (value instanceof RecordId) {
 		path.push('id');
 		const problem = check(value.id, path, seen);
@@ -202,6 +206,12 @@ const check = (
 						'a string with a lone UTF-16 surrogate, which UTF-8 cannot carry; the SDK would replace it with U+FFFD',
 					);
 		case 'number':
+			if (Object.is(value, -0)) {
+				return fail(
+					path,
+					'negative zero, which the SDK encodes as positive zero',
+				);
+			}
 			return Number.isInteger(value) && Math.abs(value) > MAX_NUMBER
 				? fail(
 						path,
