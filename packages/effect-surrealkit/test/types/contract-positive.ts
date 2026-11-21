@@ -6,7 +6,7 @@ import {
 	type Scope,
 	Stream,
 } from 'effect';
-
+import type { makeBulk } from '../../src/client/bulk.js';
 import {
 	type BulkOptions,
 	type BulkProgress,
@@ -42,6 +42,7 @@ import {
 	timed,
 	withTransaction,
 } from '../../src/client/index.js';
+import type { Transport } from '../../src/client/internal/transport.js';
 import * as SurrealSchema from '../../src/index.js';
 import {
 	type Expr,
@@ -242,6 +243,11 @@ export const clientContract = (session: Queryable, client: Client): void => {
 			return Effect.void;
 		},
 	};
+	type RootSender = Extract<
+		Parameters<typeof makeBulk>[0],
+		{ readonly transport: object }
+	>;
+	same<RootSender['transport']['collect'], Transport['collect']>(true);
 	same<ListBindingsOf<typeof names.params>, 'names'>(true);
 	const bulk = client.bulk(
 		names,
@@ -286,6 +292,16 @@ export const statementContract = (client: Client): void => {
 		Expr<typeof rows, RowsBinding>
 	>(true);
 	const update = updateEach(PersonTable, updateRows).build('update rows');
+	const optionalMode: { readonly missing?: 'ignore' } = {};
+	const optionalUpdate = updateEach(
+		PersonTable,
+		updateRows,
+		optionalMode,
+	).build();
+	same<
+		typeof optionalUpdate,
+		Statement<RowsBinding, NoResult<'many'>, 'Record not found'>
+	>(true);
 	const updateIgnoringMissing = updateEach(PersonTable, updateRows, {
 		missing: 'ignore',
 	}).build();

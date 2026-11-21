@@ -31,17 +31,30 @@ export interface UpdateEach<
 }
 
 /** Merges each row's fields into its record, throwing on a missing record by default. */
-export const updateEach = <
+export function updateEach<
 	T extends PureTable,
 	D extends Codec,
 	P extends Params,
-	M extends Missing = 'error',
 >(
-	_table: T,
-	_rows: FitsUpdateRows<T, D, Expr<D, P>>,
-	_options?: { readonly missing?: M },
-): UpdateEach<T, P, M> => {
+	table: T,
+	rows: FitsUpdateRows<T, D, Expr<D, P>>,
+	options: { readonly missing: 'ignore' },
+): UpdateEach<T, P, 'ignore'>;
+export function updateEach<
+	T extends PureTable,
+	D extends Codec,
+	P extends Params,
+>(
+	table: T,
+	rows: FitsUpdateRows<T, D, Expr<D, P>>,
+	options?: { readonly missing?: Missing },
+): UpdateEach<T, P>;
+export function updateEach(
+	_table: PureTable,
+	_rows: unknown,
+	_options?: { readonly missing?: Missing },
+): never {
 	throw new Error(
 		'effect-surrealkit: updateEach is not implemented yet (lane L5)',
 	);
-};
+}

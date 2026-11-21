@@ -65,7 +65,7 @@ export interface BulkSummary<A> {
 }
 
 type BulkSender =
-	| { readonly transport: Pick<Transport, 'begin' | 'send'> }
+	| { readonly transport: Pick<Transport, 'begin' | 'collect' | 'send'> }
 	| { readonly transaction: Pick<TransactionHandle, 'send'> };
 
 export const makeBulk =
