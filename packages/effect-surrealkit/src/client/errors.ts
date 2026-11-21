@@ -166,3 +166,40 @@ export type StatementError<Throws extends string = never> =
 	| StatementEmptyResult
 	| StatementWriteOutcomeError
 	| ([Throws] extends [never] ? never : StatementThrown<Throws>);
+
+/** The transport or engine lacks a required feature. No write request was sent. */
+export class StatementUnsupported extends Data.TaggedError(
+	'StatementUnsupported',
+)<{
+	readonly feature: 'interactive transaction' | 'live query' | 'stream';
+	readonly statement?: string;
+	readonly message: string;
+	readonly cause?: unknown;
+}> {}
+
+/** The commit was sent and no answer arrived. Read back before retrying. */
+export class TransactionOutcomeUnknown extends Data.TaggedError(
+	'TransactionOutcomeUnknown',
+)<{
+	readonly message: string;
+	readonly cause: unknown;
+}> {}
+
+/** A non-atomic bulk write failed after committing any preceding chunks. */
+export class BulkWriteError<
+	Throws extends string = never,
+> extends Data.TaggedError('BulkWriteError')<{
+	readonly statement: string;
+	/** Zero-based index of the failed chunk. */
+	readonly chunk: number;
+	readonly chunksCommitted: number;
+	readonly rowsCommitted: number;
+	readonly cause: StatementError<Throws>;
+}> {}
+
+/** The live query ended without the caller closing it. */
+export class LiveQueryClosed extends Data.TaggedError('LiveQueryClosed')<{
+	readonly statement: string;
+	readonly reason: 'killed' | 'disconnected';
+	readonly message: string;
+}> {}

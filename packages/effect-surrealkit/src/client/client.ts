@@ -7,9 +7,19 @@
  * declared number of results, NONE in all but the last, and a last result
  * the statement's codec accepts. Interrupting the effect aborts the request.
  */
-import { Context, Effect, Layer, type Schedule } from 'effect';
+import {
+	Context,
+	Effect,
+	Layer,
+	type Schedule,
+	type Schema,
+	type Scope,
+	Stream,
+} from 'effect';
 import type { SurrealSession } from 'surrealdb';
 
+import type { ElementOf } from '../statement/expr.js';
+import type { LiveStatement } from '../statement/live.js';
 import type {
 	CheckedInput,
 	Codec,
@@ -17,7 +27,29 @@ import type {
 	Params,
 	Statement,
 } from '../statement/statement.js';
-import type { StatementConflict, StatementError } from './errors.js';
+import {
+	type BulkInput,
+	type BulkOptions,
+	type BulkSummary,
+	type ListBindingsOf,
+	makeBulk,
+} from './bulk.js';
+import type {
+	BulkWriteError,
+	StatementConflict,
+	StatementEncodeError,
+	StatementError,
+	StatementRequestError,
+	StatementScopeError,
+	StatementUnsupported,
+} from './errors.js';
+import {
+	makeWithTransaction,
+	type TransactionClient,
+	type TransactionError,
+	type TransactionOptions,
+	withTransactionContext,
+} from './interactive.js';
 import { classify, declarer } from './internal/classify.js';
 import {
 	changesOf,
@@ -34,12 +66,20 @@ import {
 	sending,
 	type Transport,
 } from './internal/transport.js';
+import { type LiveError, type LiveEvent, makeLive } from './live.js';
+import {
+	makePipeline,
+	type PipelineOptions,
+	type PipelineResults,
+} from './pipeline.js';
+import { makeStream } from './stream.js';
 
 /**
- * What a client needs from the SDK: a connection or a session. Statements
- * run with that session's authentication, namespace and database.
+ * What a client needs from a connection or session. Interactive transactions
+ * and live queries also require the corresponding optional SDK methods.
  */
-export type Queryable = Pick<SurrealSession, 'query' | 'transaction'>;
+export type Queryable = Pick<SurrealSession, 'query' | 'transaction'> &
+	Partial<Pick<SurrealSession, 'beginTransaction' | 'liveOf'>>;
 
 export interface RunOptions {
 	/**
@@ -72,10 +112,16 @@ export type InputOf<P extends Params, I = Input<P>> =
 		: readonly [input: CheckedInput<P, I>];
 
 /** The arguments after the statement: its input, then the options. */
-export type RunArgs<P extends Params, I = Input<P>> =
+export type RunArgs<P extends Params, I = Input<P>> = RunArgsWithOptions<
+	P,
+	I,
+	RunOptions
+>;
+
+export type RunArgsWithOptions<P extends Params, I, Options> =
 	Record<never, never> extends Input<P>
-		? readonly [input?: CheckedInput<P, I>, options?: RunOptions]
-		: readonly [input: CheckedInput<P, I>, options?: RunOptions];
+		? readonly [input?: CheckedInput<P, I>, options?: Options]
+		: readonly [input: CheckedInput<P, I>, options?: Options];
 
 /** Only {@link bind} makes a {@link Bound}: no other code can name this. */
 declare const BoundTypeId: unique symbol;
@@ -109,7 +155,7 @@ export const bind = <
 	}) as unknown as Bound<R, Throws>;
 
 /**
- * The statements of a transaction as the caller wrote them, `S`: each one
+ * The statements sent together as the caller wrote them, `S`: each one
  * not made by {@link bind} is typed as a message saying so.
  */
 export type BoundStatements<S extends ReadonlyArray<unknown>> = {
@@ -118,7 +164,7 @@ export type BoundStatements<S extends ReadonlyArray<unknown>> = {
 		readonly [BoundTypeId]: 'made by bind';
 	}
 		? S[I]
-		: 'a transaction takes statements paired with their input by `bind`';
+		: 'statements that run together are paired with their input by `bind`';
 };
 
 /** The decoded results of the statements of a transaction, in order. */
@@ -169,6 +215,76 @@ export interface Client {
 		statements: BoundStatements<S>,
 		options?: RunOptions,
 	) => Effect.Effect<Results<S>, StatementError<ThrownByAny<S>>>;
+
+	/** Sends a list together and returns one outcome per statement. */
+	readonly pipeline: <const S extends ReadonlyArray<unknown>>(
+		statements: BoundStatements<S>,
+		options?: PipelineOptions,
+	) => Effect.Effect<
+		PipelineResults<S>,
+		StatementEncodeError | StatementScopeError | StatementRequestError
+	>;
+
+	/** Opens a transaction for the body and commits when the body succeeds. */
+	readonly withTransaction: <A, E, R>(
+		body: (tx: TransactionClient) => Effect.Effect<A, E, R>,
+		options?: TransactionOptions,
+	) => Effect.Effect<A, E | TransactionError, R>;
+
+	/** Runs a statement over chunks of one list binding. */
+	readonly bulk: <
+		P extends Params,
+		R extends Codec,
+		T extends string,
+		K extends ListBindingsOf<P>,
+		E = never,
+		C = never,
+	>(
+		statement: Statement<P, R, T>,
+		input: BulkInput<P, K, E, C>,
+		options: BulkOptions<K, ElementOf<P[K]['Type']>, E, C>,
+	) => Effect.Effect<
+		BulkSummary<R['Type']>,
+		StatementError<T> | BulkWriteError<T> | StatementUnsupported | E,
+		C
+	>;
+
+	/** Decodes an array result one row at a time. */
+	readonly stream: <
+		P extends Params,
+		Row extends Codec,
+		T extends string,
+		I = Input<P>,
+	>(
+		statement: Statement<P, Schema.$Array<Row>, T>,
+		...input: InputOf<P, I>
+	) => Stream.Stream<Row['Type'], StatementError<T> | StatementUnsupported>;
+
+	/** Acquires a live query in the current scope. */
+	readonly liveScoped: <
+		P extends Params,
+		Row extends Codec,
+		Id extends Codec,
+		I = Input<P>,
+	>(
+		statement: LiveStatement<P, Row, Id>,
+		...input: InputOf<P, I>
+	) => Effect.Effect<
+		Stream.Stream<LiveEvent<Row['Type'], Id['Type']>, LiveError>,
+		LiveError,
+		Scope.Scope
+	>;
+
+	/** Streams changes for the lifetime of the subscription. */
+	readonly live: <
+		P extends Params,
+		Row extends Codec,
+		Id extends Codec,
+		I = Input<P>,
+	>(
+		statement: LiveStatement<P, Row, Id>,
+		...input: InputOf<P, I>
+	) => Stream.Stream<LiveEvent<Row['Type'], Id['Type']>, LiveError>;
 }
 
 /** The client statements run through, as a service. */
@@ -186,9 +302,9 @@ export class SurrealClient extends Context.Service<SurrealClient, Client>()(
  */
 export const make = (db: Queryable): Client => makeWith(sdkTransport(db));
 
-/** A client over a {@link Transport}. @internal */
-export const makeWith = (transport: Transport): Client => ({
-	run: <P extends Params, R extends Codec, Throws extends string, I>(
+const makeRun =
+	(transport: Transport): Client['run'] =>
+	<P extends Params, R extends Codec, Throws extends string, I>(
 		statement: Statement<P, R, Throws>,
 		...args: RunArgs<P, I>
 	) => {
@@ -267,8 +383,11 @@ export const makeWith = (transport: Transport): Client => ({
 				}),
 			),
 		) as Effect.Effect<R['Type'], StatementError<Throws>>;
-	},
-	transaction: <const S extends ReadonlyArray<unknown>>(
+	};
+
+const makeTransaction =
+	(transport: Transport): Client['transaction'] =>
+	<const S extends ReadonlyArray<unknown>>(
 		given: BoundStatements<S>,
 		options?: RunOptions,
 	) => {
@@ -367,7 +486,17 @@ export const makeWith = (transport: Transport): Client => ({
 				}),
 			),
 		) as Effect.Effect<Results<S>, StatementError<ThrownByAny<S>>>;
-	},
+	};
+
+/** A client over a {@link Transport}. @internal */
+export const makeWith = (transport: Transport): Client => ({
+	run: makeRun(transport),
+	transaction: makeTransaction(transport),
+	pipeline: makePipeline(transport),
+	withTransaction: makeWithTransaction(transport),
+	bulk: makeBulk({ transport }),
+	stream: makeStream(transport),
+	...makeLive(transport),
 });
 
 /** Provides {@link SurrealClient} from an SDK connection or session. */
@@ -395,4 +524,46 @@ export const transaction = <const S extends ReadonlyArray<unknown>>(
 ): Effect.Effect<Results<S>, StatementError<ThrownByAny<S>>, SurrealClient> =>
 	Effect.flatMap(Effect.service(SurrealClient), (client) =>
 		client.transaction<S>(statements, options),
+	);
+
+/** Sends a pipeline through the client in context. */
+export const pipeline = <const S extends ReadonlyArray<unknown>>(
+	statements: BoundStatements<S>,
+	options?: PipelineOptions,
+): Effect.Effect<
+	PipelineResults<S>,
+	StatementEncodeError | StatementScopeError | StatementRequestError,
+	SurrealClient
+> =>
+	Effect.flatMap(Effect.service(SurrealClient), (client) =>
+		client.pipeline<S>(statements, options),
+	);
+
+/** Runs an effect with a transaction-bound client in context. */
+export const withTransaction = <A, E, R>(
+	effect: Effect.Effect<A, E, R>,
+	options?: TransactionOptions,
+): Effect.Effect<A, E | TransactionError, R | SurrealClient> =>
+	Effect.flatMap(Effect.service(SurrealClient), (client) =>
+		withTransactionContext(client, effect, options),
+	);
+
+/** Streams rows through the client in context. */
+export const stream = <
+	P extends Params,
+	Row extends Codec,
+	T extends string,
+	I = Input<P>,
+>(
+	statement: Statement<P, Schema.$Array<Row>, T>,
+	...input: InputOf<P, I>
+): Stream.Stream<
+	Row['Type'],
+	StatementError<T> | StatementUnsupported,
+	SurrealClient
+> =>
+	Stream.unwrap(
+		Effect.map(Effect.service(SurrealClient), (client) =>
+			client.stream<P, Row, T, I>(statement, ...input),
+		),
 	);

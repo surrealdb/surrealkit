@@ -41,6 +41,7 @@ export {
 	type Scope,
 	type SomeOf,
 } from './block.js';
+export { type FitsUpdateRows, type UpdateEach, updateEach } from './bulk.js';
 export {
 	and,
 	at,
@@ -196,6 +197,12 @@ export {
 	variance,
 } from './group.js';
 export {
+	type Live,
+	type LiveStatement,
+	LiveStatementTypeId,
+	live,
+} from './live.js';
+export {
 	type Binds,
 	type BindsOf,
 	type Contract,
@@ -226,6 +233,7 @@ export {
 	type RecordKeyOf,
 	recordId,
 } from './record.js';
+export { renameNames } from './rename.js';
 export {
 	type FieldExpr,
 	type Fields,
