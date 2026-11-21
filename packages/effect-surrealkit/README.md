@@ -1704,7 +1704,77 @@ binding can be sent under its generated name.
 
 #### Timing
 
-Written by lane L3.
+`timed(effect)` returns the effect's value and one `RequestTiming` for each
+request it sends, in completion order. Nested collectors also see the
+requests made inside their scope. Effects that send nothing return an
+empty timing list.
+
+```ts
+import { Duration, Schema } from 'effect';
+import { bind, type RequestTiming, timed } from 'effect-surrealkit/client';
+import { make } from 'effect-surrealkit/statement';
+
+const answer = make({
+  name: 'read, answer',
+  sql: 'NONE; 42;',
+  params: {},
+  result: Schema.Number,
+  slots: 2,
+  writes: false,
+});
+const numbers = make({
+  name: 'read, answer',
+  sql: '[1, 2];',
+  params: {},
+  result: Schema.Array(Schema.Number),
+  writes: false,
+});
+const [results, [timing]] = yield* timed(
+  client.pipeline([bind(answer), bind(numbers)]),
+);
+
+// One timing observed on embedded SurrealDB 4.0.1.
+const example: RequestTiming = {
+  kind: 'pipeline',
+  name: 'pipeline(read, answer, read, answer)',
+  sends: 1,
+  encode: Duration.nanos(289_333n),
+  wait: Duration.nanos(5_243_334n),
+  server: Duration.nanos(1_143_000n),
+  decode: Duration.nanos(396_584n),
+  total: Duration.nanos(6_301_875n),
+  statements: [
+    { statement: 'read, answer', server: Duration.nanos(785_583n) },
+    { statement: 'read, answer', server: Duration.nanos(357_417n), rows: 2 },
+  ],
+};
+```
+
+- `kind` identifies the client operation. `name` is its span name.
+- `sends` counts client transport attempts, including the client's own
+  conflict retries. The SDK may retry internally within one attempt.
+- `encode` measures binding encoding and preparation of the request.
+- `wait` measures the last transport attempt, including any SDK retries it
+  performs internally.
+- `server` sums the engine durations supplied for the request's slots.
+  Pipelines provide these durations, including the wrapping `BEGIN` and
+  `COMMIT` slots when requested. The collected `run` and `transaction`
+  methods leave them absent.
+- `decode` measures the time spent decoding the answer.
+- `total` measures the whole operation, including earlier attempts and
+  retry delays.
+- `statements` lists the original statement names in request order, with
+  each statement's own `server` duration when available and `rows` count
+  when its decoded result is a list.
+
+The client records these phases with or without `timed`. Request spans
+carry `effect_surrealkit.encode_us`, `effect_surrealkit.wait_us`,
+`effect_surrealkit.decode_us`, `effect_surrealkit.sends`, and
+`effect_surrealkit.server_us` when available. The timers
+`effect_surrealkit_statement_encode_duration`,
+`effect_surrealkit_statement_decode_duration`, and
+`effect_surrealkit_statement_server_duration` use the `statement` tag.
+Binding and result values stay out of span attributes and metric tags.
 
 #### Interactive transactions
 

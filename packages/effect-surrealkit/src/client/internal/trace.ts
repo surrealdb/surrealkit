@@ -1,5 +1,11 @@
 import { Clock, Duration, Effect, Metric } from 'effect';
 
+import {
+	type RequestTiming,
+	type StatementTiming,
+	timingCollectors,
+} from '../timing.js';
+
 /**
  * The metrics every run updates, through Effect's `Metric`:
  *
@@ -39,17 +45,28 @@ export const traced = <A, E extends { readonly _tag: string }>(
 	rows: boolean,
 	sent: { count: number },
 	effect: Effect.Effect<A, E>,
+	group?: {
+		readonly names: ReadonlyArray<string>;
+		readonly outcome: (result: A, index: number) => string;
+	},
 ): Effect.Effect<A, E> =>
 	Effect.gen(function* () {
 		const started = yield* Clock.currentTimeNanos;
-		const record = (outcome: string) =>
+		const record = (outcome: (index: number) => string) =>
 			Effect.gen(function* () {
 				const ended = yield* Clock.currentTimeNanos;
+				for (const [index, member] of (
+					group?.names ?? [name]
+				).entries()) {
+					yield* Metric.update(
+						Metric.withAttributes(runs, {
+							statement: member,
+							outcome: outcome(index),
+						}),
+						1,
+					);
+				}
 				const statement = { statement: name };
-				yield* Metric.update(
-					Metric.withAttributes(runs, { ...statement, outcome }),
-					1,
-				);
 				yield* Metric.update(
 					Metric.withAttributes(durations, statement),
 					Duration.nanos(ended - started),
@@ -90,20 +107,25 @@ export const traced = <A, E extends { readonly _tag: string }>(
 					}),
 				},
 			}),
-			Effect.tap(() => record('success')),
-			Effect.tapError((error) => record(error._tag)),
-			Effect.onInterrupt(() => record('interrupted')),
+			Effect.tap((result) =>
+				record((index) => group?.outcome(result, index) ?? 'success'),
+			),
+			Effect.tapError((error) => record(() => error._tag)),
+			Effect.onInterrupt(() => record(() => 'interrupted')),
 		);
 	});
 
 export interface Recorder {
 	readonly encode: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E>;
+	/** Measures one client transport attempt. Wrap this effect in the retry, if any. */
 	readonly wait: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E>;
 	readonly decode: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E>;
+	/** Registers the next statement, whether or not its duration is available. */
 	readonly server: (
 		statement: string,
 		duration: Duration.Duration | undefined,
 	) => Effect.Effect<void>;
+	/** Records a row count for the statement just registered. */
 	readonly rows: (statement: string, count: number) => Effect.Effect<void>;
 }
 
@@ -115,16 +137,146 @@ export type RequestKind =
 	| 'bulk'
 	| 'interactive';
 
-const passthrough: Recorder = {
-	encode: (effect) => effect,
-	wait: (effect) => effect,
-	decode: (effect) => effect,
-	server: () => Effect.void,
-	rows: () => Effect.void,
-};
+const encodeDuration = Metric.timer(
+	'effect_surrealkit_statement_encode_duration',
+);
+const serverDuration = Metric.timer(
+	'effect_surrealkit_statement_server_duration',
+);
+const decodeDuration = Metric.timer(
+	'effect_surrealkit_statement_decode_duration',
+);
+
+const micros = (duration: Duration.Duration): number =>
+	Duration.toMillis(duration) * 1_000;
+
+const report = (timing: RequestTiming): Effect.Effect<void> =>
+	Effect.gen(function* () {
+		const { name, sends, encode, wait, server, decode } = timing;
+		yield* Effect.annotateCurrentSpan({
+			'effect_surrealkit.encode_us': micros(encode),
+			'effect_surrealkit.wait_us': micros(wait),
+			...(server === undefined
+				? {}
+				: { 'effect_surrealkit.server_us': micros(server) }),
+			'effect_surrealkit.decode_us': micros(decode),
+			'effect_surrealkit.sends': sends,
+		});
+		const tags = { statement: name };
+		yield* Metric.update(
+			Metric.withAttributes(encodeDuration, tags),
+			encode,
+		);
+		yield* Metric.update(
+			Metric.withAttributes(decodeDuration, tags),
+			decode,
+		);
+		if (server !== undefined) {
+			yield* Metric.update(
+				Metric.withAttributes(serverDuration, tags),
+				server,
+			);
+		}
+		if (sends > 0) {
+			const collectors = yield* timingCollectors;
+			for (const collect of collectors) collect(timing);
+		}
+	});
+
+const measure = <A, E>(
+	effect: Effect.Effect<A, E>,
+	save: (elapsed: Duration.Duration) => void,
+	onStart?: () => void,
+): Effect.Effect<A, E> =>
+	Effect.uninterruptibleMask((restore) =>
+		Effect.gen(function* () {
+			const start = yield* Clock.currentTimeNanos;
+			onStart?.();
+			return yield* restore(effect).pipe(
+				Effect.ensuring(
+					Effect.gen(function* () {
+						save(
+							Duration.nanos(
+								(yield* Clock.currentTimeNanos) - start,
+							),
+						);
+					}),
+				),
+			);
+		}),
+	);
 
 export const recording = <A, E>(
-	_kind: RequestKind,
-	_name: string,
+	kind: RequestKind,
+	name: string,
 	use: (recorder: Recorder) => Effect.Effect<A, E>,
-): Effect.Effect<A, E> => use(passthrough);
+): Effect.Effect<A, E> =>
+	Effect.gen(function* () {
+		const start = yield* Clock.currentTimeNanos;
+		const statements: Array<StatementTiming> = [];
+		let sends = 0;
+		let encode = Duration.zero;
+		let wait = Duration.zero;
+		let decode = Duration.zero;
+		let server: Duration.Duration | undefined;
+		return yield* use({
+			encode: (effect) =>
+				measure(effect, (elapsed) => {
+					encode = Duration.sum(encode, elapsed);
+				}),
+			wait: (effect) =>
+				measure(
+					effect,
+					(elapsed) => {
+						wait = elapsed;
+					},
+					() => {
+						sends++;
+					},
+				),
+			decode: (effect) =>
+				measure(effect, (elapsed) => {
+					decode = Duration.sum(decode, elapsed);
+				}),
+			server: (statement, duration) =>
+				Effect.sync(() => {
+					statements.push(
+						duration === undefined
+							? { statement }
+							: { statement, server: duration },
+					);
+					if (duration !== undefined) {
+						server =
+							server === undefined
+								? duration
+								: Duration.sum(server, duration);
+					}
+				}),
+			rows: (statement, rows) =>
+				Effect.sync(() => {
+					const index = statements.length - 1;
+					const part = statements[index];
+					if (part?.statement === statement)
+						statements[index] = { ...part, rows };
+				}),
+		}).pipe(
+			Effect.ensuring(
+				Effect.gen(function* () {
+					const total = Duration.nanos(
+						(yield* Clock.currentTimeNanos) - start,
+					);
+					yield* report({
+						kind,
+						name,
+						sends,
+						encode,
+						wait,
+						decode,
+						total,
+						statements: statements.slice(),
+						...(server === undefined ? {} : { server }),
+					});
+				}),
+			),
+		);
+	});

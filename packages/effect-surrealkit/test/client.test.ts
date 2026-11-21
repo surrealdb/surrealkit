@@ -614,6 +614,10 @@ describe('run', () => {
 			'db.system.name': 'surrealdb',
 			'db.operation.name': 'add',
 			'db.query.text': 'RETURN $a + $b;',
+			'effect_surrealkit.encode_us': expect.any(Number),
+			'effect_surrealkit.wait_us': expect.any(Number),
+			'effect_surrealkit.decode_us': expect.any(Number),
+			'effect_surrealkit.sends': 1,
 		});
 	});
 });

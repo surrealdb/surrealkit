@@ -1,4 +1,4 @@
-import { type Duration, Effect } from 'effect';
+import { Context, type Duration, Effect } from 'effect';
 
 import type { RequestKind } from './internal/trace.js';
 
@@ -14,10 +14,10 @@ export interface RequestTiming {
 	readonly kind: RequestKind;
 	/** The span name of the request. */
 	readonly name: string;
-	/** Requests sent, including retries. */
+	/** Transport attempts by the client, including its own conflict retries. */
 	readonly sends: number;
 	readonly encode: Duration.Duration;
-	/** Time from the last send until its answer arrived. */
+	/** Elapsed time of the last transport attempt, including any retries inside the SDK. */
 	readonly wait: Duration.Duration;
 	/** Sum of the statement durations, when available. */
 	readonly server?: Duration.Duration;
@@ -26,10 +26,31 @@ export interface RequestTiming {
 	readonly statements: ReadonlyArray<StatementTiming>;
 }
 
-/** Runs an effect and collects its request timings in order. */
+export const timingCollectors = Context.Reference<
+	ReadonlyArray<(timing: RequestTiming) => void>
+>('effect-surrealkit/TimingCollectors', { defaultValue: () => [] });
+
+/** Runs an effect and collects its request timings in completion order. */
 export const timed = <A, E, R>(
-	_effect: Effect.Effect<A, E, R>,
+	effect: Effect.Effect<A, E, R>,
 ): Effect.Effect<readonly [A, ReadonlyArray<RequestTiming>], E, R> =>
-	Effect.die(
-		new Error('effect-surrealkit: timed is not implemented yet (lane L3)'),
-	);
+	Effect.gen(function* () {
+		const outer = yield* timingCollectors;
+		const timings: Array<RequestTiming> = [];
+		let active: Array<RequestTiming> | undefined = timings;
+		const append = (timing: RequestTiming): void => {
+			active?.push(timing);
+		};
+		const value = yield* Effect.provideService(effect, timingCollectors, [
+			...outer,
+			append,
+		]).pipe(
+			Effect.ensuring(
+				Effect.sync(() => {
+					// Detached fibers may still hold this collector after the scope settles.
+					active = undefined;
+				}),
+			),
+		);
+		return [value, timings] as const;
+	});
