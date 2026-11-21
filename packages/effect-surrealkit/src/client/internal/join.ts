@@ -80,27 +80,38 @@ export const joinWith = <E>(
 			options.refuseTransactional,
 		);
 		if (refused !== undefined) return yield* Effect.fail(refused);
-		const bindings: Record<string, unknown> = {};
-		const boundBy = new Map<string, string>();
+		const bindings = new Map<string, { owner: string; value: unknown }>();
 		const sql: Array<string> = [];
 		const parts: Array<RequestPart> = [];
 		let offset = 0;
 		for (const { statement, bindings: encoded } of statements) {
 			const mine = yield* encoded;
 			for (const [key, value] of Object.entries(mine)) {
-				const first = boundBy.get(key);
-				if (first === undefined) {
-					boundBy.set(key, statement.name);
-				} else if (!sameValue(bindings[key], value)) {
+				// The SDK's transaction() silently drops this own binding when it
+				// combines its inputs, even when we pass a single BoundQuery.
+				if (options.mode === 'atomic' && key === '__proto__') {
 					return yield* Effect.fail(
 						new StatementScopeError({
 							statement: statement.name,
 							binding: key,
-							message: `\`$${key}\` is bound by \`${first}\` and by \`${statement.name}\` to values that are not certainly equal, and statements in one transaction share one variable scope; rename the binding in one of them`,
+							message: `the SurrealDB SDK drops \`$${key}\` bound by \`${statement.name}\` when sending an atomic transaction; rename the binding`,
 						}),
 					);
 				}
-				bindings[key] = value;
+				const first = bindings.get(key);
+				if (first !== undefined && !sameValue(first.value, value)) {
+					return yield* Effect.fail(
+						new StatementScopeError({
+							statement: statement.name,
+							binding: key,
+							message: `\`$${key}\` is bound by \`${first.owner}\` and by \`${statement.name}\` to values that are not certainly equal, and statements in one transaction share one variable scope; rename the binding in one of them`,
+						}),
+					);
+				}
+				bindings.set(key, {
+					owner: first?.owner ?? statement.name,
+					value,
+				});
 			}
 			const wrap = options.wrap;
 			const slots = statement.slots + (wrap === undefined ? 0 : 2);
@@ -112,7 +123,14 @@ export const joinWith = <E>(
 				sql.push(wrap.before, statement.sql, wrap.after);
 			}
 		}
-		return { mode: options.mode, sql: sql.join('\n'), bindings, parts };
+		return {
+			mode: options.mode,
+			sql: sql.join('\n'),
+			bindings: Object.fromEntries(
+				Array.from(bindings, ([key, { value }]) => [key, value]),
+			),
+			parts,
+		};
 	});
 
 export const join = (
