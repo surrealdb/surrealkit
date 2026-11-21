@@ -1868,7 +1868,53 @@ row delivery without a memory bound.
 
 #### Live queries
 
-Written by lane L7.
+`live(table)` builds a typed `LIVE SELECT` over a table descriptor or a
+`readAs` view. `where` and `project` use the same expressions and binding
+codecs as `select`.
+
+```ts
+import { Effect, Stream } from 'effect';
+import { Int } from 'effect-surrealkit';
+import { SurrealClient } from 'effect-surrealkit/client';
+import { gt, live, param } from 'effect-surrealkit/statement';
+
+const adults = live(PersonTable)
+  .where((row) => gt(row.age, param('minimum', Int)))
+  .project((row) => ({ name: row.name }))
+  .build('adult changes');
+
+const listen = Effect.scoped(Effect.gen(function* () {
+  const client = yield* SurrealClient;
+  const changes = yield* client.liveScoped(adults, { minimum: 17 });
+  return yield* Stream.runForEach(changes, (event) => onChange(event));
+}));
+```
+
+The registration sends `LIVE SELECT name AS name FROM ⟨person⟩ WHERE age >
+$minimum;`. When `liveScoped` succeeds, the listener is ready to receive
+changes even before the first pull. Closing the scope kills the subscription.
+Use the client's `live` stream to start listening on the first pull and kill
+the subscription when that stream ends.
+`timed` records registration and scope cleanup as separate requests.
+
+Each `CREATE`, `UPDATE` or `DELETE` has a separate typed record `id` and a
+typed `value`. `DELETE` supplies the last row before deletion, including
+the selected projection. The client preserves the engine's delivery order.
+On embedded 4.0.1 and WebSocket 3.3.4, an update
+that stops matching `WHERE` emits no event. An update that starts matching
+again emits `UPDATE`. Live events honor the session's table and field
+permissions, and `readAs` supplies the restricted row codec.
+
+An invalid event fails with `StatementDecodeError`. Server-side `KILLED`
+and a disconnected session end the stream with `LiveQueryClosed`. HTTP
+connections refuse live queries with `StatementUnsupported`. Embedded
+SurrealDB 4.0.1 still delivered changes with
+`capabilities.live_query_notifications` set to `false` in the Node engine
+configuration.
+
+Live queries here start from a table. They provide change events without a
+baseline read. `DIFF`, `FETCH`, record-ID and range targets, ordering,
+limits, grouping, and `only` are outside this API.
 
 #### Transports
 

@@ -3,6 +3,7 @@ import {
 	BoundQuery,
 	type QueryResponse,
 	type Duration as SurrealDuration,
+	Uuid,
 } from 'surrealdb';
 
 import type { AnyStatement } from '../../statement/statement.js';
@@ -134,6 +135,7 @@ export const sdkTransport = (db: Queryable): Transport => {
 	const query = (request: Request, signal: Signal) =>
 		db.query(request.sql, request.bindings).signal(signal);
 	const beginTransaction = db.beginTransaction?.bind(db);
+	const liveOf = db.liveOf?.bind(db);
 	return {
 		collect: (request, signal) =>
 			request.mode === 'atomic'
@@ -163,6 +165,65 @@ export const sdkTransport = (db: Queryable): Transport => {
 							commit: () => tx.commit(),
 							cancel: () => tx.cancel(),
 						};
+					},
+				}),
+		...(liveOf === undefined
+			? {}
+			: {
+					live: async (
+						request: Request,
+						signal: Signal,
+					): Promise<LiveHandle> => {
+						signal.throwIfAborted();
+						// Wait for the query ID even if the scope ends during registration.
+						// The owner can then kill the exact query before releasing the connection.
+						const ids = await db
+							.query(request.sql, request.bindings)
+							.retry(false)
+							.collect();
+						const [id] = ids;
+						if (ids.length !== 1 || !(id instanceof Uuid))
+							throw new Error(
+								'LIVE SELECT did not return one query UUID',
+							);
+						let attached:
+							| Awaited<ReturnType<typeof liveOf>>
+							| undefined;
+						try {
+							attached = await liveOf(id);
+							const subscription = attached;
+							// Register the iterator before the caller can issue its first write.
+							const iterator =
+								subscription[Symbol.asyncIterator]();
+							signal.throwIfAborted();
+							return {
+								messages: (async function* () {
+									for await (const message of {
+										[Symbol.asyncIterator]: () => iterator,
+									}) {
+										if (message.action === 'KILLED')
+											yield { action: message.action };
+										else
+											yield {
+												action: message.action,
+												id: message.recordId,
+												value: message.value,
+											};
+									}
+								})(),
+								kill: () => subscription.kill(),
+							};
+						} catch (error) {
+							const cleanup =
+								attached === undefined
+									? db
+											.query('KILL $id;', { id })
+											.retry(false)
+											.collect()
+									: attached.kill();
+							await cleanup.catch(() => undefined);
+							throw error;
+						}
 					},
 				}),
 		stream: async function* (request, signal) {
