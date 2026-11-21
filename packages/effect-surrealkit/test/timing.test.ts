@@ -72,6 +72,29 @@ const delayString = (encodeMs: number, decodeMs: number) =>
 		}),
 	);
 
+it('counts retries independently when the same run or transaction effect is reused', async () => {
+	const client = clientWith(() => Promise.resolve([1]));
+	const statement = scalar('reusable');
+	const operations = [
+		Effect.asVoid(client.run(statement)),
+		Effect.asVoid(client.transaction([bind(statement)])),
+	];
+	const snapshots = await Effect.runPromise(
+		Effect.gen(function* () {
+			for (const run of operations) {
+				yield* run;
+				yield* Effect.all([run, run], { concurrency: 2 });
+			}
+			return yield* Metric.snapshot;
+		}).pipe(Effect.provideService(Metric.MetricRegistry, new Map())),
+	);
+	expect(
+		snapshots.filter(
+			({ id }) => id === 'effect_surrealkit_statement_retries',
+		),
+	).toEqual([]);
+});
+
 it('measures each phase on the Effect clock and reports the last conflict attempt', async () => {
 	const { spans, tracer } = tracing();
 	const name = 'read secret';
@@ -337,16 +360,10 @@ it('uses one grouped span and counts each member outcome in the existing runs me
 		effect: Effect.Effect<A, { readonly _tag: string }>,
 		outcome: (result: A, index: number) => string,
 	) =>
-		traced(
-			'group',
-			'1; 2; 3;',
-			undefined,
-			undefined,
-			false,
-			{ count: 1 },
-			effect,
-			{ names, outcome },
-		);
+		traced('group', '1; 2; 3;', undefined, undefined, false, effect, {
+			names,
+			outcome,
+		});
 	const snapshots = await Effect.runPromise(
 		Effect.gen(function* () {
 			yield* grouped(

@@ -159,7 +159,6 @@ export const makePipeline =
 			sources,
 			undefined,
 			false,
-			{ count: 0 },
 			recording('pipeline', name, (recorder) =>
 				Effect.gen(function* () {
 					const request = yield* recorder.encode(

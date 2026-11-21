@@ -43,7 +43,6 @@ export const traced = <A, E extends { readonly _tag: string }>(
 	sources: ReadonlyArray<string> | undefined,
 	variant: string | undefined,
 	rows: boolean,
-	sent: { count: number },
 	effect: Effect.Effect<A, E>,
 	group?: {
 		readonly names: ReadonlyArray<string>;
@@ -71,12 +70,6 @@ export const traced = <A, E extends { readonly _tag: string }>(
 					Metric.withAttributes(durations, statement),
 					Duration.nanos(ended - started),
 				);
-				if (sent.count > 1) {
-					yield* Metric.update(
-						Metric.withAttributes(retries, statement),
-						sent.count - 1,
-					);
-				}
 			});
 		return yield* effect.pipe(
 			Effect.tap((result) =>
@@ -164,6 +157,17 @@ const report = (timing: RequestTiming): Effect.Effect<void> =>
 		});
 		const tags = { statement: name };
 		yield* Metric.update(
+		if (
+			sends > 1 &&
+			(timing.kind === 'run' ||
+				timing.kind === 'transaction' ||
+				timing.kind === 'bulk')
+		) {
+			yield* Metric.update(
+				Metric.withAttributes(retries, tags),
+				sends - 1,
+			);
+		}
 			Metric.withAttributes(encodeDuration, tags),
 			encode,
 		);

@@ -312,14 +312,12 @@ const makeRun =
 		const input = (args[0] ?? {}) as Readonly<Record<string, unknown>>;
 		const options = args[1];
 		const writes = changesOf([statement]);
-		const sent = { count: 0 };
 		return traced(
 			statement.name,
 			statement.sql,
 			statement.sources,
 			statement.variant,
 			true,
-			sent,
 			recording('run', statement.name, (recorder) =>
 				Effect.gen(function* () {
 					const request = yield* recorder.encode(
@@ -348,10 +346,8 @@ const makeRun =
 					const results = yield* sending(
 						recorder.wait(
 							Effect.tryPromise({
-								try: (signal) => {
-									sent.count++;
-									return transport.collect(request, signal);
-								},
+								try: (signal) =>
+									transport.collect(request, signal),
 								catch: (cause) =>
 									classify(
 										statement.name,
@@ -405,14 +401,12 @@ const makeTransaction =
 		];
 		const descriptors = statements.map(({ statement }) => statement);
 		const writes = changesOf(descriptors);
-		const sent = { count: 0 };
 		return traced(
 			name,
 			sql,
 			sources,
 			undefined,
 			false,
-			sent,
 			recording('transaction', name, (recorder) =>
 				Effect.gen(function* () {
 					if (statements.length === 0) return [];
@@ -444,10 +438,8 @@ const makeTransaction =
 					const results = yield* sending(
 						recorder.wait(
 							Effect.tryPromise({
-								try: (signal) => {
-									sent.count++;
-									return transport.collect(request, signal);
-								},
+								try: (signal) =>
+									transport.collect(request, signal),
 								catch: (cause) =>
 									classify(
 										name,
