@@ -45,7 +45,7 @@ import {
 	classify,
 	declarer,
 	firstFailure,
-	messageOf,
+	requestErrorText,
 } from './internal/classify.js';
 import { countOf, decode } from './internal/decode.js';
 import { checkValues, encode } from './internal/encode.js';
@@ -134,7 +134,7 @@ const unsupported = (cause?: unknown): StatementUnsupported =>
 const requestError = (cause: unknown): StatementRequestError =>
 	new StatementRequestError({
 		statement: name,
-		message: messageOf(cause),
+		message: requestErrorText(cause),
 		cause,
 	});
 

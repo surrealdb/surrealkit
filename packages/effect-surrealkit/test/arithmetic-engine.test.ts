@@ -18,6 +18,7 @@ import {
 	add,
 	div,
 	evaluate,
+	make,
 	mul,
 	param,
 	select,
@@ -143,7 +144,33 @@ describe.skipIf(!engineConfigured)('arithmetic on an engine', () => {
 			),
 		);
 		expect(error).toBeInstanceOf(StatementRequestError);
-		expect(error.message).toMatch(/Cannot perform addition/);
+		expect(error.message).toBe('SurrealDB request failed');
+		expect(error).toHaveProperty(
+			'cause.message',
+			expect.stringMatching(
+				/Cannot perform addition.*4611686018427387904/u,
+			),
+		);
+	});
+
+	it('keeps the rejected conversion input in the raw engine error', async () => {
+		const supplied = 'synthetic-non-integer-input';
+		const statement = make({
+			name: 'convert',
+			sql: 'RETURN <int>$supplied;',
+			params: { supplied: Schema.String },
+			result: SurrealSchema.Int,
+			writes: false,
+		});
+		const error = await ok(
+			Effect.flip(client.run(statement, { supplied })),
+		);
+		expect(error).toBeInstanceOf(StatementRequestError);
+		expect(error.message).toBe('SurrealDB request failed');
+		expect(error).toHaveProperty(
+			'cause.message',
+			expect.stringContaining(supplied),
+		);
 	});
 
 	it('reads fields of the row in a projection', async () => {

@@ -808,7 +808,11 @@ describe('bulk writes', () => {
 			chunk: 2,
 			rowsCommitted: 4,
 			chunksCommitted: 2,
-			cause: { message: 'write refused' },
+			cause: {
+				message: 'SurrealDB request failed',
+				cause: { message: 'write refused' },
+			},
 		});
+		expect(JSON.stringify(error)).not.toContain('write refused');
 	});
 });

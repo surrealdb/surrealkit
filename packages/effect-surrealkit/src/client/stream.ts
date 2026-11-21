@@ -24,7 +24,6 @@ import {
 	classify,
 	declarer,
 	isCollateralFailure,
-	messageOf,
 } from './internal/classify.js';
 import {
 	changesOf,
@@ -55,7 +54,8 @@ export const makeStream =
 				? new StatementUnsupported({
 						statement: name,
 						feature: 'stream',
-						message: messageOf(cause),
+						message:
+							'the connection does not support streaming queries',
 						cause,
 					})
 				: classify<Throws>(

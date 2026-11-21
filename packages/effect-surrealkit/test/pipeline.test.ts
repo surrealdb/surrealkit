@@ -390,7 +390,7 @@ describe('pipeline request failures and interruption', () => {
 		expect(error).toBeInstanceOf(StatementRequestError);
 		expect(error).toMatchObject({
 			statement: 'pipeline(first, last)',
-			message: 'connection closed',
+			message: 'SurrealDB request failed',
 			cause: lost,
 		});
 		expect(send).toHaveBeenCalledOnce();

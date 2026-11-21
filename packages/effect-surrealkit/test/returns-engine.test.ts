@@ -887,8 +887,12 @@ describe.skipIf(!engineConfigured)('RETURN modes on the engine', () => {
 				}),
 			);
 			expect(error).toBeInstanceOf(StatementRequestError);
+			expect(error.message).toBe('SurrealDB request failed');
 			// SurrealDB 3.3 and 4.0 quote the id differently.
-			expect(error.message).toMatch(/rel-ghost.*does not exist/u);
+			expect(error).toHaveProperty(
+				'cause.message',
+				expect.stringMatching(/rel-ghost.*does not exist/u),
+			);
 			expect(await stored(holds('g1'))).toBe(undefined);
 			expect(await stored(holds('g2'))).toBe(undefined);
 		});

@@ -63,16 +63,6 @@ const leaves = [
 	StringRecordId,
 ] as const;
 
-const kindOf = (value: object): string => {
-	const proto = Object.getPrototypeOf(value) as {
-		readonly constructor?: { readonly name?: unknown };
-	} | null;
-	const name = proto?.constructor?.name;
-	return typeof name === 'string' && name.length > 0
-		? `a ${name}`
-		: 'an object';
-};
-
 type Path = Array<string | number>;
 
 const fail = (path: Path, problem: string): ValueProblem => ({
@@ -115,7 +105,7 @@ const checkObject = (
 	if (ArrayBuffer.isView(value)) {
 		return fail(
 			path,
-			`${kindOf(value)}, which the SDK sends as its raw bytes; send a Uint8Array`,
+			'an array buffer view, which the SDK sends as its raw bytes; send a Uint8Array',
 		);
 	}
 	if (value instanceof Set) {
@@ -168,7 +158,7 @@ const checkObject = (
 	if (proto !== Object.prototype && proto !== null) {
 		return fail(
 			path,
-			`${kindOf(value)}, which the SDK would send as its own enumerable fields; encode it to a SurrealDB value`,
+			'a non-plain object, which the SDK would send as its own enumerable fields; encode it to a SurrealDB value',
 		);
 	}
 	if (Object.getOwnPropertySymbols(value).length > 0) {
@@ -261,17 +251,11 @@ export const valueProblem = (value: unknown): ValueProblem | undefined => {
 	}
 };
 
-/** `$name.field[0]`: a path inside a binding, for messages. */
+/** `$name[*][0]`: a display path that does not expose keys from the data. */
 export const pathText = (
 	binding: string,
 	path: ReadonlyArray<string | number>,
 ): string =>
 	`$${binding}${path
-		.map((step) =>
-			typeof step === 'number'
-				? `[${step}]`
-				: /^[A-Za-z_][A-Za-z0-9_]*$/u.test(step)
-					? `.${step}`
-					: `[${JSON.stringify(step)}]`,
-		)
+		.map((step) => (typeof step === 'number' ? `[${step}]` : '[*]'))
 		.join('')}`;

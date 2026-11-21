@@ -8,6 +8,7 @@ import {
 
 import type { AnyStatement } from '../../statement/statement.js';
 import type { Queryable, RunOptions } from '../client.js';
+import { LiveRegistrationError } from './classify.js';
 
 /** The abort signal a request takes, as the SDK names it. */
 export type Signal = NonNullable<
@@ -190,9 +191,7 @@ export const sdkTransport = (db: Queryable): Transport => {
 							.collect();
 						const [id] = ids;
 						if (ids.length !== 1 || !(id instanceof Uuid))
-							throw new Error(
-								'LIVE SELECT did not return one query UUID',
-							);
+							throw new LiveRegistrationError('missing-id');
 						const killById = async () => {
 							await db
 								.query('KILL $id;', { id })
@@ -234,9 +233,9 @@ export const sdkTransport = (db: Queryable): Transport => {
 									? killById()
 									: attached.kill().catch(killById);
 							await cleanup.catch(() => {
-								throw new Error(
-									'live query attachment failed and cleanup could not be confirmed',
-									{ cause: error },
+								throw new LiveRegistrationError(
+									'cleanup-unconfirmed',
+									error,
 								);
 							});
 							throw error;

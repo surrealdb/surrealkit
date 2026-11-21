@@ -10,7 +10,7 @@ import {
 	classify,
 	declarer,
 	firstFailure,
-	messageOf,
+	requestErrorText,
 } from './internal/classify.js';
 import {
 	changesOf,
@@ -195,7 +195,7 @@ export const makePipeline =
 							catch: (cause) =>
 								new StatementRequestError({
 									statement: name,
-									message: messageOf(cause),
+									message: requestErrorText(cause),
 									cause,
 								}),
 						}),

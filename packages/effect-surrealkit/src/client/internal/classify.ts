@@ -1,3 +1,5 @@
+import { ExpressionError } from 'surrealdb';
+
 import type { AnyStatement } from '../../statement/statement.js';
 import {
 	StatementConflict,
@@ -44,8 +46,39 @@ export const firstFailure = (
 
 const thrownPrefix = 'An error occurred: ';
 
-export const messageOf = (error: unknown): string =>
-	error instanceof Error ? error.message : String(error);
+// The collector gives the SDK one query. Only complete, known diagnostic
+// strings from the SDK's preflight can be shown without exposing its input.
+const transactionRefusals = new Set([
+	...['BEGIN', 'COMMIT', 'CANCEL'].map(
+		(keyword) =>
+			`queries[0] contains a ${keyword} statement. transaction() wraps the queries in BEGIN and COMMIT itself, so they must not contain any`,
+	),
+	'queries[0] contains a RETURN statement which is followed by another statement (in queries[0]). Inside a transaction RETURN ends it early: the statements after it would be skipped but the transaction would still commit. Use SELECT or a bare expression instead, or move the RETURN to the end',
+]);
+
+/** Internal live-registration diagnostics whose text is controlled by the client. */
+export class LiveRegistrationError extends Error {
+	constructor(
+		problem: 'missing-id' | 'cleanup-unconfirmed',
+		cause?: unknown,
+	) {
+		super(
+			problem === 'missing-id'
+				? 'LIVE SELECT did not return one query UUID'
+				: 'live query attachment failed and cleanup could not be confirmed',
+			{ cause },
+		);
+	}
+}
+
+export const requestErrorText = (error: unknown): string => {
+	if (error instanceof LiveRegistrationError) return error.message;
+	if (error instanceof ExpressionError) {
+		const { message } = error;
+		if (transactionRefusals.has(message)) return message;
+	}
+	return 'SurrealDB request failed';
+};
 
 /** The statement that declares a `THROW` message, and where. */
 interface Declarer {
@@ -91,7 +124,7 @@ export const classify = <Throws extends string>(
 		if (isTransactionConflict === true) {
 			return new StatementConflict({
 				statement: name,
-				message: error.message,
+				message: 'Transaction conflict',
 				cause,
 			});
 		}
@@ -105,7 +138,7 @@ export const classify = <Throws extends string>(
 	}
 	return new StatementRequestError({
 		statement: name,
-		message: messageOf(cause),
+		message: requestErrorText(cause),
 		cause,
 	});
 };

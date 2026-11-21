@@ -1536,6 +1536,12 @@ const client = make(db);
 | `BulkWriteError` | a non-atomic bulk chunk failed. Carries the failed chunk, confirmed preceding counts and the statement error | preceding chunks completed. The cause describes the failed chunk's outcome |
 | `LiveQueryClosed` | the engine killed the live query or the connection was lost | closing the subscription does not write data |
 
+Client error messages, default inspection, and JSON output omit raw server
+diagnostics, undeclared `THROW` text, and keys from preflight binding values.
+Read `cause`, `reason`, or `path` directly when you need those details and
+can handle them privately. Formatters that traverse those fields, including
+Effect's `Cause.pretty`, can display their contents.
+
 An `update` or `delete` by condition may match nothing, so its empty list is
 a result, not an error; so is a denied one (the conformance suite pins
 both).

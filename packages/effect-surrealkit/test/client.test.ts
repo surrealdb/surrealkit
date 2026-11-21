@@ -97,7 +97,7 @@ const transactionRefusal = (sql: string): string | undefined => {
 			return `queries[0] contains a ${keyword} statement. transaction() wraps the queries in BEGIN and COMMIT itself, so they must not contain any`;
 		}
 		if (returned) {
-			return 'queries[0] contains a RETURN statement which is followed by another statement (in queries[0])';
+			return 'queries[0] contains a RETURN statement which is followed by another statement (in queries[0]). Inside a transaction RETURN ends it early: the statements after it would be skipped but the transaction would still commit. Use SELECT or a bare expression instead, or move the RETURN to the end';
 		}
 		if (keyword === 'RETURN') returned = true;
 	}
@@ -350,7 +350,7 @@ describe('run', () => {
 			cause: wrapped,
 		});
 		expect(error.message).toBe(
-			"`guarded` threw 'Something else', which it does not declare",
+			'`guarded` threw a message it does not declare',
 		);
 		// Not a request failure: the request ran, and the text threw.
 		expect(error).not.toBeInstanceOf(StatementRequestError);
@@ -1319,7 +1319,7 @@ describe('outgoing values', () => {
 		for (const [value, path, problem] of [
 			[{ a: ['ok', 'bad\uD800'] }, ['a', 1], /lone UTF-16 surrogate/],
 			[{ m: new Map([['k', 1]]) }, ['m'], /a Map/],
-			[[new Point(1)], [0], /a Point/],
+			[[new Point(1)], [0], /a non-plain object/],
 			[{ 'k\uDC00': 1 }, ['k\uDC00'], /a key with a lone/],
 			[-0, [], /negative zero/],
 			[{ samples: [0, -0] }, ['samples', 1], /negative zero/],
@@ -1357,13 +1357,14 @@ describe('outgoing values', () => {
 		}
 	});
 
-	it('names the path in its message', async () => {
+	it('shows the shape of the path and keeps its object keys in the structured path', async () => {
 		const error = await failure(
 			fake(async () => []).client.run(open, {
 				v: { 'a b': [{ c: 'x\uD800' }] },
 			}),
 		);
-		expect(error.message).toMatch(/^\$v\["a b"\]\[0\]\.c is a string/);
+		expect(error).toHaveProperty('path', ['a b', 0, 'c']);
+		expect(error.message).toMatch(/^\$v\[\*\]\[0\]\[\*\] is a string/);
 	});
 
 	it('accepts representable SurrealDB values, NONE and bytes', async () => {

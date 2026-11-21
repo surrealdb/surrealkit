@@ -465,13 +465,16 @@ describe('fake', () => {
 		expect(conflicted).toBeInstanceOf(StatementConflict);
 		const failed = await failureOf(client.run(byName, { name: 'x' }));
 		expect(failed).toBeInstanceOf(StatementRequestError);
-		expect(failed.message).toBe('Parse error');
+		expect(failed.message).toBe('SurrealDB request failed');
+		expect(failed).toHaveProperty('cause.message', 'Parse error');
 	});
 
 	it('fails a statement the script does not name', async () => {
 		const error = await failureOf(fake({}).run(everyone));
 		expect(error).toBeInstanceOf(StatementRequestError);
-		expect(error.message).toBe(
+		expect(error.message).toBe('SurrealDB request failed');
+		expect(error).toHaveProperty(
+			'cause.message',
 			'the scripted client has no reply for `everyone`',
 		);
 	});

@@ -96,7 +96,7 @@ it('validates renamed bindings under their original statement and binding names'
 		statement: 'second, value',
 		binding: 'item',
 		path: ['nested'],
-		message: /^\$item\.nested /,
+		message: /^\$item\[\*\] /,
 	});
 	expect(collect).not.toHaveBeenCalled();
 	await expect(

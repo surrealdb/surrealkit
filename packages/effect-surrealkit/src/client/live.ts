@@ -22,7 +22,7 @@ import {
 	type StatementScopeError,
 	StatementUnsupported,
 } from './errors.js';
-import { messageOf } from './internal/classify.js';
+import { requestErrorText } from './internal/classify.js';
 import { checkValues, encode } from './internal/encode.js';
 import { requestPart } from './internal/join.js';
 import { withClientSpan } from './internal/span.js';
@@ -48,10 +48,7 @@ const unsupported = (statement: string, cause?: unknown) =>
 	new StatementUnsupported({
 		feature: 'live query',
 		statement,
-		message:
-			cause === undefined
-				? 'the connection cannot listen for live queries'
-				: messageOf(cause),
+		message: 'the connection cannot listen for live queries',
 		...(cause !== undefined && { cause }),
 	});
 
@@ -62,7 +59,7 @@ const requestError = (statement: string, cause: unknown) =>
 		? unsupported(statement, cause)
 		: new StatementRequestError({
 				statement,
-				message: messageOf(cause),
+				message: requestErrorText(cause),
 				cause,
 			});
 

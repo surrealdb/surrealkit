@@ -74,7 +74,7 @@ it('reports an unreadable binding at its path without echoing the thrown error',
 		binding: 'entry',
 		path: ['field'],
 	});
-	expect(error.message).toContain('$entry.field');
+	expect(error.message).toContain('$entry[*]');
 	expect(client.calls).toHaveLength(0);
 });
 

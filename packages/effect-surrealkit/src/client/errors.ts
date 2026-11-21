@@ -5,6 +5,17 @@
  */
 import { Data } from 'effect';
 
+/** A display representation of a request failure leaves raw SDK data private. */
+const requestDisplay = ({
+	_tag,
+	statement,
+	message,
+}: {
+	readonly _tag: string;
+	readonly statement: string;
+	readonly message: string;
+}) => ({ _tag, statement, message });
+
 /**
  * A binding's value failed its codec, or its encoded value is not one the
  * SDK sends without loss (`path` says where inside it). Nothing was sent:
@@ -19,7 +30,12 @@ export class StatementEncodeError extends Data.TaggedError(
 	/** Where inside the encoded value the problem is; empty for the value. */
 	readonly path?: ReadonlyArray<string | number>;
 	readonly message: string;
-}> {}
+}> {
+	override toJSON(): unknown {
+		const { _tag, statement, binding, message } = this;
+		return { _tag, statement, binding, message };
+	}
+}
 
 /**
  * `transaction` refused its statements before sending anything, because
@@ -43,7 +59,11 @@ export class StatementRequestError extends Data.TaggedError(
 	readonly statement: string;
 	readonly message: string;
 	readonly cause: unknown;
-}> {}
+}> {
+	override toJSON(): unknown {
+		return requestDisplay(this);
+	}
+}
 
 /**
  * The statement raised one of the `THROW` messages it declares. A message
@@ -75,12 +95,16 @@ export class StatementUnexpectedThrow extends Data.TaggedError(
 	'StatementUnexpectedThrow',
 )<{
 	readonly statement: string;
-	/** The thrown text. */
+	/** The raw thrown text, available for deliberate inspection. */
 	readonly reason: string;
 	readonly cause: unknown;
 }> {
 	override get message(): string {
-		return `\`${this.statement}\` threw '${this.reason}', which it does not declare`;
+		return `\`${this.statement}\` threw a message it does not declare`;
+	}
+
+	override toJSON(): unknown {
+		return requestDisplay(this);
 	}
 }
 
@@ -92,7 +116,11 @@ export class StatementConflict extends Data.TaggedError('StatementConflict')<{
 	readonly statement: string;
 	readonly message: string;
 	readonly cause: unknown;
-}> {}
+}> {
+	override toJSON(): unknown {
+		return requestDisplay(this);
+	}
+}
 
 /**
  * The engine answered, and the answer is not what the statement declares:
@@ -171,7 +199,12 @@ export class StatementUnsupported extends Data.TaggedError(
 	readonly statement?: string;
 	readonly message: string;
 	readonly cause?: unknown;
-}> {}
+}> {
+	override toJSON(): unknown {
+		const { _tag, feature, statement, message } = this;
+		return { _tag, feature, statement, message };
+	}
+}
 
 /** The commit was sent and no answer arrived. Read back before retrying. */
 export class TransactionOutcomeUnknown extends Data.TaggedError(
@@ -179,7 +212,12 @@ export class TransactionOutcomeUnknown extends Data.TaggedError(
 )<{
 	readonly message: string;
 	readonly cause: unknown;
-}> {}
+}> {
+	override toJSON(): unknown {
+		const { _tag, message } = this;
+		return { _tag, message };
+	}
+}
 
 /** A non-atomic bulk write failed after committing any preceding chunks. */
 export class BulkWriteError<
