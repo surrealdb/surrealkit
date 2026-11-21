@@ -1,3 +1,4 @@
+import { setTimeout as delay } from 'node:timers/promises';
 import { Effect, Schedule, Schema, Stream } from 'effect';
 import { CallTerminatedError, RecordId } from 'surrealdb';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -104,6 +105,20 @@ const failAfterWrite = make({
 	result: Schema.Undefined,
 	throws: ['after write'],
 	slots: 2,
+	writes: true,
+});
+
+const bumpWithLock = make({
+	name: 'bump counter while holding a lock',
+	sql: `
+		LET $locked = (SELECT * FROM ONLY bulk_row:locked FOR UPDATE);
+		FOR $amount IN $increments { UPDATE ONLY bulk_row:counter SET n += $amount RETURN NONE; };
+		SLEEP 1s;
+	`,
+	params: bump.params,
+	result: bump.result,
+	defines: ['locked'],
+	slots: 3,
 	writes: true,
 });
 
@@ -421,7 +436,7 @@ describe.skipIf(!engineConfigured)('bulk writes on a disposable engine', () => {
 		});
 	});
 
-	it('disables SDK connection retries for bulk collectors so an earlier acknowledged write is not replayed', async () => {
+	it('rolls back an earlier slot when a later slot fails and disables SDK retries', async () => {
 		await reset();
 		await engine.db.query('CREATE ONLY bulk_row:counter SET n = 0;');
 		const error = await failed(
@@ -440,12 +455,76 @@ describe.skipIf(!engineConfigured)('bulk writes on a disposable engine', () => {
 			cause: { _tag: 'StatementThrown', reason: 'after write' },
 		});
 		expect(sdkRetryChecks).toBe(0);
-		expect(await counter()).toEqual([1]);
+		expect(await counter()).toEqual([0]);
+	});
+
+	it('retries a real chunk conflict once and applies the earlier increment once', async () => {
+		await reset();
+		await engine.db.query(`
+			CREATE ONLY bulk_row:counter SET n = 0;
+			CREATE ONLY bulk_row:locked SET n = 0;
+		`);
+		const sdk = sdkTransport(engine.db);
+		let sends = 0;
+		const failedAttempts: Array<unknown> = [];
+		const observed: Array<unknown> = [];
+		const client = makeWith({
+			...sdk,
+			collect: async (request, signal) => {
+				sends++;
+				const pending = Promise.resolve(sdk.collect(request, signal));
+				if (sends !== 1) return pending;
+				const [, result] = await Promise.all([
+					(async () => {
+						// Change the locked record while the first request sleeps before commit.
+						await delay(100);
+						await engine.db.query(
+							'UPDATE bulk_row:locked SET n += 1;',
+						);
+					})(),
+					pending.catch(async (error: unknown) => {
+						failedAttempts.push(error);
+						observed.push(await counter());
+						throw error;
+					}),
+				]);
+				return result;
+			},
+		});
+		expect(
+			await Effect.runPromise(
+				client.bulk(
+					bumpWithLock,
+					{ increments: [2] },
+					{
+						over: 'increments',
+						atomic: false,
+						retry: Schedule.recurs(1),
+					},
+				),
+			),
+		).toEqual({ chunks: 1, rows: 1, results: [undefined] });
+		expect(sends).toBe(2);
+		expect(failedAttempts).toEqual([
+			expect.objectContaining({ isTransactionConflict: true }),
+		]);
+		expect(observed).toEqual([[0]]);
+		expect(await counter()).toEqual([2]);
 	});
 
 	it('never resends a write after dropping the real engine response', async () => {
 		const sdk = sdkTransport(engine.db);
-		for (const atomic of [false, true]) {
+		const multiSlotBump = make({
+			...bump,
+			sql: `${bump.sql}\nNONE;`,
+			slots: 2,
+			valueSlot: 2,
+		});
+		for (const [statement, atomic, expected] of [
+			[bump, false, BulkWriteError],
+			[bump, true, TransactionOutcomeUnknown],
+			[multiSlotBump, false, TransactionOutcomeUnknown],
+		] as const) {
 			await reset();
 			await engine.db.query('CREATE ONLY bulk_row:counter SET n = 0;');
 			let sends = 0;
@@ -461,7 +540,7 @@ describe.skipIf(!engineConfigured)('bulk writes on a disposable engine', () => {
 			});
 			const error = await failed(
 				client.bulk(
-					bump,
+					statement,
 					{ increments: [1] },
 					{
 						over: 'increments',
@@ -470,9 +549,7 @@ describe.skipIf(!engineConfigured)('bulk writes on a disposable engine', () => {
 					},
 				),
 			);
-			expect(error).toBeInstanceOf(
-				atomic ? TransactionOutcomeUnknown : BulkWriteError,
-			);
+			expect(error).toBeInstanceOf(expected);
 			expect(sends).toBe(1);
 			expect(await counter()).toEqual([1]);
 		}

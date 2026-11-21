@@ -8,13 +8,15 @@ import {
 	Schema,
 	Stream,
 } from 'effect';
-import { CallTerminatedError } from 'surrealdb';
+import { CallTerminatedError, CborCodec, Surreal } from 'surrealdb';
 import { describe, expect, it } from 'vitest';
 
 import { makeWith } from '../src/client/client.js';
 import {
 	BulkWriteError,
+	make as makeClient,
 	StatementConflict,
+	StatementRequestError,
 	StatementScopeError,
 	StatementUnsupported,
 	StatementWriteOutcomeError,
@@ -34,6 +36,14 @@ const list = make({
 	writes: true,
 });
 
+const multiSlot = make({
+	...list,
+	sql: 'LET $copy = $rows; $copy;',
+	defines: ['copy'],
+	slots: 2,
+	valueSlot: 2,
+});
+
 const scopeViolation = make({
 	name: 'nested control',
 	sql: 'BEGIN; $rows; COMMIT;',
@@ -49,6 +59,36 @@ const flip = <A, E>(effect: Effect.Effect<A, E>) =>
 	Effect.runPromise(Effect.flip(effect));
 const values = [1, 2, 3, 4, 5];
 const input = { rows: values, label: 'all' };
+
+const cborResponse = (body: unknown) =>
+	new Response(Uint8Array.from(CborCodec.DEFAULT.encode(body)));
+
+const httpClient = async (reply: (id: string) => Response) => {
+	const queries: Array<string> = [];
+	const db = new Surreal({
+		fetchImpl: async (_url, init) => {
+			if (!(init?.body instanceof Uint8Array))
+				throw new Error('expected an HTTP RPC body');
+			const rpc = CborCodec.DEFAULT.decode<{
+				id: string;
+				method: string;
+				params: [string];
+			}>(init.body);
+			if (rpc.method === 'version') {
+				return cborResponse({ id: rpc.id, result: 'surrealdb-3.3.4' });
+			}
+			expect(rpc.method).toBe('query');
+			queries.push(rpc.params[0]);
+			return reply(rpc.id);
+		},
+	});
+	await db.connect('http://surreal.invalid/rpc', {
+		namespace: 'bulk',
+		database: 'bulk',
+		reconnect: false,
+	});
+	return { client: makeClient(db), queries, close: () => db.close() };
+};
 
 describe('bulk writes', () => {
 	it('keeps binding names, row order, the short chunk and confirmed progress through the Client service', async () => {
@@ -315,6 +355,45 @@ describe('bulk writes', () => {
 		]);
 	});
 
+	it('retries a multi-slot chunk in one atomic request using the same encoded chunk', async () => {
+		let sends = 0;
+		const { transport } = scriptedTransport({
+			numbers: (vars: Readonly<Record<string, unknown>>) =>
+				++sends === 2 ? conflict() : vars.rows,
+		});
+		const requests: Array<Request> = [];
+		const client = makeWith({
+			...transport,
+			collect: (request, signal) => {
+				requests.push(request);
+				return transport.collect(request, signal);
+			},
+		});
+		expect(
+			await Effect.runPromise(
+				client.bulk(multiSlot, input, {
+					over: 'rows',
+					chunk: 2,
+					atomic: false,
+					retry: Schedule.recurs(1),
+				}),
+			),
+		).toEqual({ chunks: 3, rows: 5, results: [[1, 2], [3, 4], [5]] });
+		expect(requests.map(({ mode }) => mode)).toEqual([
+			'atomic',
+			'atomic',
+			'atomic',
+			'atomic',
+		]);
+		expect(requests[2]).toBe(requests[1]);
+		expect(requests.map(({ bindings }) => bindings.rows)).toEqual([
+			[1, 2],
+			[3, 4],
+			[3, 4],
+			[5],
+		]);
+	});
+
 	it('replays all original rows in a fresh transaction without re-acquiring a one-shot stream', async () => {
 		let commits = 0;
 		const client = fake({
@@ -552,12 +631,94 @@ describe('bulk writes', () => {
 		expect(batches).toBe(1);
 	});
 
+	it.each([
+		{ kind: 'response body', message: 'terminated', atomic: true },
+		{
+			kind: 'fetch',
+			message: 'NetworkError when attempting to fetch resource.',
+			atomic: false,
+		},
+	])('reports an unknown HTTP atomic acknowledgement when $kind fails', async ({
+		kind,
+		message,
+		atomic,
+	}) => {
+		const cause = new TypeError(message);
+		const { client, queries, close } = await httpClient(() => {
+			if (kind === 'fetch') throw cause;
+			return new Response(
+				new ReadableStream({
+					pull: (controller) => controller.error(cause),
+				}),
+			);
+		});
+		try {
+			const error = await flip(
+				client.bulk(multiSlot, input, {
+					over: 'rows',
+					atomic,
+					retry: Schedule.recurs(2),
+				}),
+			);
+			expect(queries).toEqual([
+				expect.stringMatching(/^BEGIN;[\s\S]+COMMIT;$/u),
+			]);
+			expect(error).toBeInstanceOf(TransactionOutcomeUnknown);
+			expect(error).toMatchObject({ cause });
+		} finally {
+			await close();
+		}
+	});
+
+	it('keeps HTTP atomic rejections distinct from unknown outcomes', async () => {
+		const { client, queries, close } = await httpClient((id) =>
+			cborResponse({
+				id,
+				error: { code: -32002, message: 'query denied' },
+			}),
+		);
+		try {
+			const earlyReturn = make({
+				...multiSlot,
+				sql: 'RETURN $rows; NONE;',
+				defines: [],
+				valueSlot: 1,
+			});
+			const preflight = await flip(
+				client.bulk(earlyReturn, input, {
+					over: 'rows',
+					atomic: false,
+				}),
+			);
+			expect(preflight).toBeInstanceOf(BulkWriteError);
+			expect(preflight).toMatchObject({
+				cause: expect.any(StatementRequestError),
+			});
+			expect(preflight).toMatchObject({
+				cause: {
+					message: expect.stringContaining(
+						'contains a RETURN statement',
+					),
+				},
+			});
+			expect(queries).toHaveLength(0);
+			const rejected = await flip(
+				client.bulk(multiSlot, input, { over: 'rows' }),
+			);
+			expect(rejected).toBeInstanceOf(StatementRequestError);
+			expect(rejected).toMatchObject({ cause: { kind: 'NotAllowed' } });
+			expect(queries).toHaveLength(1);
+		} finally {
+			await close();
+		}
+	});
+
 	it('uses the current transaction for tx.bulk without another lifecycle or chunk retry', async () => {
 		const client = fake({ numbers: collectRows });
 		expect(
 			await Effect.runPromise(
 				client.withTransaction((tx) =>
-					tx.bulk(list, input, {
+					tx.bulk(multiSlot, input, {
 						over: 'rows',
 						chunk: 2,
 					}),
@@ -581,7 +742,7 @@ describe('bulk writes', () => {
 		expect(
 			await flip(
 				conflicted.withTransaction((tx) =>
-					tx.bulk(list, input, { over: 'rows', chunk: 2 }),
+					tx.bulk(multiSlot, input, { over: 'rows', chunk: 2 }),
 				),
 			),
 		).toBeInstanceOf(StatementConflict);

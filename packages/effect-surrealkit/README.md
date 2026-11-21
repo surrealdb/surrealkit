@@ -1519,7 +1519,7 @@ value, for an application that names its own services, one per session.
 | `StatementDecodeError` | the answer of a statement or transaction known not to write (`writes: false`) is not what it declares: the number of results, a value where NONE belongs, or a last result its codec refuses | no |
 | `StatementWriteOutcomeError` | the same, for a request not known to be read-only; `request` names the statement or transaction and `cause` is the `StatementDecodeError` (naming the statement and result), with `committed: true` and a message saying the request succeeded and either its writes are committed (`writes: true`) or it may have written (`writes` unknown) | yes, whatever it wrote is committed: read it back before resending |
 | `StatementUnsupported` | the connection or engine refuses the requested feature | the feature did not start |
-| `TransactionOutcomeUnknown` | an interactive or atomic bulk commit lacked an acknowledgement | unknown. Read back before replaying |
+| `TransactionOutcomeUnknown` | the commit of an interactive transaction, an atomic bulk write, or a multi-statement bulk chunk lacked an acknowledgement | unknown. Read back before replaying |
 | `BulkWriteError` | a non-atomic bulk chunk failed. Carries the failed chunk, confirmed preceding counts and the statement error | preceding chunks completed. The cause describes the failed chunk's outcome |
 | `LiveQueryClosed` | the engine killed the live query or the connection was lost | closing the subscription does not write data |
 
@@ -1853,14 +1853,17 @@ peeks one chunk so empty input sends nothing. If begin is unsupported it
 reuses that chunk and runs the hooks only on the fallback. Inside an
 existing transaction, `tx.bulk` uses its handle.
 
-With `atomic: false`, each chunk is a separate request. The client waits
-for its acknowledgement before pulling the next chunk. A
+With `atomic: false`, the client sends each chunk in one request and waits
+for its acknowledgement before pulling the next chunk. A chunk containing
+several SurrealQL statements gets its own atomic transaction. A conflict
+rolls back the entire chunk before a scheduled retry. The SDK's rule for
+an early `RETURN` in a stateless transaction also applies to these chunks.
+
 `BulkWriteError` reports the zero-based failed chunk and the confirmed
-counts for preceding chunks. A chunk can have written if its response was
-lost, if a committed result fails decoding, or if its text contains multiple
-SurrealQL statements and a later one fails. Read back before replaying.
-In atomic mode a lost commit acknowledgement is
-`TransactionOutcomeUnknown`. The client never retries an unknown outcome.
+counts for preceding chunks. A single-statement chunk with a lost response
+can have written, as can a chunk whose acknowledged result fails decoding.
+An unacknowledged atomic commit raises `TransactionOutcomeUnknown`, including
+when that commit covered one multi-statement chunk. Read back before replaying.
 
 `beforeChunk` sees the original rows and can stop the operation with its
 own error. `onProgress` runs after acknowledgement, with a total for

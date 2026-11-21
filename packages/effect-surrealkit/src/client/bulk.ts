@@ -200,7 +200,8 @@ const uncertain = (cause: unknown): boolean =>
 	(cause instanceof HttpConnectionError && cause.status >= 500) ||
 	(cause instanceof Error &&
 		(cause.name === 'TimeoutError' || cause.name === 'AbortError')) ||
-	(cause instanceof TypeError && cause.message === 'fetch failed');
+	// Fetch and response-body failures escape the SDK as host TypeErrors.
+	cause instanceof TypeError;
 
 const failureOf = (
 	statement: AnyStatement,
@@ -361,6 +362,9 @@ const sequential = <Row, E, R>(
 ) =>
 	Effect.gen(function* () {
 		const { statement, options, total } = job;
+		// A later slot can fail after an earlier slot has written. Commit the
+		// entire chunk together before allowing a root request to be replayed.
+		const atomic = !('transaction' in sender) && statement.slots > 1;
 		const results: Array<unknown> = [];
 		let rows = 0;
 		for (
@@ -370,7 +374,7 @@ const sequential = <Row, E, R>(
 		) {
 			const index = results.length;
 			yield* options.beforeChunk?.({ index, rows: chunk }) ?? Effect.void;
-			const [result] = yield* submit(sender, job, [chunk], false).pipe(
+			const [result] = yield* submit(sender, job, [chunk], atomic).pipe(
 				Effect.mapError((cause) =>
 					'transaction' in sender ||
 					cause instanceof TransactionOutcomeUnknown
