@@ -160,33 +160,57 @@ const commitError = (cause: unknown): TransactionError => {
 	return commitUnknown(cause);
 };
 
+const recordControl = <A, E>(
+	operation: 'begin' | 'commit' | 'cancel',
+	request: Effect.Effect<A, E>,
+): Effect.Effect<A, E> => {
+	const span = `${name}.${operation}`;
+	return recording('interactive', span, (recorder) =>
+		recorder.wait(request),
+	).pipe(
+		Effect.withSpan(span, {
+			kind: 'client',
+			attributes: {
+				'db.system.name': 'surrealdb',
+				'db.operation.name': operation,
+			},
+		}),
+	);
+};
+
 const commit = (
 	handle: TransactionHandle,
 ): Effect.Effect<void, TransactionError> =>
-	Effect.interruptible(
-		Effect.tryPromise({
-			try: () => handle.commit(),
-			catch: commitError,
-		}),
-	).pipe(
-		Effect.timeoutOrElse({
-			duration: commitDeadline,
-			orElse: () =>
-				Effect.fail(
-					commitUnknown(
-						new Error(
-							`No acknowledgement within ${commitDeadline}`,
+	recordControl(
+		'commit',
+		Effect.interruptible(
+			Effect.tryPromise({
+				try: () => handle.commit(),
+				catch: commitError,
+			}),
+		).pipe(
+			Effect.timeoutOrElse({
+				duration: commitDeadline,
+				orElse: () =>
+					Effect.fail(
+						commitUnknown(
+							new Error(
+								`No acknowledgement within ${commitDeadline}`,
+							),
 						),
 					),
-				),
-		}),
+			}),
+		),
 	);
 
 const cancel = (handle: TransactionHandle): Effect.Effect<void> =>
-	Effect.tryPromise({
-		try: () => handle.cancel(),
-		catch: (cause) => cause,
-	}).pipe(
+	recordControl(
+		'cancel',
+		Effect.tryPromise({
+			try: () => handle.cancel(),
+			catch: (cause) => cause,
+		}),
+	).pipe(
 		Effect.catch(() =>
 			Effect.annotateCurrentSpan('effect_surrealkit.cancel_failed', true),
 		),
@@ -331,14 +355,17 @@ const transactionClient = (
 });
 
 const beginTransaction = (begin: NonNullable<Transport['begin']>) =>
-	Effect.tryPromise({
-		try: (signal) => begin(signal),
-		catch: (cause) =>
-			cause instanceof UnsupportedFeatureError ||
-			cause instanceof UnavailableFeatureError
-				? unsupported(cause)
-				: requestError(cause),
-	});
+	recordControl(
+		'begin',
+		Effect.tryPromise({
+			try: (signal) => begin(signal),
+			catch: (cause) =>
+				cause instanceof UnsupportedFeatureError ||
+				cause instanceof UnavailableFeatureError
+					? unsupported(cause)
+					: requestError(cause),
+		}),
+	);
 
 const attempt = <A, E, R>(
 	begin: NonNullable<Transport['begin']>,

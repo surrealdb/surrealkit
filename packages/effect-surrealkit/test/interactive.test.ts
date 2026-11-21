@@ -31,6 +31,7 @@ import {
 	StatementUnsupported,
 	SurrealClient,
 	TransactionOutcomeUnknown,
+	timed,
 	withTransaction,
 } from '../src/client/index.js';
 import type { TransactionHandle } from '../src/client/internal/transport.js';
@@ -84,6 +85,77 @@ const usingHandle = (handle: TransactionHandle) =>
 	makeWith({ ...scriptedTransport({}).transport, begin: async () => handle });
 
 describe('interactive transactions', () => {
+	it.each([
+		{ fails: false, last: 'commit' },
+		{ fails: true, last: 'cancel' },
+	])('times begin, the statement and $last without recording bindings', async ({
+		fails,
+		last,
+	}) => {
+		const statement = make({
+			name: 'private read',
+			sql: 'string::len($text);',
+			params: { text: Schema.String },
+			result: Schema.Number,
+			writes: false,
+		});
+		const binding = 'private binding value';
+		const client = fake({ 'private read': 4 });
+		const spans: Array<Tracer.Span> = [];
+		const tracer = Tracer.make({
+			span: (options) => {
+				const span = new Tracer.NativeSpan(options);
+				spans.push(span);
+				return span;
+			},
+		});
+		const transaction = client.withTransaction((tx) =>
+			tx
+				.run(statement, { text: binding })
+				.pipe(
+					Effect.andThen((value) =>
+						fails ? Effect.fail('rollback') : Effect.succeed(value),
+					),
+				),
+		);
+		const [outcome, timings] = await Effect.runPromise(
+			timed(Effect.result(transaction)).pipe(Effect.withTracer(tracer)),
+		);
+
+		expect(outcome._tag).toBe(fails ? 'Failure' : 'Success');
+		const begin = 'withTransaction.begin';
+		const finish = `withTransaction.${last}`;
+		expect(
+			timings.map(({ kind, name, sends }) => ({ kind, name, sends })),
+		).toEqual([
+			{ kind: 'interactive', name: begin, sends: 1 },
+			{ kind: 'interactive', name: statement.name, sends: 1 },
+			{ kind: 'interactive', name: finish, sends: 1 },
+		]);
+		for (const control of [begin, finish]) {
+			const timing = timings.find(({ name }) => name === control);
+			expect(timing?.statements).toEqual([]);
+			expect(timing).not.toHaveProperty('server');
+			const span = spans.find(({ name }) => name === control);
+			expect(span?.parent).toMatchObject({
+				_tag: 'Some',
+				value: { name: 'withTransaction' },
+			});
+			expect(Object.fromEntries(span?.attributes ?? [])).toMatchObject({
+				'effect_surrealkit.sends': 1,
+			});
+			expect(span?.attributes.has('effect_surrealkit.server_us')).toBe(
+				false,
+			);
+		}
+		const attributes = JSON.stringify(
+			spans.map((span) => Object.fromEntries(span.attributes)),
+		);
+		expect(attributes).not.toContain('db.query.text');
+		expect(attributes).not.toContain(statement.sql);
+		expect(attributes).not.toContain(binding);
+	});
+
 	it('commits a successful body and joins multiple bound statements in it', async () => {
 		const client = fake({ read: 1, change: 2 });
 		expect(
