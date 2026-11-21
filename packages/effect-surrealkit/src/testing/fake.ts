@@ -173,46 +173,53 @@ export const fake = (script: Script): FakeClient => {
 				Object.hasOwn(bindings, name) ? [[name, bindings[name]]] : [],
 			),
 		);
-	const transport: Transport = {
-		query: async (statement, bindings) => {
-			calls.push({
-				statement: statement.name,
-				bindings: { ...bindings },
-			});
-			const answer = reply(statement, bindings);
-			const error = rejection(answer);
-			if (error !== undefined) throw error;
-			return slotsOf(
-				statement,
-				answer[ReplyTypeId] === 'result' ? answer.value : undefined,
-			);
-		},
-		transaction: async (statements, { sql, bindings }) => {
+	const collect: Transport['collect'] = async ({
+		mode,
+		parts,
+		sql,
+		bindings,
+	}) => {
+		const transaction =
+			mode === 'atomic'
+				? `transaction(${parts.map(({ statement }) => statement.name).join(', ')})`
+				: undefined;
+		if (mode === 'atomic') {
 			const refused = sdkRefusal(sql);
 			if (refused !== undefined) throw refused;
-			const name = `transaction(${statements.map((item) => item.name).join(', ')})`;
-			const results: Array<unknown> = [];
-			for (const statement of statements) {
-				const mine = own(statement, bindings);
-				calls.push({
-					statement: statement.name,
-					bindings: mine,
-					transaction: name,
-				});
-				const answer = reply(statement, mine);
-				const error = rejection(answer);
-				// The transaction is atomic: one failure answers for all of it.
-				if (error !== undefined) throw error;
-				results.push(
-					...slotsOf(
-						statement,
-						answer[ReplyTypeId] === 'result'
-							? answer.value
-							: undefined,
-					),
-				);
-			}
-			return results;
+		}
+		const results: Array<unknown> = [];
+		for (const { statement } of parts) {
+			const mine = own(statement, bindings);
+			calls.push({
+				statement: statement.name,
+				bindings: mine,
+				...(transaction === undefined ? {} : { transaction }),
+			});
+			const answer = reply(statement, mine);
+			const error = rejection(answer);
+			if (error !== undefined) throw error;
+			results.push(
+				...slotsOf(
+					statement,
+					answer[ReplyTypeId] === 'result' ? answer.value : undefined,
+				),
+			);
+		}
+		return results;
+	};
+	const transport: Transport = {
+		collect,
+		send: async (request, signal) => {
+			const values = (await collect(
+				request,
+				signal,
+			)) as ReadonlyArray<unknown>;
+			return values.map((value) => ({ ok: true, value }));
+		},
+		stream: () => {
+			throw new Error(
+				'effect-surrealkit: scripted streams are not implemented yet',
+			);
 		},
 	};
 	return Object.assign(makeWith(transport), { calls });

@@ -1,5 +1,5 @@
-import { Effect, type Schedule } from 'effect';
-import { BoundQuery } from 'surrealdb';
+import { Duration, Effect, type Schedule } from 'effect';
+import { BoundQuery, type Duration as SurrealDuration } from 'surrealdb';
 
 import type { AnyStatement } from '../../statement/statement.js';
 import type { Queryable, RunOptions } from '../client.js';
@@ -9,50 +9,133 @@ export type Signal = NonNullable<
 	Parameters<ReturnType<Queryable['query']>['signal']>[0]
 >;
 
-/**
- * What a client sends its requests through: one statement's text with its
- * encoded bindings, or a transaction's joined text with the bindings of all
- * its statements. Each resolves to the list of results, one per SurrealQL
- * statement, or rejects as the SDK does (`classify` reads the rejection).
- *
- * @internal The SDK is the only transport the package offers; the scripted
- * client of `effect-surrealkit/testing` is the other.
- */
-export interface Transport {
-	readonly query: (
-		statement: AnyStatement,
-		bindings: Readonly<Record<string, unknown>>,
-		signal: Signal,
-	) => PromiseLike<unknown>;
-	readonly transaction: (
-		statements: ReadonlyArray<AnyStatement>,
-		request: {
-			readonly sql: string;
-			readonly bindings: Readonly<Record<string, unknown>>;
-		},
-		signal: Signal,
-	) => PromiseLike<unknown>;
+/** One statement of a request: its original bindings and the names they were sent under. */
+export interface RequestPart {
+	readonly statement: AnyStatement;
+	readonly bindings: Readonly<Record<string, unknown>>;
+	readonly sent: Readonly<Record<string, string>>;
+	/** Index of the first slot in the answer, and the number of slots this part occupies. */
+	readonly offset: number;
+	readonly slots: number;
 }
+
+export interface Request {
+	readonly mode: 'query' | 'atomic';
+	readonly sql: string;
+	readonly bindings: Readonly<Record<string, unknown>>;
+	readonly parts: ReadonlyArray<RequestPart>;
+}
+
+export type SlotAnswer =
+	| {
+			readonly ok: true;
+			readonly value: unknown;
+			readonly server?: Duration.Duration;
+	  }
+	| {
+			readonly ok: false;
+			readonly error: unknown;
+			readonly server?: Duration.Duration;
+	  };
+
+export interface TransactionHandle {
+	readonly send: (
+		request: Request,
+		signal: Signal,
+	) => PromiseLike<ReadonlyArray<SlotAnswer>>;
+	readonly commit: () => PromiseLike<void>;
+	readonly cancel: () => PromiseLike<void>;
+}
+
+export interface LiveHandle {
+	readonly messages: AsyncIterable<{
+		readonly action: 'CREATE' | 'UPDATE' | 'DELETE' | 'KILLED';
+		readonly id?: unknown;
+		readonly value?: unknown;
+	}>;
+	readonly kill: () => PromiseLike<void>;
+}
+
+export type StreamFrame =
+	| { readonly kind: 'row'; readonly slot: number; readonly value: unknown }
+	| {
+			readonly kind: 'done';
+			readonly slot: number;
+			readonly server?: Duration.Duration;
+	  }
+	| {
+			readonly kind: 'error';
+			readonly slot: number;
+			readonly error: unknown;
+	  };
+
+export interface Transport {
+	/** The existing collector, which preserves SDK query retry and failure selection. */
+	readonly collect: (
+		request: Request,
+		signal: Signal,
+	) => PromiseLike<unknown>;
+	readonly send: (
+		request: Request,
+		signal: Signal,
+	) => PromiseLike<ReadonlyArray<SlotAnswer>>;
+	/** The value slot arrives row by row, with other slots arriving as whole values. */
+	readonly stream: (
+		request: Request,
+		signal: Signal,
+	) => AsyncIterable<StreamFrame>;
+	/** Absent when the connection cannot do it. */
+	readonly begin?: (signal: Signal) => PromiseLike<TransactionHandle>;
+	readonly live?: (
+		request: Request,
+		signal: Signal,
+	) => PromiseLike<LiveHandle>;
+}
+
+const sdkDuration = (value: SurrealDuration): Duration.Duration => {
+	const [seconds = 0n, nanos = 0n] = value.toCompact();
+	return Duration.nanos(seconds * 1_000_000_000n + nanos);
+};
 
 export const sdkTransport = (db: Queryable): Transport => {
 	// One request per transaction, encoded once and sent again as it is on a
 	// retry: the same bindings object makes the same `BoundQuery`.
 	const requests = new WeakMap<object, BoundQuery>();
+	const collectAtomic = (request: Request, signal: Signal) => {
+		let bound = requests.get(request.bindings);
+		if (bound === undefined) {
+			bound = new BoundQuery(request.sql, request.bindings);
+			requests.set(request.bindings, bound);
+		}
+		return db.transaction([bound], { signal });
+	};
+	const query = (request: Request, signal: Signal) =>
+		db.query(request.sql, request.bindings).signal(signal);
 	return {
-		query: (statement, bindings, signal) =>
-			db
-				.query(statement.sql, bindings as Record<string, unknown>)
-				.signal(signal),
-		transaction: (_, { sql, bindings }, signal) => {
-			let request = requests.get(bindings);
-			if (request === undefined) {
-				request = new BoundQuery(
-					sql,
-					bindings as Record<string, unknown>,
-				);
-				requests.set(bindings, request);
+		collect: (request, signal) =>
+			request.mode === 'atomic'
+				? collectAtomic(request, signal)
+				: query(request, signal),
+		send: async (request, signal) => {
+			if (request.mode === 'atomic') {
+				const values = await collectAtomic(request, signal);
+				return values.map((value) => ({ ok: true, value }));
 			}
-			return db.transaction([request], { signal });
+			const responses = await query(request, signal).responses();
+			return responses.map((response) => {
+				const timing =
+					response.stats === undefined
+						? {}
+						: { server: sdkDuration(response.stats.duration) };
+				return response.success
+					? { ok: true, value: response.result, ...timing }
+					: { ok: false, error: response.error, ...timing };
+			});
+		},
+		stream: () => {
+			throw new Error(
+				'effect-surrealkit: stream is not implemented yet (lane L6)',
+			);
 		},
 	};
 };

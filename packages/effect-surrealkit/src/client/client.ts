@@ -17,12 +17,7 @@ import type {
 	Params,
 	Statement,
 } from '../statement/statement.js';
-import { sameValue } from './equal.js';
-import {
-	type StatementConflict,
-	type StatementError,
-	StatementScopeError,
-} from './errors.js';
+import type { StatementConflict, StatementError } from './errors.js';
 import { classify, declarer } from './internal/classify.js';
 import {
 	changesOf,
@@ -31,9 +26,14 @@ import {
 	decodeOutcome,
 } from './internal/decode.js';
 import { checkValues, encode } from './internal/encode.js';
-import { refuseInTransaction } from './internal/join.js';
-import { traced } from './internal/trace.js';
-import { sdkTransport, sending, type Transport } from './internal/transport.js';
+import { joinWith, requestPart } from './internal/join.js';
+import { recording, traced } from './internal/trace.js';
+import {
+	type Request,
+	sdkTransport,
+	sending,
+	type Transport,
+} from './internal/transport.js';
 
 /**
  * What a client needs from the SDK: a connection or a session. Statements
@@ -203,34 +203,69 @@ export const makeWith = (transport: Transport): Client => ({
 			statement.variant,
 			true,
 			sent,
-			Effect.gen(function* () {
-				const bindings = yield* encode(statement, input);
-				yield* checkValues(bindings, () => statement.name, options);
-				const results = yield* sending(
-					Effect.tryPromise({
-						try: (signal) => {
-							sent.count++;
-							return transport.query(statement, bindings, signal);
-						},
-						catch: (cause) =>
-							classify(
+			recording('run', statement.name, (recorder) =>
+				Effect.gen(function* () {
+					const request = yield* recorder.encode(
+						Effect.gen(function* () {
+							const bindings = yield* encode(statement, input);
+							yield* checkValues(
+								bindings,
+								() => statement.name,
+								options,
+							);
+							return {
+								mode: 'query',
+								sql: statement.sql,
+								bindings,
+								parts: [
+									requestPart(
+										statement,
+										bindings,
+										0,
+										statement.slots,
+									),
+								],
+							} satisfies Request;
+						}),
+					);
+					const results = yield* sending(
+						recorder.wait(
+							Effect.tryPromise({
+								try: (signal) => {
+									sent.count++;
+									return transport.collect(request, signal);
+								},
+								catch: (cause) =>
+									classify(
+										statement.name,
+										(reason) =>
+											declarer([statement], reason),
+										cause,
+									),
+							}),
+						),
+						options,
+					);
+					const decoded = yield* recorder.decode(
+						Effect.gen(function* () {
+							const slots = yield* countOf(
 								statement.name,
-								(reason) => declarer([statement], reason),
-								cause,
+								results,
+								statement.slots,
+								writes,
+							);
+							return yield* decode(statement, slots, 0, writes);
+						}).pipe(
+							Effect.mapError(
+								decodeOutcome(statement.name, writes),
 							),
-					}),
-					options,
-				);
-				const slots = yield* countOf(
-					statement.name,
-					results,
-					statement.slots,
-					writes,
-				).pipe(Effect.mapError(decodeOutcome(statement.name, writes)));
-				return yield* decode(statement, slots, 0, writes).pipe(
-					Effect.mapError(decodeOutcome(statement.name, writes)),
-				);
-			}),
+						),
+					);
+					if (Array.isArray(decoded))
+						yield* recorder.rows(statement.name, decoded.length);
+					return decoded;
+				}),
+			),
 		) as Effect.Effect<R['Type'], StatementError<Throws>>;
 	},
 	transaction: <const S extends ReadonlyArray<unknown>>(
@@ -247,7 +282,8 @@ export const makeWith = (transport: Transport): Client => ({
 				statements.flatMap(({ statement }) => statement.sources ?? []),
 			),
 		];
-		const writes = changesOf(statements.map(({ statement }) => statement));
+		const descriptors = statements.map(({ statement }) => statement);
+		const writes = changesOf(descriptors);
 		const sent = { count: 0 };
 		return traced(
 			name,
@@ -256,82 +292,80 @@ export const makeWith = (transport: Transport): Client => ({
 			undefined,
 			false,
 			sent,
-			Effect.gen(function* () {
-				if (statements.length === 0) return [];
-				const refused = refuseInTransaction(statements);
-				if (refused !== undefined) return yield* Effect.fail(refused);
-				const bindings: Record<string, unknown> = {};
-				const boundBy = new Map<string, string>();
-				for (const { input, statement } of statements) {
-					const encoded = yield* encode(statement, input);
-					for (const [key, value] of Object.entries(encoded)) {
-						const first = boundBy.get(key);
-						if (first === undefined) {
-							boundBy.set(key, statement.name);
-						} else if (!sameValue(bindings[key], value)) {
-							return yield* Effect.fail(
-								new StatementScopeError({
-									statement: statement.name,
-									binding: key,
-									message: `\`$${key}\` is bound by \`${first}\` and by \`${statement.name}\` to values that are not certainly equal, and statements in one transaction share one variable scope; rename the binding in one of them`,
-								}),
-							);
-						}
-						bindings[key] = value;
-					}
-				}
-				yield* checkValues(
-					bindings,
-					(binding) => boundBy.get(binding) ?? name,
-					options,
-				);
-				const request = { sql, bindings };
-				const results = yield* sending(
-					Effect.tryPromise({
-						try: (signal) => {
-							sent.count++;
-							return transport.transaction(
-								statements.map((item) => item.statement),
-								request,
-								signal,
-							);
-						},
-						catch: (cause) =>
-							classify(
-								name,
-								(reason) =>
-									declarer(
-										statements.map(
-											(item) => item.statement,
-										),
-										reason,
+			recording('transaction', name, (recorder) =>
+				Effect.gen(function* () {
+					if (statements.length === 0) return [];
+					const request = yield* recorder.encode(
+						Effect.gen(function* () {
+							const joined = yield* joinWith(
+								statements.map(({ statement, input }) => ({
+									statement,
+									bindings: Effect.suspend(() =>
+										encode(statement, input),
 									),
-								cause,
-							),
-					}),
-					options,
-				);
-				const slots = yield* countOf(
-					name,
-					results,
-					statements.reduce(
-						(total, { statement }) => total + statement.slots,
-						0,
-					),
-					writes,
-				).pipe(Effect.mapError(decodeOutcome(name, writes)));
-				const decoded: Array<unknown> = [];
-				let offset = 0;
-				for (const { statement } of statements) {
-					decoded.push(
-						yield* decode(statement, slots, offset, writes).pipe(
-							Effect.mapError(decodeOutcome(name, writes)),
-						),
+								})),
+								{ mode: 'atomic', refuseTransactional: true },
+							);
+							yield* checkValues(
+								joined.bindings,
+								(binding) =>
+									joined.parts.find((part) =>
+										Object.hasOwn(part.bindings, binding),
+									)?.statement.name ?? name,
+								options,
+							);
+							return joined;
+						}),
 					);
-					offset += statement.slots;
-				}
-				return decoded;
-			}),
+					const results = yield* sending(
+						recorder.wait(
+							Effect.tryPromise({
+								try: (signal) => {
+									sent.count++;
+									return transport.collect(request, signal);
+								},
+								catch: (cause) =>
+									classify(
+										name,
+										(reason) =>
+											declarer(descriptors, reason),
+										cause,
+									),
+							}),
+						),
+						options,
+					);
+					return yield* recorder.decode(
+						Effect.gen(function* () {
+							const slots = yield* countOf(
+								name,
+								results,
+								request.parts.reduce(
+									(total, part) => total + part.slots,
+									0,
+								),
+								writes,
+							);
+							const decoded: Array<unknown> = [];
+							for (const { statement, offset } of request.parts) {
+								const value = yield* decode(
+									statement,
+									slots,
+									offset,
+									writes,
+								);
+								if (Array.isArray(value))
+									yield* recorder.rows(
+										statement.name,
+										value.length,
+									);
+								decoded.push(value);
+							}
+							return decoded;
+						}).pipe(Effect.mapError(decodeOutcome(name, writes))),
+					);
+				}),
+			),
 		) as Effect.Effect<Results<S>, StatementError<ThrownByAny<S>>>;
 	},
 });

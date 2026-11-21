@@ -16,7 +16,7 @@
 import { type ChildProcess, spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 
-import { Surreal } from 'surrealdb';
+import { type ConnectOptions, Surreal } from 'surrealdb';
 
 /** How the engine is provided. */
 export type EngineMode = 'embedded' | 'binary' | 'remote';
@@ -128,9 +128,16 @@ const httpSql =
 		return last.result;
 	};
 
-const connect = async (url: string, namespace: string): Promise<Surreal> => {
+type EngineOptions = Pick<ConnectOptions, 'retry'>;
+
+const connect = async (
+	url: string,
+	namespace: string,
+	options: EngineOptions,
+): Promise<Surreal> => {
 	const db = new Surreal();
 	await db.connect(url, {
+		...options,
 		authentication: { username: 'root', password: 'root' },
 	});
 	await db.query(
@@ -151,10 +158,17 @@ const engineVersion = async (db: Surreal) => {
 	return { version, majorVersion: Number(major) };
 };
 
-const startEmbedded = async (namespace: string): Promise<Engine> => {
+const startEmbedded = async (
+	namespace: string,
+	options: EngineOptions,
+): Promise<Engine> => {
 	const db = await embeddedEngine();
 	try {
-		await db.connect('mem://', { namespace, database: namespace });
+		await db.connect('mem://', {
+			...options,
+			namespace,
+			database: namespace,
+		});
 		return {
 			db,
 			mode: 'embedded',
@@ -173,9 +187,11 @@ const startEmbedded = async (namespace: string): Promise<Engine> => {
 	}
 };
 
-export const startEngine = async (): Promise<Engine> => {
+export const startEngine = async (
+	options: EngineOptions = {},
+): Promise<Engine> => {
 	const namespace = `effect_surrealkit_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-	if (engineMode === 'embedded') return startEmbedded(namespace);
+	if (engineMode === 'embedded') return startEmbedded(namespace, options);
 
 	let child: ChildProcess | undefined;
 	let url = process.env.SURREAL_URL;
@@ -205,7 +221,7 @@ export const startEngine = async (): Promise<Engine> => {
 	let lastError: unknown;
 	for (let attempt = 0; attempt < 100 && db === undefined; attempt++) {
 		try {
-			db = await connect(url, namespace);
+			db = await connect(url, namespace, options);
 		} catch (error) {
 			lastError = error;
 			await delay(100);

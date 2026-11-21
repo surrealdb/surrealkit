@@ -95,3 +95,36 @@ export const traced = <A, E extends { readonly _tag: string }>(
 			Effect.onInterrupt(() => record('interrupted')),
 		);
 	});
+
+export interface Recorder {
+	readonly encode: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E>;
+	readonly wait: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E>;
+	readonly decode: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E>;
+	readonly server: (
+		statement: string,
+		duration: Duration.Duration | undefined,
+	) => Effect.Effect<void>;
+	readonly rows: (statement: string, count: number) => Effect.Effect<void>;
+}
+
+export type RequestKind =
+	| 'run'
+	| 'transaction'
+	| 'pipeline'
+	| 'stream'
+	| 'bulk'
+	| 'interactive';
+
+const passthrough: Recorder = {
+	encode: (effect) => effect,
+	wait: (effect) => effect,
+	decode: (effect) => effect,
+	server: () => Effect.void,
+	rows: () => Effect.void,
+};
+
+export const recording = <A, E>(
+	_kind: RequestKind,
+	_name: string,
+	use: (recorder: Recorder) => Effect.Effect<A, E>,
+): Effect.Effect<A, E> => use(passthrough);
