@@ -1551,6 +1551,11 @@ matters most for transactions and for SurrealDB 3.
 yield* transaction([bind(bump)], { retry: Schedule.recurs(3) });
 ```
 
+Standalone `run` also honors the SDK connection's retry policy. With a
+custom policy that retries a later error in a multi-statement request, an
+earlier write can commit again on each attempt. Use an atomic transaction
+when those writes must succeed or roll back together.
+
 Each run is a span named after the statement, carrying the static text,
 the part sources (`code.file.path`), the number of rows when the result is
 a list (`db.response.returned_rows`) and the error tag on failure
@@ -1891,7 +1896,8 @@ table and fields its merge schema accepts. A missing record raises
 one request and delivers the decoded rows in order. The result schema must be a plain
 `Schema.Array(row)`. A statement built with `only()` returns at most one
 row, so use `run` for it. Use `run` for array-wide checks and transformations
-as well.
+as well. Effect Schema preserves the array's static type when a check is added.
+The stream verifies the schema at runtime and refuses array-wide checks before dispatch.
 
 ```ts
 import { Schema, Stream } from 'effect';
