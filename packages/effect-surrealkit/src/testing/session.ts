@@ -16,7 +16,42 @@ import type { Queryable } from '../client/client.js';
 
 type Query = ReturnType<Queryable['query']>;
 
-/** Retains the real receiver of SDK methods and accessors, which use private fields. */
+const forwardData = (
+	target: object,
+	key: PropertyKey,
+	{
+		configurable = false,
+		enumerable = false,
+		writable = false,
+	}: PropertyDescriptor,
+): PropertyDescriptor => {
+	let method: unknown;
+	let bound: unknown;
+	return {
+		configurable,
+		enumerable,
+		get: () => {
+			const value: unknown = Reflect.get(target, key);
+			if (typeof value !== 'function') return value;
+			if (value !== method) {
+				method = value;
+				bound = value.bind(target);
+			}
+			return bound;
+		},
+		...(writable && {
+			set: (value: unknown) => {
+				if (!Reflect.set(target, key, value)) {
+					throw new TypeError(
+						`Cannot write session property ${String(key)}`,
+					);
+				}
+			},
+		}),
+	};
+};
+
+/** Forwards session properties and retains the receiver required by SDK private fields. */
 const forward = <T extends object>(target: T, overrides: object): T => {
 	const facade = Object.defineProperties(
 		{},
@@ -36,15 +71,17 @@ const forward = <T extends object>(target: T, overrides: object): T => {
 			const descriptor = Object.getOwnPropertyDescriptor(owner, key);
 			if (descriptor === undefined) continue;
 			if ('value' in descriptor) {
-				if (typeof descriptor.value === 'function') {
-					descriptor.value = descriptor.value.bind(target);
-				}
-			} else {
-				if (descriptor.get !== undefined)
-					descriptor.get = descriptor.get.bind(target);
-				if (descriptor.set !== undefined)
-					descriptor.set = descriptor.set.bind(target);
+				Object.defineProperty(
+					facade,
+					key,
+					forwardData(target, key, descriptor),
+				);
+				continue;
 			}
+			if (descriptor.get !== undefined)
+				descriptor.get = descriptor.get.bind(target);
+			if (descriptor.set !== undefined)
+				descriptor.set = descriptor.set.bind(target);
 			Object.defineProperty(facade, key, descriptor);
 		}
 	}
@@ -205,9 +242,18 @@ const wrapQuery = (
 		responses: async (...indexes: number[]) => {
 			if (!inject()) return query.responses(...indexes);
 			const slots = responses();
-			return indexes.length === 0
-				? slots
-				: indexes.map((index) => slots[index]);
+			if (indexes.length === 0) return slots;
+			const positions = new Map(
+				indexes.map((slot, index) => [slot, index]),
+			);
+			const selected: Array<QueryResponseFailure> = [];
+			for (const [index, slot] of slots.entries()) {
+				const position = positions.get(index);
+				// The SDK rejects when any excluded slot fails.
+				if (position === undefined) throw slot.error;
+				selected[position] = slot;
+			}
+			return selected;
 		},
 		rows: <A>(parse?: (row: unknown) => A) =>
 			view(() => query.rows(parse), inject),

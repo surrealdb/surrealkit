@@ -174,6 +174,50 @@ describe.skipIf(!engineConfigured)(
 			expect(matched.count).toBe(2);
 		});
 
+		it('rejects errors in excluded response slots and keeps selected indexes', async () => {
+			await expect(
+				engine.db.query("1; THROW 'excluded';").responses(0),
+			).rejects.toMatchObject({
+				kind: 'Thrown',
+				message: 'An error occurred: excluded',
+			});
+
+			const { session, matched } = conflictingSession(engine.db, {
+				marker,
+				times: 5,
+			});
+			const single = await session
+				.query('/* injected conflict */ 2;')
+				.responses(0);
+			const conflict = {
+				success: false,
+				error: { isTransactionConflict: true },
+			};
+			const collateral = {
+				success: false,
+				error: { isNotExecuted: true },
+			};
+			expect(single).toMatchObject([conflict]);
+
+			const multi = session.query('1; /* injected conflict */ 2;');
+			await expect(multi.responses(0)).rejects.toMatchObject({
+				isTransactionConflict: true,
+			});
+			await expect(multi.responses(1)).rejects.toMatchObject({
+				isNotExecuted: true,
+			});
+			expect(await multi.responses(1, 0)).toMatchObject([
+				conflict,
+				collateral,
+			]);
+			const duplicate = await multi.responses(0, 1, 0);
+			expect(duplicate).toHaveLength(3);
+			expect(Object.hasOwn(duplicate, 0)).toBe(false);
+			expect(duplicate[1]).toMatchObject(conflict);
+			expect(duplicate[2]).toMatchObject(collateral);
+			expect(matched.count).toBe(5);
+		});
+
 		it('injects direct collector and view reads, and forwards later views and disposal', async () => {
 			await reset();
 			const { session, matched } = conflictingSession(engine.db, {
@@ -228,6 +272,58 @@ describe.skipIf(!engineConfigured)(
 			]);
 			expect(await count()).toEqual([0]);
 			expect(matched.count).toBe(1);
+		});
+
+		it('forwards mutable own and inherited session data through the real receiver', () => {
+			class SessionState {
+				counter = 1;
+				declare inheritedCounter: number;
+				declare readonly fixed: number;
+
+				increase() {
+					this.counter++;
+					this.inheritedCounter++;
+				}
+
+				read = function (this: SessionState) {
+					return this.counter;
+				};
+			}
+
+			Object.defineProperty(SessionState.prototype, 'inheritedCounter', {
+				value: 3,
+				writable: true,
+			});
+			const original = Object.assign(new SessionState(), {
+				query: engine.db.query.bind(engine.db),
+				transaction: engine.db.transaction.bind(engine.db),
+			});
+			Object.defineProperty(original, 'fixed', { value: 7 });
+			const { session } = conflictingSession(original, {
+				marker,
+				times: 0,
+			});
+
+			expect(session.counter).toBe(1);
+			expect(session.inheritedCounter).toBe(3);
+			session.increase();
+			expect(session.counter).toBe(2);
+			expect(session.inheritedCounter).toBe(4);
+
+			session.counter = 8;
+			session.inheritedCounter = 9;
+			expect(original.counter).toBe(8);
+			expect(original.inheritedCounter).toBe(9);
+			expect(session.read).toBe(session.read);
+			expect(session.read()).toBe(8);
+			original.read = function () {
+				return this.inheritedCounter;
+			};
+			expect(session.read()).toBe(9);
+
+			expect(Reflect.set(session, 'fixed', 10)).toBe(false);
+			expect(session.fixed).toBe(7);
+			expect(original.fixed).toBe(7);
 		});
 
 		it('keeps additional session methods, getters and own properties', async () => {
