@@ -99,13 +99,13 @@ const sdkDuration = (value: SurrealDuration): Duration.Duration => {
 
 export const sdkTransport = (db: Queryable): Transport => {
 	// One request per transaction, encoded once and sent again as it is on a
-	// retry: the same bindings object makes the same `BoundQuery`.
-	const requests = new WeakMap<object, BoundQuery>();
+	// retry. Separate requests may reuse a bindings object with different SQL.
+	const requests = new WeakMap<Request, BoundQuery>();
 	const collectAtomic = (request: Request, signal: Signal) => {
-		let bound = requests.get(request.bindings);
+		let bound = requests.get(request);
 		if (bound === undefined) {
 			bound = new BoundQuery(request.sql, request.bindings);
-			requests.set(request.bindings, bound);
+			requests.set(request, bound);
 		}
 		return db.transaction([bound], { signal });
 	};

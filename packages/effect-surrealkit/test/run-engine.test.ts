@@ -70,6 +70,33 @@ describe.skipIf(!engineConfigured)(
 			});
 		});
 
+		it('sends distinct atomic requests that share a bindings object', async () => {
+			const transport = sdkTransport(engine.db);
+			const bindings = {};
+			const signal = new AbortController().signal;
+			const request = (sql: string) => {
+				const statement = make({
+					sql,
+					params: {},
+					result: Schema.Number,
+				});
+				return {
+					mode: 'atomic' as const,
+					sql,
+					bindings,
+					parts: [
+						requestPart(statement, bindings, 0, statement.slots),
+					],
+				};
+			};
+			expect(await transport.collect(request('11;'), signal)).toEqual([
+				11,
+			]);
+			expect(await transport.send(request('22;'), signal)).toEqual([
+				{ ok: true, value: 22 },
+			]);
+		});
+
 		it('keeps raw response order and surfaces the root error after a rollback', async () => {
 			await engine.db.query(
 				'CREATE ONLY request_test:rollback SET n = 0;',
