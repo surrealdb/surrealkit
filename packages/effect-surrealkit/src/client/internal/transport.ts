@@ -193,6 +193,12 @@ export const sdkTransport = (db: Queryable): Transport => {
 							throw new Error(
 								'LIVE SELECT did not return one query UUID',
 							);
+						const killById = async () => {
+							await db
+								.query('KILL $id;', { id })
+								.retry(false)
+								.collect();
+						};
 						let attached:
 							| Awaited<ReturnType<typeof liveOf>>
 							| undefined;
@@ -218,17 +224,21 @@ export const sdkTransport = (db: Queryable): Transport => {
 											};
 									}
 								})(),
-								kill: () => subscription.kill(),
+								// The SDK caches a rejected kill. A fresh request
+								// on the same session can still release this UUID.
+								kill: () => subscription.kill().catch(killById),
 							};
 						} catch (error) {
 							const cleanup =
 								attached === undefined
-									? db
-											.query('KILL $id;', { id })
-											.retry(false)
-											.collect()
-									: attached.kill();
-							await cleanup.catch(() => undefined);
+									? killById()
+									: attached.kill().catch(killById);
+							await cleanup.catch(() => {
+								throw new Error(
+									'live query attachment failed and cleanup could not be confirmed',
+									{ cause: error },
+								);
+							});
 							throw error;
 						}
 					},

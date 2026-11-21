@@ -1,4 +1,4 @@
-import { Deferred, Effect, Fiber, Schema, Stream } from 'effect';
+import { Deferred, Effect, Fiber, Logger, Schema, Stream } from 'effect';
 import { RecordId } from 'surrealdb';
 import { expect, it } from 'vitest';
 import { makeWith } from '../src/client/client.js';
@@ -254,4 +254,37 @@ it('times registration and kill separately without capturing the binding or even
 	const report = JSON.stringify(timings);
 	expect(report).not.toContain(sent);
 	expect(report).not.toContain(received);
+});
+
+it('reports an unconfirmed kill without exposing the SDK error or replacing a body failure', async () => {
+	const { transport } = scriptedTransport({});
+	const client = makeWith({
+		...transport,
+		live: async () => ({
+			messages: { async *[Symbol.asyncIterator]() {} },
+			kill: async () => {
+				throw new Error('private kill response');
+			},
+		}),
+	});
+	const messages: unknown[] = [];
+	const result = await Effect.runPromise(
+		Effect.scoped(
+			client
+				.liveScoped(basic)
+				.pipe(Effect.andThen(Effect.fail('body failed'))),
+		).pipe(
+			Effect.flip,
+			Effect.provide(
+				Logger.layer([
+					Logger.make(({ message }) => messages.push(message)),
+				]),
+			),
+		),
+	);
+	expect(result).toBe('body failed');
+	expect(JSON.stringify(messages)).toContain(
+		'live query cleanup could not be confirmed',
+	);
+	expect(JSON.stringify(messages)).not.toContain('private kill response');
 });

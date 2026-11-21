@@ -1,6 +1,6 @@
 import { Deferred, Effect, Fiber, Option, Schema, Stream } from 'effect';
-import { RecordId, Surreal } from 'surrealdb';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { RecordId, Surreal, UnmanagedLiveSubscription, Uuid } from 'surrealdb';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import {
 	LiveQueryClosed,
@@ -410,6 +410,29 @@ describe.skipIf(!engineConfigured || !liveQueries)(
 			expect(await liveIds(db)).toEqual([]);
 		});
 
+		it('removes the registration when the SDK subscription kill rejects', async () => {
+			const db = engine.db;
+			const kill = vi
+				.spyOn(UnmanagedLiveSubscription.prototype, 'kill')
+				.mockRejectedValueOnce(new Error('injected kill refusal'));
+			try {
+				await run(
+					Effect.scoped(
+						Effect.gen(function* () {
+							yield* makeClient(db).liveScoped(plain, reg);
+							expect(
+								yield* Effect.promise(() => liveIds(db)),
+							).toHaveLength(1);
+						}),
+					),
+				);
+				expect(kill).toHaveBeenCalledTimes(1);
+				expect(await liveIds(db)).toEqual([]);
+			} finally {
+				kill.mockRestore();
+			}
+		});
+
 		it('kills the server registration if SDK attachment fails', async () => {
 			const db = engine.db;
 			const cause = new Error('test attachment refusal');
@@ -426,6 +449,40 @@ describe.skipIf(!engineConfigured || !liveQueries)(
 			expect(error).toBeInstanceOf(StatementRequestError);
 			expect(error).toHaveProperty('cause', cause);
 			expect(await liveIds(db)).toEqual([]);
+		});
+
+		it('exposes an unconfirmed cleanup when both attachment and its cleanup fail', async () => {
+			const db = engine.db;
+			const attachment = new Error('injected attachment refusal');
+			const client = makeClient({
+				query: (sql, ...args) => {
+					if (sql === 'KILL $id;')
+						throw new Error('private cleanup response');
+					return Reflect.apply(db.query, db, [sql, ...args]);
+				},
+				transaction: db.transaction.bind(db),
+				liveOf: () => {
+					throw attachment;
+				},
+			});
+			try {
+				const failure = await run(
+					Effect.flip(Effect.scoped(client.liveScoped(plain, reg))),
+				);
+				expect(failure).toMatchObject({
+					_tag: 'StatementRequestError',
+					message:
+						'live query attachment failed and cleanup could not be confirmed',
+					cause: { cause: attachment },
+				});
+				expect(await liveIds(db)).toHaveLength(1);
+			} finally {
+				for (const registration of await liveIds(db)) {
+					await db
+						.query('KILL $id;', { id: new Uuid(registration) })
+						.collect();
+				}
+			}
 		});
 
 		it('reports server KILLED even when the table is removed before the first pull', async () => {

@@ -177,8 +177,16 @@ const register = (
 const kill = (name: string, handle: LiveHandle) => {
 	const operation = `kill(${name})`;
 	return recording('run', operation, (recorder) =>
-		recorder.wait(Effect.tryPromise(() => handle.kill())),
-	).pipe(Effect.withSpan(operation, { kind: 'client' }), Effect.ignore);
+		recorder
+			.wait(Effect.tryPromise(() => handle.kill()))
+			.pipe(
+				Effect.catch(() =>
+					Effect.logWarning(
+						'live query cleanup could not be confirmed',
+					).pipe(Effect.annotateLogs({ statement: name })),
+				),
+			),
+	).pipe(Effect.withSpan(operation, { kind: 'client' }));
 };
 
 const scoped =

@@ -1960,6 +1960,9 @@ const listen = Effect.scoped(Effect.gen(function* () {
 The registration sends `LIVE SELECT name AS name FROM ⟨person⟩ WHERE age >
 $minimum;`. When `liveScoped` succeeds, the listener is ready to receive
 changes even before the first pull. Closing the scope kills the subscription.
+If the SDK kill fails, the client sends a separate KILL for that query ID on the
+same session. If cleanup still cannot be confirmed, scope release logs a warning.
+A failed attachment also reports when its registration could not be cleaned up.
 Use the client's `live` stream to start listening on the first pull and kill
 the subscription when that stream ends.
 `timed` records registration and scope cleanup as separate requests.
