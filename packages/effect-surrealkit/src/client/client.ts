@@ -362,6 +362,7 @@ const makeRun =
 						),
 						options,
 					);
+					yield* recorder.server(statement.name, undefined);
 					const decoded = yield* recorder.decode(
 						Effect.gen(function* () {
 							const slots = yield* countOf(
@@ -425,14 +426,17 @@ const makeTransaction =
 								})),
 								{ mode: 'atomic', refuseTransactional: true },
 							);
-							yield* checkValues(
-								joined.bindings,
-								(binding) =>
-									joined.parts.find((part) =>
-										Object.hasOwn(part.bindings, binding),
-									)?.statement.name ?? name,
-								options,
-							);
+							// Join first so scope and codec failures keep precedence.
+							for (const {
+								statement,
+								bindings,
+							} of joined.parts) {
+								yield* checkValues(
+									bindings,
+									() => statement.name,
+									options,
+								);
+							}
 							return joined;
 						}),
 					);
@@ -467,6 +471,11 @@ const makeTransaction =
 							);
 							const decoded: Array<unknown> = [];
 							for (const { statement, offset } of request.parts) {
+								// Register each part before its optional row count, even when names repeat.
+								yield* recorder.server(
+									statement.name,
+									undefined,
+								);
 								const value = yield* decode(
 									statement,
 									slots,
