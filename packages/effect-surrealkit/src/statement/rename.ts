@@ -9,7 +9,10 @@ interface ParameterScan {
 
 const possibleParameter = /[$\\]/u;
 const lexForRename = (sql: string) =>
-	lex(sql, undefined, { unambiguousLineComments: true }).tokens;
+	lex(sql, undefined, {
+		unambiguousLineComments: true,
+		unambiguousSlashes: true,
+	}).tokens;
 
 /** Reads rewritable variable spans and read-only names in record literals. */
 export const scanParameters = (sql: string): ParameterScan | undefined => {
@@ -35,15 +38,6 @@ export const scanParameters = (sql: string): ParameterScan | undefined => {
 				if (token.kind === 'param') {
 					if (insideRecord) recordNames.add(token.value);
 					else writable.push(token);
-				}
-				// Slash classification is heuristic. A division expression mistaken
-				// for a regex could hide a whole record literal or part of its key.
-				if (
-					token.kind === 'regex' &&
-					(/\br['"]/u.test(token.value) ||
-						(insideRecord && possibleParameter.test(token.value)))
-				) {
-					return undefined;
 				}
 				if (
 					token.kind === 'string' &&

@@ -94,8 +94,7 @@ const OPEN = new Map([
 const CLOSE = new Set([')', ']', '}']);
 
 /**
- * Words after which an expression starts, so a `/` there opens a regex
- * literal rather than dividing.
+ * Words that can introduce an expression. Many are also valid identifiers.
  */
 const EXPRESSION_WORDS: ReadonlySet<string> = new Set([
 	'AND',
@@ -131,6 +130,21 @@ const EXPRESSION_WORDS: ReadonlySet<string> = new Set([
 	'DEFAULT',
 ]);
 
+const EXPRESSION_STATEMENTS: ReadonlySet<string> = new Set([
+	'IF',
+	'RETURN',
+	'SELECT',
+	'THROW',
+]);
+
+const WORD_LITERALS: ReadonlySet<string> = new Set([
+	'NONE',
+	'NULL',
+	'TRUE',
+	'FALSE',
+	'NAN',
+]);
+
 const isWordChar = (c: string | undefined): boolean =>
 	c !== undefined && /[A-Za-z0-9_]/u.test(c);
 
@@ -154,7 +168,10 @@ export interface Lexed {
 export const lex = (
 	sql: string,
 	holeEndingAt?: (start: number) => number,
-	options?: { readonly unambiguousLineComments?: boolean },
+	options?: {
+		readonly unambiguousLineComments?: boolean;
+		readonly unambiguousSlashes?: boolean;
+	},
 ): Lexed => {
 	const lineStarts = [0];
 	for (let i = 0; i < sql.length; i++) {
@@ -257,20 +274,54 @@ export const lex = (
 		return fail('unterminated', `unterminated ${what}`, from);
 	};
 
-	const operandBefore = (): boolean => {
-		const last = tokens[tokens.length - 1];
-		if (last === undefined) return false;
+	const startsStatement = (index: number): boolean => {
+		const before = tokens[index - 1];
+		return (
+			before === undefined ||
+			(before.kind === 'punct' &&
+				(before.value === ';' || before.value === '{'))
+		);
+	};
+
+	const slashRole = (): 'division' | 'regex' | 'uncertain' => {
+		const index = tokens.length - 1;
+		const last = tokens[index];
+		if (last === undefined) return 'regex';
 		switch (last.kind) {
 			case 'param':
 			case 'string':
 			case 'ident':
 			case 'regex':
 			case 'hole':
-				return true;
-			case 'word':
-				return !EXPRESSION_WORDS.has(last.value.toUpperCase());
+				return 'division';
+			case 'word': {
+				const word = last.value.toUpperCase();
+				const before = tokens[index - 1];
+				// A single dot introduces a property, even when its name is a keyword.
+				if (
+					before?.kind === 'punct' &&
+					before.value === '.' &&
+					tokens[index - 2]?.value !== '.'
+				) {
+					return 'division';
+				}
+				if (!options?.unambiguousSlashes) {
+					return EXPRESSION_WORDS.has(word) ? 'regex' : 'division';
+				}
+				if (WORD_LITERALS.has(word) || /^[0-9]/u.test(word)) {
+					return 'division';
+				}
+				const introducesExpression =
+					(EXPRESSION_STATEMENTS.has(word) &&
+						startsStatement(index)) ||
+					(word === 'VALUE' &&
+						before?.kind === 'word' &&
+						before.value.toUpperCase() === 'SELECT' &&
+						startsStatement(index - 1));
+				return introducesExpression ? 'regex' : 'uncertain';
+			}
 			case 'punct':
-				return CLOSE.has(last.value);
+				return CLOSE.has(last.value) ? 'division' : 'regex';
 		}
 	};
 
@@ -413,22 +464,32 @@ export const lex = (
 			continue;
 		}
 		if (c === '/') {
-			if (operandBefore()) {
-				push('punct', i, i + 1, c);
-				i++;
-				continue;
+			const role = slashRole();
+			if (role !== 'division') {
+				// A regex literal is opaque up to the next unescaped slash.
+				let end = i + 1;
+				while (end < sql.length && sql[end] !== '/') {
+					if (role === 'regex' && sql[end] === '\n') break;
+					end += sql[end] === '\\' ? 2 : 1;
+				}
+				if (role === 'regex') {
+					if (sql[end] !== '/')
+						fail('unterminated', 'unterminated regex literal', i);
+					push('regex', i, end + 1, sql.slice(i + 1, end));
+					i = end + 1;
+					continue;
+				}
+				// With no closing delimiter a valid expression can only be division.
+				if (sql[end] === '/') {
+					fail(
+						'ambiguousSlash',
+						'cannot distinguish division from a regex after this word',
+						i,
+					);
+				}
 			}
-			// A regex literal: opaque up to the next unescaped `/`.
-			let end = i + 1;
-			while (end < sql.length && sql[end] !== '/') {
-				if (sql[end] === '\n') break;
-				end += sql[end] === '\\' ? 2 : 1;
-			}
-			if (sql[end] !== '/') {
-				fail('unterminated', 'unterminated regex literal', i);
-			}
-			push('regex', i, end + 1, sql.slice(i + 1, end));
-			i = end + 1;
+			push('punct', i, i + 1, c);
+			i++;
 			continue;
 		}
 		if (OPERATOR_CHARS.has(c)) {

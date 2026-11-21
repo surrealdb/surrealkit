@@ -405,6 +405,40 @@ describe.skipIf(!engineConfigured)(
 			]);
 		});
 
+		it('preserves division after a keyword field and avoids capturing another divisor', async () => {
+			const read = make({
+				sql: '({ return: 12 }.return / $id / 2);',
+				params: { id: S.Int },
+				result: S.Int,
+			});
+			const reserved = make({
+				sql: '({ return: 12 }.return / ($id__1 ?? 2) / 2);',
+				params: {},
+				result: S.Int,
+			});
+			const members = [
+				bind(read, { id: 2 }),
+				bind(read, { id: 3 }),
+				bind(reserved),
+			] as const;
+			const expected = [3, 2, 3];
+			expect(
+				await Promise.all([
+					Effect.runPromise(client.run(read, { id: 2 })),
+					Effect.runPromise(client.run(read, { id: 3 })),
+					Effect.runPromise(client.run(reserved)),
+				]),
+			).toEqual(expected);
+			expect(
+				await Effect.runPromise(client.transaction(members)),
+			).toEqual(expected);
+			for (const each of ['statement', 'transaction'] as const) {
+				expect(
+					await Effect.runPromise(client.pipeline(members, { each })),
+				).toEqual(expected.map(Result.succeed));
+			}
+		});
+
 		it('preserves record key bindings on their own and refuses a rename before composition', async () => {
 			const record = make({
 				name: 'record with bound key',

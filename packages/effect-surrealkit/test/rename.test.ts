@@ -63,9 +63,48 @@ it('renames around a record literal that only references unrelated names', () =>
 	).toBe("[$id__1, r'thing:[$id2, $other]'];");
 });
 
-it('refuses an ambiguous slash expression that can hide a record literal', () => {
+it('finds a record literal in a division expression after a keyword field', () => {
 	const sql = "({ return: 12 }.return / record::id(r'thing:[$id]')[0] / 2);";
 	expect(renameNames(sql, { id: 'id__1' })).toBeUndefined();
+});
+
+it('renames a divisor following a field whose name is a keyword', () => {
+	const sql = '({ return: 12 }.return / $id / 2);';
+	expect(renameNames(sql, { id: 'id__1' })).toBe(
+		'({ return: 12 }.return / $id__1 / 2);',
+	);
+});
+
+it.each([
+	'$id',
+	'$id__1',
+])('refuses a slash that could hide a relevant parameter after a contextual keyword (%s)', (divisor) => {
+	const sql = `SELECT VALUE value / ${divisor} / 2 FROM ONLY [{ value: 12 }];`;
+	expect(renameNames(sql, { id: 'id__1' })).toBeUndefined();
+});
+
+it('refuses a slash after an unclassified word when it could start a regex', () => {
+	expect(
+		renameNames('SELECT VALUE $id FROM /[$id]/;', { id: 'id__1' }),
+	).toBeUndefined();
+});
+
+it('renames division after a bare identifier when the slash cannot start a regex', () => {
+	const sql = 'SELECT VALUE amount / $id FROM ONLY [{ amount: 12 }];';
+	expect(renameNames(sql, { id: 'id__1' })).toBe(
+		'SELECT VALUE amount / $id__1 FROM ONLY [{ amount: 12 }];',
+	);
+});
+
+it.each([
+	['RETURN /[$id]/ = $id;', 'RETURN /[$id]/ = $id__1;'],
+	["[/[$id]/, /r'[$id]/, $id];", "[/[$id]/, /r'[$id]/, $id__1];"],
+	[
+		`[r'thing:["$id" = /[$id]/]', $id];`,
+		`[r'thing:["$id" = /[$id]/]', $id__1];`,
+	],
+])('preserves a known regex when renaming %s', (sql, expected) => {
+	expect(renameNames(sql, { id: 'id__1' })).toBe(expected);
 });
 
 it('refuses a record literal where engines disagree on the end of a comment', () => {
@@ -93,10 +132,10 @@ it.each([
 it('extends a suffix past locals and quoted variables anywhere in the list', async () => {
 	const first = read('id');
 	const reserve = make({
-		sql: "{ LET $id__1 = 7; $id__1; }; $⟨id__1_⟩; r'thing:[$`id__1__`]';",
+		sql: "{ LET $id__1 = 7; $id__1; }; $⟨id__1_⟩; r'thing:[$`id__1__`]'; ({ return: 12 }.return / $id__1___ / 2);",
 		params: {},
 		result: Schema.Unknown,
-		slots: 3,
+		slots: 4,
 	});
 	const joined = await Effect.runPromise(
 		join(
@@ -108,10 +147,10 @@ it('extends a suffix past locals and quoted variables anywhere in the list', asy
 			query,
 		),
 	);
-	expect(joined.sql).toBe(`$id__1___;\n$id__2;\n${reserve.sql}`);
-	expect(joined.bindings).toEqual({ id__1___: 1, id__2: 2 });
+	expect(joined.sql).toBe(`$id__1____;\n$id__2;\n${reserve.sql}`);
+	expect(joined.bindings).toEqual({ id__1____: 1, id__2: 2 });
 	expect(joined.parts.map(({ sent }) => sent)).toEqual([
-		{ id: 'id__1___' },
+		{ id: 'id__1____' },
 		{ id: 'id__2' },
 		{},
 	]);
