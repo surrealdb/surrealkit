@@ -1,6 +1,6 @@
 import { setTimeout as delay } from 'node:timers/promises';
 import { Effect, Schedule, Schema, Stream } from 'effect';
-import { CallTerminatedError, RecordId } from 'surrealdb';
+import { CallTerminatedError, RecordId, ServerError } from 'surrealdb';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { makeWith } from '../src/client/client.js';
@@ -455,6 +455,35 @@ describe.skipIf(!engineConfigured)('bulk writes on a disposable engine', () => {
 			cause: { _tag: 'StatementThrown', reason: 'after write' },
 		});
 		expect(sdkRetryChecks).toBe(0);
+		expect(await counter()).toEqual([0]);
+	});
+
+	it('keeps a server parse refusal distinct from an unknown atomic outcome', async () => {
+		await reset();
+		await engine.db.query('CREATE ONLY bulk_row:counter SET n = 0;');
+		const invalid = make({
+			...bump,
+			sql: `${bump.sql}\nSELECT FROM;`,
+			slots: 2,
+		});
+		const error = await failed(
+			makeClient(engine.db).bulk(
+				invalid,
+				{ increments: [1] },
+				{
+					over: 'increments',
+					atomic: false,
+					retry: Schedule.recurs(1),
+				},
+			),
+		);
+		expect(error).toBeInstanceOf(BulkWriteError);
+		expect(error).toMatchObject({
+			cause: {
+				_tag: 'StatementRequestError',
+				cause: expect.any(ServerError),
+			},
+		});
 		expect(await counter()).toEqual([0]);
 	});
 

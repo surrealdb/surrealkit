@@ -8,7 +8,13 @@ import {
 	Schema,
 	Stream,
 } from 'effect';
-import { CallTerminatedError, CborCodec, Surreal } from 'surrealdb';
+import {
+	CallTerminatedError,
+	CborCodec,
+	ConnectionUnavailableError,
+	ExpressionError,
+	Surreal,
+} from 'surrealdb';
 import { describe, expect, it } from 'vitest';
 
 import { makeWith } from '../src/client/client.js';
@@ -632,20 +638,38 @@ describe('bulk writes', () => {
 	});
 
 	it.each([
-		{ kind: 'response body', message: 'terminated', atomic: true },
 		{
-			kind: 'fetch',
-			message: 'NetworkError when attempting to fetch resource.',
+			scenario: 'a terminated response body',
+			cause: new TypeError('terminated'),
+			atomic: true,
+		},
+		{
+			scenario: 'browser fetch',
+			cause: new TypeError(
+				'NetworkError when attempting to fetch resource.',
+			),
+			beforeResponse: true,
 			atomic: false,
 		},
-	])('reports an unknown HTTP atomic acknowledgement when $kind fails', async ({
-		kind,
-		message,
+		{
+			scenario: 'a response body with a network DOMException',
+			cause: new DOMException('transport failed', 'NetworkError'),
+			atomic: true,
+		},
+		{
+			scenario: 'a response body with a socket reset',
+			cause: Object.assign(new Error('socket hang up'), {
+				code: 'ECONNRESET',
+			}),
+			atomic: false,
+		},
+	])('reports an unknown HTTP atomic acknowledgement when $scenario fails', async ({
+		cause,
+		beforeResponse,
 		atomic,
 	}) => {
-		const cause = new TypeError(message);
 		const { client, queries, close } = await httpClient(() => {
-			if (kind === 'fetch') throw cause;
+			if (beforeResponse) throw cause;
 			return new Response(
 				new ReadableStream({
 					pull: (controller) => controller.error(cause),
@@ -678,29 +702,32 @@ describe('bulk writes', () => {
 			}),
 		);
 		try {
-			const earlyReturn = make({
-				...multiSlot,
-				sql: 'RETURN $rows; NONE;',
-				defines: [],
-				valueSlot: 1,
-			});
-			const preflight = await flip(
-				client.bulk(earlyReturn, input, {
-					over: 'rows',
-					atomic: false,
-				}),
-			);
-			expect(preflight).toBeInstanceOf(BulkWriteError);
-			expect(preflight).toMatchObject({
-				cause: expect.any(StatementRequestError),
-			});
-			expect(preflight).toMatchObject({
-				cause: {
-					message: expect.stringContaining(
-						'contains a RETURN statement',
-					),
-				},
-			});
+			const scripted = fake({ numbers: collectRows });
+			for (const [sql, keyword] of [
+				['RETURN $rows; NONE;', 'RETURN'],
+				['BEGIN; $rows;', 'BEGIN'],
+			] as const) {
+				const statement = make({ ...multiSlot, sql, defines: [] });
+				for (const candidate of [client, scripted]) {
+					const preflight = await flip(
+						candidate.bulk(statement, input, {
+							over: 'rows',
+							atomic: false,
+						}),
+					);
+					expect(preflight).toBeInstanceOf(BulkWriteError);
+					expect(preflight).toMatchObject({
+						cause: {
+							_tag: 'StatementRequestError',
+							cause: expect.any(ExpressionError),
+							message: expect.stringContaining(
+								`contains a ${keyword} statement`,
+							),
+						},
+					});
+				}
+			}
+			expect(scripted.calls).toHaveLength(0);
 			expect(queries).toHaveLength(0);
 			const rejected = await flip(
 				client.bulk(multiSlot, input, { over: 'rows' }),
@@ -711,6 +738,20 @@ describe('bulk writes', () => {
 		} finally {
 			await close();
 		}
+	});
+
+	it('keeps an SDK refusal before connecting distinct from an unknown atomic outcome', async () => {
+		const client = makeClient(new Surreal());
+		const rejected = await flip(
+			client.bulk(multiSlot, input, { over: 'rows', atomic: false }),
+		);
+		expect(rejected).toBeInstanceOf(BulkWriteError);
+		expect(rejected).toMatchObject({
+			cause: {
+				_tag: 'StatementRequestError',
+				cause: expect.any(ConnectionUnavailableError),
+			},
+		});
 	});
 
 	it('uses the current transaction for tx.bulk without another lifecycle or chunk retry', async () => {

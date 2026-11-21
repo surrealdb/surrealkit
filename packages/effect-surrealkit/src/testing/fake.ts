@@ -10,7 +10,7 @@
  * followed by another statement.
  */
 import { Layer } from 'effect';
-import { Features, UnsupportedFeatureError } from 'surrealdb';
+import { ExpressionError, Features, UnsupportedFeatureError } from 'surrealdb';
 
 import { type Client, makeWith, SurrealClient } from '../client/client.js';
 import type { StatementUnsupported } from '../client/errors.js';
@@ -156,16 +156,16 @@ const control: ReadonlySet<string> = new Set(['BEGIN', 'COMMIT', 'CANCEL']);
  * What the SDK's `transaction()` refuses before sending: the client sends a
  * transaction as one query, `queries[0]`.
  */
-const sdkRefusal = (sql: string): Error | undefined => {
+const sdkRefusal = (sql: string): ExpressionError | undefined => {
 	let returned = false;
 	for (const keyword of scanTopLevel(sql).keywords) {
 		if (control.has(keyword)) {
-			return sdkError(
+			return new ExpressionError(
 				`queries[0] contains a ${keyword} statement. transaction() wraps the queries in BEGIN and COMMIT itself, so they must not contain any`,
 			);
 		}
 		if (returned) {
-			return sdkError(
+			return new ExpressionError(
 				'queries[0] contains a RETURN statement which is followed by another statement (in queries[0]). Inside a transaction RETURN ends it early: the statements after it would be skipped but the transaction would still commit. Use SELECT or a bare expression instead, or move the RETURN to the end',
 			);
 		}

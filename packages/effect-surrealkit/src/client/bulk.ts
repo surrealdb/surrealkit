@@ -8,10 +8,15 @@ import {
 	Stream,
 } from 'effect';
 import {
-	CallTerminatedError,
-	HttpConnectionError,
-	UnexpectedConnectionError,
-	UnexpectedServerResponseError,
+	AuthenticationError,
+	ConnectionUnavailableError,
+	ExpressionError,
+	InvalidSessionError,
+	MissingNamespaceDatabaseError,
+	ServerError,
+	UnavailableFeatureError,
+	UnsupportedFeatureError,
+	UnsupportedVersionError,
 } from 'surrealdb';
 
 import type { ElementOf } from '../statement/expr.js';
@@ -27,6 +32,7 @@ import {
 	BulkWriteError,
 	StatementConflict,
 	type StatementError,
+	StatementRequestError,
 	StatementScopeError,
 	StatementUnsupported,
 	TransactionOutcomeUnknown,
@@ -194,15 +200,17 @@ const inputWith = (
 	rows: unknown,
 ): Readonly<Record<string, unknown>> => ({ ...input, [key]: rows });
 
-const uncertain = (cause: unknown): boolean =>
-	cause instanceof CallTerminatedError ||
-	cause instanceof UnexpectedConnectionError ||
-	cause instanceof UnexpectedServerResponseError ||
-	(cause instanceof HttpConnectionError && cause.status >= 500) ||
-	(cause instanceof Error &&
-		(cause.name === 'TimeoutError' || cause.name === 'AbortError')) ||
-	// Fetch and response-body failures escape the SDK as host TypeErrors.
-	cause instanceof TypeError;
+/** The engine rejected the request, or the SDK refused it before dispatch. */
+const definiteRejection = (cause: unknown): boolean =>
+	cause instanceof ServerError ||
+	cause instanceof AuthenticationError ||
+	cause instanceof ConnectionUnavailableError ||
+	cause instanceof ExpressionError ||
+	cause instanceof InvalidSessionError ||
+	cause instanceof MissingNamespaceDatabaseError ||
+	cause instanceof UnavailableFeatureError ||
+	cause instanceof UnsupportedFeatureError ||
+	cause instanceof UnsupportedVersionError;
 
 const failureOf = (
 	statement: AnyStatement,
@@ -211,21 +219,28 @@ const failureOf = (
 ) => {
 	if (
 		cause instanceof StatementScopeError ||
-		cause instanceof StatementConflict
+		cause instanceof StatementConflict ||
+		cause instanceof TransactionOutcomeUnknown
 	)
 		return cause;
-	if (atomic && uncertain(cause)) {
-		return new TransactionOutcomeUnknown({
-			message:
-				'The bulk transaction was not acknowledged. Read back the data before retrying.',
+	if (!atomic || cause instanceof Error) {
+		const classified = classify(
+			statement.name,
+			(reason) => declarer([statement], reason),
 			cause,
-		});
+		);
+		if (
+			!atomic ||
+			!(classified instanceof StatementRequestError) ||
+			definiteRejection(cause)
+		)
+			return classified;
 	}
-	return classify(
-		statement.name,
-		(reason) => declarer([statement], reason),
+	return new TransactionOutcomeUnknown({
+		message:
+			'The bulk transaction was not acknowledged. Read back the data before retrying.',
 		cause,
-	);
+	});
 };
 
 const serverTime = (
