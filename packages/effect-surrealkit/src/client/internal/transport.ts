@@ -1,5 +1,9 @@
 import { Duration, Effect, type Schedule } from 'effect';
-import { BoundQuery, type Duration as SurrealDuration } from 'surrealdb';
+import {
+	BoundQuery,
+	type QueryResponse,
+	type Duration as SurrealDuration,
+} from 'surrealdb';
 
 import type { AnyStatement } from '../../statement/statement.js';
 import type { Queryable, RunOptions } from '../client.js';
@@ -97,6 +101,19 @@ const sdkDuration = (value: SurrealDuration): Duration.Duration => {
 	return Duration.nanos(seconds * 1_000_000_000n + nanos);
 };
 
+const responseSlots = (
+	responses: ReadonlyArray<QueryResponse>,
+): ReadonlyArray<SlotAnswer> =>
+	responses.map((response) => {
+		const timing =
+			response.stats === undefined
+				? {}
+				: { server: sdkDuration(response.stats.duration) };
+		return response.success
+			? { ok: true, value: response.result, ...timing }
+			: { ok: false, error: response.error, ...timing };
+	});
+
 export const sdkTransport = (db: Queryable): Transport => {
 	// One request per transaction, encoded once and sent again as it is on a
 	// retry. Separate requests may reuse a bindings object with different SQL.
@@ -111,6 +128,7 @@ export const sdkTransport = (db: Queryable): Transport => {
 	};
 	const query = (request: Request, signal: Signal) =>
 		db.query(request.sql, request.bindings).signal(signal);
+	const beginTransaction = db.beginTransaction?.bind(db);
 	return {
 		collect: (request, signal) =>
 			request.mode === 'atomic'
@@ -121,17 +139,27 @@ export const sdkTransport = (db: Queryable): Transport => {
 				const values = await collectAtomic(request, signal);
 				return values.map((value) => ({ ok: true, value }));
 			}
-			const responses = await query(request, signal).responses();
-			return responses.map((response) => {
-				const timing =
-					response.stats === undefined
-						? {}
-						: { server: sdkDuration(response.stats.duration) };
-				return response.success
-					? { ok: true, value: response.result, ...timing }
-					: { ok: false, error: response.error, ...timing };
-			});
+			return responseSlots(await query(request, signal).responses());
 		},
+		...(beginTransaction === undefined
+			? {}
+			: {
+					begin: async (signal: Signal) => {
+						signal.throwIfAborted();
+						const tx = await beginTransaction();
+						return {
+							send: async (request: Request, signal: Signal) =>
+								responseSlots(
+									await tx
+										.query(request.sql, request.bindings)
+										.signal(signal)
+										.responses(),
+								),
+							commit: () => tx.commit(),
+							cancel: () => tx.cancel(),
+						};
+					},
+				}),
 		stream: () => {
 			throw new Error(
 				'effect-surrealkit: stream is not implemented yet (lane L6)',

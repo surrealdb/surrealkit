@@ -1778,7 +1778,41 @@ Binding and result values stay out of span attributes and metric tags.
 
 #### Interactive transactions
 
-Written by lane L4.
+Use `client.withTransaction((tx) => effect)` to make several requests
+and commit them together. The body can call `tx.run`, `tx.transaction`
+or `tx.bulk`. The `withTransaction(effect)` accessor supplies the
+transaction as `SurrealClient` so existing code that uses `run` or
+`transaction` joins it.
+
+```ts
+import { run, withTransaction } from 'effect-surrealkit/client';
+
+const move = withTransaction(
+  Effect.gen(function* () {
+    yield* run(debit, { from, amount });
+    return yield* run(credit, { to, amount });
+  }),
+);
+```
+
+A successful body commits. A body that fails, dies or is interrupted
+cancels the transaction. Embedded and WebSocket sessions support this
+API. HTTP returns `StatementUnsupported` before the body starts.
+There are no savepoints. Nested interactive transactions, pipelines,
+live queries and streams are refused in the transaction’s client.
+
+The tested engines, embedded SurrealDB 4.0.1 and WebSocket 3.3.4, can
+continue and commit an open transaction after a statement fails. Propagate
+the failure from the body when its earlier writes should be cancelled.
+A top-level `LET` is local to the request that declares it. Keep the
+statements that use it in that same request.
+
+Pass `{ retry: schedule }` to rerun the whole body in a fresh transaction
+after a conflict. A failed attempt does not commit its database writes.
+The body’s other effects run again. If a commit answer is lost, or none
+arrives within 30 seconds, the client returns `TransactionOutcomeUnknown`
+without cancelling or retrying the commit. The SDK may still complete it.
+Read the data back before deciding whether to run the body again.
 
 #### Bulk writes
 
