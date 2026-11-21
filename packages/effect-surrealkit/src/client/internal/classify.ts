@@ -5,6 +5,42 @@ import {
 	StatementThrown,
 	StatementUnexpectedThrow,
 } from '../errors.js';
+import type { SlotAnswer } from './transport.js';
+
+export type FailedSlot = Extract<SlotAnswer, { readonly ok: false }>;
+
+/** The SDK marks statements rolled back by a different failure as not executed. */
+const isCollateralFailure = (error: unknown): boolean => {
+	if (!(error instanceof Error)) return false;
+	const query = error as Error & {
+		readonly kind?: unknown;
+		readonly details?: unknown;
+		readonly isNotExecuted?: unknown;
+		readonly isCancelled?: unknown;
+	};
+	if (query.kind !== undefined && query.kind !== 'Query') return false;
+	if (query.isNotExecuted === true || query.isCancelled === true) return true;
+	// Older servers can report the same condition without structured details.
+	return (
+		!query.details &&
+		/^(?:The query was not executed due to a (?:failed|cancelled) transaction|Cannot COMMIT: the transaction was aborted due to a prior error)/u.test(
+			query.message,
+		)
+	);
+};
+
+/** Preserve the causal error within this block, including a conflict reported only at COMMIT. */
+export const firstFailure = (
+	slots: ReadonlyArray<SlotAnswer>,
+): FailedSlot | undefined => {
+	let first: FailedSlot | undefined;
+	for (const slot of slots) {
+		if (slot.ok) continue;
+		first ??= slot;
+		if (!isCollateralFailure(slot.error)) return slot;
+	}
+	return first;
+};
 
 const thrownPrefix = 'An error occurred: ';
 

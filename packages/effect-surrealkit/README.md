@@ -1588,7 +1588,78 @@ empty results.
 
 #### Several statements in one request: pipelines
 
-Written by lane L1.
+`pipeline` sends statements paired with their inputs by `bind` in one
+query request. The effect returns a tuple of Effect `Result`s in the
+same order, each with its own result type and declared throws. An empty
+pipeline returns `[]` without sending a request.
+
+```ts
+import { Effect, Schema } from 'effect';
+import { bind, pipeline, run } from 'effect-surrealkit/client';
+import { make } from 'effect-surrealkit/statement';
+
+const names = make({
+  name: 'person names',
+  sql: 'SELECT VALUE name FROM person WHERE name != $excluded LIMIT 3;',
+  params: { excluded: Schema.String },
+  result: Schema.Array(Schema.String),
+  writes: false,
+});
+const countTeams = make({
+  name: 'team count',
+  sql: 'count((SELECT VALUE id FROM team));',
+  params: {},
+  result: Schema.Number,
+  writes: false,
+});
+
+const reports = pipeline([
+  bind(names, { excluded: 'Bee' }),
+  bind(countTeams),
+], { each: 'transaction' });
+```
+
+The text sent with the `excluded` binding is:
+
+```surql
+BEGIN;
+SELECT VALUE name FROM person WHERE name != $excluded LIMIT 3;
+COMMIT;
+BEGIN;
+count((SELECT VALUE id FROM team));
+COMMIT;
+```
+
+With `each: 'statement'` (the default), each statement's text runs as
+written, including any of its own transaction controls. With
+`each: 'transaction'`, each member gets its own `BEGIN` and `COMMIT`. A
+failure rolls back that member's writes, while the other members can commit. This
+mode refuses members that already contain transaction controls. The
+members share one request scope, so an unrenamed `LET` is visible to later
+members in either mode.
+
+A binding that fails validation, a scope refusal, or a request the SDK
+cannot send or answer fails the outer effect. A failed statement or
+block has its own `Result.fail`, with the first error that caused the
+failure. If every failed slot only reports fallout from a different
+failure, the first failed slot is used. A write whose acknowledged
+result fails decoding has a `StatementWriteOutcomeError` in its result.
+A pipeline has no `retry` option because some writes may already have
+committed by the time another member fails.
+
+Use a pipeline for one round trip when you want the answers together.
+Use concurrent Effects for independent requests whose answers should
+be available as each request finishes:
+
+```ts
+const independent = Effect.all([
+  run(names, { excluded: 'Bee' }),
+  run(countTeams),
+], { concurrency: 2, mode: 'result' });
+```
+
+`Effect.all` collects the results after both requests finish. To act on an
+answer as soon as it arrives, handle it inside its individual effect.
 
 #### The same statement more than once
 
