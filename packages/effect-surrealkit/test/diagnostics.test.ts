@@ -25,6 +25,9 @@ const fixtures = [
 	'family-negative.ts',
 	'pipeline-negative.ts',
 	'interactive-negative.ts',
+	'bulk-negative.ts',
+	'stream-negative.ts',
+	'live-negative.ts',
 ].map((file) => join(typesRoot, file));
 
 const directive = /^\s*\/\/ @ts-expect-error(?: \[([^\]\s]+)\])?/u;

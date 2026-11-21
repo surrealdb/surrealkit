@@ -198,6 +198,60 @@ exports[`type diagnostics > bound/hand-built-wrong-value 1`] = `
 ]
 `;
 
+exports[`type diagnostics > bulk-list-required 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type 'never'.",
+]
+`;
+
+exports[`type diagnostics > bulk-merge-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<$Array<Struct<{ readonly id: declareConstructor<_RecordId<"bulk_row">, _RecordId<"bulk_row">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>; readonly set: Struct<...>; }>>, { ...; }>' is not assignable to parameter of type '"\`set.absent\` is not a field \`bulk_row\` accepts in UPDATE EACH"'.",
+]
+`;
+
+exports[`type diagnostics > bulk-other-binding 1`] = `
+[
+  "TS2345: Argument of type '{ rows: number[]; }' is not assignable to parameter of type 'BulkInput<{ readonly rows: $Array<declareConstructor<number, number, readonly [], number>>; readonly label: String; }, "rows", never, never>'.
+  Property 'label' is missing in type '{ rows: number[]; }' but required in type 'Omit<{ readonly rows: readonly number[]; readonly label: string; }, "rows">'.",
+]
+`;
+
+exports[`type diagnostics > bulk-over-kind 1`] = `
+[
+  "TS2322: Type '"label"' is not assignable to type '"rows"'.",
+]
+`;
+
+exports[`type diagnostics > bulk-record-id 1`] = `
+[
+  "TS2345: Argument of type 'Expr<$Array<Struct<{ readonly id: declareConstructor<_RecordId<"other_row">, _RecordId<"other_row">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>; readonly set: Struct<...>; }>>, { ...; }>' is not assignable to parameter of type '"\`id\` is not a value \`bulk_row\` accepts in UPDATE EACH"'.",
+]
+`;
+
+exports[`type diagnostics > bulk-row-kind 1`] = `
+[
+  "TS2322: Type 'string[]' is not assignable to type 'Iterable<number> | Stream<number, never, never>'.
+  Type 'string[]' is not assignable to type 'Iterable<number>'.
+    The types returned by '[Symbol.iterator]().next(...)' are incompatible between these types.
+      Type 'IteratorResult<string, undefined>' is not assignable to type 'IteratorResult<number, any>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+        Type 'IteratorYieldResult<string>' is not assignable to type 'IteratorResult<number, any>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+          Type 'IteratorYieldResult<string>' is not assignable to type 'IteratorYieldResult<number>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+            Type 'string' is not assignable to type 'number'.",
+]
+`;
+
+exports[`type diagnostics > bulk-stream-kind 1`] = `
+[
+  "TS2345: Argument of type '{ rows: Stream.Stream<"wrong", never, never>; label: string; }' is not assignable to parameter of type 'BulkInput<{ readonly rows: $Array<declareConstructor<number, number, readonly [], number>>; readonly label: String; }, "rows", never, never>'.
+  Type '{ rows: Stream.Stream<"wrong", never, never>; label: string; }' is not assignable to type '{ readonly rows: Iterable<number> | Stream<number, never, never>; }'.
+    Types of property 'rows' are incompatible.
+      Type 'Stream<"wrong", never, never>' is not assignable to type 'Iterable<number> | Stream<number, never, never>'.
+        Type 'Stream<"wrong", never, never>' is not assignable to type 'Stream<number, never, never>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+          Type 'string' is not assignable to type 'number'.",
+]
+`;
+
 exports[`type diagnostics > call/missing-argument 1`] = `
 [
   "TS2345: Argument of type '{ readonly name: "fn::greet"; readonly args: Schema.Tuple<readonly [Schema.declareConstructor<string, string, readonly [], string>, Schema.optional<Schema.declareConstructor<string, string, readonly [], string>>, Schema.optional<...>]>; readonly returns: Schema.declareConstructor<...>; }' is not assignable to parameter of type '"\`fn::greet\` needs more than 0 arguments"'.",
@@ -717,6 +771,50 @@ exports[`type diagnostics > link/not-a-link 1`] = `
 exports[`type diagnostics > link/union-uncommon-field 1`] = `
 [
   "TS2339: Property 'members' does not exist on type 'FollowedOf<Store, Path<Union<readonly [brand<declareConstructor<_RecordId<"org">, _RecordId<"org">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/org">, brand<...>]> & Codec>>'.",
+]
+`;
+
+exports[`type diagnostics > live/group-by 1`] = `
+[
+  "TS2339: Property 'groupBy' does not exist on type 'Live<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, NoParams, de...'.",
+  "TS7006: Parameter 'row' implicitly has an 'any' type.",
+]
+`;
+
+exports[`type diagnostics > live/limit 1`] = `
+[
+  "TS2339: Property 'limit' does not exist on type 'Live<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, NoParams, de...'.",
+]
+`;
+
+exports[`type diagnostics > live/only 1`] = `
+[
+  "TS2339: Property 'only' does not exist on type 'Live<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, NoParams, de...'.",
+]
+`;
+
+exports[`type diagnostics > live/order-by 1`] = `
+[
+  "TS2339: Property 'orderBy' does not exist on type 'Live<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, NoParams, de...'.",
+  "TS7006: Parameter 'row' implicitly has an 'any' type.",
+]
+`;
+
+exports[`type diagnostics > live/project-expression 1`] = `
+[
+  "TS2322: Type '42' is not assignable to type '"a projected field is an expression: inline a constant with \`literal\`"'.",
+]
+`;
+
+exports[`type diagnostics > live/required-binding 1`] = `
+[
+  "TS2554: Expected 2 arguments, but got 1.",
+]
+`;
+
+exports[`type diagnostics > live/where-comparison 1`] = `
+[
+  "TS2345: Argument of type '12' is not assignable to parameter of type '"these operands never compare: their stored types do not overlap"'.",
 ]
 `;
 
@@ -1844,6 +1942,27 @@ exports[`type diagnostics > step/target-filter-no-such-field 1`] = `
 exports[`type diagnostics > step/target-filter-uncommon-field 1`] = `
 [
   "TS2339: Property 'members' does not exist on type 'ReachedRow<Store, "member_of", "out">'.",
+]
+`;
+
+exports[`type diagnostics > stream/result-must-be-list-of-rows-only 1`] = `
+[
+  "TS2379: Argument of type 'Statement<{ readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person">; }, UndefinedOr<...>, never>' is not assignable to parameter of type 'Statement<{ readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person">; }, $Array<...>, never>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Property 'value' is missing in type 'UndefinedOr<declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; readonly name: string; readonly role: "owner" | "member" | "admin"; readonly address: { readonly [x: string]: SurrealValue; readonly city: string; }; ... 15 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { ...;...' but required in type '$Array<Codec>'.",
+]
+`;
+
+exports[`type diagnostics > stream/result-must-be-list-of-rows-optional 1`] = `
+[
+  "TS2379: Argument of type 'Statement<{}, UndefinedOr<$Array<Number>>, never>' is not assignable to parameter of type 'Statement<{}, $Array<Codec>, never>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Property 'value' is missing in type 'UndefinedOr<$Array<Number>>' but required in type '$Array<Codec>'.",
+]
+`;
+
+exports[`type diagnostics > stream/result-must-be-list-of-rows-tuple 1`] = `
+[
+  "TS2379: Argument of type 'Statement<{}, Tuple<readonly [Number]>, never>' is not assignable to parameter of type 'Statement<{}, $Array<Codec>, never>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Property 'value' is missing in type 'Tuple<readonly [Number]>' but required in type '$Array<Codec>'.",
 ]
 `;
 
