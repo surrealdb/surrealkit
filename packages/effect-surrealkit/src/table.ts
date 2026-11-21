@@ -63,6 +63,50 @@ export type EdgeIn<E extends EdgeDescriptor> = E['in'][number]['Type'];
 /** The record ids a relation accepts as its `out` endpoint. */
 export type EdgeOut<E extends EdgeDescriptor> = E['out'][number]['Type'];
 
+/** What a `DEFINE INDEX` builds (schema document v2, section 9). */
+export type IndexType =
+	| 'standard'
+	| 'unique'
+	| 'fulltext'
+	| 'hnsw'
+	| 'diskann'
+	| 'count';
+
+/**
+ * One `DEFINE INDEX`: its kind and the field paths it covers, in order
+ * (`[["owner"], ["status"]]`; a `COUNT` index covers none). The generated
+ * descriptors keep the paths as literal types.
+ */
+export interface IndexDescriptor {
+	readonly type: IndexType;
+	readonly columns: ReadonlyArray<ReadonlyArray<string>>;
+	/** A `FULLTEXT` index's analyzer, and whether it keeps highlights. */
+	readonly fulltext?: {
+		readonly analyzer: string;
+		readonly highlights: boolean;
+	};
+	/** An `HNSW` or `DISKANN` index's vector shape. */
+	readonly vector?: {
+		readonly dimension: number;
+		readonly distance: string;
+		readonly elementType: string;
+	};
+	/** A `COUNT … WHERE` index's condition. */
+	readonly where?: string;
+}
+
+/**
+ * A field's `PERMISSIONS`: `true` (FULL), `false` (NONE) or a `WHERE`
+ * expression, for `select`, `create` and `update`; `fields` holds those of
+ * its declared children (`*` for an array or set element).
+ */
+export interface FieldPermissions {
+	readonly select: Permission;
+	readonly create: Permission;
+	readonly update: Permission;
+	readonly fields?: { readonly [key: string]: FieldPermissions };
+}
+
 export interface TableDescriptor {
 	readonly name: string;
 	readonly type: 'normal' | 'any' | 'relation';
@@ -70,6 +114,12 @@ export interface TableDescriptor {
 	readonly drop: boolean;
 	readonly id: Schema.Top;
 	readonly select: RowSchema;
+	/**
+	 * The stored row as a session reads it when field permissions may hide
+	 * fields: every field whose `select` permission is not FULL is optional,
+	 * because SurrealDB returns such a field as NONE without an error.
+	 */
+	readonly visible?: RowSchema;
 	/** Absent for lightweight relations, which take no content. */
 	readonly create?: RowSchema;
 	readonly merge?: RowSchema;
@@ -83,6 +133,10 @@ export interface TableDescriptor {
 		readonly out: ReadonlyArray<string>;
 	};
 	readonly permissions: TablePermissions;
+	/** Each top-level field's permissions (not `id`, `in` or `out`). */
+	readonly fieldPermissions?: { readonly [key: string]: FieldPermissions };
+	/** Every `DEFINE INDEX` of the table, by name. */
+	readonly indexes?: { readonly [name: string]: IndexDescriptor };
 	readonly edge?: EdgeDescriptor;
 }
 
@@ -119,6 +173,32 @@ export const edge = <const E extends EdgeDescriptor>(descriptor: E): E =>
 	descriptor;
 /** Declares a generated function descriptor (identity at runtime). */
 export const fn = <const F extends FunctionDescriptor>(descriptor: F): F =>
+	descriptor;
+
+/**
+ * Every table, view, relation endpoint and function of one store, by its
+ * SurrealDB name, so a record link (`RecordId<"person">`) or a graph step
+ * (`->member_of->`) resolves to the descriptor of its target.
+ */
+export interface StoreDescriptor {
+	/** The logical store name (the emitter's `store` option). */
+	readonly name: string;
+	readonly tables: { readonly [name: string]: TableDescriptor };
+	readonly views: { readonly [name: string]: ViewDescriptor };
+	/** The endpoints of every relation table, by the relation's name. */
+	readonly edges: { readonly [name: string]: EdgeDescriptor };
+	readonly functions: { readonly [name: string]: FunctionDescriptor };
+}
+
+/**
+ * A group of a store registry with no entries. A generated registry names
+ * this type instead of writing the empty object type, which lint rules against
+ * that type report in the generated module.
+ */
+export type NoEntries = Record<never, never>;
+
+/** Declares a generated store registry (identity at runtime). */
+export const store = <const S extends StoreDescriptor>(descriptor: S): S =>
 	descriptor;
 
 /** Applies a presence to a field schema, as the generated variants do. */
@@ -203,7 +283,7 @@ export type Replaced<T extends TableDescriptor, Replacements> = {
 					? Replacements[F]
 					: T['fields'][F];
 			}
-		: K extends Operation
+		: K extends Operation | 'visible'
 			? ReplaceVariant<T[K], Replacements>
 			: T[K];
 };
@@ -221,15 +301,31 @@ const isStructWithRest = (
 
 const replaceInRow = (
 	row: RowSchema,
-	operation: Operation,
+	operation: Operation | 'visible',
 	presence: TableDescriptor['presence'],
 	replacements: { readonly [key: string]: Schema.Top },
 ): RowSchema => {
 	const struct = isStructWithRest(row) ? row.schema : row;
+	// A row no replacement reaches is kept as it is, with its checks
+	// (`EmptyObject` refuses every key; a rebuilt `Schema.Struct({})` would not).
+	if (
+		!Object.keys(struct.fields).some((key) =>
+			Object.hasOwn(replacements, key),
+		)
+	) {
+		return row;
+	}
 	const fields: Record<string, Schema.Constraint> = {};
 	for (const [key, field] of Object.entries(struct.fields)) {
 		const replacement = replacements[key];
-		const fieldPresence = presence[key]?.[operation];
+		// The visible row is the select row with fields a permission can hide
+		// made optional: a field keeps the presence it has there.
+		const fieldPresence =
+			operation === 'visible'
+				? field.ast.context?.isOptional === true
+					? 'optional'
+					: 'required'
+				: presence[key]?.[operation];
 		fields[key] =
 			replacement === undefined || fieldPresence === undefined
 				? field
@@ -241,8 +337,9 @@ const replaceInRow = (
 		: rebuilt;
 };
 
-const operations: ReadonlyArray<Operation> = [
+const operations: ReadonlyArray<Operation | 'visible'> = [
 	'select',
+	'visible',
 	'create',
 	'merge',
 	'content',

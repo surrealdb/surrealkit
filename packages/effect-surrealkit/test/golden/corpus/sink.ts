@@ -22,18 +22,23 @@ export const SinkRow = SurrealSchema.NoneAsAbsent(Sink);
 export type SinkRow = typeof SinkRow.Type;
 export type SinkRowEncoded = typeof SinkRow.Encoded;
 
+/** `Sink` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Sink`. */
+export const SinkVisible = Sink;
+export type SinkVisible = typeof SinkVisible.Type;
+export type SinkVisibleEncoded = typeof SinkVisible.Encoded;
+
 /** Input for `CREATE sink CONTENT` / `INSERT`. The record id is an operation argument. */
-export const SinkCreate = Schema.Struct({});
+export const SinkCreate = SurrealSchema.EmptyObject;
 export type SinkCreate = typeof SinkCreate.Type;
 export type SinkCreateEncoded = typeof SinkCreate.Encoded;
 
 /** Input for `UPDATE sink MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
-export const SinkMerge = Schema.Struct({});
+export const SinkMerge = SurrealSchema.EmptyObject;
 export type SinkMerge = typeof SinkMerge.Type;
 export type SinkMergeEncoded = typeof SinkMerge.Encoded;
 
 /** Input for `UPDATE sink CONTENT`: a full replacement of the writable fields. */
-export const SinkContent = Schema.Struct({});
+export const SinkContent = SurrealSchema.EmptyObject;
 export type SinkContent = typeof SinkContent.Type;
 export type SinkContentEncoded = typeof SinkContent.Encoded;
 
@@ -45,6 +50,7 @@ export const SinkTable = SurrealSchema.table({
 	drop: true,
 	id: SinkId,
 	select: Sink,
+	visible: SinkVisible,
 	create: SinkCreate,
 	merge: SinkMerge,
 	content: SinkContent,
@@ -54,6 +60,8 @@ export const SinkTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `sink` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

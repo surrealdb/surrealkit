@@ -30,6 +30,145 @@ const link = (target: string, path: string) => {
 	symlinkSync(target, path, 'junction');
 };
 
+const statements = `import { Effect, Schema } from 'effect';
+import * as SurrealSchema from 'effect-surrealkit';
+import {
+	analyze,
+	fill,
+	renderStatementModules,
+	text,
+} from 'effect-surrealkit/analyze';
+import { bind, run, transaction } from 'effect-surrealkit/client';
+import { math, string } from 'effect-surrealkit/functions';
+import { expectIndex, fake, fakeLayer, memoryLayer, result } from 'effect-surrealkit/testing';
+import {
+	call,
+	cast,
+	codecOf,
+	create,
+	eq,
+	param,
+	part,
+	readAs,
+	select,
+	sequence,
+	update,
+} from 'effect-surrealkit/statement';
+import * as search from 'effect-surrealkit/statement';
+
+import {
+	DocTable,
+	fn_greet,
+	PersonCreate,
+	PersonId,
+	PersonMerge,
+	PersonTable,
+} from './index.js';
+
+export const createPerson = create(PersonTable)
+	.content(param('person', PersonCreate))
+	.build();
+
+export const listing = select(PersonTable)
+	.where((row) => eq(row.email, param('email', SurrealSchema.String)))
+	.project((row) => ({
+		id: row.id,
+		key: cast('string', row.id),
+		city: row.address.city,
+		greeting: call(fn_greet, row.name),
+	}))
+	.build();
+
+const Email = SurrealSchema.String.pipe(Schema.brand('DirectoryEmail'));
+const directory = readAs(PersonTable, Schema.Struct({ id: PersonId, email: Email }));
+export const directoryLookup = select(directory)
+    .where((row) => eq(row.email, param('email', codecOf(row.email))))
+    .project((row) => ({ person: row.id, contact: row.email }))
+    .build();
+
+type Exact<A, B> = (<T>() => T extends A ? 1 : 2) extends (<T>() => T extends B ? 1 : 2) ? true : false;
+const exactBindings: Exact<typeof directoryLookup.params.email.Type, typeof Email.Type> = true;
+const exactRows: Exact<typeof directoryLookup.result.Type, ReadonlyArray<{readonly person: typeof PersonId.Type; readonly contact: typeof Email.Type}>> = true;
+void [exactBindings, exactRows];
+
+const words = search.match(DocTable, 'body', param('terms', SurrealSchema.String), { ref: 1 });
+const near = search.knn(DocTable, 'embedding', 'query', { k: 3, ef: 40 });
+export const searched = search.evaluate(
+	search.rrf(
+		[
+			select(DocTable).where(() => words).project((row) => ({ id: row.id, score: search.score(words) })).toExpr(),
+			select(DocTable).where(() => near).project((row) => ({ id: row.id, distance: search.knnDistance(near) })).toExpr(),
+		],
+		{ limit: 10 },
+	),
+);
+
+export const shouting = select(PersonTable)
+	.where((row) => string.isEmail(row.email))
+	.project((row) => ({
+		loud: string.uppercase(row.name),
+		size: string.len(row.name),
+		tau: math.tau,
+	}))
+	.build();
+
+export const rename = update(PersonTable, param('id', PersonId))
+	.merge(param('changes', PersonMerge))
+	.build();
+
+export const guarded = sequence(
+	part({
+		sql: "IF $name = NONE { THROW 'No name' };",
+		free: ['name'],
+		throws: ['No name'],
+	}),
+).define({
+	params: { name: SurrealSchema.String },
+	result: Schema.Undefined,
+});
+
+export const filter = text({
+	kind: 'part',
+	sql: 'SELECT * FROM person WHERE __FILTER__;',
+	holes: ['__FILTER__'],
+	free: [],
+	defines: [],
+	provisional: true,
+	slots: 1,
+	throws: [],
+});
+
+export const filtered = fill(filter, { __FILTER__: 'name = $name' }).pipe(
+	Effect.flatMap((sql) => analyze(sql)),
+);
+
+export const rendered = renderStatementModules({
+	scopes: [{ name: 'people', files: [{ name: 'count', sql: 'RETURN 1;' }] }],
+	importExtension: '.ts',
+}).pipe(
+	Effect.map(({ files, warnings }) => [files[0]?.path, warnings.length] as const),
+	Effect.catchTag('StatementModulesError', (error) =>
+		Effect.succeed([error.problems[0]?.text, 0] as const),
+	),
+);
+
+// The testing subpath declares without \`@surrealdb/node\` installed.
+export const scripted = fake({ 'select person': result([]) });
+export const scriptedLayer = fakeLayer({});
+export const memoryDatabase = memoryLayer({ schema: 'DEFINE TABLE person;' });
+export const indexed = expectIndex(listing, { email: 'a@example.com' }, 'person_email');
+
+export const program = (person: typeof PersonCreate.Type) =>
+	Effect.gen(function* () {
+		const rows = yield* run(listing, { email: person.email });
+		const [made] = yield* transaction([
+			bind(createPerson, { person }),
+			bind(guarded, { name: person.name }),
+		]);
+		return { rows, made };
+	});
+`;
+
 describe('declaration emit in a pnpm consumer', () => {
 	let root = '';
 
@@ -99,6 +238,10 @@ describe('declaration emit in a pnpm consumer', () => {
 		}
 
 		cpSync(goldenDir('corpus'), join(root, 'src'), { recursive: true });
+		// A consumer module that exports statements and an effect built from
+		// them, through the package's `statement`, `functions`, `client`,
+		// `analyze` and `testing` subpaths (with no `@surrealdb/node` installed).
+		writeFileSync(join(root, 'src', 'statements.ts'), statements);
 		writeFileSync(
 			join(root, 'tsconfig.json'),
 			JSON.stringify({
@@ -130,7 +273,7 @@ describe('declaration emit in a pnpm consumer', () => {
 		else console.log('kept', root);
 	});
 
-	it('the corpus modules emit declarations with no non-portable type', () => {
+	it('the corpus modules, and statements built from them, emit declarations with no non-portable type', () => {
 		const result = spawnSync(
 			process.execPath,
 			[join(modules, 'typescript', 'bin', 'tsc'), '-p', root],

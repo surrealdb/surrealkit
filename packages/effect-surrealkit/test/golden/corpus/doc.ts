@@ -11,7 +11,7 @@ export { DocId } from "./ids.js";
 export const DocFields = {
 	body: SurrealSchema.String,
 	code: SurrealSchema.String,
-	embedding: Schema.Array(Schema.Number).check(Schema.isBetweenLength(4, 4)),
+	embedding: Schema.Array(SurrealSchema.Float).check(Schema.isBetweenLength(4, 4)),
 	owner: PersonId,
 	status: Schema.Literals(["closed", "open"]),
 	title: SurrealSchema.String,
@@ -36,6 +36,11 @@ export type DocEncoded = typeof Doc.Encoded;
 export const DocRow = SurrealSchema.NoneAsAbsent(Doc);
 export type DocRow = typeof DocRow.Type;
 export type DocRowEncoded = typeof DocRow.Encoded;
+
+/** `Doc` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Doc`. */
+export const DocVisible = Doc;
+export type DocVisible = typeof DocVisible.Type;
+export type DocVisibleEncoded = typeof DocVisible.Encoded;
 
 /** Input for `CREATE doc CONTENT` / `INSERT`. The record id is an operation argument. */
 export const DocCreate = Schema.Struct({
@@ -84,6 +89,7 @@ export const DocTable = SurrealSchema.table({
 	drop: false,
 	id: DocId,
 	select: Doc,
+	visible: DocVisible,
 	create: DocCreate,
 	merge: DocMerge,
 	content: DocContent,
@@ -100,13 +106,35 @@ export const DocTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: ["rates"] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		body: { select: true, create: true, update: true },
+		code: { select: true, create: true, update: true },
+		embedding: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true },
+		} },
+		owner: { select: true, create: true, update: true },
+		status: { select: true, create: true, update: true },
+		title: { select: true, create: true, update: true },
+		touched: { select: true, create: true, update: true },
+	},
+	indexes: {
+		cnt_all: { type: "count", columns: [] },
+		cnt_open: { type: "count", columns: [], where: "status = 'open'" },
+		diskann_embedding: { type: "diskann", columns: [["embedding"]], vector: { dimension: 4, distance: "EUCLIDEAN", elementType: "F32" } },
+		ft_body: { type: "fulltext", columns: [["body"]], fulltext: { analyzer: "simple", highlights: true } },
+		hnsw_embedding: { type: "hnsw", columns: [["embedding"]], vector: { dimension: 4, distance: "COSINE", elementType: "F32" } },
+		idx_owner_status: { type: "standard", columns: [["owner"], ["status"]] },
+		idx_title: { type: "standard", columns: [["title"]] },
+		idx_title_concurrent: { type: "standard", columns: [["title"]] },
+		uniq_code: { type: "unique", columns: [["code"]] },
+	},
 });
 
 /** JSON world: the field schemas of a selected `doc` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */
 export const DocJsonFields = {
 	body: SurrealSchema.String,
 	code: SurrealSchema.String,
-	embedding: Schema.Array(Schema.Number).check(Schema.isBetweenLength(4, 4)),
+	embedding: Schema.Array(Schema.Finite).check(Schema.isBetweenLength(4, 4)),
 	owner: SurrealSchema.RecordIdFromJsonAs(PersonId),
 	status: Schema.Literals(["closed", "open"]),
 	title: SurrealSchema.String,

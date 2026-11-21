@@ -73,7 +73,7 @@ describe('effect-surrealkit CLI', () => {
 			['--input', examplePath, '--out', 'gen', '--store', 'corpus'],
 			{ cwd },
 		);
-		expect(result.stderr).toMatch(/9 modules in .*gen \(9 updated\)/);
+		expect(result.stderr).toMatch(/10 modules in .*gen \(10 updated\)/);
 		expect(result.code).toBe(0);
 		expect(withoutToolVersionsIn(filesOf(join(cwd, 'gen')))).toEqual(
 			golden,

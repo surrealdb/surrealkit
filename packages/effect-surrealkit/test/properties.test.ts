@@ -16,6 +16,11 @@ const viaJson = (value: unknown): unknown => JSON.parse(JSON.stringify(value));
 
 const native: ReadonlyArray<readonly [string, Schema.Codec<unknown, unknown>]> =
 	[
+		// The SDK's encoder writes -0 as the CBOR integer zero.
+		[
+			'Float',
+			S.Float.check(Schema.makeFilter((value) => !Object.is(value, -0))),
+		],
 		['Int', S.Int],
 		['Int64', S.Int64],
 		['DateTime', S.DateTime],
@@ -89,6 +94,10 @@ describe('checks on a codec narrow generation instead of filtering it', () => {
 	// generation must honour them or a narrow range is never hit.
 	for (const [name, schema] of [
 		[
+			'Float in [0.125, 0.25]',
+			S.Float.check(Schema.isBetween({ minimum: 0.125, maximum: 0.25 })),
+		],
+		[
 			'Int in [0, 150]',
 			S.Int.check(Schema.isBetween({ minimum: 0, maximum: 150 })),
 		],
@@ -118,6 +127,12 @@ describe('checks on a codec narrow generation instead of filtering it', () => {
 			);
 		});
 	}
+});
+
+describe('Float round-trips through the native schema', () => {
+	it('preserves arbitrary IEEE-754 numbers', async () => {
+		await expectRoundTrip(S.Float, (value) => value);
+	});
 });
 
 describe('native codecs round-trip through the SDK CBOR codec', () => {

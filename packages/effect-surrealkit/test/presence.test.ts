@@ -2,9 +2,15 @@
  * The field-presence matrix (schema document v2, section 7) checked cell by
  * cell against a disposable engine, using the modules generated for the
  * corpus's evidence tables (test/golden/presence). For every cell the
- * generated schema and the engine must agree; the two documented
- * conservative cells (COMPUTED supplied on create, VALUE with a fallback) are
- * pinned explicitly.
+ * generated schema and the engine must agree, except where the schema is
+ * deliberately stricter than the engine, and those cells assert both sides:
+ *
+ * - COMPUTED supplied on create, and VALUE with a fallback, are the two
+ *   documented conservative cells.
+ * - A field whose VALUE ignores its input: the engine accepts a supplied value
+ *   and discards it, storing what the VALUE produces. The field is excluded
+ *   from Create, Merge and Content, because a value a caller passes would be
+ *   thrown away without an error.
  */
 import { Exit, Schema } from 'effect';
 import { DateTime, RecordId, type Surreal } from 'surrealdb';
@@ -210,14 +216,15 @@ describe.skipIf(!engineConfigured)(
 				expect(row).toEqual({ comp: 'x!' });
 			});
 
-			it('VALUE ignoring $value is optional (a supplied value is replaced)', async () => {
-				const content = accepted(MCreate, {
+			it('VALUE ignoring $value is excluded on create: the engine accepts a supplied value and discards it', async () => {
+				const content = {
 					req: 'x',
 					nul: null,
 					vin: 'a',
 					vfall: 'q',
 					vout: new DateTime('1999-01-01T00:00:00Z'),
-				});
+				};
+				rejected(MCreate, content);
 				const row = await one<{ vout: DateTime }>(
 					'CREATE m:4 CONTENT $content RETURN vout',
 					{ content },
@@ -407,6 +414,16 @@ describe.skipIf(!engineConfigured)(
 				await fails('UPDATE m:7 MERGE { roopt: NONE }', {}, /readonly/);
 			});
 
+			it('VALUE ignoring $value is excluded on merge: the engine accepts a supplied value and discards it', async () => {
+				const patch = { vout: new DateTime('1999-01-01T00:00:00Z') };
+				rejected(MMerge, patch);
+				const row = await one<{ vout: DateTime }>(
+					'UPDATE $id MERGE $patch RETURN vout',
+					{ id: m1, patch },
+				);
+				expect(row.vout.toString()).toBe('2020-01-01T00:00:00.000Z');
+			});
+
 			it('omitting a VALUE field keeps the stored value', async () => {
 				const patch = accepted(MMerge, { opt: 'z' });
 				expect(
@@ -449,6 +466,23 @@ describe.skipIf(!engineConfigured)(
 				expect(row.ro).toBe('r');
 				expect(row.optd).toBeUndefined();
 				expect(String(row.vout)).toBe('2020-01-01T00:00:00.000Z');
+			});
+
+			it('VALUE ignoring $value is excluded on content: the engine accepts a supplied value and discards it', async () => {
+				const content = {
+					req: 'y',
+					nul: null,
+					vin: 'Q',
+					vfall: 'q',
+					dflt: 'd',
+					vout: new DateTime('1999-01-01T00:00:00Z'),
+				};
+				rejected(MContent, content);
+				const row = await one<{ vout: DateTime }>(
+					'UPDATE $id CONTENT $content RETURN vout',
+					{ id: m1, content },
+				);
+				expect(row.vout.toString()).toBe('2020-01-01T00:00:00.000Z');
 			});
 
 			it('VALUE reading $value is required', async () => {

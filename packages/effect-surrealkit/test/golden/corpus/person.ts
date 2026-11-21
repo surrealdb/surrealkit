@@ -39,7 +39,7 @@ export const PersonFields = {
 	pins: Schema.Array(SurrealSchema.String).check(Schema.isMaxLength(3)),
 	referenced_by: Schema.Unknown,
 	role: Schema.Literals(["admin", "member", "owner"]),
-	score: Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThan(100)),
+	score: SurrealSchema.Float.check(Schema.isGreaterThan(0), Schema.isLessThan(100)),
 	session_ttl: SurrealSchema.Duration,
 	shout: SurrealSchema.String,
 	slug: SurrealSchema.String,
@@ -59,7 +59,7 @@ export const Person = Schema.Struct({
 		city: SurrealSchema.String,
 		geo: Schema.optionalKey(SurrealSchema.GeometryPoint),
 		zip: Schema.optionalKey(SurrealSchema.String),
-	}), [Schema.Record(Schema.String, Schema.Unknown)]),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]),
 	age: Schema.optionalKey(PersonFields.age),
 	bio: PersonFields.bio,
 	buddy: Schema.optionalKey(PersonFields.buddy),
@@ -111,13 +111,18 @@ export const PersonRow = SurrealSchema.NoneAsAbsent(Person);
 export type PersonRow = typeof PersonRow.Type;
 export type PersonRowEncoded = typeof PersonRow.Encoded;
 
+/** `Person` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Person`. */
+export const PersonVisible = Person;
+export type PersonVisible = typeof PersonVisible.Type;
+export type PersonVisibleEncoded = typeof PersonVisible.Encoded;
+
 /** Input for `CREATE person CONTENT` / `INSERT`. The record id is an operation argument. */
 export const PersonCreate = Schema.Struct({
 	address: Schema.StructWithRest(Schema.Struct({
 		city: SurrealSchema.String,
 		geo: Schema.optionalKey(SurrealSchema.GeometryPoint),
 		zip: Schema.optionalKey(SurrealSchema.String),
-	}), [Schema.Record(Schema.String, Schema.Unknown)]),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]),
 	age: Schema.optionalKey(PersonFields.age),
 	bio: PersonFields.bio,
 	buddy: Schema.optionalKey(PersonFields.buddy),
@@ -149,12 +154,10 @@ export const PersonCreate = Schema.Struct({
 		theme: Schema.optionalKey(Schema.Literals(["dark", "light"])),
 	})),
 	shout: Schema.optionalKey(PersonFields.shout),
-	slug: Schema.optionalKey(PersonFields.slug),
 	ssn: Schema.optionalKey(PersonFields.ssn),
 	tags: Schema.optionalKey(PersonFields.tags),
 	team: Schema.optionalKey(PersonFields.team),
 	tier: Schema.optionalKey(PersonFields.tier),
-	touched_at: Schema.optionalKey(PersonFields.touched_at),
 	updated_at: Schema.optionalKey(PersonFields.updated_at),
 	watchers: Schema.optionalKey(PersonFields.watchers),
 });
@@ -167,7 +170,7 @@ export const PersonMerge = Schema.Struct({
 		city: Schema.optionalKey(SurrealSchema.String),
 		geo: Schema.optional(SurrealSchema.GeometryPoint),
 		zip: Schema.optional(SurrealSchema.String),
-	}), [Schema.Record(Schema.String, Schema.Unknown)])),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealMergeValue)])),
 	age: Schema.optional(PersonFields.age),
 	bio: Schema.optionalKey(PersonFields.bio),
 	buddy: Schema.optional(PersonFields.buddy),
@@ -198,12 +201,10 @@ export const PersonMerge = Schema.Struct({
 		theme: Schema.optionalKey(Schema.Literals(["dark", "light"])),
 	})),
 	shout: Schema.optionalKey(PersonFields.shout),
-	slug: Schema.optionalKey(PersonFields.slug),
 	ssn: Schema.optional(PersonFields.ssn),
 	tags: Schema.optionalKey(PersonFields.tags),
 	team: Schema.optional(PersonFields.team),
 	tier: Schema.optionalKey(PersonFields.tier),
-	touched_at: Schema.optionalKey(PersonFields.touched_at),
 	updated_at: Schema.optional(PersonFields.updated_at),
 	watchers: Schema.optionalKey(PersonFields.watchers),
 });
@@ -216,7 +217,7 @@ export const PersonContent = Schema.Struct({
 		city: SurrealSchema.String,
 		geo: Schema.optionalKey(SurrealSchema.GeometryPoint),
 		zip: Schema.optionalKey(SurrealSchema.String),
-	}), [Schema.Record(Schema.String, Schema.Unknown)]),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]),
 	age: Schema.optionalKey(PersonFields.age),
 	bio: PersonFields.bio,
 	buddy: Schema.optionalKey(PersonFields.buddy),
@@ -247,12 +248,10 @@ export const PersonContent = Schema.Struct({
 		theme: Schema.Literals(["dark", "light"]),
 	}),
 	shout: PersonFields.shout,
-	slug: Schema.optionalKey(PersonFields.slug),
 	ssn: Schema.optionalKey(PersonFields.ssn),
 	tags: PersonFields.tags,
 	team: Schema.optionalKey(PersonFields.team),
 	tier: PersonFields.tier,
-	touched_at: Schema.optionalKey(PersonFields.touched_at),
 	updated_at: Schema.optionalKey(PersonFields.updated_at),
 	watchers: PersonFields.watchers,
 });
@@ -267,6 +266,7 @@ export const PersonTable = SurrealSchema.table({
 	drop: false,
 	id: PersonId,
 	select: Person,
+	visible: PersonVisible,
 	create: PersonCreate,
 	merge: PersonMerge,
 	content: PersonContent,
@@ -301,17 +301,80 @@ export const PersonTable = SurrealSchema.table({
 		session_ttl: { select: "required", create: "optional", merge: "optional", content: "required" },
 		settings: { select: "required", create: "optional", merge: "optional", content: "required" },
 		shout: { select: "required", create: "optional", merge: "optional", content: "required" },
-		slug: { select: "required", create: "optional", merge: "optional", content: "optional" },
+		slug: { select: "required", create: "excluded", merge: "excluded", content: "excluded" },
 		ssn: { select: "optional", create: "optional", merge: "removable", content: "optional" },
 		tags: { select: "required", create: "optional", merge: "optional", content: "required" },
 		team: { select: "optional", create: "optional", merge: "removable", content: "optional" },
 		tier: { select: "required", create: "optional", merge: "optional", content: "required" },
-		touched_at: { select: "required", create: "optional", merge: "optional", content: "optional" },
+		touched_at: { select: "required", create: "excluded", merge: "excluded", content: "excluded" },
 		updated_at: { select: "required", create: "optional", merge: "resettable", content: "optional" },
 		watchers: { select: "required", create: "optional", merge: "optional", content: "required" },
 	},
 	relations: { in: ["follows", "knows", "member_of", "rates"], out: ["follows", "knows"] },
 	permissions: { select: true, create: "$auth.id = id", update: "$auth.id = id", delete: false },
+	fieldPermissions: {
+		address: { select: true, create: true, update: true, fields: {
+			city: { select: true, create: true, update: true },
+			geo: { select: true, create: true, update: true },
+			zip: { select: true, create: true, update: true },
+		} },
+		age: { select: true, create: true, update: true },
+		bio: { select: true, create: true, update: true },
+		buddy: { select: true, create: true, update: true },
+		created_at: { select: true, create: true, update: true },
+		display: { select: true, create: true, update: true },
+		display_typed: { select: true, create: true, update: true },
+		email: { select: true, create: true, update: true },
+		flagged: { select: true, create: true, update: true },
+		handle: { select: true, create: true, update: true },
+		manager: { select: true, create: true, update: true },
+		mentor: { select: true, create: true, update: true },
+		motto: { select: true, create: true, update: true },
+		name: { select: true, create: true, update: true },
+		nickname: { select: true, create: true, update: true },
+		notes: { select: true, create: true, update: true },
+		"odd.name": { select: true, create: true, update: true },
+		org: { select: true, create: true, update: true },
+		pattern: { select: true, create: true, update: true },
+		phones: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true, fields: {
+				kind: { select: true, create: true, update: true },
+				number: { select: true, create: true, update: true },
+			} },
+		} },
+		pins: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true },
+		} },
+		prefs: { select: true, create: true, update: true, fields: {
+			locale: { select: true, create: true, update: true },
+		} },
+		referenced_by: { select: true, create: true, update: true },
+		role: { select: true, create: true, update: true },
+		score: { select: true, create: true, update: true },
+		session_ttl: { select: true, create: true, update: true },
+		settings: { select: true, create: true, update: true, fields: {
+			notify: { select: true, create: true, update: true, fields: {
+				email: { select: true, create: true, update: true },
+			} },
+			theme: { select: true, create: true, update: true },
+		} },
+		shout: { select: true, create: true, update: true },
+		slug: { select: true, create: true, update: true },
+		ssn: { select: "$auth.admin = true", create: true, update: false },
+		tags: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true },
+		} },
+		team: { select: true, create: true, update: true },
+		tier: { select: true, create: true, update: true },
+		touched_at: { select: true, create: true, update: true },
+		updated_at: { select: true, create: true, update: true },
+		watchers: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true },
+		} },
+	},
+	indexes: {
+		uniq_email: { type: "unique", columns: [["email"]] },
+	},
 });
 
 /** JSON world: the field schemas of a selected `person` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */
@@ -320,7 +383,7 @@ export const PersonJsonFields = {
 		city: SurrealSchema.String,
 		geo: Schema.optionalKey(SurrealSchema.GeometryFromJson(SurrealSchema.GeometryPoint)),
 		zip: Schema.optionalKey(SurrealSchema.String),
-	}), [Schema.Record(Schema.String, Schema.Unknown)]),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealJsonValue)]),
 	age: SurrealSchema.Int.check(Schema.isGreaterThanOrEqualTo(0), Schema.isLessThanOrEqualTo(150)),
 	bio: Schema.NullOr(SurrealSchema.String),
 	buddy: SurrealSchema.RecordIdFromJsonAs(PersonId),
@@ -349,7 +412,7 @@ export const PersonJsonFields = {
 	}),
 	referenced_by: Schema.Unknown,
 	role: Schema.Literals(["admin", "member", "owner"]),
-	score: Schema.Number.check(Schema.isGreaterThan(0), Schema.isLessThan(100)),
+	score: Schema.Finite.check(Schema.isGreaterThan(0), Schema.isLessThan(100)),
 	session_ttl: SurrealSchema.DurationFromJson,
 	settings: Schema.Struct({
 		notify: Schema.Struct({

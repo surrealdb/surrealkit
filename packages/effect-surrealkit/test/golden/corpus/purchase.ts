@@ -29,6 +29,11 @@ export const PurchaseRow = SurrealSchema.NoneAsAbsent(Purchase);
 export type PurchaseRow = typeof PurchaseRow.Type;
 export type PurchaseRowEncoded = typeof PurchaseRow.Encoded;
 
+/** `Purchase` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Purchase`. */
+export const PurchaseVisible = Purchase;
+export type PurchaseVisible = typeof PurchaseVisible.Type;
+export type PurchaseVisibleEncoded = typeof PurchaseVisible.Encoded;
+
 /** Input for `CREATE purchase CONTENT` / `INSERT`. The record id is an operation argument. */
 export const PurchaseCreate = Schema.Struct({
 	buyer: PurchaseFields.buyer,
@@ -62,6 +67,7 @@ export const PurchaseTable = SurrealSchema.table({
 	drop: false,
 	id: PurchaseId,
 	select: Purchase,
+	visible: PurchaseVisible,
 	create: PurchaseCreate,
 	merge: PurchaseMerge,
 	content: PurchaseContent,
@@ -74,6 +80,12 @@ export const PurchaseTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		buyer: { select: true, create: true, update: true },
+		number: { select: true, create: true, update: true },
+		total: { select: true, create: true, update: true },
+	},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `purchase` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

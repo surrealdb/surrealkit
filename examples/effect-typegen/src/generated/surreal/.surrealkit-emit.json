@@ -2,6 +2,7 @@
   "emitter": "effect",
   "protocol": 1,
   "files": [
+    "_store.ts",
     "functions.ts",
     "ids.ts",
     "index.ts",

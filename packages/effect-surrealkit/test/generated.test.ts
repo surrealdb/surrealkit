@@ -1,9 +1,26 @@
 /** Runtime behaviour of the golden generated modules. */
+import Ajv2020 from 'ajv/dist/2020.js';
 import { DateTime as EffectDateTime, Exit, Schema } from 'effect';
 import { DateTime, RecordId } from 'surrealdb';
 import { describe, expect, it } from 'vitest';
 
 import * as SurrealSchema from '../src/index.js';
+import {
+	AnythingFromJson,
+	AnythingRow,
+	DocTable as CorpusDocTable,
+	MemberOfEdge as CorpusMemberOfEdge,
+	PersonMerge as CorpusPersonMerge,
+	PersonTable as CorpusPersonTable,
+	TeamSizeTable as CorpusTeamSizeTable,
+	store as corpusStore,
+	KindsFields,
+	KindsJsonFields,
+	SinkContent,
+	SinkCreate,
+	SinkMerge,
+	SinkTable,
+} from './golden/corpus/index.js';
 import {
 	fn_double,
 	fn_greet,
@@ -20,6 +37,7 @@ import {
 	TeamId,
 } from './golden/example/index.js';
 import * as Big from './golden/example-bigint/index.js';
+import { Member, MemberTable, MemberVisible } from './golden/members/index.js';
 
 const strict = { onExcessProperty: 'error' } as const;
 const decodes = (schema: Schema.Top, value: unknown) =>
@@ -38,7 +56,100 @@ const create = {
 	score: 50,
 };
 
+const encodes = (schema: Schema.Top, value: unknown) =>
+	Exit.isSuccess(
+		Schema.encodeUnknownExit(schema as Schema.Codec<unknown, unknown>)(
+			value,
+			strict,
+		),
+	);
+
+describe('a closed object with no fields is exactly {}', () => {
+	// `sink` is SCHEMAFULL with only its id: SurrealDB refuses any key in its
+	// content (`Found field 'stray', but no such field exists`).
+	const inputs = [
+		['SinkCreate', SinkCreate],
+		['SinkMerge', SinkMerge],
+		['SinkContent', SinkContent],
+		['EmptyObject', SurrealSchema.EmptyObject],
+	] as const;
+
+	it.each(inputs)('%s accepts {} in both directions', (_, schema) => {
+		expect(decodes(schema, {})).toBe(true);
+		expect(encodes(schema, {})).toBe(true);
+		expect(decodes(schema, Object.create(null))).toBe(true);
+		expect(Schema.encodeSync(schema)({})).toEqual({});
+	});
+
+	it.each(
+		inputs,
+	)('%s refuses a stray key, a string, a number and an array in both directions', (_, schema) => {
+		for (const value of [{ stray: 1 }, 'x', 1, [], [1], new Date(0)]) {
+			expect(decodes(schema, value), JSON.stringify(value)).toBe(false);
+			expect(encodes(schema, value), JSON.stringify(value)).toBe(false);
+			// Also without `onExcessProperty: "error"`.
+			expect(
+				Exit.isSuccess(
+					Schema.encodeUnknownExit(
+						schema as Schema.Codec<unknown, unknown>,
+					)(value),
+				),
+			).toBe(false);
+		}
+	});
+
+	it('Schema.Struct({}) is what it replaces: it passes every non-nullish value through', () => {
+		const bare = Schema.Struct({});
+		for (const value of [{ stray: 1 }, 'x', []]) {
+			expect(encodes(bare, value)).toBe(true);
+		}
+	});
+
+	it('is the descriptor’s operation schema, and refine keeps it', () => {
+		expect(SinkTable.create).toBe(SurrealSchema.EmptyObject);
+		expect(SinkTable.merge).toBe(SurrealSchema.EmptyObject);
+		expect(SinkTable.content).toBe(SurrealSchema.EmptyObject);
+		const refined = SurrealSchema.refine(SinkTable, {});
+		expect(refined.create).toBe(SurrealSchema.EmptyObject);
+		expect(decodes(refined.create, { stray: 1 })).toBe(false);
+		// Its fields are none, as before: a `Schema.Struct`.
+		expect(SinkTable.create.fields).toEqual({});
+	});
+
+	it('has the JSON Schema of an exactly empty object', () => {
+		const { schema } = Schema.toJsonSchemaDocument(
+			SurrealSchema.EmptyObject,
+		);
+		expect(schema).toMatchObject({
+			allOf: [{ type: 'object', additionalProperties: false }],
+		});
+		const validate = new Ajv2020({ strict: false }).compile(schema);
+		expect(validate({})).toBe(true);
+		for (const value of [{ stray: 1 }, 'x', [], 1, null]) {
+			expect(validate(value), JSON.stringify(value)).toBe(false);
+		}
+	});
+
+	it('keeps the type {}: a caller that passes {} compiles', () => {
+		const value: typeof SinkCreate.Type = {};
+		expect(Schema.decodeUnknownSync(SinkCreate)(value)).toEqual({});
+	});
+});
+
 describe('generated table modules', () => {
+	it('encodes NONE in a flexible MERGE object while keeping stored array items strict', () => {
+		const patch = {
+			address: { zip: undefined, extra: { deep: undefined } },
+		} satisfies typeof CorpusPersonMerge.Type;
+		expect(Schema.encodeSync(CorpusPersonMerge)(patch)).toEqual(patch);
+		expect(
+			decodes(CorpusPersonMerge, { address: { extra: [undefined] } }),
+		).toBe(false);
+		expect(decodes(SurrealSchema.SurrealValue, { deep: undefined })).toBe(
+			false,
+		);
+	});
+
 	it('decode a stored row the SDK returned, NONE as absent', () => {
 		const row = Schema.decodeUnknownSync(PersonRow)({
 			id: new RecordId('person', 'ann'),
@@ -53,6 +164,34 @@ describe('generated table modules', () => {
 		});
 		expect('nickname' in row).toBe(false);
 		expect(row.id.table.name).toBe('person');
+	});
+
+	it('decode open row fields according to the representation', () => {
+		const id = new RecordId('anything', 'ann');
+		const datetime = new DateTime('2024-01-01T00:00:00Z');
+		expect(decodes(AnythingRow, { id, extra: { datetime } })).toBe(true);
+		expect(decodes(AnythingRow, { id, extra: Symbol() })).toBe(false);
+		expect(
+			decodes(AnythingFromJson, {
+				id: 'anything:ann',
+				extra: { datetime: datetime.toString() },
+			}),
+		).toBe(true);
+		expect(
+			decodes(AnythingFromJson, {
+				id: 'anything:ann',
+				extra: { datetime },
+			}),
+		).toBe(false);
+	});
+
+	it('distinguish NONE in an any field from values in open collections', () => {
+		expect(decodes(KindsFields.k_any, undefined)).toBe(true);
+		expect(decodes(KindsFields.k_array, [undefined])).toBe(false);
+		expect(decodes(KindsFields.k_set, new Set([undefined]))).toBe(false);
+		expect(decodes(KindsJsonFields.k_any, undefined)).toBe(false);
+		expect(decodes(KindsJsonFields.k_array, [null])).toBe(true);
+		expect(decodes(KindsJsonFields.k_set, [null])).toBe(true);
 	});
 
 	it('reject a record id of another table where a table id is expected', () => {
@@ -88,6 +227,74 @@ describe('generated table modules', () => {
 			content: 'optional',
 		});
 		expect(PersonTable.relations).toEqual({ in: ['member_of'], out: [] });
+	});
+
+	it('expose each index and each field permission in the descriptor', () => {
+		expect(PersonTable.indexes).toEqual({
+			uniq_email: { type: 'unique', columns: [['email']] },
+		});
+		expect(CorpusDocTable.indexes.idx_owner_status).toEqual({
+			type: 'standard',
+			columns: [['owner'], ['status']],
+		});
+		expect(CorpusDocTable.indexes.ft_body).toEqual({
+			type: 'fulltext',
+			columns: [['body']],
+			fulltext: { analyzer: 'simple', highlights: true },
+		});
+		expect(CorpusDocTable.indexes.cnt_open).toEqual({
+			type: 'count',
+			columns: [],
+			where: "status = 'open'",
+		});
+		expect(PersonTable.fieldPermissions.ssn).toEqual({
+			select: '$auth.admin = true',
+			create: true,
+			update: false,
+		});
+		expect(Object.keys(PersonTable.fieldPermissions)).toEqual(
+			Object.keys(PersonTable.presence).filter((key) => key !== 'id'),
+		);
+		expect(CorpusPersonTable.fieldPermissions.address.fields?.city).toEqual(
+			{ select: true, create: true, update: true },
+		);
+	});
+
+	it('read a row without the fields a permission can hide through the visible row, refinements included', () => {
+		const seen = {
+			id: new RecordId('member', 'ann'),
+			handle: 'ann',
+			region: 'north',
+			number: 1,
+			profile: { bio: 'b' },
+		};
+		expect(decodes(Member, seen)).toBe(false);
+		expect(decodes(MemberVisible, seen)).toBe(true);
+		expect(MemberTable.visible).toBe(MemberVisible);
+		expect(PersonTable.visible).toBe(PersonTable.select);
+		const Refined = SurrealSchema.refine(MemberTable, {
+			email: (s) => s.check(Schema.isMinLength(3)),
+		});
+		expect(decodes(Refined.visible, seen)).toBe(true);
+		expect(decodes(Refined.visible, { ...seen, email: 'a' })).toBe(false);
+		expect(decodes(Refined.visible, { ...seen, email: 'a@b' })).toBe(true);
+	});
+
+	it('register every table, view, relation endpoint and function of the store by name', () => {
+		expect(corpusStore.name).toBe('corpus');
+		expect(corpusStore.tables.person).toBe(CorpusPersonTable);
+		expect(corpusStore.views.team_size).toBe(CorpusTeamSizeTable);
+		expect(corpusStore.edges.member_of).toBe(CorpusMemberOfEdge);
+		expect(corpusStore.functions['fn::greet'].name).toBe('fn::greet');
+		for (const [name, table] of Object.entries(corpusStore.tables)) {
+			expect(table.name).toBe(name);
+		}
+		for (const [name, edge] of Object.entries(corpusStore.edges)) {
+			expect(edge.table).toBe(name);
+			expect(corpusStore.tables[name as 'member_of']?.type).toBe(
+				'relation',
+			);
+		}
 	});
 });
 

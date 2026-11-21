@@ -22,6 +22,12 @@
 		"paths": {
 			"effect-surrealkit": [
 				"./src/index.ts"
+			],
+			"effect-surrealkit/statement": [
+				"./src/statement/index.ts"
+			],
+			"effect-surrealkit/analyze": [
+				"./src/analyze/index.ts"
 			]
 		}
 	},

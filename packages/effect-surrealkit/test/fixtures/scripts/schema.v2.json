@@ -1,0 +1,652 @@
+{
+  "version": 2,
+  "semanticDigest": "sha256:e3e58668aed843ec7700d1fc2fb085b6e61cb3d8460c72be2c53d45ddf16e417",
+  "provenance": {
+    "generator": {
+      "name": "surrealkit",
+      "version": "1.0.0-beta.6"
+    },
+    "engine": {
+      "version": "3.3.0",
+      "build": "surrealdb-3.3.0",
+      "mode": "embedded"
+    },
+    "adapter": "structure-3.3",
+    "source": {
+      "kind": "compile",
+      "modules": [
+        "default"
+      ],
+      "files": [
+        {
+          "path": "schema/scripts.surql",
+          "sha256": "ac66dc58da6b77df0cf840773f3631fb56d5e124dcffbb6c0b4af065ce23e390"
+        }
+      ]
+    },
+    "capabilities": {
+      "experimental": [],
+      "network": false
+    }
+  },
+  "tables": [
+    {
+      "name": "account",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "name"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD name ON account TYPE string PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE account TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "invite",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "expires_at"
+          ],
+          "kind": {
+            "kind": "datetime"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD expires_at ON invite TYPE datetime PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "role"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "admin"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "member"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD role ON invite TYPE 'member' | 'admin' PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "status"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "accepted"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "open"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "revoked"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD status ON invite TYPE 'open' | 'accepted' | 'revoked' PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "team"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "team"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD team ON invite TYPE record<team> PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE invite TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "membership",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "account"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "account"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD account ON membership TYPE record<account> PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "key"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD key ON membership TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "role"
+          ],
+          "kind": {
+            "kind": "union",
+            "variants": [
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "admin"
+              },
+              {
+                "kind": "literal",
+                "type": "string",
+                "value": "member"
+              }
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD role ON membership TYPE 'member' | 'admin' PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "team"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "team"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD team ON membership TYPE record<team> PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "membership_key",
+          "columns": [
+            [
+              "key"
+            ]
+          ],
+          "type": "unique",
+          "clause": "UNIQUE"
+        }
+      ],
+      "events": [],
+      "define": "DEFINE TABLE membership TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "payment",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "amount"
+          ],
+          "kind": {
+            "kind": "int"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD amount ON payment TYPE int PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "key"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD key ON payment TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "wallet"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "wallet"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD wallet ON payment TYPE record<wallet> PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "payment_key",
+          "columns": [
+            [
+              "key"
+            ]
+          ],
+          "type": "unique",
+          "clause": "UNIQUE"
+        }
+      ],
+      "events": [],
+      "define": "DEFINE TABLE payment TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "team",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "name"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD name ON team TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "seats"
+          ],
+          "kind": {
+            "kind": "int"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD seats ON team TYPE int PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE team TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    },
+    {
+      "name": "wallet",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": false,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "balance"
+          ],
+          "kind": {
+            "kind": "int"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD balance ON wallet TYPE int PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "frozen"
+          ],
+          "kind": {
+            "kind": "bool"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD frozen ON wallet TYPE bool PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "owner"
+          ],
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "account"
+            ]
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD owner ON wallet TYPE record<account> PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE wallet TYPE NORMAL SCHEMAFULL PERMISSIONS NONE"
+    }
+  ],
+  "functions": [
+    {
+      "name": "fn::debit",
+      "args": [
+        {
+          "name": "balance",
+          "kind": {
+            "kind": "int"
+          },
+          "optional": false,
+          "omittable": false
+        },
+        {
+          "name": "amount",
+          "kind": {
+            "kind": "int"
+          },
+          "optional": false,
+          "omittable": false
+        }
+      ],
+      "returns": {
+        "kind": "int"
+      },
+      "block": "{ RETURN $balance - $amount }",
+      "permissions": true
+    },
+    {
+      "name": "fn::membership_key",
+      "args": [
+        {
+          "name": "team",
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "team"
+            ]
+          },
+          "optional": false,
+          "omittable": false
+        },
+        {
+          "name": "account",
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "account"
+            ]
+          },
+          "optional": false,
+          "omittable": false
+        }
+      ],
+      "returns": {
+        "kind": "string"
+      },
+      "block": "{ RETURN string::concat(<string> $team, '/', <string> $account) }",
+      "permissions": true
+    },
+    {
+      "name": "fn::payment_key",
+      "args": [
+        {
+          "name": "wallet",
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "wallet"
+            ]
+          },
+          "optional": false,
+          "omittable": false
+        },
+        {
+          "name": "request",
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "omittable": false
+        }
+      ],
+      "returns": {
+        "kind": "string"
+      },
+      "block": "{ RETURN string::concat(<string> $wallet, '/', $request) }",
+      "permissions": true
+    },
+    {
+      "name": "fn::seats_taken",
+      "args": [
+        {
+          "name": "team",
+          "kind": {
+            "kind": "record",
+            "tables": [
+              "team"
+            ]
+          },
+          "optional": false,
+          "omittable": false
+        }
+      ],
+      "returns": {
+        "kind": "int"
+      },
+      "block": "{ RETURN count((SELECT id FROM membership WHERE team = $team)) }",
+      "permissions": true
+    }
+  ],
+  "params": [],
+  "accesses": [],
+  "analyzers": [],
+  "sequences": [],
+  "buckets": [],
+  "apis": [],
+  "modules": [],
+  "configs": [],
+  "users": [],
+  "diagnostics": []
+}

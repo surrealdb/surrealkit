@@ -9,7 +9,7 @@ export { RatesId } from "./ids.js";
 
 /** Field schemas of `rates` that are the same in every operation using them; `refine` and `replaceField` accept these keys. */
 export const RatesFields = {
-	weight: Schema.Number,
+	weight: SurrealSchema.Float,
 } as const;
 
 /** A stored `rates` row as a privileged reader selects it (all fields). */
@@ -26,6 +26,11 @@ export type RatesEncoded = typeof Rates.Encoded;
 export const RatesRow = SurrealSchema.NoneAsAbsent(Rates);
 export type RatesRow = typeof RatesRow.Type;
 export type RatesRowEncoded = typeof RatesRow.Encoded;
+
+/** `Rates` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Rates`. */
+export const RatesVisible = Rates;
+export type RatesVisible = typeof RatesVisible.Type;
+export type RatesVisibleEncoded = typeof RatesVisible.Encoded;
 
 /** Input for `CREATE rates CONTENT` / `INSERT`. The record id is an operation argument. */
 export const RatesCreate = Schema.Struct({
@@ -65,6 +70,7 @@ export const RatesTable = SurrealSchema.table({
 	drop: false,
 	id: RatesId,
 	select: Rates,
+	visible: RatesVisible,
 	create: RatesCreate,
 	merge: RatesMerge,
 	content: RatesContent,
@@ -77,12 +83,16 @@ export const RatesTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		weight: { select: true, create: true, update: true },
+	},
+	indexes: {},
 	edge: RatesEdge,
 });
 
 /** JSON world: the field schemas of a selected `rates` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */
 export const RatesJsonFields = {
-	weight: Schema.Number,
+	weight: Schema.Finite,
 } as const;
 
 /** A selected `rates` row from SurrealDB JSON. Not the default: rows the SDK returned decode with `RatesRow`. */

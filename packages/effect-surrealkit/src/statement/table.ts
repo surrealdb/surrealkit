@@ -1,0 +1,344 @@
+/**
+ * What the builders need from a generated table descriptor: its name and
+ * row schemas, with codecs that need no services. Every table the emitter
+ * generates fits.
+ */
+import type { Schema } from 'effect';
+import { escapeIdent, type RecordId } from 'surrealdb';
+
+import {
+	type Context,
+	codecOf,
+	conjunct,
+	type Expr,
+	Level,
+	makeExpr,
+	mergeParams,
+	type ParamsOfAll,
+	paramsOf,
+	type Reader,
+	type RowScope,
+	sqlOf,
+} from './expr.js';
+import { assertResolved, withoutRefs } from './refs.js';
+import {
+	type FieldsOf,
+	fieldsOf,
+	type ProjectedCodec,
+	type Projection,
+	projectedCodec,
+	type RowCodec,
+	type RowCodecIn,
+	type RowOf,
+	rowCodec,
+	rowIn,
+} from './row.js';
+import type { Codec, Params } from './statement.js';
+
+/** A generated table descriptor, as far as the builders read it. */
+export interface PureTable {
+	readonly name: string;
+	readonly schemafull?: boolean;
+	readonly id: Codec;
+	readonly select: RowCodecIn;
+	/** The row as a session reads it when field permissions may hide fields. */
+	readonly visible?: RowCodecIn;
+	readonly create?: RowCodecIn;
+	readonly merge?: RowCodecIn;
+	readonly content?: RowCodecIn;
+	readonly edge?: {
+		readonly table: string;
+		readonly in: ReadonlyArray<Codec>;
+		readonly out: ReadonlyArray<Codec>;
+	};
+	/** Every `DEFINE INDEX` of the table, by name. */
+	readonly indexes?: {
+		readonly [name: string]: {
+			readonly type: string;
+			readonly columns: ReadonlyArray<ReadonlyArray<string>>;
+		};
+	};
+}
+
+/** The row object a table's callbacks receive. */
+export type RowExprs<T extends PureTable> = RowOf<FieldsOf<T['select']>>;
+
+/** The codec a table's stored rows decode with. */
+export type StoredRow<T extends PureTable> = RowCodec<T['select']>;
+
+/** A boolean expression. */
+export type Condition<P extends Params = Params> = Expr<
+	Schema.Codec<unknown, boolean, never, never>,
+	P
+>;
+
+/** A record id expression of table `T`. */
+export type IdOf<T extends PureTable, P extends Params = Params> = Expr<
+	Schema.Codec<unknown, T['id']['Encoded'], never, never>,
+	P
+>;
+
+type ExtraReadFields<T extends PureTable, S extends RowCodecIn> = Exclude<
+	keyof FieldsOf<S>,
+	keyof FieldsOf<T['select']>
+>;
+type Encoded<F> = F extends Codec ? F['Encoded'] : never;
+
+// A view may decode a link to a domain brand. Its encoded value still addresses
+// the stored table and uses an accepted key, allowing NONE for a hidden field.
+type IncompatibleReadLinks<Stored, View> = {
+	[K in keyof Stored & keyof View]: [
+		NonNullable<Encoded<Stored[K]>>,
+	] extends [never]
+		? never
+		: [NonNullable<Encoded<Stored[K]>>] extends [RecordId]
+			? [Exclude<Encoded<View[K]>, undefined>] extends [
+					Exclude<Encoded<Stored[K]>, undefined>,
+				]
+				? never
+				: K
+			: never;
+}[keyof Stored & keyof View];
+
+type KnownReadFields<T extends PureTable, S extends RowCodecIn> = T extends {
+	readonly schemafull: true;
+}
+	? [ExtraReadFields<T, S>] extends [never]
+		? [IncompatibleReadLinks<FieldsOf<T['select']>, FieldsOf<S>>] extends [
+				never,
+			]
+			? unknown
+			: {
+					readonly incompatibleRecordLinks: IncompatibleReadLinks<
+						FieldsOf<T['select']>,
+						FieldsOf<S>
+					>;
+				}
+		: { readonly unknownReadFields: ExtraReadFields<T, S> }
+	: unknown;
+
+/**
+ * `T`, when it is a descriptor with a generated `visible` row; otherwise a
+ * message saying what `readAs(table)` needs.
+ */
+export type WithVisible<T> = T extends { readonly visible: RowCodecIn }
+	? T
+	: 'this descriptor has no generated `visible` row: regenerate it, or pass the row the session reads as the second argument';
+
+const readerKey: unique symbol = Symbol.for('effect-surrealkit/Reader');
+
+/**
+ * The reader a table descriptor or a store view reads as: `restricted` for
+ * one `readAs` returned, `privileged` otherwise. The mark is an enumerable
+ * symbol property, so a descriptor rebuilt by spreading keeps it.
+ *
+ * @internal
+ */
+export const readerOf = (value: object): Reader =>
+	(value as { readonly [readerKey]?: Reader })[readerKey] ?? 'privileged';
+
+/** What `readAs` needs of a store registry: its tables, by name. */
+export interface ReadableStore {
+	readonly tables: { readonly [name: string]: PureTable };
+	readonly edges: object;
+}
+
+/** A table as a restricted session reads it: its `visible` row, when it has one. */
+export type VisibleTable<T> = T extends {
+	readonly visible: infer V extends RowCodecIn;
+}
+	? Omit<T, 'select'> & { readonly select: V }
+	: T;
+
+/** A store as a restricted session reads it: every table through {@link VisibleTable}. */
+export type VisibleStore<S extends ReadableStore> = Omit<S, 'tables'> & {
+	readonly tables: {
+		readonly [K in keyof S['tables']]: VisibleTable<S['tables'][K]>;
+	};
+};
+
+/** What `readAs` returns for a table with a `visible` row, or a whole store. */
+export type ReadAs<T> = T extends ReadableStore
+	? VisibleStore<T>
+	: T extends PureTable
+		? Omit<T, 'select'> & { readonly select: NonNullable<T['visible']> }
+		: never;
+
+/** `value`, copied and marked as read by a restricted session. */
+const restricted = <T extends object>(value: T): T =>
+	({ ...value, [readerKey]: 'restricted' }) as T;
+
+const isStore = (value: object): value is ReadableStore =>
+	'tables' in value &&
+	'edges' in value &&
+	typeof value.tables === 'object' &&
+	value.tables !== null &&
+	!('select' in value);
+
+/**
+ * `table` as a session with narrower permissions reads it, or a whole
+ * `store`.
+ *
+ * A generated `select` schema describes a privileged reader. SurrealDB does
+ * not report what permissions hide: a field the session may not read comes
+ * back as NONE, and a row it may not read is simply absent.
+ *
+ * With one argument the statements read the generated `visible` row, in
+ * which every field whose `select` permission is not FULL may be absent.
+ * With two, they read the row given: declare the row such a session really
+ * gets (usually the same fields, optional where a permission can hide them),
+ * so the rows decode instead of failing on the missing fields.
+ *
+ * Given a store registry, it returns the store as such a session reads it:
+ * every table that has a `visible` row reads through it, so a record reached
+ * through a link, a step or FETCH of that store (`follow`, `rows`,
+ * `destructure`, the steps, recursive paths and `fetch` take the store)
+ * decodes with its `visible` row. A statement that reads its own table as
+ * one reader and records through a store view of the other is refused when
+ * it is built.
+ *
+ * @example
+ * const visible = select(readAs(MemberTable)).build();
+ * // ReadonlyArray<{ …; email?: string; salary?: number }>
+ * const session = readAs(store);
+ * select(readAs(DocTable)).project((row) => ({ owner: rows(session, row.owner) }));
+ */
+export function readAs<T extends PureTable | ReadableStore>(
+	table: T extends ReadableStore ? T : WithVisible<T>,
+): ReadAs<T>;
+export function readAs<T extends PureTable, S extends RowCodecIn>(
+	table: T,
+	select: S & KnownReadFields<NoInfer<T>, NoInfer<S>>,
+): Omit<T, 'select'> & { readonly select: S };
+export function readAs(
+	value: PureTable | ReadableStore,
+	declared?: RowCodecIn,
+): unknown {
+	if (isStore(value)) {
+		const tables: Record<string, PureTable> = {};
+		for (const [name, table] of Object.entries(value.tables)) {
+			tables[name] = restricted(
+				table.visible === undefined
+					? table
+					: { ...table, select: table.visible },
+			);
+		}
+		return restricted({ ...value, tables });
+	}
+	const table = value as PureTable;
+	if (declared === undefined) {
+		if (table.visible === undefined) {
+			throw new TypeError(
+				`readAs: the descriptor of \`${table.name}\` has no generated \`visible\` row; regenerate it, or pass the row the session reads`,
+			);
+		}
+		return restricted({ ...table, select: table.visible });
+	}
+	const select = declared;
+	if (table.schemafull) {
+		const stored = fieldsOf(table.select);
+		const view = fieldsOf(select);
+		if (!stored || !view)
+			throw new TypeError(
+				'readAs requires row schemas with declared fields',
+			);
+		for (const key of Object.keys(view)) {
+			if (!Object.hasOwn(stored, key))
+				throw new TypeError(
+					`readAs: ${table.name} has no declared field ${key}`,
+				);
+		}
+	}
+	return restricted({ ...table, select });
+}
+
+/**
+ * A table name as SurrealQL reads it in subject position (`FROM`,
+ * `FROM ONLY`, `CREATE`, `UPDATE`, `DELETE`, `RELATE`), whatever the word:
+ * always delimited, because a bare `from`, `ONLY` or `select` there is a
+ * keyword, `none` is NONE and `a.b` a field path. `⟨…⟩` cannot escape a `⟩`,
+ * so a name with `⟩` or `\` takes backticks, escaping `\` and `` ` ``.
+ *
+ * @internal
+ */
+export const tableName = (table: PureTable): string =>
+	/[⟩\\]/u.test(table.name)
+		? `\`${table.name.replace(/[\\`]/gu, (char) => `\\${char}`)}\``
+		: `⟨${table.name}⟩`;
+
+/** @internal */
+export const storedRow = <T extends PureTable>(table: T): StoredRow<T> =>
+	rowCodec<T['select']>(table.select);
+
+/** @internal */
+export const rowExprs = <T extends PureTable>(
+	table: T,
+	scope?: RowScope,
+): RowExprs<T> => rowIn<T['select']>(table.select, scope);
+
+/** @internal */
+export interface Projected {
+	readonly sql: string;
+	readonly codec: Codec;
+	readonly params: Params;
+}
+
+/**
+ * The field list and codec of a projection: `expr AS alias, …`.
+ *
+ * @internal
+ */
+export const project = <F extends Projection>(
+	fields: F,
+): {
+	readonly sql: string;
+	readonly codec: ProjectedCodec<F>;
+	readonly params: ParamsOfAll<F[keyof F]>;
+	/** Each alias and the text of its expression. */
+	readonly aliases: ReadonlyMap<string, string>;
+} => {
+	const entries = Object.entries(fields);
+	if (entries.length === 0) {
+		throw new RangeError('a projection needs at least one field');
+	}
+	const codecs: Record<string, Codec> = {};
+	for (const [alias, value] of entries) {
+		codecs[alias] = codecOf(value);
+	}
+	return {
+		sql: entries
+			.map(([alias, value]) => `${sqlOf(value)} AS ${escapeIdent(alias)}`)
+			.join(', '),
+		codec: projectedCodec<F>(
+			codecs as Parameters<typeof projectedCodec<F>>[0],
+		),
+		params: mergeParams(
+			...entries.map(([, value]) => paramsOf(value)),
+		) as ParamsOfAll<F[keyof F]>,
+		aliases: new Map(
+			entries.map(([alias, value]) => [alias, sqlOf(value)]),
+		),
+	};
+};
+
+/** @internal */
+export const andAll = (conditions: ReadonlyArray<Expr>): string =>
+	conditions.map((condition) => conjunct(condition, Level.and)).join(' AND ');
+
+/** @internal */
+export const subquery = <S extends Codec, P extends Params>(
+	codec: S,
+	sql: string,
+	params: P,
+	context?: Context,
+): Expr<S, P> => {
+	// A subquery's search references are its own.
+	assertResolved(params, `the subquery \`${sql}\``);
+	return makeExpr(
+		codec,
+		`(${sql})`,
+		withoutRefs(params),
+		Level.atom,
+		context,
+	);
+};

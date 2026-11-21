@@ -288,6 +288,104 @@ describe('SurrealNumber', () => {
 	});
 });
 
+describe('Float', () => {
+	it.each([
+		NaN,
+		Infinity,
+		-Infinity,
+		0,
+		-0,
+		Number.MIN_VALUE,
+	])('preserves %s on both sides of the native schema', (value) => {
+		expect(decode(S.Float, value)).toBe(value);
+		expect(encode(S.Float, value)).toBe(value);
+	});
+
+	it('uses IEEE-754 identity for equivalence', () => {
+		const equivalent = Schema.toEquivalence(S.Float);
+		expect(equivalent(NaN, NaN)).toBe(true);
+		expect(equivalent(-0, 0)).toBe(false);
+	});
+
+	it('rejects other numeric representations', () => {
+		for (const value of [1n, new Decimal('1'), '1', null]) {
+			expect(() => decode(S.Float, value)).toThrow(/IEEE-754/);
+			expect(() => encode(S.Float, value)).toThrow(/IEEE-754/);
+		}
+	});
+});
+
+describe('open values', () => {
+	class CustomObject {
+		value = 1;
+	}
+
+	it('recursively accepts native values in objects, sets and arrays', () => {
+		const value = {
+			data: [
+				null,
+				true,
+				NaN,
+				-Infinity,
+				-0,
+				2n ** 60n,
+				new Uint8Array([1, 2]),
+				new Date('2024-01-02T03:04:05.123Z'),
+				new DateTime('2024-01-02T03:04:05.123456789Z'),
+				new Decimal('1.5'),
+				new Duration('1s'),
+				new Uuid('0189a8f6-0000-7000-8000-000000000000'),
+				new GeometryPoint([1, 2]),
+				new Range(new BoundIncluded(1), undefined),
+				new Table('person'),
+				new FileRef('avatars', '/a.png'),
+				new Set([new RecordId('person', 'ann'), 'ann']),
+			],
+		} satisfies S.SurrealValue;
+		expect(decode(S.SurrealValue, value)).toEqual(value);
+		expect(encode(S.SurrealValue, value)).toEqual(value);
+	});
+
+	it('accepts nested JSON and null-prototype records', () => {
+		const value = {
+			data: [null, false, [1.5, 'text'], { id: 'person:ann' }],
+		} satisfies S.SurrealJsonValue;
+		const withNullPrototype = Object.assign(Object.create(null), value);
+		expect(decode(S.SurrealJsonValue, withNullPrototype)).toEqual(value);
+		expect(encode(S.SurrealJsonValue, value)).toEqual(value);
+		expect(decode(S.SurrealValue, withNullPrototype)).toEqual(value);
+	});
+
+	it('rejects unsupported values nested inside objects and arrays', () => {
+		const nonSurrealValues = [
+			undefined,
+			() => 1,
+			Symbol('key'),
+			new CustomObject(),
+		];
+		for (const value of nonSurrealValues) {
+			const nested = { values: [value] };
+			expect(() => decode(S.SurrealValue, nested)).toThrow();
+			expect(() => encode(S.SurrealValue, nested)).toThrow();
+		}
+
+		for (const value of [
+			...nonSurrealValues,
+			NaN,
+			Infinity,
+			1n,
+			new Date(0),
+			new RecordId('person', 'ann'),
+			new Set([1]),
+			new Uint8Array([1]),
+		]) {
+			const nested = { values: [value] };
+			expect(() => decode(S.SurrealJsonValue, nested)).toThrow();
+			expect(() => encode(S.SurrealJsonValue, nested)).toThrow();
+		}
+	});
+});
+
 describe('Uuid and Bytes', () => {
 	it('Uuid accepts SDK Uuids only', () => {
 		const uuid = new Uuid('0189a8f6-0000-7000-8000-000000000000');
@@ -717,5 +815,14 @@ describe('JSON codec world', () => {
 		).toEqual(
 			decode(S.DateTimeEffect, new DateTime('2024-01-02T03:04:05.123Z')),
 		);
+	});
+
+	it.each([
+		NaN,
+		Infinity,
+		-Infinity,
+	])('rejects %s on both sides of the JSON number codec', (value) => {
+		expect(() => decode(S.SurrealNumberFromJson, value)).toThrow();
+		expect(() => encode(S.SurrealNumberFromJson, value)).toThrow();
 	});
 });

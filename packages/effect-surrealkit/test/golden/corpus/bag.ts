@@ -16,7 +16,7 @@ export const BagFields = {
 export const Bag = Schema.StructWithRest(Schema.Struct({
 	id: BagId,
 	label: Schema.optionalKey(BagFields.label),
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type Bag = typeof Bag.Type;
 export type BagEncoded = typeof Bag.Encoded;
 
@@ -25,24 +25,29 @@ export const BagRow = SurrealSchema.NoneAsAbsent(Bag);
 export type BagRow = typeof BagRow.Type;
 export type BagRowEncoded = typeof BagRow.Encoded;
 
+/** `Bag` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Bag`. */
+export const BagVisible = Bag;
+export type BagVisible = typeof BagVisible.Type;
+export type BagVisibleEncoded = typeof BagVisible.Encoded;
+
 /** Input for `CREATE bag CONTENT` / `INSERT`. The record id is an operation argument. */
 export const BagCreate = Schema.StructWithRest(Schema.Struct({
 	label: Schema.optionalKey(BagFields.label),
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type BagCreate = typeof BagCreate.Type;
 export type BagCreateEncoded = typeof BagCreate.Encoded;
 
 /** Input for `UPDATE bag MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
 export const BagMerge = Schema.StructWithRest(Schema.Struct({
 	label: Schema.optional(BagFields.label),
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealMergeValue)]);
 export type BagMerge = typeof BagMerge.Type;
 export type BagMergeEncoded = typeof BagMerge.Encoded;
 
 /** Input for `UPDATE bag CONTENT`: a full replacement of the writable fields. */
 export const BagContent = Schema.StructWithRest(Schema.Struct({
 	label: Schema.optionalKey(BagFields.label),
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type BagContent = typeof BagContent.Type;
 export type BagContentEncoded = typeof BagContent.Encoded;
 
@@ -54,6 +59,7 @@ export const BagTable = SurrealSchema.table({
 	drop: false,
 	id: BagId,
 	select: Bag,
+	visible: BagVisible,
 	create: BagCreate,
 	merge: BagMerge,
 	content: BagContent,
@@ -64,6 +70,10 @@ export const BagTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		label: { select: true, create: true, update: true },
+	},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `bag` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */
@@ -75,5 +85,5 @@ export const BagJsonFields = {
 export const BagFromJson = Schema.StructWithRest(Schema.Struct({
 	id: SurrealSchema.RecordIdFromJsonAs(BagId),
 	label: Schema.optionalKey(BagJsonFields.label),
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealJsonValue)]);
 export type BagJsonEncoded = typeof BagFromJson.Encoded;

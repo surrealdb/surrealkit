@@ -15,7 +15,7 @@ export const Follows = Schema.StructWithRest(Schema.Struct({
 	id: FollowsId,
 	in: PersonId,
 	out: PersonId,
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type Follows = typeof Follows.Type;
 export type FollowsEncoded = typeof Follows.Encoded;
 
@@ -24,18 +24,23 @@ export const FollowsRow = SurrealSchema.NoneAsAbsent(Follows);
 export type FollowsRow = typeof FollowsRow.Type;
 export type FollowsRowEncoded = typeof FollowsRow.Encoded;
 
+/** `Follows` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Follows`. */
+export const FollowsVisible = Follows;
+export type FollowsVisible = typeof FollowsVisible.Type;
+export type FollowsVisibleEncoded = typeof FollowsVisible.Encoded;
+
 /** Input for `CREATE follows CONTENT` / `INSERT`. The record id is an operation argument. */
-export const FollowsCreate = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, Schema.Unknown)]);
+export const FollowsCreate = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type FollowsCreate = typeof FollowsCreate.Type;
 export type FollowsCreateEncoded = typeof FollowsCreate.Encoded;
 
 /** Input for `UPDATE follows MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
-export const FollowsMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, Schema.Unknown)]);
+export const FollowsMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealMergeValue)]);
 export type FollowsMerge = typeof FollowsMerge.Type;
 export type FollowsMergeEncoded = typeof FollowsMerge.Encoded;
 
 /** Input for `UPDATE follows CONTENT`: a full replacement of the writable fields. */
-export const FollowsContent = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, Schema.Unknown)]);
+export const FollowsContent = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type FollowsContent = typeof FollowsContent.Type;
 export type FollowsContentEncoded = typeof FollowsContent.Encoded;
 
@@ -56,6 +61,7 @@ export const FollowsTable = SurrealSchema.table({
 	drop: false,
 	id: FollowsId,
 	select: Follows,
+	visible: FollowsVisible,
 	create: FollowsCreate,
 	merge: FollowsMerge,
 	content: FollowsContent,
@@ -67,6 +73,8 @@ export const FollowsTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {},
+	indexes: {},
 	edge: FollowsEdge,
 });
 
@@ -79,5 +87,5 @@ export const FollowsFromJson = Schema.StructWithRest(Schema.Struct({
 	id: SurrealSchema.RecordIdFromJsonAs(FollowsId),
 	in: SurrealSchema.RecordIdFromJsonAs(PersonId),
 	out: SurrealSchema.RecordIdFromJsonAs(PersonId),
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealJsonValue)]);
 export type FollowsJsonEncoded = typeof FollowsFromJson.Encoded;

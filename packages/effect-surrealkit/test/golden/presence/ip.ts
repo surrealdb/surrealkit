@@ -33,6 +33,11 @@ export const IpRow = SurrealSchema.NoneAsAbsent(Ip);
 export type IpRow = typeof IpRow.Type;
 export type IpRowEncoded = typeof IpRow.Encoded;
 
+/** `Ip` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Ip`. */
+export const IpVisible = Ip;
+export type IpVisible = typeof IpVisible.Type;
+export type IpVisibleEncoded = typeof IpVisible.Encoded;
+
 /** Input for `CREATE ip CONTENT` / `INSERT`. The record id is an operation argument. */
 export const IpCreate = Schema.Struct({
 	need: Schema.Struct({
@@ -77,6 +82,7 @@ export const IpTable = SurrealSchema.table({
 	drop: false,
 	id: IpId,
 	select: Ip,
+	visible: IpVisible,
 	create: IpCreate,
 	merge: IpMerge,
 	content: IpContent,
@@ -88,6 +94,15 @@ export const IpTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		need: { select: true, create: true, update: true, fields: {
+			x: { select: true, create: true, update: true },
+		} },
+		pref: { select: true, create: true, update: true, fields: {
+			locale: { select: true, create: true, update: true },
+		} },
+	},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `ip` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

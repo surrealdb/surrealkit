@@ -1,0 +1,1 @@
+SELECT VALUE name FROM ONLY $owner;

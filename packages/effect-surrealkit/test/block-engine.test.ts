@@ -1,0 +1,703 @@
+/**
+ * The two scripts of `test/blocks.ts` against a real engine: the schema of
+ * `test/fixtures/scripts/schema` is applied to a disposable database, each
+ * branch's result is decoded strictly by the block's derived codec, and each
+ * guard's message arrives as a typed `StatementThrown`. Runs on whichever
+ * engine `engine.ts` provides (SurrealDB 4.0.1 embedded, or 3.3.4 with
+ * `SURREAL_BIN`).
+ */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { Effect, Schedule, Schema } from 'effect';
+import { DateTime, RecordId } from 'surrealdb';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import {
+	bind,
+	type Client,
+	make as makeClient,
+	StatementConflict,
+	StatementThrown,
+} from '../src/client/index.js';
+import * as SurrealSchema from '../src/index.js';
+import { eq, param, part, select, sequence } from '../src/statement/index.js';
+import {
+	acceptInvite,
+	pay,
+	payAndRead,
+	recordBalance,
+	recordBalanceByBuiltId,
+	recordBalanceByBuiltIdUnlocked,
+	recordBalanceByLiteral,
+	recordBalanceByLiteralUnlocked,
+	recordBalanceUnlocked,
+	summarise,
+	topUp,
+	withdraw,
+} from './blocks.js';
+import {
+	type Engine,
+	engineConfigured,
+	engineSkipReason,
+	startEngine,
+	within,
+} from './engine.js';
+import {
+	AccountId,
+	InviteId,
+	InviteTable,
+	MembershipTable,
+	PaymentId,
+	PaymentTable,
+	WalletId,
+	WalletTable,
+} from './golden/scripts/index.js';
+
+if (!engineConfigured) {
+	console.warn(
+		`[effect-surrealkit] block engine suite skipped: ${engineSkipReason}`,
+	);
+}
+
+const schema = readFileSync(
+	join(import.meta.dirname, 'fixtures', 'scripts', 'schema', 'scripts.surql'),
+	'utf8',
+);
+
+const ok = <A, E>(effect: Effect.Effect<A, E>): Promise<A> =>
+	within(Effect.runPromise(effect), 20_000);
+const failure = <A, E>(effect: Effect.Effect<A, E>): Promise<E> =>
+	within(Effect.runPromise(Effect.flip(effect)), 20_000);
+
+const account = (key: string) =>
+	Schema.decodeUnknownSync(AccountId)(new RecordId('account', key));
+const invite = (key: string) =>
+	Schema.decodeUnknownSync(InviteId)(new RecordId('invite', key));
+const wallet = (key: string) =>
+	Schema.decodeUnknownSync(WalletId)(new RecordId('wallet', key));
+
+const readInvite = select(InviteTable, param('id', InviteId)).only().build();
+const readWallet = select(WalletTable, param('id', WalletId)).only().build();
+const membershipsOf = select(MembershipTable)
+	.where((row) => eq(row.account, param('member', AccountId)))
+	.build();
+const paymentByKey = select(PaymentTable)
+	.where((row) => eq(row.key, param('key', SurrealSchema.String)))
+	.build();
+const readPayment = select(PaymentTable, param('payment', PaymentId))
+	.only()
+	.build();
+
+describe.skipIf(!engineConfigured)('blocks on a disposable engine', () => {
+	let engine: Engine;
+	let client: Client;
+
+	beforeAll(async () => {
+		engine = await startEngine();
+		client = makeClient(engine.db);
+		await engine.db.query(schema);
+		await engine.db.query(`
+			CREATE account:ann SET name = 'Ann';
+			CREATE account:bob SET name = 'Bob';
+			CREATE account:cy SET name = 'Cy';
+			CREATE account:dee SET name = 'Dee';
+			CREATE team:red SET name = 'Red', seats = 2;
+			CREATE team:blue SET name = 'Blue', seats = 1;
+			CREATE membership:seed SET team = team:blue, account = account:cy,
+				role = 'member', key = fn::membership_key(team:blue, account:cy);
+			CREATE invite:open SET team = team:red, role = 'admin', status = 'open',
+				expires_at = d'2100-01-01T00:00:00Z';
+			CREATE invite:again SET team = team:red, role = 'member', status = 'open',
+				expires_at = d'2100-01-01T00:00:00Z';
+			CREATE invite:revoked SET team = team:red, role = 'member', status = 'revoked',
+				expires_at = d'2100-01-01T00:00:00Z';
+			CREATE invite:expired SET team = team:red, role = 'member', status = 'open',
+				expires_at = d'2000-01-01T00:00:00Z';
+			CREATE invite:ghost SET team = team:ghost, role = 'member', status = 'open',
+				expires_at = d'2100-01-01T00:00:00Z';
+			CREATE invite:blue SET team = team:blue, role = 'member', status = 'open',
+				expires_at = d'2100-01-01T00:00:00Z';
+			CREATE wallet:ann SET owner = account:ann, balance = 100, frozen = false;
+			CREATE wallet:ice SET owner = account:ann, balance = 100, frozen = true;
+			CREATE wallet:low SET owner = account:ann, balance = 5, frozen = false;
+		`);
+		console.info(
+			`[effect-surrealkit] blocks: ${engine.mode} engine ${engine.version}`,
+		);
+	});
+	afterAll(async () => {
+		await engine?.stop();
+	});
+
+	const accepting = (inviteKey: string, accountKey: string) => ({
+		invite_id: invite(inviteKey),
+		now: new DateTime(),
+		account: account(accountKey),
+	});
+
+	describe('accepting an invite', () => {
+		it('joins the team from an open invite and closes the invite, atomically', async () => {
+			const [joined, closed] = await ok(
+				client.transaction([
+					bind(acceptInvite, accepting('open', 'ann')),
+					bind(readInvite, { id: invite('open') }),
+				]),
+			);
+			expect(joined).toMatchObject({ kind: 'joined', role: 'admin' });
+			expect(
+				joined.kind === 'joined' && joined.membership,
+			).toBeInstanceOf(RecordId);
+			expect(closed?.status).toBe('accepted');
+			const memberships = await ok(
+				client.run(membershipsOf, { member: account('ann') }),
+			);
+			expect(memberships).toHaveLength(1);
+			expect(memberships[0]).toMatchObject({
+				id: joined.membership,
+				key: 'team:red/account:ann',
+				role: 'admin',
+			});
+		});
+
+		it('reports the membership that already exists, and leaves the invite open', async () => {
+			const [existing] = await ok(
+				client.transaction([
+					bind(acceptInvite, accepting('again', 'ann')),
+				]),
+			);
+			const [membership] = await ok(
+				client.run(membershipsOf, { member: account('ann') }),
+			);
+			expect(existing).toStrictEqual({
+				kind: 'member',
+				membership: membership?.id,
+				role: 'admin',
+			});
+			expect(
+				(await ok(client.run(readInvite, { id: invite('again') })))
+					?.status,
+			).toBe('open');
+		});
+
+		it.each([
+			['nope', 'ann', 'Invite not found'],
+			['revoked', 'ann', 'Invite is not open'],
+			['expired', 'ann', 'Invite has expired'],
+			['ghost', 'ann', 'Team not found'],
+			['blue', 'dee', 'Team is full'],
+		] as const)('invite:%s for account:%s throws %j as a typed error, and writes nothing', async (inviteKey, accountKey, message) => {
+			const error = await failure(
+				client.transaction([
+					bind(acceptInvite, accepting(inviteKey, accountKey)),
+				]),
+			);
+			expect(error).toBeInstanceOf(StatementThrown);
+			expect(error).toMatchObject({
+				_tag: 'StatementThrown',
+				statement: 'accept invite',
+				reason: message,
+			});
+			if (error._tag === 'StatementThrown') {
+				// The reason is typed as the block's messages.
+				const reason: (typeof acceptInvite.throws)[number] =
+					error.reason;
+				expect(acceptInvite.throws).toContain(reason);
+			}
+			expect(
+				await ok(
+					client.run(membershipsOf, { member: account(accountKey) }),
+				),
+			).toHaveLength(accountKey === 'ann' ? 1 : 0);
+		});
+
+		it('raises the same typed error from a single run', async () => {
+			expect(
+				await failure(
+					client.run(acceptInvite, accepting('revoked', 'bob')),
+				),
+			).toMatchObject({
+				_tag: 'StatementThrown',
+				reason: 'Invite is not open',
+			});
+		});
+	});
+
+	const paying = (
+		walletKey: string,
+		request: string,
+		amount: number,
+		payer = 'ann',
+	) => ({
+		wallet_id: wallet(walletKey),
+		payer: account(payer),
+		request,
+		amount,
+	});
+
+	describe('paying from a wallet', () => {
+		it('records a payment and debits the wallet, then replays it for the same request', async () => {
+			const [paid, after] = await ok(
+				client.transaction([
+					bind(pay, paying('ann', 'r1', 30)),
+					bind(readWallet, { id: wallet('ann') }),
+				]),
+			);
+			expect(paid).toMatchObject({ kind: 'paid', balance: 70 });
+			expect(after?.balance).toBe(70);
+			const [replayed] = await ok(
+				client.transaction([bind(pay, paying('ann', 'r1', 30))]),
+			);
+			expect(replayed).toStrictEqual({
+				kind: 'replayed',
+				payment: paid.kind === 'paid' ? paid.payment : undefined,
+				amount: 30,
+			});
+			expect(
+				(await ok(client.run(readWallet, { id: wallet('ann') })))
+					?.balance,
+			).toBe(70);
+		});
+
+		it('declines when the balance is short, writing nothing', async () => {
+			expect(
+				await ok(client.run(pay, paying('low', 'r2', 10))),
+			).toStrictEqual({ kind: 'declined', balance: 5 });
+			expect(
+				await ok(client.run(paymentByKey, { key: 'wallet:low/r2' })),
+			).toStrictEqual([]);
+		});
+
+		it.each([
+			['ice', 'ann', 'Wallet is frozen'],
+			['ann', 'bob', 'Not your wallet'],
+			['nope', 'ann', 'Wallet not found'],
+		] as const)('wallet:%s paid by account:%s throws %j as a typed error', async (walletKey, payer, message) => {
+			expect(
+				await failure(
+					client.transaction([
+						bind(pay, paying(walletKey, 'r3', 1, payer)),
+					]),
+				),
+			).toMatchObject({
+				_tag: 'StatementThrown',
+				statement: 'pay',
+				reason: message,
+			});
+		});
+	});
+
+	describe('a FOR UPDATE read and a concurrent write to the record', () => {
+		const held = wallet('held');
+		const readBalance = select(WalletTable, param('id', WalletId))
+			.only()
+			.value((row) => row.balance)
+			.build();
+		const recorded = (key: string) =>
+			ok(client.run(paymentByKey, { key })).then((payments) =>
+				payments.map((payment) => payment.amount),
+			);
+		const balance = () => ok(client.run(readBalance, { id: held }));
+
+		beforeAll(async () => {
+			await engine.db.query(
+				'CREATE wallet:held SET owner = account:ann, balance = 100, frozen = false;',
+			);
+		});
+
+		/**
+		 * Starts `effect`, whose block reads the wallet and then pauses,
+		 * adds one to the wallet's balance during the pause, and answers how
+		 * the effect ended.
+		 */
+		const raced = async <A, E>(effect: Effect.Effect<A, E>) => {
+			const running = Effect.runPromise(Effect.result(effect));
+			await new Promise((resolve) => setTimeout(resolve, 120));
+			await engine.db.query('UPDATE $id SET balance += 1;', {
+				id: held,
+			});
+			return within(running, 20_000);
+		};
+
+		it('without the lock the block commits, having recorded a balance that changed under it', async () => {
+			const before = await balance();
+			const outcome = await raced(
+				client.transaction([
+					bind(recordBalanceUnlocked, {
+						wallet_id: held,
+						key: 'unlocked',
+					}),
+				]),
+			);
+			expect(outcome).toMatchObject({
+				_tag: 'Success',
+				success: [{ seen: before }],
+			});
+			expect(await recorded('unlocked')).toEqual([before]);
+			expect(await balance()).toBe((before ?? 0) + 1);
+		});
+
+		it('in a transaction the client reports a StatementConflict on SurrealDB 3 and 4, and nothing is written', async () => {
+			const before = await balance();
+			const outcome = await raced(
+				client.transaction([
+					bind(recordBalance, { wallet_id: held, key: 'locked' }),
+				]),
+			);
+			expect(outcome._tag).toBe('Failure');
+			const error = outcome._tag === 'Failure' ? outcome.failure : null;
+			expect(error).toBeInstanceOf(StatementConflict);
+			expect(error?.message).toMatch(/Transaction conflict/u);
+			expect(await recorded('locked')).toEqual([]);
+			expect(await balance()).toBe((before ?? 0) + 1);
+		});
+
+		// The same race with the wallet read through a literal id and
+		// through a record id built from its key: both take part in the
+		// conflict as a binding does.
+		const bySubject = [
+			{
+				form: 'a literal record id',
+				locked: () =>
+					bind(recordBalanceByLiteral, { key: 'literal locked' }),
+				unlocked: () =>
+					bind(recordBalanceByLiteralUnlocked, {
+						key: 'literal unlocked',
+					}),
+				key: 'literal',
+			},
+			{
+				form: 'a record id built from its key',
+				locked: () =>
+					bind(recordBalanceByBuiltId, {
+						wallet_key: 'held',
+						key: 'built locked',
+					}),
+				unlocked: () =>
+					bind(recordBalanceByBuiltIdUnlocked, {
+						wallet_key: 'held',
+						key: 'built unlocked',
+					}),
+				key: 'built',
+			},
+		] as const;
+
+		it.each(
+			bySubject,
+		)('read by $form without the lock, the block commits a balance that changed under it', async ({
+			unlocked,
+			key,
+		}) => {
+			const before = await balance();
+			const outcome = await raced(client.transaction([unlocked()]));
+			expect(outcome).toMatchObject({
+				_tag: 'Success',
+				success: [{ seen: before }],
+			});
+			expect(await recorded(`${key} unlocked`)).toEqual([before]);
+			expect(await balance()).toBe((before ?? 0) + 1);
+		});
+
+		it.each(
+			bySubject,
+		)('read by $form FOR UPDATE in a transaction, the client reports a StatementConflict and nothing is written', async ({
+			locked,
+			key,
+		}) => {
+			const before = await balance();
+			const outcome = await raced(client.transaction([locked()]));
+			expect(outcome._tag).toBe('Failure');
+			const error = outcome._tag === 'Failure' ? outcome.failure : null;
+			expect(error).toBeInstanceOf(StatementConflict);
+			expect(error?.message).toMatch(/Transaction conflict/u);
+			expect(await recorded(`${key} locked`)).toEqual([]);
+			expect(await balance()).toBe((before ?? 0) + 1);
+		});
+
+		it('run alone, SurrealDB 3 reports the conflict and 4 retries the statement itself, reading the new balance', async () => {
+			const before = await balance();
+			const outcome = await raced(
+				client.run(recordBalance, { wallet_id: held, key: 'alone' }),
+			);
+			if (engine.majorVersion >= 4) {
+				// A statement outside a transaction that loses a conflict is
+				// run again by the server.
+				expect(outcome).toMatchObject({
+					_tag: 'Success',
+					success: { seen: (before ?? 0) + 1 },
+				});
+				expect(await recorded('alone')).toEqual([(before ?? 0) + 1]);
+			} else {
+				expect(outcome._tag).toBe('Failure');
+				expect(
+					outcome._tag === 'Failure' ? outcome.failure : null,
+				).toBeInstanceOf(StatementConflict);
+				expect(await recorded('alone')).toEqual([]);
+			}
+			expect(await balance()).toBe((before ?? 0) + 1);
+		});
+
+		it.each([
+			'transaction',
+			'run',
+		] as const)('with a retry schedule the %s succeeds, recording the balance after the write', async (form) => {
+			const before = await balance();
+			const key = `retried ${form}`;
+			const input = { wallet_id: held, key };
+			const options = { retry: Schedule.recurs(3) };
+			const outcome = await raced(
+				form === 'transaction'
+					? client
+							.transaction([bind(recordBalance, input)], options)
+							.pipe(Effect.map(([result]) => result))
+					: client.run(recordBalance, input, options),
+			);
+			expect(outcome).toMatchObject({
+				_tag: 'Success',
+				success: { seen: (before ?? 0) + 1 },
+			});
+			expect(await recorded(key)).toEqual([(before ?? 0) + 1]);
+			expect(await balance()).toBe((before ?? 0) + 1);
+		});
+	});
+
+	describe('on its own', () => {
+		it('a block is one statement, all or nothing: a guard after a write undoes the write', async () => {
+			const before = (
+				await ok(client.run(readWallet, { id: wallet('low') }))
+			)?.balance;
+			expect(
+				await failure(
+					client.run(withdraw, {
+						wallet_id: wallet('low'),
+						amount: 100,
+					}),
+				),
+			).toMatchObject({
+				_tag: 'StatementThrown',
+				statement: 'withdraw',
+				reason: 'Insufficient funds',
+			});
+			expect(
+				(await ok(client.run(readWallet, { id: wallet('low') })))
+					?.balance,
+			).toBe(before);
+			expect(
+				await ok(
+					client.run(withdraw, {
+						wallet_id: wallet('low'),
+						amount: 1,
+					}),
+				),
+			).toStrictEqual({ balance: (before ?? 0) - 1 });
+		});
+
+		it('a block can be a local of another block', async () => {
+			const result = await ok(
+				client
+					.run(payAndRead, paying('ice', 'r9', 1))
+					.pipe(Effect.flip),
+			);
+			expect(result).toMatchObject({ reason: 'Wallet is frozen' });
+			const read = await ok(
+				client.run(payAndRead, paying('low', 'r9', 1000)),
+			);
+			expect(read).toStrictEqual({
+				outcome: { kind: 'declined', balance: read.balance },
+				balance: read.balance,
+			});
+		});
+	});
+
+	describe('inside a transaction', () => {
+		it('a block can be followed by another statement, and by a block that LETs the same names: it never writes RETURN, at which SurrealDB 3 would end the transaction', async () => {
+			expect(pay.sql).toContain('LET $key = ');
+			expect(acceptInvite.sql).toContain('LET $key = ');
+			const results = await ok(
+				client.transaction([
+					bind(pay, paying('low', 'r4', 10)),
+					bind(readWallet, { id: wallet('low') }),
+					bind(acceptInvite, accepting('again', 'bob')),
+				]),
+			);
+			expect(results[0]).toStrictEqual({
+				kind: 'declined',
+				balance: results[1]?.balance,
+			});
+			expect(results[2]).toMatchObject({
+				kind: 'joined',
+				role: 'member',
+			});
+			const [membership] = await ok(
+				client.run(membershipsOf, { member: account('bob') }),
+			);
+			expect(membership?.key).toBe('team:red/account:bob');
+		});
+
+		it('applies the same block with two distinct payment requests in order', async () => {
+			await engine.db.query(
+				'CREATE wallet:repeat SET owner = account:ann, balance = 5, frozen = false;',
+			);
+			const [first, second] = await ok(
+				client.transaction([
+					bind(pay, paying('repeat', 'r8', 1)),
+					bind(pay, paying('repeat', 'r9', 2)),
+				]),
+			);
+			expect(first).toMatchObject({ kind: 'paid', balance: 4 });
+			expect(second).toMatchObject({ kind: 'paid', balance: 2 });
+			for (const [request, amount] of [
+				['r8', 1],
+				['r9', 2],
+			] as const) {
+				expect(
+					await ok(
+						client.run(paymentByKey, {
+							key: `wallet:repeat/${request}`,
+						}),
+					),
+				).toMatchObject([{ amount }]);
+			}
+		});
+
+		it('shares none of its locals: a statement may bind a name the block LETs, and each reads its own value', async () => {
+			expect(pay.defines).toEqual([]);
+			const [before, paid, after] = await ok(
+				client.transaction([
+					bind(paymentByKey, { key: 'wallet:ann/r1' }),
+					bind(pay, paying('ann', 'r6', 1)),
+					bind(paymentByKey, { key: 'wallet:ann/r1' }),
+				]),
+			);
+			expect(before).toHaveLength(1);
+			expect(before[0]?.amount).toBe(30);
+			expect(paid).toMatchObject({ kind: 'paid', balance: 69 });
+			// The block's `$key` (wallet:ann/r6) did not replace the binding.
+			expect(after).toStrictEqual(before);
+		});
+
+		it('keeps a block binding independent of a previous top-level LET', async () => {
+			await engine.db.query(
+				'CREATE wallet:bound SET owner = account:ann, balance = 5, frozen = false;',
+			);
+			const setsAmount = sequence(
+				part({ sql: 'LET $amount = 1000;', defines: ['amount'] }),
+			).define({
+				name: 'sets amount',
+				params: {},
+				result: Schema.Undefined,
+			});
+			const [defined, paid] = await ok(
+				client.transaction([
+					bind(setsAmount),
+					bind(pay, paying('bound', 'r7', 1)),
+				]),
+			);
+			expect(defined).toBeUndefined();
+			expect(paid).toMatchObject({ kind: 'paid', balance: 4 });
+			expect(
+				await ok(client.run(paymentByKey, { key: 'wallet:bound/r7' })),
+			).toMatchObject([{ amount: 1 }]);
+		});
+
+		it('shares no name the block LETs only inside a branch: each statement reads its own value', async () => {
+			const [first] = await ok(
+				client.run(paymentByKey, { key: 'wallet:ann/r1' }),
+			);
+			const earlier = first?.id;
+			expect(earlier).toBeInstanceOf(RecordId);
+			expect(pay.defines).not.toContain('payment');
+			const [before, paid, after] = await ok(
+				client.transaction([
+					bind(readPayment, { payment: earlier as PaymentId }),
+					bind(pay, paying('ann', 'r8', 5)),
+					bind(readPayment, { payment: earlier as PaymentId }),
+				]),
+			);
+			expect(before?.id).toEqual(earlier);
+			expect(paid).toMatchObject({ kind: 'paid', balance: 64 });
+			expect(paid.kind === 'paid' && paid.payment).not.toEqual(earlier);
+			// The branch's `$payment` did not replace the binding.
+			expect(after?.id).toEqual(earlier);
+		});
+	});
+	describe('built-in functions and the newer writes', () => {
+		beforeAll(async () => {
+			await engine.db.query(`
+				CREATE wallet:fun SET owner = account:dee, balance = 7, frozen = false;
+				CREATE wallet:none SET owner = account:dee, balance = 0, frozen = false;
+				CREATE payment:fun1 SET wallet = wallet:fun, amount = -3, key = 'fun-b';
+				CREATE payment:fun2 SET wallet = wallet:fun, amount = 2, key = 'fun-a';
+				CREATE payment:fun3 SET wallet = wallet:ann, amount = 4, key = 'fun-c';
+				CREATE payment:other SET wallet = wallet:fun, amount = 9, key = 'other';
+			`);
+		});
+
+		it('calls catalogue functions in guards, locals, the result, conditions, projections and a grouped condition', async () => {
+			const summary = await ok(
+				client.run(summarise, {
+					wallet_id: wallet('fun'),
+					label: 'loud',
+					prefix: 'fun-',
+				}),
+			);
+			expect(summary.shout).toBe('LOUD');
+			expect(summary.length).toBe(4);
+			expect(summary.payments).toEqual([
+				{ key: 'FUN-A', size: 2 },
+				{ key: 'FUN-B', size: 3 },
+			]);
+			expect(summary.count).toBe(2);
+			expect(
+				summary.totals
+					.map((row) => [String(row.wallet), row.total, row.payments])
+					.sort(),
+			).toEqual([
+				['wallet:ann', 4, 1],
+				['wallet:fun', -1, 2],
+			]);
+			expect(Number(summary.rounded)).toBe(7);
+		});
+
+		it.each([
+			[{ wallet: 'fun', label: 'not ok' }, 'Label is not alphanumeric'],
+			[{ wallet: 'none', label: 'ok' }, 'Wallet is empty'],
+			[{ wallet: 'ghost', label: 'ok' }, 'Wallet not found'],
+		])('a guard of built-in functions throws its message: %o', async (input, message) => {
+			const error = await failure(
+				client.run(summarise, {
+					wallet_id: wallet(input.wallet),
+					label: input.label,
+					prefix: 'fun-',
+				}),
+			);
+			expect(error).toBeInstanceOf(StatementThrown);
+			expect((error as StatementThrown<string>).message).toBe(message);
+		});
+
+		it('binds the result of an UPSERT and an INSERT, all or nothing', async () => {
+			const input = (balance: number, request: string) => ({
+				wallet_id: wallet('topped'),
+				owner: account('dee'),
+				amount: balance,
+				request,
+			});
+			const created = await ok(client.run(topUp, input(10, 'r1')));
+			expect(created.balance).toBe(10);
+			expect(created.receipts).toHaveLength(1);
+			expect(created.first?.amount).toBe(10);
+			expect(created.first?.key.endsWith('/r1')).toBe(true);
+			expect(String(created.first?.wallet)).toBe('wallet:topped');
+			const changed = await ok(client.run(topUp, input(25, 'r2')));
+			expect(changed.balance).toBe(25);
+			expect(changed.first?.amount).toBe(25);
+			// The same request again collides on the unique payment key, so the
+			// whole block fails and the UPSERT before it is undone.
+			await failure(client.run(topUp, input(40, 'r2')));
+			const after = await ok(
+				client.run(readWallet, { id: wallet('topped') }),
+			);
+			expect(after?.balance).toBe(25);
+		});
+	});
+});

@@ -5,21 +5,99 @@
  *   else started (a throwaway container); root/root credentials.
  * - `SURREAL_BIN` (e.g. `/usr/local/bin/surreal`): start
  *   `surreal start --bind 127.0.0.1:<free port> memory` and stop it after.
+ * - `SURREAL_TRANSPORT=http`: use HTTP RPC with either server option.
+ * - With neither set: the embedded engine of `@surrealdb/node`, in process and
+ *   in memory, so the engine suites run on a plain `npm test`.
  *
- * Without either, the engine suites are skipped and say so. They never touch
- * a shared database: every run uses a fresh in-memory namespace.
+ * The suites never touch a shared database: every run uses a fresh
+ * namespace. The embedded engine has no HTTP endpoint, so the suites that
+ * read SurrealDB's JSON over `/sql` need one of the two variables and say so
+ * when they are skipped.
  */
 import { type ChildProcess, spawn } from 'node:child_process';
 import { createServer } from 'node:net';
 
-import { Surreal } from 'surrealdb';
+import { type ConnectOptions, Surreal } from 'surrealdb';
 
-export const engineConfigured =
-	process.env.SURREAL_URL !== undefined ||
-	process.env.SURREAL_BIN !== undefined;
+/** How the engine is provided. */
+export type EngineMode = 'embedded' | 'binary' | 'remote';
+export type EngineTransport = 'embedded' | 'ws' | 'http';
 
-export const engineSkipReason =
-	'set SURREAL_BIN (a surreal binary) or SURREAL_URL (a disposable engine) to run the engine round-trip suite';
+const remoteUrl = process.env.SURREAL_URL;
+const binary = process.env.SURREAL_BIN;
+const requestedTransport = process.env.SURREAL_TRANSPORT;
+
+export const engineMode: EngineMode =
+	remoteUrl !== undefined
+		? 'remote'
+		: binary !== undefined
+			? 'binary'
+			: 'embedded';
+
+if (
+	requestedTransport !== undefined &&
+	requestedTransport !== 'http' &&
+	requestedTransport !== 'ws'
+) {
+	throw new Error('SURREAL_TRANSPORT must be http or ws');
+}
+if (requestedTransport !== undefined && engineMode === 'embedded') {
+	throw new Error('SURREAL_TRANSPORT requires SURREAL_BIN or SURREAL_URL');
+}
+
+export const transport: EngineTransport =
+	engineMode === 'embedded'
+		? 'embedded'
+		: (requestedTransport ??
+			(/^https?:\/\//iu.test(remoteUrl ?? '') ? 'http' : 'ws'));
+
+export const interactiveTransactions = transport !== 'http';
+export const liveQueries = transport !== 'http';
+
+const withTransport = (rpc: string, via: 'ws' | 'http'): URL => {
+	const url = new URL(rpc);
+	const secure = url.protocol === 'wss:' || url.protocol === 'https:';
+	url.protocol = `${via}${secure ? 's' : ''}:`;
+	return url;
+};
+
+const embeddedEngine = async (): Promise<Surreal> => {
+	const { createNodeEngines } = await import('@surrealdb/node');
+	return new Surreal({ engines: createNodeEngines() });
+};
+
+/**
+ * Why the embedded engine cannot run here (no native build for the platform
+ * or the Node release), or `undefined` when it starts.
+ */
+const embeddedFailure = async (): Promise<string | undefined> => {
+	try {
+		const db = await embeddedEngine();
+		try {
+			await db.connect('mem://');
+			await db.version();
+		} finally {
+			await db.close();
+		}
+		return undefined;
+	} catch (error) {
+		return error instanceof Error ? error.message : String(error);
+	}
+};
+
+const unavailable =
+	engineMode === 'embedded' ? await embeddedFailure() : undefined;
+
+/** False only when no engine can be started; the engine suites then skip. */
+export const engineConfigured = unavailable === undefined;
+
+export const engineSkipReason = `the embedded engine did not start (${unavailable}); set SURREAL_BIN (a surreal binary) or SURREAL_URL (a disposable engine) to run the engine suites`;
+
+/** Whether the engine serves HTTP `/sql`, which the embedded engine does not. */
+export const httpConfigured = engineMode !== 'embedded';
+
+export const httpSkipReason =
+	'the embedded engine has no HTTP /sql endpoint; set SURREAL_BIN (a surreal binary) or SURREAL_URL (a disposable engine) to run the JSON round trips';
 
 const freePort = (): Promise<number> =>
 	new Promise((resolve, reject) => {
@@ -42,7 +120,15 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export interface Engine {
 	readonly db: Surreal;
+	readonly mode: EngineMode;
+	readonly transport: EngineTransport;
+	/** RPC address of the disposable server, when the engine runs out of process. */
+	readonly rpcUrl?: string;
+	/** As the engine reports it, e.g. `surrealdb-4.0.1`. */
 	readonly version: string;
+	readonly majorVersion: number;
+	/** The fresh namespace of this run; its database has the same name. */
+	readonly namespace: string;
 	/**
 	 * Runs SurrealQL over the engine's HTTP `/sql` endpoint, in the same
 	 * namespace and database, and returns the last statement's JSON result.
@@ -54,8 +140,7 @@ export interface Engine {
 const httpSql =
 	(rpc: string, namespace: string) =>
 	async (sql: string): Promise<unknown> => {
-		const url = new URL(rpc);
-		url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+		const url = withTransport(rpc, 'http');
 		url.pathname = '/sql';
 		const response = await fetch(url, {
 			method: 'POST',
@@ -78,9 +163,16 @@ const httpSql =
 		return last.result;
 	};
 
-const connect = async (url: string, namespace: string): Promise<Surreal> => {
+type EngineOptions = Pick<ConnectOptions, 'retry'>;
+
+const connect = async (
+	url: string,
+	namespace: string,
+	options: EngineOptions,
+): Promise<Surreal> => {
 	const db = new Surreal();
 	await db.connect(url, {
+		...options,
 		authentication: { username: 'root', password: 'root' },
 	});
 	await db.query(
@@ -90,16 +182,60 @@ const connect = async (url: string, namespace: string): Promise<Surreal> => {
 	return db;
 };
 
-export const startEngine = async (): Promise<Engine> => {
+const engineVersion = async (db: Surreal) => {
+	const { version } = await db.version();
+	const major = /^(?:surrealdb-)?(\d+)\./u.exec(version)?.[1];
+	if (major === undefined) {
+		throw new Error(
+			`could not determine SurrealDB major version: ${version}`,
+		);
+	}
+	return { version, majorVersion: Number(major) };
+};
+
+const startEmbedded = async (
+	namespace: string,
+	options: EngineOptions,
+): Promise<Engine> => {
+	const db = await embeddedEngine();
+	try {
+		await db.connect('mem://', {
+			...options,
+			namespace,
+			database: namespace,
+		});
+		return {
+			db,
+			mode: 'embedded',
+			transport: 'embedded',
+			namespace,
+			...(await engineVersion(db)),
+			http: async () => {
+				throw new Error(httpSkipReason);
+			},
+			stop: async () => {
+				await db.close();
+			},
+		};
+	} catch (error) {
+		await db.close();
+		throw error;
+	}
+};
+
+export const startEngine = async (
+	options: EngineOptions = {},
+): Promise<Engine> => {
 	const namespace = `effect_surrealkit_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
+	if (engineMode === 'embedded') return startEmbedded(namespace, options);
+
 	let child: ChildProcess | undefined;
-	let url = process.env.SURREAL_URL;
+	let url = remoteUrl;
 	if (url === undefined) {
-		const bin = process.env.SURREAL_BIN;
-		if (bin === undefined) throw new Error(engineSkipReason);
+		if (binary === undefined) throw new Error(engineSkipReason);
 		const port = await freePort();
 		child = spawn(
-			bin,
+			binary,
 			[
 				'start',
 				'--bind',
@@ -114,13 +250,15 @@ export const startEngine = async (): Promise<Engine> => {
 			],
 			{ stdio: 'ignore' },
 		);
-		url = `ws://127.0.0.1:${port}/rpc`;
+		url = `${transport}://127.0.0.1:${port}/rpc`;
+	} else if (transport !== 'embedded') {
+		url = withTransport(url, transport).href;
 	}
 	let db: Surreal | undefined;
 	let lastError: unknown;
 	for (let attempt = 0; attempt < 100 && db === undefined; attempt++) {
 		try {
-			db = await connect(url, namespace);
+			db = await connect(url, namespace, options);
 		} catch (error) {
 			lastError = error;
 			await delay(100);
@@ -132,11 +270,14 @@ export const startEngine = async (): Promise<Engine> => {
 			`could not reach the disposable engine at ${url}: ${String(lastError)}`,
 		);
 	}
-	const version = await db.version();
 	const connected = db;
 	return {
 		db: connected,
-		version: version.version,
+		mode: engineMode,
+		transport,
+		rpcUrl: url,
+		namespace,
+		...(await engineVersion(connected)),
 		http: httpSql(url, namespace),
 		stop: async () => {
 			await connected
