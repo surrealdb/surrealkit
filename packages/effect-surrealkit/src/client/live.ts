@@ -5,6 +5,7 @@ import {
 	UnsupportedFeatureError,
 } from 'surrealdb';
 
+import { codecIssueText } from '../internal/codecIssue.js';
 import type { LiveStatement } from '../statement/live.js';
 import {
 	type AnyStatement,
@@ -95,7 +96,7 @@ const decodeField = <C extends Codec>(
 					statement,
 					slot: 1,
 					committed: false,
-					message: `live event ${field}: ${error.message}`,
+					message: `live event ${field}: ${codecIssueText(error.issue, codec.ast)}`,
 				}),
 		),
 	);

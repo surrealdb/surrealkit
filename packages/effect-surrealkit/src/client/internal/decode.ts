@@ -1,5 +1,6 @@
 import { Effect, Schema } from 'effect';
 
+import { codecIssueText } from '../../internal/codecIssue.js';
 import type { AnyStatement } from '../../statement/statement.js';
 import {
 	StatementDecodeError,
@@ -83,7 +84,7 @@ export const decode = (
 					statement: statement.name,
 					slot: statement.valueSlot,
 					committed: writes !== 'none',
-					message: `${error.message}${committedNote(writes)}`,
+					message: `${codecIssueText(error.issue, statement.result.ast)}${committedNote(writes)}`,
 				}),
 		),
 	);

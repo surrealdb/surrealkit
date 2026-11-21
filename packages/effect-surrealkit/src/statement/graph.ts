@@ -393,10 +393,10 @@ const enforced = (leaf: Codec, relation: string): Codec =>
 		expected: `a record the ENFORCED relation \`${relation}\` reaches`,
 		code: ([inner]) =>
 			runtimeCode(inner?.runtime ?? '', inner?.Type ?? 'unknown'),
-		refuse: (input) =>
-			input === undefined
-				? `a record reached through \`${relation}\` is NONE, but the generated descriptors declare \`${relation}\` ENFORCED, so SurrealDB would refuse to relate to a missing record and delete a record's edges with it: the live schema may differ from the generated descriptors (is \`${relation}\` ENFORCED there, and does it lead to these tables?); regenerate them, or check the database with \`schemaDrift\` from \`effect-surrealkit/testing\``
-				: undefined,
+		refuse: {
+			when: (input) => input === undefined,
+			message: `a record reached through \`${relation}\` is NONE, but the generated descriptors declare \`${relation}\` ENFORCED, so SurrealDB would refuse to relate to a missing record and delete a record's edges with it: the live schema may differ from the generated descriptors (is \`${relation}\` ENFORCED there, and does it lead to these tables?); regenerate them, or check the database with \`schemaDrift\` from \`effect-surrealkit/testing\``,
+		},
 	}) as unknown as Codec;
 
 const lift = (

@@ -11,6 +11,7 @@ import {
 } from 'effect';
 import { UnavailableFeatureError, UnsupportedFeatureError } from 'surrealdb';
 
+import { codecIssueText } from '../internal/codecIssue.js';
 import type { Codec, Params, Statement } from '../statement/statement.js';
 import type { Client, InputOf } from './client.js';
 import {
@@ -272,7 +273,10 @@ export const makeStream =
 										decodeError(
 											makeDecodeError(
 												valueSlot,
-												error.message,
+												codecIssueText(
+													error.issue,
+													result.value.ast,
+												),
 											),
 										),
 									),

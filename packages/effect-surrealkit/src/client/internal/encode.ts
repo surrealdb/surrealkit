@@ -1,5 +1,6 @@
-import { Effect, Schema } from 'effect';
+import { Effect, Schema, SchemaAST } from 'effect';
 
+import { codecIssueText } from '../../internal/codecIssue.js';
 import type { AnyStatement } from '../../statement/statement.js';
 import type { RunOptions } from '../client.js';
 import { StatementEncodeError } from '../errors.js';
@@ -17,7 +18,10 @@ export const encode = (
 					new StatementEncodeError({
 						statement: statement.name,
 						binding: name,
-						message: error.message,
+						message: codecIssueText(
+							error.issue,
+							SchemaAST.flip(codec.ast),
+						),
 					}),
 			),
 		),

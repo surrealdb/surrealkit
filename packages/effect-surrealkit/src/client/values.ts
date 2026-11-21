@@ -256,13 +256,8 @@ export const valueProblem = (value: unknown): ValueProblem | undefined => {
 	const path: Path = [];
 	try {
 		return check(value, path, new Set());
-	} catch (error) {
-		return {
-			path: [...path],
-			problem: `a value that cannot be read to the end (${
-				error instanceof Error ? error.message : 'it threw'
-			})`,
-		};
+	} catch {
+		return fail(path, 'a value that cannot be read to the end');
 	}
 };
 
