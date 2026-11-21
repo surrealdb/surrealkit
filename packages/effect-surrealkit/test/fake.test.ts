@@ -212,12 +212,12 @@ describe('scripted execution transport', () => {
 			parts: [requestPart(statement, {}, 0, 3)],
 		} satisfies Request;
 		expect(await all(transport.stream(request, signal))).toEqual([
-			{ kind: 'row', slot: 0, value: undefined },
+			{ kind: 'value', slot: 0, value: undefined },
 			{ kind: 'done', slot: 0 },
 			{ kind: 'row', slot: 1, value: 1 },
 			{ kind: 'row', slot: 1, value: 2 },
 			{ kind: 'done', slot: 1 },
-			{ kind: 'row', slot: 2, value: undefined },
+			{ kind: 'value', slot: 2, value: undefined },
 			{ kind: 'done', slot: 2 },
 		]);
 	});

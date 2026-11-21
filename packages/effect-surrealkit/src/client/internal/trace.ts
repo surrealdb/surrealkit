@@ -1,4 +1,4 @@
-import { Clock, Duration, Effect, Metric } from 'effect';
+import { Clock, Duration, Effect, Metric, type Scope } from 'effect';
 
 import {
 	type RequestTiming,
@@ -206,11 +206,12 @@ const measure = <A, E>(
 		}),
 	);
 
-export const recording = <A, E>(
-	kind: RequestKind,
-	name: string,
-	use: (recorder: Recorder) => Effect.Effect<A, E>,
-): Effect.Effect<A, E> =>
+/** A stream measures the time spent pulling frames across one transport request. */
+export interface ScopedRecorder extends Recorder {
+	readonly pull: <A, E>(effect: Effect.Effect<A, E>) => Effect.Effect<A, E>;
+}
+
+const startRecording = (kind: RequestKind, name: string) =>
 	Effect.gen(function* () {
 		const start = yield* Clock.currentTimeNanos;
 		const statements: Array<StatementTiming> = [];
@@ -219,7 +220,7 @@ export const recording = <A, E>(
 		let wait = Duration.zero;
 		let decode = Duration.zero;
 		let server: Duration.Duration | undefined;
-		return yield* use({
+		const recorder: ScopedRecorder = {
 			encode: (effect) =>
 				measure(effect, (elapsed) => {
 					encode = Duration.sum(encode, elapsed);
@@ -232,6 +233,16 @@ export const recording = <A, E>(
 					},
 					() => {
 						sends++;
+					},
+				),
+			pull: (effect) =>
+				measure(
+					effect,
+					(elapsed) => {
+						wait = Duration.sum(wait, elapsed);
+					},
+					() => {
+						sends = 1;
 					},
 				),
 			decode: (effect) =>
@@ -259,24 +270,40 @@ export const recording = <A, E>(
 					if (part?.statement === statement)
 						statements[index] = { ...part, rows };
 				}),
-		}).pipe(
-			Effect.ensuring(
-				Effect.gen(function* () {
-					const total = Duration.nanos(
-						(yield* Clock.currentTimeNanos) - start,
-					);
-					yield* report({
-						kind,
-						name,
-						sends,
-						encode,
-						wait,
-						decode,
-						total,
-						statements: statements.slice(),
-						...(server === undefined ? {} : { server }),
-					});
-				}),
-			),
-		);
+		};
+		const finish = Effect.gen(function* () {
+			const total = Duration.nanos(
+				(yield* Clock.currentTimeNanos) - start,
+			);
+			yield* report({
+				kind,
+				name,
+				sends,
+				encode,
+				wait,
+				decode,
+				total,
+				statements: statements.slice(),
+				...(server === undefined ? {} : { server }),
+			});
+		});
+		return { recorder, finish };
 	});
+
+export const recording = <A, E>(
+	kind: RequestKind,
+	name: string,
+	use: (recorder: Recorder) => Effect.Effect<A, E>,
+): Effect.Effect<A, E> =>
+	Effect.flatMap(startRecording(kind, name), ({ recorder, finish }) =>
+		use(recorder).pipe(Effect.ensuring(finish)),
+	);
+
+export const recordingScoped = (
+	kind: RequestKind,
+	name: string,
+): Effect.Effect<ScopedRecorder, never, Scope.Scope> =>
+	Effect.acquireRelease(
+		startRecording(kind, name),
+		({ finish }) => finish,
+	).pipe(Effect.map(({ recorder }) => recorder));

@@ -97,10 +97,9 @@ export class StatementConflict extends Data.TaggedError('StatementConflict')<{
 /**
  * The engine answered, and the answer is not what the statement declares:
  * a different number of results, a value where NONE was required, or a
- * final result its codec refuses. The request itself succeeded, so unless
- * the statement is known not to write (`committed` is false), whatever it
- * wrote is committed; the client then reports it inside a
- * {@link StatementWriteOutcomeError}.
+ * final result its codec refuses. For a write, the client reports the failure
+ * inside a {@link StatementWriteOutcomeError} and records whether the engine
+ * acknowledged the write before decoding failed.
  */
 export class StatementDecodeError extends Data.TaggedError(
 	'StatementDecodeError',
@@ -135,13 +134,10 @@ export class StatementEmptyResult extends Data.TaggedError(
 }> {}
 
 /**
- * The request succeeded but its result failed validation, and the
- * statement or batch is not known to be read-only: whatever it wrote is
- * committed. The message says which: its writes are committed (a statement
- * with `writes: true`), or it may have written (one with `writes` unknown).
- * `cause` is the {@link StatementDecodeError}, naming the statement and the
- * result. Reconcile (read the data back) before replaying. A request whose
- * every statement has `writes: false` fails with the decode error itself.
+ * A write or a statement that may write returned data its result codec refused.
+ * `cause.committed` is true after the engine acknowledged the request. A
+ * stream can fail while decoding provisional rows, before the write is
+ * acknowledged. Read back the data before replaying the request.
  */
 export class StatementWriteOutcomeError extends Data.TaggedError(
 	'StatementWriteOutcomeError',

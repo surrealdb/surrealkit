@@ -10,7 +10,7 @@ import type { SlotAnswer } from './transport.js';
 export type FailedSlot = Extract<SlotAnswer, { readonly ok: false }>;
 
 /** The SDK marks statements rolled back by a different failure as not executed. */
-const isCollateralFailure = (error: unknown): boolean => {
+export const isCollateralFailure = (error: unknown): boolean => {
 	if (!(error instanceof Error)) return false;
 	const query = error as Error & {
 		readonly kind?: unknown;

@@ -306,15 +306,16 @@ export const scriptedTransport = (
 						slot === valueSlot(part) &&
 						answer[ReplyTypeId] === 'result'
 					) {
-						const rows = Array.isArray(answer.value)
-							? answer.value
-							: [answer.value];
-						for (const value of rows) {
-							signal.throwIfAborted();
-							yield { kind: 'row', slot, value };
+						if (Array.isArray(answer.value)) {
+							for (const value of answer.value) {
+								signal.throwIfAborted();
+								yield { kind: 'row', slot, value };
+							}
+						} else {
+							yield { kind: 'value', slot, value: answer.value };
 						}
 					} else {
-						yield { kind: 'row', slot, value: undefined };
+						yield { kind: 'value', slot, value: undefined };
 					}
 					yield { kind: 'done', slot };
 				}

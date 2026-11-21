@@ -61,7 +61,11 @@ export interface LiveHandle {
 }
 
 export type StreamFrame =
-	| { readonly kind: 'row'; readonly slot: number; readonly value: unknown }
+	| {
+			readonly kind: 'row' | 'value';
+			readonly slot: number;
+			readonly value: unknown;
+	  }
 	| {
 			readonly kind: 'done';
 			readonly slot: number;
@@ -71,6 +75,7 @@ export type StreamFrame =
 			readonly kind: 'error';
 			readonly slot: number;
 			readonly error: unknown;
+			readonly server?: Duration.Duration;
 	  };
 
 export interface Transport {
@@ -160,10 +165,48 @@ export const sdkTransport = (db: Queryable): Transport => {
 						};
 					},
 				}),
-		stream: () => {
-			throw new Error(
-				'effect-surrealkit: stream is not implemented yet (lane L6)',
-			);
+		stream: async function* (request, signal) {
+			const part = request.parts[0];
+			const valueSlot =
+				part === undefined
+					? -1
+					: part.offset + part.statement.valueSlot - 1;
+			for await (const frame of query(request, signal).stream()) {
+				const slot = frame.query;
+				if (frame.isValue()) {
+					if (
+						frame.isSingle &&
+						slot === valueSlot &&
+						Array.isArray(frame.value)
+					) {
+						for (const value of frame.value)
+							yield { kind: 'row', slot, value };
+					} else {
+						yield {
+							kind: frame.isSingle ? 'value' : 'row',
+							slot,
+							value: frame.value,
+						};
+					}
+				} else if (frame.isDone()) {
+					const timing =
+						frame.stats === undefined
+							? {}
+							: { server: sdkDuration(frame.stats.duration) };
+					yield { kind: 'done', slot, ...timing };
+				} else if (frame.isError()) {
+					const timing =
+						frame.stats === undefined
+							? {}
+							: { server: sdkDuration(frame.stats.duration) };
+					yield {
+						kind: 'error',
+						slot,
+						error: frame.error,
+						...timing,
+					};
+				}
+			}
 		},
 	};
 };

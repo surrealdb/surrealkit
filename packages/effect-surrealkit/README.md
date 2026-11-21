@@ -1820,7 +1820,51 @@ Written by lane L5.
 
 #### Rows as a stream
 
-Written by lane L6.
+`stream(statement, input)` returns an Effect `Stream`. Consuming it sends
+one request and delivers the decoded rows in order. The result schema must be a plain
+`Schema.Array(row)`. A statement built with `only()` returns at most one
+row, so use `run` for it. Use `run` for array-wide checks and transformations
+as well.
+
+```ts
+import { Schema, Stream } from 'effect';
+import { stream } from 'effect-surrealkit/client';
+import { make } from 'effect-surrealkit/statement';
+
+const readings = make({
+  name: 'recent readings',
+  sql: 'SELECT VALUE n FROM reading WHERE n >= $minimum ORDER BY n;',
+  params: { minimum: Schema.Number },
+  result: Schema.Array(Schema.Number),
+  writes: false,
+});
+
+const sum = stream(readings, { minimum: 10 }).pipe(
+  Stream.runFold(() => 0, (total, n) => total + n),
+);
+```
+
+This sends the statement's SurrealQL with the encoded `minimum` binding.
+Each consumer pull reads only far enough to decode and emit the next row.
+Taking the first few rows or interrupting the effect closes the iterator
+and aborts the request. The connection can serve subsequent requests.
+`timed` reports one send, the time spent pulling from the iterator, the
+number of emitted rows and the server durations received before closure.
+
+Full consumption verifies that every slot besides the value slot returns
+NONE. An empty list in the value slot emits zero rows, or fails with `StatementEmptyResult` if the
+statement declares `nonEmpty`. A server or decode failure ends the stream
+after any rows already emitted. If decoding fails before a writing stream
+has been fully acknowledged, `StatementWriteOutcomeError` reports the
+unknown write outcome. Read the data back before replaying an interrupted
+or unacknowledged write.
+
+The engine and SDK can buffer data before the consumer asks for it. On
+Apple Silicon with Node 26.13.1, fresh processes read and consumed 100,000
+small rows in four runs per method. Median peak RSS for `run` and `stream`
+was about 183 MiB and 256 MiB on embedded 4.0.1 with SurrealKV, and 168 MiB
+and 293 MiB for the client on WebSocket 3.3.4. Streaming provides early
+row delivery without a memory bound.
 
 #### Live queries
 
