@@ -50,6 +50,7 @@ import {
 import { countOf, decode } from './internal/decode.js';
 import { checkValues, encode } from './internal/encode.js';
 import { joinWith } from './internal/join.js';
+import { withClientSpan } from './internal/span.js';
 import { recording } from './internal/trace.js';
 import type {
 	RequestPart,
@@ -168,7 +169,7 @@ const recordControl = <A, E>(
 	return recording('interactive', span, (recorder) =>
 		recorder.wait(request),
 	).pipe(
-		Effect.withSpan(span, {
+		withClientSpan(span, {
 			kind: 'client',
 			attributes: {
 				'db.system.name': 'surrealdb',
@@ -321,7 +322,7 @@ const execute = (
 				}),
 			);
 		}),
-	).pipe(Effect.withSpan(requestName, { kind: 'client' }));
+	).pipe(withClientSpan(requestName, { kind: 'client' }));
 
 const transactionClient = (
 	send: TransactionHandle['send'],
@@ -433,7 +434,7 @@ export const makeWithTransaction =
 				while: (error) => error instanceof StatementConflict,
 			});
 		}).pipe(
-			Effect.withSpan(name, {
+			withClientSpan(name, {
 				kind: 'client',
 				attributes: { 'db.system.name': 'surrealdb' },
 			}),

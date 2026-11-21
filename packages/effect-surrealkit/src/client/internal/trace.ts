@@ -5,6 +5,7 @@ import {
 	type StatementTiming,
 	timingCollectors,
 } from '../timing.js';
+import { withClientSpan } from './span.js';
 
 /**
  * The metrics every run updates, through Effect's `Metric`:
@@ -83,7 +84,7 @@ export const traced = <A, E extends { readonly _tag: string }>(
 			Effect.tapError((error) =>
 				Effect.annotateCurrentSpan('error.type', error._tag),
 			),
-			Effect.withSpan(name, {
+			withClientSpan(name, {
 				kind: 'client',
 				attributes: {
 					'db.system.name': 'surrealdb',
@@ -156,7 +157,6 @@ const report = (timing: RequestTiming): Effect.Effect<void> =>
 			'effect_surrealkit.sends': sends,
 		});
 		const tags = { statement: name };
-		yield* Metric.update(
 		if (
 			sends > 1 &&
 			(timing.kind === 'run' ||
@@ -168,6 +168,7 @@ const report = (timing: RequestTiming): Effect.Effect<void> =>
 				sends - 1,
 			);
 		}
+		yield* Metric.update(
 			Metric.withAttributes(encodeDuration, tags),
 			encode,
 		);

@@ -41,6 +41,7 @@ import {
 } from './internal/decode.js';
 import { checkValues, encode } from './internal/encode.js';
 import { joinWith } from './internal/join.js';
+import { withClientSpan } from './internal/span.js';
 import { recording } from './internal/trace.js';
 import {
 	type SlotAnswer,
@@ -347,7 +348,7 @@ const submit = <Row, E, R>(
 			);
 		}),
 	).pipe(
-		Effect.withSpan(label, {
+		withClientSpan(label, {
 			kind: 'client',
 			attributes: { 'db.system.name': 'surrealdb' },
 		}),

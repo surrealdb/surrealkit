@@ -25,6 +25,7 @@ import {
 import { messageOf } from './internal/classify.js';
 import { checkValues, encode } from './internal/encode.js';
 import { requestPart } from './internal/join.js';
+import { withClientSpan } from './internal/span.js';
 import { recording } from './internal/trace.js';
 import type { LiveHandle, Transport } from './internal/transport.js';
 
@@ -171,7 +172,7 @@ const register = (
 				}),
 			);
 		}),
-	).pipe(Effect.withSpan(operation, { kind: 'client' }));
+	).pipe(withClientSpan(operation, { kind: 'client' }));
 };
 
 const kill = (name: string, handle: LiveHandle) => {
@@ -186,7 +187,7 @@ const kill = (name: string, handle: LiveHandle) => {
 					).pipe(Effect.annotateLogs({ statement: name })),
 				),
 			),
-	).pipe(Effect.withSpan(operation, { kind: 'client' }));
+	).pipe(withClientSpan(operation, { kind: 'client' }));
 };
 
 const scoped =

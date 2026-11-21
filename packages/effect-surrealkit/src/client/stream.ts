@@ -34,6 +34,7 @@ import {
 } from './internal/decode.js';
 import { checkValues, encode } from './internal/encode.js';
 import { requestPart } from './internal/join.js';
+import { withClientStreamSpan } from './internal/span.js';
 import { metrics, recordingScoped } from './internal/trace.js';
 import type { Request, Transport } from './internal/transport.js';
 
@@ -289,7 +290,7 @@ export const makeStream =
 				return Stream.fromPull(Effect.succeed(nextRow));
 			}),
 		).pipe(
-			Stream.withSpan(name, {
+			withClientStreamSpan(name, {
 				kind: 'client',
 				attributes: {
 					'db.system.name': 'surrealdb',
