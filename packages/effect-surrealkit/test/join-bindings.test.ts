@@ -41,35 +41,22 @@ const compareClientModes = async (client: Client, key: string) => {
 	} else {
 		expect(await Effect.runPromise(atomic)).toStrictEqual([7]);
 	}
+	expect(
+		await Effect.runPromise(
+			client.transaction([
+				bind(statement, bindings),
+				bind(statement, { [key]: 8 }),
+			]),
+		),
+	).toStrictEqual([7, 8]);
 };
 
 describe('joining encoded bindings', () => {
 	it.each(
 		bindingNames,
-	)('keeps equal own $%s bindings in the joined request and each part', async (key) => {
-		const bindings = { [key]: 7 };
-		const joined = await Effect.runPromise(
-			join(
-				[
-					{ statement: reader('first', key), bindings },
-					{ statement: reader('second', key), bindings },
-				],
-				options,
-			),
-		);
-		expect(Object.entries(joined.bindings)).toEqual([[key, 7]]);
-		expect(joined.parts.map((part) => Object.entries(part.sent))).toEqual([
-			[[key, key]],
-			[[key, key]],
-		]);
-	});
-
-	it.each([
-		'__proto__',
-		'ordinary',
-	])('refuses different values for the same $%s binding', async (key) => {
-		const error = await Effect.runPromise(
-			Effect.flip(
+	)('renames repeat bindings of $%s and keeps original part keys', async (key) => {
+		for (const second of [7, 8]) {
+			const joined = await Effect.runPromise(
 				join(
 					[
 						{
@@ -78,15 +65,23 @@ describe('joining encoded bindings', () => {
 						},
 						{
 							statement: reader('second', key),
-							bindings: { [key]: 8 },
+							bindings: { [key]: second },
 						},
 					],
 					options,
 				),
-			),
-		);
-		expect(error).toBeInstanceOf(StatementScopeError);
-		expect(error).toMatchObject({ statement: 'second', binding: key });
+			);
+			expect(Object.entries(joined.bindings)).toEqual([
+				[`${key}__1`, 7],
+				[`${key}__2`, second],
+			]);
+			expect(
+				joined.parts.map((part) => Object.entries(part.sent)),
+			).toEqual([[[key, `${key}__1`]], [[key, `${key}__2`]]]);
+			expect(
+				joined.parts.map((part) => Object.entries(part.bindings)),
+			).toEqual([[[key, 7]], [[key, second]]]);
+		}
 	});
 });
 
@@ -95,7 +90,7 @@ it.each(bindingNames)('handles $%s on a scripted client', async (key) => {
 		reader: (bindings: Readonly<Record<string, unknown>>) => bindings[key],
 	});
 	await compareClientModes(client, key);
-	expect(client.calls).toHaveLength(key === '__proto__' ? 1 : 2);
+	expect(client.calls).toHaveLength(key === '__proto__' ? 3 : 4);
 });
 
 if (!engineConfigured) {

@@ -1,7 +1,13 @@
 import { Effect } from 'effect';
 
-import type { AnyStatement } from '../../statement/statement.js';
-import { sameValue } from '../equal.js';
+import {
+	parameterTokens,
+	renameParameterTokens,
+} from '../../statement/rename.js';
+import {
+	type AnyStatement,
+	assertBindingName,
+} from '../../statement/statement.js';
 import { StatementScopeError } from '../errors.js';
 import type { Request, RequestPart } from './transport.js';
 
@@ -19,52 +25,93 @@ interface JoinOptions {
 	readonly refuseTransactional: boolean;
 }
 
-/**
- * What a transaction refuses before encoding anything: a statement that
- * writes its own transaction control, and a name one statement binds and
- * another `LET`s, which would make one of them read the other's value.
- */
-const refuseInTransaction = (
-	statements: ReadonlyArray<Entry<unknown>>,
-	refuseTransactional: boolean,
-): StatementScopeError | undefined => {
-	if (refuseTransactional) {
+interface Renamed {
+	readonly sql: string;
+	readonly names: ReadonlyMap<string, string>;
+}
+
+/** Plan renames from statement metadata and text alone, before any codec runs. */
+const planRenames = (statements: ReadonlyArray<Entry<unknown>>) =>
+	Effect.gen(function* () {
+		const used = new Set<string>();
+		const shared = new Set<string>();
+		const scopes = statements.map(({ statement }) => {
+			const names = new Set([
+				...Object.keys(statement.params),
+				...statement.defines,
+			]);
+			for (const name of names) {
+				if (used.has(name)) shared.add(name);
+				used.add(name);
+			}
+			return names;
+		});
+		const plans = new Map<number, Renamed>();
+		if (shared.size === 0) return plans;
+		for (const binding of shared) {
+			try {
+				assertBindingName(binding);
+			} catch (error) {
+				if (!(error instanceof RangeError)) throw error;
+				const owner = statements.find(
+					({ statement }) =>
+						Object.hasOwn(statement.params, binding) ||
+						statement.defines.includes(binding),
+				);
+				return yield* Effect.fail(
+					new StatementScopeError({
+						statement: owner?.statement.name ?? 'join',
+						binding,
+						message: `${error.message}; cannot rename a shared parameter`,
+					}),
+				);
+			}
+		}
+		const scanned = [];
 		for (const { statement } of statements) {
-			if (statement.transactional) {
-				return new StatementScopeError({
-					statement: statement.name,
-					message: `\`${statement.name}\` writes its own BEGIN, COMMIT or CANCEL, so it cannot run inside a transaction; run it on its own`,
+			const tokens = parameterTokens(statement.sql);
+			if (tokens === undefined) {
+				return yield* Effect.fail(
+					new StatementScopeError({
+						statement: statement.name,
+						message: `cannot tokenize \`${statement.name}\` with certainty while renaming shared parameters`,
+					}),
+				);
+			}
+			for (const token of tokens) used.add(token.value);
+			scanned.push({ statement, tokens });
+		}
+		for (const [index, { statement, tokens }] of scanned.entries()) {
+			const names = new Map<string, string>();
+			for (const name of scopes[index] ?? []) {
+				if (!shared.has(name)) continue;
+				let alias = `${name}__${index + 1}`;
+				while (used.has(alias)) alias += '_';
+				used.add(alias);
+				names.set(name, alias);
+			}
+			if (names.size !== 0) {
+				plans.set(index, {
+					sql: renameParameterTokens(statement.sql, tokens, names),
+					names,
 				});
 			}
 		}
-	}
-	for (const [index, { statement }] of statements.entries()) {
-		for (const binding of Object.keys(statement.params)) {
-			const definer = statements.find(
-				(other, at) =>
-					at !== index && other.statement.defines.includes(binding),
-			);
-			if (definer !== undefined) {
-				return new StatementScopeError({
-					statement: statement.name,
-					binding,
-					message: `\`$${binding}\` is bound by \`${statement.name}\` and defined with LET by \`${definer.statement.name}\`, and statements in one transaction share one variable scope, so one would read the other's value; rename one of them`,
-				});
-			}
-		}
-	}
-	return undefined;
-};
+		return plans;
+	});
 
 export const requestPart = (
 	statement: AnyStatement,
 	bindings: Bindings,
 	offset: number,
 	slots: number,
+	names?: ReadonlyMap<string, string>,
 ): RequestPart => ({
 	statement,
 	bindings,
-	sent: Object.fromEntries(Object.keys(bindings).map((name) => [name, name])),
+	sent: Object.fromEntries(
+		Object.keys(bindings).map((name) => [name, names?.get(name) ?? name]),
+	),
 	offset,
 	slots,
 });
@@ -75,60 +122,61 @@ export const joinWith = <E>(
 	options: JoinOptions,
 ): Effect.Effect<Request, E | StatementScopeError> =>
 	Effect.gen(function* () {
-		const refused = refuseInTransaction(
-			statements,
-			options.refuseTransactional,
-		);
-		if (refused !== undefined) return yield* Effect.fail(refused);
-		const bindings = new Map<string, { owner: string; value: unknown }>();
+		if (options.refuseTransactional) {
+			const own = statements.find(
+				({ statement }) => statement.transactional,
+			)?.statement;
+			if (own !== undefined)
+				return yield* Effect.fail(
+					new StatementScopeError({
+						statement: own.name,
+						message: `\`${own.name}\` writes its own BEGIN, COMMIT or CANCEL, so it cannot run inside a transaction; run it on its own`,
+					}),
+				);
+		}
+		const plans = yield* planRenames(statements);
+		const bindings = new Map<string, unknown>();
 		const sql: Array<string> = [];
 		const parts: Array<RequestPart> = [];
 		let offset = 0;
-		for (const { statement, bindings: encoded } of statements) {
+		for (const [
+			index,
+			{ statement, bindings: encoded },
+		] of statements.entries()) {
+			const planned = plans.get(index);
 			const mine = yield* encoded;
-			for (const [key, value] of Object.entries(mine)) {
+			for (const [binding, value] of Object.entries(mine)) {
+				const key = planned?.names.get(binding) ?? binding;
 				// The SDK's transaction() silently drops this own binding when it
 				// combines its inputs, even when we pass a single BoundQuery.
 				if (options.mode === 'atomic' && key === '__proto__') {
 					return yield* Effect.fail(
 						new StatementScopeError({
 							statement: statement.name,
-							binding: key,
+							binding,
 							message: `the SurrealDB SDK drops \`$${key}\` bound by \`${statement.name}\` when sending an atomic transaction; rename the binding`,
 						}),
 					);
 				}
-				const first = bindings.get(key);
-				if (first !== undefined && !sameValue(first.value, value)) {
-					return yield* Effect.fail(
-						new StatementScopeError({
-							statement: statement.name,
-							binding: key,
-							message: `\`$${key}\` is bound by \`${first.owner}\` and by \`${statement.name}\` to values that are not certainly equal, and statements in one transaction share one variable scope; rename the binding in one of them`,
-						}),
-					);
-				}
-				bindings.set(key, {
-					owner: first?.owner ?? statement.name,
-					value,
-				});
+				bindings.set(key, value);
 			}
 			const wrap = options.wrap;
 			const slots = statement.slots + (wrap === undefined ? 0 : 2);
-			parts.push(requestPart(statement, mine, offset, slots));
+			parts.push(
+				requestPart(statement, mine, offset, slots, planned?.names),
+			);
 			offset += slots;
+			const text = planned?.sql ?? statement.sql;
 			if (wrap === undefined) {
-				sql.push(statement.sql);
+				sql.push(text);
 			} else {
-				sql.push(wrap.before, statement.sql, wrap.after);
+				sql.push(wrap.before, text, wrap.after);
 			}
 		}
 		return {
 			mode: options.mode,
 			sql: sql.join('\n'),
-			bindings: Object.fromEntries(
-				Array.from(bindings, ([key, { value }]) => [key, value]),
-			),
+			bindings: Object.fromEntries(bindings),
 			parts,
 		};
 	});

@@ -570,7 +570,12 @@ describe('run', () => {
 			expect(calls).toHaveLength(2);
 			expect(calls.every((call) => call.atomic)).toBe(true);
 			expect(calls[1]?.request).toBe(calls[0]?.request);
-			expect(calls[1]?.bindings).toEqual({ a: 1, b: 2 });
+			expect(calls[1]?.bindings).toEqual({
+				a__1: 1,
+				b__1: 2,
+				a__2: 1,
+				b__2: 2,
+			});
 		});
 	});
 
@@ -643,55 +648,41 @@ describe('transaction', () => {
 		expect(results).toEqual([4, 'owner']);
 		expect(calls).toHaveLength(1);
 		expect(calls[0]?.atomic).toBe(true);
-		expect(calls[0]?.sql).toBe(`${double.sql}\n${guarded.sql}`);
+		expect(calls[0]?.sql).toBe(
+			[
+				'SELECT VALUE $n * 2 FROM ONLY $n;',
+				'LET $owner = $boundOwner;',
+				"IF $owner != $auth.id { THROW 'Not the owner' };",
+				'RETURN $owner;',
+			].join('\n'),
+		);
 		expect(calls[0]?.bindings).toEqual({ boundOwner: 'owner', n: 2 });
 		// Retries are the client's own; the SDK is never handed one.
 		expect(calls[0]?.retry).toBeUndefined();
 		expect(calls[0]?.signal).toBeInstanceOf(AbortSignal);
 	});
 
-	it('shares one variable scope: a name may repeat only with one value', async () => {
-		const same = fake(async () => [4, 4]);
-		await Effect.runPromise(
-			same.client.transaction([
-				bind(double, { n: 2 }),
-				bind(double, { n: 2 }),
-			]),
-		);
-		expect(same.calls[0]?.bindings).toEqual({ n: 2 });
-
-		const different = fake(async () => [4, 6]);
-		const error = await failure(
-			different.client.transaction([
-				bind(double, { n: 2 }),
-				bind(double, { n: 3 }),
-			]),
-		);
-		expect(error).toBeInstanceOf(StatementScopeError);
-		expect(error).toMatchObject({ statement: 'double', binding: 'n' });
-		expect(different.calls).toHaveLength(0);
-	});
-
-	it('refuses a later input shadowed by an earlier LET', async () => {
-		const { client, calls } = fake(async () => []);
-		const readOwner = make({
-			sql: 'RETURN $owner;',
-			params: { owner: Schema.String },
-			result: Schema.String,
+	it.each([
+		2, 3,
+	])('gives repeated inputs separate names even when their values match (%s)', async (n) => {
+		const { client, calls } = fake(async () => [4, n * 2]);
+		expect(
+			await Effect.runPromise(
+				client.transaction([
+					bind(double, { n: 2 }),
+					bind(double, { n }),
+				]),
+			),
+		).toEqual([4, n * 2]);
+		expect(calls).toHaveLength(1);
+		expect(calls[0]).toMatchObject({
+			sql: 'SELECT VALUE $n__1 * 2 FROM ONLY $n__1;\nSELECT VALUE $n__2 * 2 FROM ONLY $n__2;',
+			bindings: { n__1: 2, n__2: n },
 		});
-		const error = await failure(
-			client.transaction([
-				bind(guarded, { boundOwner: 'first' }),
-				bind(readOwner, { owner: 'second' }),
-			]),
-		);
-		expect(error).toBeInstanceOf(StatementScopeError);
-		expect(error).toMatchObject({ binding: 'owner' });
-		expect(calls).toHaveLength(0);
 	});
 
-	it('refuses a binding shadowed by a LET of a directly declared statement', async () => {
-		const text = "LET $owner = 'a'; RETURN $owner;";
+	it('renames a binding and a directly declared LET independently', async () => {
+		const text = "LET $owner = 'a'; $owner;";
 		expect(() =>
 			make({ sql: text, params: {}, result: Schema.String, slots: 2 }),
 		).toThrow(/declares no `defines`/);
@@ -703,25 +694,28 @@ describe('transaction', () => {
 			defines: ['owner'],
 		});
 		const readOwner = make({
-			sql: 'RETURN $owner;',
+			sql: '$owner;',
 			params: { owner: Schema.String },
 			result: Schema.String,
 		});
-		const { client, calls } = fake(async () => []);
-		const error = await failure(
-			client.transaction([
-				bind(letter, {}),
-				bind(readOwner, { owner: 'b' }),
-			]),
-		);
-		expect(error).toBeInstanceOf(StatementScopeError);
-		expect(error).toMatchObject({ binding: 'owner' });
-		expect(calls).toHaveLength(0);
+		const { client, calls } = fake(async () => [undefined, 'a', 'b']);
+		expect(
+			await Effect.runPromise(
+				client.transaction([
+					bind(letter),
+					bind(readOwner, { owner: 'b' }),
+				]),
+			),
+		).toEqual(['a', 'b']);
+		expect(calls[0]).toMatchObject({
+			sql: "LET $owner__1 = 'a'; $owner__1;\n$owner__2;",
+			bindings: { owner__2: 'b' },
+		});
 	});
 
-	it('distinguishes native binding types with the same rendered text', async () => {
+	it('sends native binding types separately even when they print alike', async () => {
 		const read = make({
-			sql: 'RETURN $x;',
+			sql: '$x;',
 			params: { x: Schema.Unknown },
 			result: Schema.Unknown,
 		});
@@ -729,16 +723,16 @@ describe('transaction', () => {
 			[[1], new Set([1])],
 			[1, new Uint8Array([1])],
 		]) {
-			const { client, calls } = fake(async () => []);
+			const { client, calls } = fake(async () => [a, b]);
 			expect(
-				await failure(
+				await Effect.runPromise(
 					client.transaction([
 						bind(read, { x: a }),
 						bind(read, { x: b }),
 					]),
 				),
-			).toMatchObject({ binding: 'x' });
-			expect(calls).toHaveLength(0);
+			).toEqual([a, b]);
+			expect(calls[0]?.bindings).toEqual({ x__1: a, x__2: b });
 		}
 	});
 
@@ -778,34 +772,35 @@ describe('transaction', () => {
 		});
 	});
 
-	it('refuses a binding that another statement defines, before sending', async () => {
-		// Finding 1: `letter` LETs `$n`, and `reader` would read that
-		// instead of its own binding.
+	it('isolates authored LET and input names in both statement orders', async () => {
 		const letter = sequence(
 			part({ sql: 'LET $n = 1;', defines: ['n'] }),
 			part({ sql: '$n;', free: ['n'] }),
 		).define({ name: 'letter', params: {}, result: SurrealSchema.Int });
 		const reader = make({
 			name: 'reader',
-			sql: 'RETURN $n;',
+			sql: '$n;',
 			params: { n: SurrealSchema.Int },
 			result: SurrealSchema.Int,
 		});
-		expect(letter.defines).toEqual(['n']);
-		expect(reader.defines).toEqual([]);
-		for (const order of [
-			[bind(letter), bind(reader, { n: 2 })],
-			[bind(reader, { n: 2 }), bind(letter)],
-		] as const) {
-			const { calls, client } = fake(async () => [undefined, 1, 2]);
-			const error = await failure(client.transaction(order));
-			expect(error).toBeInstanceOf(StatementScopeError);
-			expect(error).toMatchObject({ statement: 'reader', binding: 'n' });
-			expect(error.message).toMatch(
-				/`\$n` is bound by `reader` and defined with LET by `letter`.*rename/,
-			);
-			expect(calls).toHaveLength(0);
-		}
+		const read = bind(reader, { n: 2 });
+		const define = bind(letter);
+		const first = fake(async () => [undefined, 1, 2]);
+		expect(
+			await Effect.runPromise(first.client.transaction([define, read])),
+		).toEqual([1, 2]);
+		expect(first.calls[0]).toMatchObject({
+			sql: 'LET $n__1 = 1;\n$n__1;\n$n__2;',
+			bindings: { n__2: 2 },
+		});
+		const second = fake(async () => [2, undefined, 1]);
+		expect(
+			await Effect.runPromise(second.client.transaction([read, define])),
+		).toEqual([2, 1]);
+		expect(second.calls[0]).toMatchObject({
+			sql: '$n__1;\nLET $n__2 = 1;\n$n__2;',
+			bindings: { n__1: 2 },
+		});
 	});
 
 	it('refuses a statement that opens its own transaction, before sending', async () => {
@@ -821,7 +816,7 @@ describe('transaction', () => {
 		expect(calls).toHaveLength(0);
 	});
 
-	describe('binds one name twice only to one value', () => {
+	describe('keeps independently encoded values in repeated bindings', () => {
 		const statementOf = (
 			name: string,
 			codec: Schema.Codec<unknown, unknown>,
@@ -855,13 +850,9 @@ describe('transaction', () => {
 		) => {
 			const { calls, outcome } = pair(first, second);
 			const result = await outcome;
-			expect(Result.isFailure(result)).toBe(true);
 			const error = Result.isFailure(result) ? result.failure : undefined;
-			expect(error).toBeInstanceOf(StatementScopeError);
-			expect(error).toMatchObject({ statement: 'b', binding: 'v' });
-			expect(error?.message).toMatch(
-				/`\$v` is bound by `a` and by `b`.*rename/,
-			);
+			expect(error).toBeInstanceOf(StatementEncodeError);
+			expect(error).toHaveProperty('binding', 'v');
 			expect(calls).toHaveLength(0);
 		};
 		const accepted = async (
@@ -871,36 +862,40 @@ describe('transaction', () => {
 			const { calls, outcome } = pair(first, second);
 			expect(Result.isSuccess(await outcome)).toBe(true);
 			expect(calls).toHaveLength(1);
+			expect(Object.keys(calls[0]?.bindings ?? {})).toEqual([
+				'v__1',
+				'v__2',
+			]);
 		};
 		const unknown = Schema.Unknown;
 
-		it('refuses values of different kinds that print alike', async () => {
+		it('keeps values of different kinds that print alike', async () => {
 			// Finding 2: each of these printed as the same SurrealQL text.
-			await refused(
+			await accepted(
 				[Schema.Array(SurrealSchema.String), ['a']],
 				[SurrealSchema.SetOf(SurrealSchema.String), new Set(['a'])],
 			);
-			await refused(
+			await accepted(
 				[SurrealSchema.Int, 5],
 				[SurrealSchema.Bytes, new Uint8Array([5])],
 			);
-			await refused(
+			await accepted(
 				[unknown, new Uint8Array([1, 2]).buffer],
 				[unknown, new Uint8Array([3, 4]).buffer],
 			);
-			await refused([unknown, 1], [unknown, 1n]);
-			await refused([unknown, 0], [unknown, -0]);
-			await refused([unknown, '1'], [unknown, 1]);
-			await refused([unknown, null], [unknown, undefined]);
-			await refused(
+			await accepted([unknown, 1], [unknown, 1n]);
+			await accepted([unknown, 0], [unknown, -0]);
+			await accepted([unknown, '1'], [unknown, 1]);
+			await accepted([unknown, null], [unknown, undefined]);
+			await accepted(
 				[unknown, new Uint8Array([1])],
 				[unknown, new Uint8Array([1]).buffer],
 			);
-			await refused(
+			await accepted(
 				[unknown, new RecordId('t', 1)],
 				[unknown, new RecordId('t', 1n)],
 			);
-			await refused(
+			await accepted(
 				[unknown, { a: 1 }],
 				[unknown, { a: 1, b: undefined }],
 			);
@@ -942,7 +937,7 @@ describe('transaction', () => {
 			const bare = Object.assign(Object.create(null), { a: 1 });
 			await accepted([unknown, bare], [unknown, { a: 1 }]);
 			const other = Object.assign(Object.create(null), { a: 2 });
-			await refused([unknown, bare], [unknown, other]);
+			await accepted([unknown, bare], [unknown, other]);
 			const cyclic: Record<string, unknown> = { a: 1 };
 			cyclic.self = cyclic;
 			const twin: Record<string, unknown> = { a: 1 };

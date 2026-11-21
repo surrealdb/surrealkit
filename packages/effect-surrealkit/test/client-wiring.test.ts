@@ -2,7 +2,6 @@ import { Effect, Schema } from 'effect';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { bind, makeWith } from '../src/client/client.js';
-import * as joining from '../src/client/internal/join.js';
 import * as tracing from '../src/client/internal/trace.js';
 import type { Transport } from '../src/client/internal/transport.js';
 import { make } from '../src/statement/index.js';
@@ -76,32 +75,6 @@ it('records each transaction part in order, including duplicate names and scalar
 });
 
 it('validates renamed bindings under their original statement and binding names', async () => {
-	// Emulate the repeatable-binding join for two one-slot reads of `$item`.
-	vi.spyOn(joining, 'joinWith').mockImplementation((entries, { mode }) =>
-		Effect.gen(function* () {
-			const parts = yield* Effect.forEach(entries, (entry, index) =>
-				Effect.map(entry.bindings, (encoded) => ({
-					...joining.requestPart(entry.statement, encoded, index, 1),
-					sent: { item: `item__${index + 1}` },
-				})),
-			);
-			return {
-				mode,
-				sql: parts
-					.map(({ statement, sent }) =>
-						statement.sql.replace('$item', `$${sent.item}`),
-					)
-					.join('\n'),
-				bindings: Object.fromEntries(
-					parts.map(({ sent, bindings }) => [
-						sent.item,
-						bindings.item,
-					]),
-				),
-				parts,
-			};
-		}),
-	);
 	const read = (name: string) =>
 		make({
 			name,
@@ -150,21 +123,27 @@ it('keeps scope and codec failures ahead of the encoded value check', async () =
 		params: { n: Schema.Number.check(Schema.isInt()) },
 		result: Schema.Number,
 	});
+	const nested = make({
+		name: 'nested transaction',
+		sql: 'BEGIN; NONE; COMMIT;',
+		params: {},
+		result: Schema.Undefined,
+		slots: 3,
+		valueSlot: 2,
+		transactional: true,
+		writes: false,
+	});
 	const badValue = bind(read, { item: new Map() });
 	const { client, collect } = collecting();
 
 	for (const options of [undefined, { unsafeSkipValueCheck: true }]) {
 		await expect(
 			Effect.runPromise(
-				client.transaction(
-					[badValue, bind(read, { item: 1 })],
-					options,
-				),
+				client.transaction([badValue, bind(nested)], options),
 			),
 		).rejects.toMatchObject({
 			_tag: 'StatementScopeError',
-			statement: 'read item',
-			binding: 'item',
+			statement: 'nested transaction',
 		});
 		await expect(
 			Effect.runPromise(

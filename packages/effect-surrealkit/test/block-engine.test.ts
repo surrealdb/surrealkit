@@ -18,7 +18,6 @@ import {
 	type Client,
 	make as makeClient,
 	StatementConflict,
-	StatementScopeError,
 	StatementThrown,
 } from '../src/client/index.js';
 import * as SurrealSchema from '../src/index.js';
@@ -535,18 +534,30 @@ describe.skipIf(!engineConfigured)('blocks on a disposable engine', () => {
 			expect(membership?.key).toBe('team:red/account:bob');
 		});
 
-		it('refuses the same block bound twice to different values, as for any statement', async () => {
-			expect(
-				await failure(
-					client.transaction([
-						bind(pay, paying('low', 'r8', 1)),
-						bind(pay, paying('low', 'r9', 1)),
-					]),
-				),
-			).toMatchObject({
-				_tag: 'StatementScopeError',
-				binding: 'request',
-			});
+		it('applies the same block with two distinct payment requests in order', async () => {
+			await engine.db.query(
+				'CREATE wallet:repeat SET owner = account:ann, balance = 5, frozen = false;',
+			);
+			const [first, second] = await ok(
+				client.transaction([
+					bind(pay, paying('repeat', 'r8', 1)),
+					bind(pay, paying('repeat', 'r9', 2)),
+				]),
+			);
+			expect(first).toMatchObject({ kind: 'paid', balance: 4 });
+			expect(second).toMatchObject({ kind: 'paid', balance: 2 });
+			for (const [request, amount] of [
+				['r8', 1],
+				['r9', 2],
+			] as const) {
+				expect(
+					await ok(
+						client.run(paymentByKey, {
+							key: `wallet:repeat/${request}`,
+						}),
+					),
+				).toMatchObject([{ amount }]);
+			}
 		});
 
 		it('shares none of its locals: a statement may bind a name the block LETs, and each reads its own value', async () => {
@@ -565,7 +576,10 @@ describe.skipIf(!engineConfigured)('blocks on a disposable engine', () => {
 			expect(after).toStrictEqual(before);
 		});
 
-		it('refuses a block whose binding another statement LETs, sending nothing', async () => {
+		it('keeps a block binding independent of a previous top-level LET', async () => {
+			await engine.db.query(
+				'CREATE wallet:bound SET owner = account:ann, balance = 5, frozen = false;',
+			);
 			const setsAmount = sequence(
 				part({ sql: 'LET $amount = 1000;', defines: ['amount'] }),
 			).define({
@@ -573,20 +587,17 @@ describe.skipIf(!engineConfigured)('blocks on a disposable engine', () => {
 				params: {},
 				result: Schema.Undefined,
 			});
-			const error = await failure(
+			const [defined, paid] = await ok(
 				client.transaction([
 					bind(setsAmount),
-					bind(pay, paying('ann', 'r7', 1)),
+					bind(pay, paying('bound', 'r7', 1)),
 				]),
 			);
-			expect(error).toBeInstanceOf(StatementScopeError);
-			expect(error).toMatchObject({
-				statement: 'pay',
-				binding: 'amount',
-			});
+			expect(defined).toBeUndefined();
+			expect(paid).toMatchObject({ kind: 'paid', balance: 4 });
 			expect(
-				await ok(client.run(paymentByKey, { key: 'wallet:ann/r7' })),
-			).toStrictEqual([]);
+				await ok(client.run(paymentByKey, { key: 'wallet:bound/r7' })),
+			).toMatchObject([{ amount: 1 }]);
 		});
 
 		it('shares no name the block LETs only inside a branch: each statement reads its own value', async () => {

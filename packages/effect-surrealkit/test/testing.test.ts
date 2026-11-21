@@ -473,7 +473,11 @@ describe('fake', () => {
 	});
 
 	it('runs a transaction atomically, with the scope rules of the real client', async () => {
-		const client = fake({ everyone: [{ name: 'Ann' }], guarded: ['Ann'] });
+		const client = fake({
+			everyone: [{ name: 'Ann' }],
+			guarded: ['Ann'],
+			'by name': [],
+		});
 		const [people, names] = await Effect.runPromise(
 			transaction([bind(everyone), bind(guarded, { name: 'Ann' })]).pipe(
 				Effect.provide(Layer.succeed(SurrealClient, client)),
@@ -485,12 +489,16 @@ describe('fake', () => {
 			'transaction(everyone, guarded)',
 			'transaction(everyone, guarded)',
 		]);
-		const clash = await failureOf(
+		const repeated = await Effect.runPromise(
 			client.transaction([
 				bind(guarded, { name: 'Ann' }),
 				bind(byName, { name: 'Kit' }),
 			]),
 		);
-		expect(clash._tag).toBe('StatementScopeError');
+		expect(repeated).toEqual([['Ann'], []]);
+		expect(client.calls.slice(-2).map(({ bindings }) => bindings)).toEqual([
+			{ name: 'Ann' },
+			{ name: 'Kit' },
+		]);
 	});
 });

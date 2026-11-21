@@ -200,14 +200,10 @@ export interface Client {
 	 * Runs several statements as one atomic request and decodes each result:
 	 * all of them take effect, or none does.
 	 *
-	 * The statements share one variable scope, as SurrealQL has it, so
-	 * before anything is sent a binding name is refused when two
-	 * statements bind it to values that are not certainly equal, or when
-	 * one statement binds a name another `LET`s (a `StatementScopeError`
-	 * naming both). A statement whose own text writes `BEGIN`, `COMMIT` or
-	 * `CANCEL` cannot be nested in this one and is refused as a
-	 * `StatementScopeError` too. The SDK refuses a top-level `RETURN` that
-	 * is followed by another statement, because some engines end the
+	 * Shared binding names and top-level locals are renamed per statement.
+	 * A statement with its own transaction control cannot be nested and
+	 * fails with a `StatementScopeError` before sending. The SDK refuses a top-level
+	 * `RETURN` followed by another statement, because some engines end the
 	 * transaction there. A declared `THROW` names the statement that
 	 * declares it.
 	 */

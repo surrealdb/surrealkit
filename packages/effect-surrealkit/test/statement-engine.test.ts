@@ -543,7 +543,7 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 			free: ['person'],
 			throws: ['No such person'],
 		}),
-		part({ sql: 'RETURN $person;', free: ['person'] }),
+		part({ sql: '$person;', free: ['person'] }),
 	).define({
 		name: 'find by email',
 		params: { boundEmail: SurrealSchema.String },
@@ -655,7 +655,7 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 		]);
 	});
 
-	it('refuses a binding another statement of the transaction defines', async () => {
+	it('isolates a bound name from another statement’s top-level LET', async () => {
 		const letter = sequence(
 			part({ sql: 'LET $n = 1;', defines: ['n'] }),
 			part({ sql: '$n;', free: ['n'] }),
@@ -668,11 +668,11 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 		});
 		expect(await ok(client.run(letter))).toBe(1);
 		expect(await ok(client.run(reader, { n: 2 }))).toBe(2);
-		const error = await failure(
-			client.transaction([bind(letter), bind(reader, { n: 2 })]),
-		);
-		expect(error).toBeInstanceOf(StatementScopeError);
-		expect(error).toMatchObject({ statement: 'reader', binding: 'n' });
+		expect(
+			await ok(
+				client.transaction([bind(letter), bind(reader, { n: 2 })]),
+			),
+		).toEqual([1, 2]);
 	});
 
 	it('refuses a statement with its own BEGIN … COMMIT inside a transaction', async () => {

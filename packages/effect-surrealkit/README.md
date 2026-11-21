@@ -1503,7 +1503,7 @@ value, for an application that names its own services, one per session.
 | Error | When | Was anything written? |
 | --- | --- | --- |
 | `StatementEncodeError` | a binding failed its codec, or its encoded value is not one the SDK sends without loss (`path` says where inside it) | no, nothing was sent |
-| `StatementScopeError` | `transaction` refused its statements: a binding another statement `LET`s, one name bound to two different values, or a statement with its own `BEGIN`, `COMMIT` or `CANCEL` | no, nothing was sent |
+| `StatementScopeError` | the client could not safely rename a shared variable, the SDK would discard an atomic binding, or a statement contains transaction control inside a transaction | no, nothing was sent |
 | `StatementThrown<Message>` | a `THROW` the statement declares; in a transaction, `statement` names the one that declares it (`one of …` when several do); `source` and `lines` say where, when the part records them | not by a transaction; a single statement's earlier statements commit on their own |
 | `StatementUnexpectedThrow` | a `THROW` whose message the statement does not declare (a dynamic message), with the thrown text as `reason` and the SDK's error as `cause` | as for `StatementThrown` |
 | `StatementConflict` | a transaction conflict that `retry` did not resolve | no; send it again |
@@ -1551,24 +1551,15 @@ metrics: `effect_surrealkit_statement_runs` (a counter by `statement` and
 
 `transaction` sends its statements as one atomic request, joined one after
 another (`make` stores every text with exactly one final `;`, so they always
-parse). They share one variable scope, as SurrealQL has it, so before
-anything is sent it refuses:
+parse). When two statements bind the same name, or one defines a top-level
+`LET` with a name the other binds, each gets its own variable in the sent
+text. The names depend only on the statements and their order. See “The
+same statement more than once” below for an example.
 
-- a binding name two statements bind to values that are not certainly
-  equal. Values compare structurally by kind: arrays, sets in any order,
-  byte arrays, plain objects in any key order, SDK values by class and
-  value, and primitives only with their own kind (`1` is not `1n`). What it
-  cannot compare with certainty (a `Map`, a class instance, a cycle) is
-  refused; the error names the binding and both statements, so rename one.
-- a name one statement binds and another `LET`s at the top level, which one
-  of them would read instead of its own value. A statement records the
-  names it defines: `sequence` takes them from its parts, builders define
-  none, and `make` takes them as declared (`defines`).
-- a statement whose own text writes `BEGIN`, `COMMIT` or `CANCEL`
-  (`transactional`; `make` takes it as declared).
-
-The SDK refuses a top-level `RETURN` followed by another statement inside a
-transaction, so put such a statement last.
+A statement that writes its own `BEGIN`, `COMMIT` or `CANCEL` cannot be
+nested in an atomic batch. The SDK also refuses a top-level `RETURN`
+followed by another statement. End a reusable lookup with a bare expression
+such as `$person;` to return that value and let the next statement run.
 
 A statement's `writes` is one of three states, and it decides what a
 result that does not decode is reported as:
@@ -1601,7 +1592,44 @@ Written by lane L1.
 
 #### The same statement more than once
 
-Written by lane L2.
+Bind each occurrence separately in a `transaction` or `pipeline`.
+
+```ts
+const find = make({
+  sql: 'SELECT * FROM ONLY $id;',
+  params: { id: PersonId },
+  result: Schema.UndefinedOr(PersonRow),
+});
+const [first, second] = yield* transaction([
+  bind(find, { id: firstId }),
+  bind(find, { id: secondId }),
+]);
+```
+
+The SDK receives one request containing the following statements and two
+separate encoded bindings.
+
+```surql
+SELECT * FROM ONLY $id__1;
+SELECT * FROM ONLY $id__2;
+```
+
+Names shared by bindings or top-level `LET`s use their statement's 1-based
+position. If the new name is already in use, another `_` is appended until
+it is free. This depends on the statements alone, so different inputs to
+the same list send identical text. Unshared names keep their spelling. A
+scripted client still sees original input names.
+
+For authored queries that will run together, use a final expression such
+as `$person;`. A top-level `RETURN $person;` works alone or at the end of
+an atomic batch. The SurrealDB SDK refuses a top-level `RETURN` followed
+by another statement, and the client preserves that refusal.
+
+A shared engine-set name or text that cannot be safely tokenized for a
+rename raises `StatementScopeError` before sending. Plain queries can
+bind `$__proto__`. Atomic requests refuse it when it would still be sent
+under that name, because the SDK would drop it. A shared `$__proto__`
+binding can be sent under its generated name.
 
 #### Timing
 
