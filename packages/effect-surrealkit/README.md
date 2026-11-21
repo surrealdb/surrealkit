@@ -1595,6 +1595,41 @@ Read back the receipt or record before deciding to replay. This outcome does
 not prove that a row changed: permissions and conditional writes can yield
 empty results.
 
+#### Several statements in one request: pipelines
+
+Written by lane L1.
+
+#### The same statement more than once
+
+Written by lane L2.
+
+#### Timing
+
+Written by lane L3.
+
+#### Interactive transactions
+
+Written by lane L4.
+
+#### Bulk writes
+
+Written by lane L5.
+
+#### Rows as a stream
+
+Written by lane L6.
+
+#### Live queries
+
+Written by lane L7.
+
+#### Transports
+
+Written by lane L8.
+
+#### Measured costs
+
+Written by lane L9.
 
 ### Record links and graph traversal
 
