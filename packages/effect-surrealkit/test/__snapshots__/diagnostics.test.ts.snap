@@ -188,13 +188,13 @@ exports[`type diagnostics > block/unknown-local 1`] = `
 
 exports[`type diagnostics > bound/hand-built 1`] = `
 [
-  "TS2322: Type '{ statement: Statement<{ readonly email: Schema.declareConstructor<string, string, readonly [], string>; }, Schema.$Array<Schema.declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 18 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { readonly id: _RecordId<"person"> & Br...' is not assignable to type '"statements that run together are paired with their input by \`bind\`"'.",
+  "TS2322: Type '{ statement: Statement<{ readonly email: Schema.declareConstructor<string, string, readonly [], string>; }, Schema.$Array<Schema.declareConstructor<{ readonly name: string; readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 17 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { readonly name:...' is not assignable to type '"statements that run together are paired with their input by \`bind\`"'.",
 ]
 `;
 
 exports[`type diagnostics > bound/hand-built-wrong-value 1`] = `
 [
-  "TS2322: Type '{ statement: Statement<{ readonly email: Schema.declareConstructor<string, string, readonly [], string>; }, Schema.$Array<Schema.declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 18 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { readonly id: _RecordId<"person"> & Br...' is not assignable to type '"statements that run together are paired with their input by \`bind\`"'.",
+  "TS2322: Type '{ statement: Statement<{ readonly email: Schema.declareConstructor<string, string, readonly [], string>; }, Schema.$Array<Schema.declareConstructor<{ readonly name: string; readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 17 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { readonly name:...' is not assignable to type '"statements that run together are paired with their input by \`bind\`"'.",
 ]
 `;
 
@@ -1948,7 +1948,7 @@ exports[`type diagnostics > step/target-filter-uncommon-field 1`] = `
 exports[`type diagnostics > stream/result-must-be-list-of-rows-only 1`] = `
 [
   "TS2379: Argument of type 'Statement<{ readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person">; }, UndefinedOr<...>, never>' is not assignable to parameter of type 'Statement<{ readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person">; }, $Array<...>, never>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
-  Property 'value' is missing in type 'UndefinedOr<declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; readonly name: string; readonly role: "owner" | "member" | "admin"; readonly address: { readonly [x: string]: SurrealValue; readonly city: string; }; ... 15 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { ...;...' but required in type '$Array<Codec>'.",
+  Property 'value' is missing in type 'UndefinedOr<declareConstructor<{ readonly name: string; readonly id: _RecordId<"person"> & Brand<"corpus/person">; readonly role: "owner" | "member" | "admin"; readonly address: { readonly [x: string]: SurrealValue; readonly city: string; }; ... 15 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { ...;...' but required in type '$Array<Codec>'.",
 ]
 `;
 
@@ -1980,7 +1980,7 @@ exports[`type diagnostics > subject/several-tables 1`] = `
 
 exports[`type diagnostics > transaction/unbound-statement 1`] = `
 [
-  "TS2322: Type 'Statement<{ readonly email: declareConstructor<string, string, readonly [], string>; }, $Array<declareConstructor<{ readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 18 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { ...; }>>, never>' is not assignable to type '"statements that run together are paired with their input by \`bind\`"'.",
+  "TS2322: Type 'Statement<{ readonly email: declareConstructor<string, string, readonly [], string>; }, $Array<declareConstructor<{ readonly name: string; readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 17 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { ...; }>>, never>' is not assignable to type '"statements that run together are paired with their input by \`bind\`"'.",
 ]
 `;
 

@@ -2049,7 +2049,8 @@ path. `unsafeSkipValueCheck` allows the SDK to encode it.
 
 Five fresh Node processes and databases per case on macOS, Apple M2
 Ultra with 128 GiB RAM. Runs used Node 26.13.1, SurrealDB SDK 2.1.1 and
-Effect 4.0.6. WebSocket connected to a local in-memory server.
+Effect 4.0.6 with the execution implementation measured at `799ab96`.
+WebSocket connected to a local in-memory server.
 
 | Workload | Embedded 4.0.1 | WebSocket 3.3.4 |
 | --- | ---: | ---: |
