@@ -25,7 +25,11 @@ import {
 	majors,
 	parseKind,
 } from '../scripts/generate-functions.mjs';
-import { type Client, make as makeClient } from '../src/client/index.js';
+import {
+	type Client,
+	make as makeClient,
+	StatementRequestError,
+} from '../src/client/index.js';
 import * as codecs from '../src/functions/generated/codecs.js';
 import * as functions from '../src/functions/index.js';
 import { Decimal, Float, Int } from '../src/index.js';
@@ -143,6 +147,13 @@ const build = (entry: Entry, sample = entry.sample): Expr => {
 
 const messageOf = (cause: Cause.Cause<unknown>): string => {
 	const error = Cause.squash(cause);
+	// The compatibility table checks the engine's own unknown-function diagnostic.
+	if (
+		error instanceof StatementRequestError &&
+		error.cause instanceof Error
+	) {
+		return error.cause.message;
+	}
 	return error instanceof Error ? error.message : String(error);
 };
 
