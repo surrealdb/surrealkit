@@ -510,7 +510,7 @@ surrealkit compile --allow-experimental surrealism
 It needs no server and reads no connection settings (`SURREALDB_*`, `.env`,
 targets), so it runs in a build with no credentials and no network. Template
 variables come from `surrealkit.toml [variables]` and `--var` only; compile
-ignores `SURREALKIT_VAR_*` in the environment, so a checkout compiles to the same
+ignores `SURREALKIT_VAR_*` in the environment and `.env`, so a checkout compiles to the same
 bytes everywhere. The engine itself has no network access (`http::*` is refused)
 and no scripting. It is strict by default: an error diagnostic fails the command
 (`--lenient` logs it instead). A configured `[typegen] typescript` is written too, from the same
@@ -979,7 +979,8 @@ rollout `run_sql` step or by hand.
 A record `DEFINE ACCESS` with no `WITH JWT ... KEY` gets a new random signing key
 every time it is overwritten, which signs every user out. SurrealKit warns when it
 applies one. Give it a stable key, for example
-`WITH JWT ALGORITHM HS512 KEY ${JWT_SECRET}`.
+`WITH JWT ALGORITHM HS512 KEY ${JWT_SECRET}` with `JWT_SECRET` set in `.env`
+(see [Template Variables](#template-variables)).
 
 A file SurrealKit cannot read (an unterminated string, an unmatched bracket, a
 `DEFINE` that starts inside another statement) stops sync or plan with the file,
@@ -1108,6 +1109,7 @@ Values are resolved in this order (highest wins):
 | ------------------------------------------- | --------------------------------------------------- |
 | `--var KEY=VALUE` CLI flag                  | `surrealkit sync --var schema_prefix=acme`          |
 | `SURREALKIT_VAR_<KEY>` environment variable | `SURREALKIT_VAR_SCHEMA_PREFIX=acme surrealkit sync` |
+| `KEY` in `.env` / `.env.local`              | `SCHEMA_PREFIX=acme` in `.env`                      |
 | `[variables]` section in `surrealkit.toml`  | _(see below)_                                       |
 
 Variable names are case-insensitive: `${FOO}`, `${foo}`, and `${Foo}` all match key `FOO`.
@@ -1143,6 +1145,28 @@ export SURREALKIT_VAR_TALENT_USERNAME=talent_rw
 surrealkit sync
 ```
 
+### `.env` File
+
+A variable is also read, under its own name, from the `.env` file SurrealKit already loads
+for its connection settings (`.env.local` instead, when it exists in the working directory):
+
+```sh
+# .env
+SURREALDB_HOST=http://localhost:8000
+JWT_SECRET=change_me
+```
+
+```sql
+DEFINE ACCESS account ON DATABASE TYPE RECORD
+    ...
+    WITH JWT ALGORITHM HS512 KEY '${JWT_SECRET}';
+```
+
+Keys match case-insensitively, like every other source, and an empty value (`JWT_SECRET=`)
+counts as unset. Only the file is read: a plain `JWT_SECRET` exported in your shell is not a
+source, so use `SURREALKIT_VAR_JWT_SECRET` or `--var` for that. `surrealkit compile` does not
+read `.env` (see [Compiling without a database](#compiling-without-a-database)).
+
 ### Escape Sequence
 
 To emit a literal `${...}` (no substitution), double the dollar sign:
@@ -1164,13 +1188,13 @@ An undefined variable is always a hard error. Surrealkit will not silently skip 
 
 ```
 error: template variable 'SCHEMA_PREFIX' is not defined
-       (set via --var SCHEMA_PREFIX=VALUE, SURREALKIT_VAR_SCHEMA_PREFIX env var, or surrealkit.toml [variables])
+       (set via --var SCHEMA_PREFIX=VALUE, SURREALKIT_VAR_SCHEMA_PREFIX env var, SCHEMA_PREFIX in .env / .env.local, or surrealkit.toml [variables])
 ```
 
 ### Known Limitations
 
 - **Hash-based re-sync**: `surrealkit sync` tracks schema files by content hash. Changing a variable value does not change the file hash, so sync will not re-apply the file. Touch the file or remove its tracking entry to force re-application.
-- **Watch mode**: variables are resolved once at startup. Edits to `surrealkit.toml` during `--watch` require a restart.
+- **Watch mode**: variables are resolved once at startup. Edits to `surrealkit.toml` or `.env` during `--watch` require a restart.
 - **Catalog snapshots**: entity names containing `${VAR}` tokens appear literally in `catalog_snapshot.json` and are not substituted. This affects drift detection for template-named tables; prefer fixed entity names in production schemas.
 - **String literals**: substitution is textual, so `${VAR}` inside a SurrealQL string literal is also replaced.
 

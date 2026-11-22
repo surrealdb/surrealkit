@@ -766,7 +766,10 @@ async fn run_mcp(args: &Cli) -> Result<()> {
 	// the process working directory: `set_current_dir` is process-global, so under
 	// concurrent tool calls it would be a data race.
 	let root = std::env::current_dir().context("resolving the project root")?;
-	let config = ServerConfig::new(root, overrides, vars)?;
+	// Template variables may also come from the project's `.env` / `.env.local`,
+	// read once here like the CLI reads it once per run.
+	let dotenv = load_env().map(|env| env.all_vars().clone()).unwrap_or_default();
+	let config = ServerConfig::new(root, overrides, vars)?.with_dotenv(dotenv);
 	log::info!("surrealkit mcp: serving {} over stdio", config.root.display());
 
 	serve_stdio(SurrealKitMcp::new(config)).await
@@ -925,7 +928,7 @@ async fn run(args: Cli) -> Result<i32> {
 	let raw_vars: Vec<(String, String)> =
 		args.var.iter().map(|s| parse_var_flag(s)).collect::<anyhow::Result<_>>()?;
 	let template_vars = TemplateVars {
-		vars: build_vars(&raw_vars, None)?,
+		vars: build_vars(&raw_vars, env.as_ref().map(DotEnv::all_vars), None)?,
 	};
 
 	let cfg = DbCfg::from_env(env.as_ref(), &overrides)?;
