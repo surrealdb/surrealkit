@@ -38,6 +38,7 @@
 	],
 	"exclude": [
 		"test/golden",
-		"test/types"
+		"test/types",
+		"test/tmp-*"
 	]
 }

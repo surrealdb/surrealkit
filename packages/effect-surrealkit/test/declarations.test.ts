@@ -19,6 +19,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import ts from 'typescript';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { PEER_VERSIONS } from '../src/emitter/version.js';
@@ -290,4 +291,34 @@ describe('declaration emit in a pnpm consumer', () => {
 		expect(output).toBe('');
 		expect(result.status).toBe(0);
 	});
+});
+
+// The build above runs tsup, whose declaration pass reads the program of
+// tsconfig.json while other test files write and delete `test/tmp-*`
+// directories. A file listed and then deleted fails it with TS6053.
+it('leaves the temporary directories tests write out of the package program', () => {
+	const dir = mkdtempSync(join(import.meta.dirname, 'tmp-program-'));
+	try {
+		writeFileSync(join(dir, 'probe.ts'), 'export const probe = 1;\n');
+		const parsed = ts.getParsedCommandLineOfConfigFile(
+			join(pkg, 'tsconfig.json'),
+			undefined,
+			{
+				...ts.sys,
+				onUnRecoverableConfigFileDiagnostic: (diagnostic) => {
+					throw new Error(
+						ts.flattenDiagnosticMessageText(
+							diagnostic.messageText,
+							'\n',
+						),
+					);
+				},
+			},
+		);
+		const files = parsed?.fileNames ?? [];
+		expect(files).toContain(join(pkg, 'test', 'declarations.test.ts'));
+		expect(files.filter((file) => file.includes('/test/tmp-'))).toEqual([]);
+	} finally {
+		rmSync(dir, { recursive: true, force: true });
+	}
 });
