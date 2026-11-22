@@ -39,6 +39,7 @@ function bufferedConnection() {
 	const liveId = Uuid.v7();
 	const state = { opens: 0, closes: 0, counter: 0, registrations: 0 };
 	const writes: Array<{ socket: number; id: string; counter: number }> = [];
+	const offers: string[][] = [];
 	class Socket extends EventTarget {
 		static CONNECTING = 0;
 		static OPEN = 1;
@@ -46,12 +47,14 @@ function bufferedConnection() {
 		static CLOSED = 3;
 		readyState = Socket.CONNECTING;
 		binaryType = 'arraybuffer';
+		// A 3.x server selects the original CBOR subprotocol.
+		readonly protocol = 'cbor';
 		#number = 0;
 
-		constructor(url: string, protocol: string) {
+		constructor(url: string, protocols: string[]) {
 			super();
 			expect(url).toBe(endpoint);
-			expect(protocol).toBe('cbor');
+			offers.push(protocols);
 			queueMicrotask(() => {
 				if (this.readyState !== Socket.CONNECTING) return;
 				this.#number = ++state.opens;
@@ -113,14 +116,14 @@ function bufferedConnection() {
 		// The SDK only uses EventTarget, send, close and readyState in this test.
 		websocketImpl: Socket as unknown as typeof WebSocket,
 	});
-	return { db, state, writes };
+	return { db, state, writes, offers };
 }
 
 it.each([
 	false,
 	true,
 ])('handles a lost buffered WebSocket acknowledgement with reconnect=%s', async (reconnect) => {
-	const { db, state, writes } = bufferedConnection();
+	const { db, state, writes, offers } = bufferedConnection();
 	const client = makeClient(db);
 	const ready = Effect.runSync(Deferred.make<void>());
 	const listen = Effect.scoped(
@@ -191,6 +194,9 @@ it.each([
 		expect(closed).toMatchObject({ reason: 'disconnected' });
 		expect(state.opens).toBe(reconnect ? 2 : 1);
 		expect(state.registrations).toBe(1);
+		expect(offers).toEqual(
+			Array.from({ length: state.opens }, () => ['cbor.2', 'cbor']),
+		);
 	} finally {
 		try {
 			await run(Effect.promise(() => db.close()));

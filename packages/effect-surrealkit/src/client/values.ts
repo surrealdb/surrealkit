@@ -199,7 +199,7 @@ const check = (
 			if (Object.is(value, -0)) {
 				return fail(
 					path,
-					'negative zero, which the SDK encodes as positive zero',
+					'negative zero, which surrealdb.js 2.1.1 encodes as positive zero',
 				);
 			}
 			return Number.isInteger(value) && Math.abs(value) > MAX_NUMBER

@@ -12,6 +12,12 @@ import {
 	type ItemCodec,
 	item,
 } from '../internal.js';
+import {
+	DateResult,
+	IntervalResult,
+	TimeResult,
+	TimestampResult,
+} from '../result.js';
 import * as C from './codecs.js';
 
 /**
@@ -26,7 +32,7 @@ export const age = <
 	from: A0,
 	to: A1,
 ): Expr<typeof C.StringCodec, ParamsOfAll<A0 | A1>> =>
-	apply('time::age', C.StringCodec, 2, [from, to]);
+	apply('time::age', IntervalResult, 2, [from, to]);
 
 /**
  * `time::ceil(time: datetime, step: duration) -> datetime`
@@ -206,7 +212,7 @@ export const makeDate = <
 	month: A1,
 	day: A2,
 ): Expr<typeof C.DateTimeCodec, ParamsOfAll<A0 | A1 | A2>> =>
-	apply('time::make_date', C.DateTimeCodec, 3, [year, month, day]);
+	apply('time::make_date', DateResult, 3, [year, month, day]);
 
 /**
  * `time::make_time(hour: int, minute: int, second: int) -> duration`
@@ -222,7 +228,7 @@ export const makeTime = <
 	minute: A1,
 	second: A2,
 ): Expr<typeof C.DurationCodec, ParamsOfAll<A0 | A1 | A2>> =>
-	apply('time::make_time', C.DurationCodec, 3, [hour, minute, second]);
+	apply('time::make_time', TimeResult, 3, [hour, minute, second]);
 
 /**
  * `time::make_timestamp(year: int, month: int, day: int, hour: int, minute: int, second: int) -> datetime`
@@ -244,7 +250,7 @@ export const makeTimestamp = <
 	minute: A4,
 	second: A5,
 ): Expr<typeof C.DateTimeCodec, ParamsOfAll<A0 | A1 | A2 | A3 | A4 | A5>> =>
-	apply('time::make_timestamp', C.DateTimeCodec, 6, [
+	apply('time::make_timestamp', TimestampResult, 6, [
 		year,
 		month,
 		day,

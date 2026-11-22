@@ -7,7 +7,7 @@ import {
 	SchemaParser,
 } from 'effect';
 
-import type { CodeOutput } from './code.js';
+import type { CodeOutput, SchemaCode } from './code.js';
 import { staticCodecIssue } from './codecIssue.js';
 
 /** Outcome of checking one input value. */
@@ -113,6 +113,10 @@ export const leaf = <T, E = T>(options: LeafOptions<T>) =>
 		},
 	);
 
+type CodesFor<Parameters extends ReadonlyArray<Schema.Top>> = {
+	readonly [Index in keyof Parameters]: SchemaCode;
+};
+
 /**
  * Wraps a composed codec (one built from transformations) in a single
  * declaration node, so it carries its own `toCode` and prints by name.
@@ -121,18 +125,21 @@ export const leaf = <T, E = T>(options: LeafOptions<T>) =>
  * declaration flips its type parameters: the encoding parser receives the
  * flipped inner codec, whose decoder is the inner encoder. `preprocess` runs
  * on the decoding side only, so encoding is exactly the inner codec's.
+ * Additional code parameters let the compiler resolve nested imports and
+ * references in the same pass. The parser uses only the first parameter.
  */
-export const wrap = <S extends Schema.Top>(
+export const wrap = <
+	S extends Schema.Top,
+	const CodeParameters extends ReadonlyArray<Schema.Top> = readonly [],
+>(
 	inner: S,
 	annotations: {
 		readonly id: string;
 		readonly payload?: Schema.Json;
 		readonly expected: string;
+		readonly codeParameters?: CodeParameters;
 		readonly code: (
-			typeParameters: ReadonlyArray<{
-				readonly runtime: string;
-				readonly Type: string;
-			}>,
+			typeParameters: CodesFor<readonly [S, ...CodeParameters]>,
 		) => CodeOutput;
 		readonly equivalence?: (self: S['Type'], that: S['Type']) => boolean;
 		/** Applied to the input before the inner codec, when decoding only. */
@@ -156,7 +163,7 @@ export const wrap = <S extends Schema.Top>(
 			refuse?: typeof annotations.refuse,
 		): DeclarationRun =>
 		(typeParameters) => {
-			// The one type parameter: `inner`, flipped when encoding.
+			// The first parameter is `inner`, flipped when encoding.
 			const codec = Schema.make<Schema.Codec<unknown, unknown>>(
 				typeParameters[0] ?? inner.ast,
 			);
@@ -176,7 +183,10 @@ export const wrap = <S extends Schema.Top>(
 				id: annotations.id,
 				payload: annotations.payload ?? null,
 			},
-			toCode: ({ typeParameters }) => annotations.code(typeParameters),
+			toCode: ({ typeParameters }) =>
+				annotations.code(
+					typeParameters as CodesFor<readonly [S, ...CodeParameters]>,
+				),
 			// Arbitraries and equivalences come from the wrapped codec.
 			toCodecArbitrary: ({ typeParameters: [type] }) =>
 				annotations.arbitrary?.() ??
@@ -193,7 +203,11 @@ export const wrap = <S extends Schema.Top>(
 		Schema.declareConstructor<S['Type'], S['Encoded'], readonly [S]>
 	>(
 		new SchemaAST.Declaration(
-			[inner.ast],
+			[
+				inner.ast,
+				...(annotations.codeParameters?.map((schema) => schema.ast) ??
+					[]),
+			],
 			parser(preprocess, annotations.refuse),
 			declaration,
 			undefined,

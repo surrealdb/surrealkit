@@ -112,7 +112,7 @@ const matrix = Schema.Struct({
 	transport: Schema.Literals(['embedded', 'ws', 'http']),
 	signedZero: Schema.Struct({
 		checkedBinding: Schema.Literal('refused before dispatch'),
-		unsafeBinding: Schema.Literal('returned +0'),
+		unsafeBinding: Schema.Literal('returned -0'),
 		engineLiteral: Schema.Literal('preserved'),
 	}),
 	operations: Schema.Record(Schema.Literals(operations), support),
@@ -361,18 +361,18 @@ const observeSignedZero = async (
 		NaN,
 		Infinity,
 		-Infinity,
-		+0,
+		-0,
 		0,
 		Number.MIN_VALUE,
 	]);
-	expect(unchecked[3]).toBe(+0);
+	expect(unchecked[3]).toBe(-0);
 	expect(counts.requests).toBe(1);
 
 	const literal = await Effect.runPromise(client.run(negativeZeroLiteral));
 	expect(literal).toBe(-0);
 	return {
 		checkedBinding: 'refused before dispatch',
-		unsafeBinding: 'returned +0',
+		unsafeBinding: 'returned -0',
 		engineLiteral: 'preserved',
 	};
 };
@@ -538,9 +538,11 @@ it('README transport table matches every committed golden', () => {
 	expect(actual).toBe(table);
 });
 
-it('the SDK encoder sends both signs of zero as CBOR integer zero', () => {
+it('the SDK encoder preserves negative zero as a CBOR float', () => {
 	const codec = CborCodec.DEFAULT;
-	expect(codec.encode(-0)).toEqual(Uint8Array.of(0));
+	const negativeZero = codec.encode(-0);
+	expect(negativeZero).toEqual(Uint8Array.of(0xf9, 0x80, 0));
+	expect(codec.decode(negativeZero)).toBe(-0);
 	expect(codec.encode(+0)).toEqual(Uint8Array.of(0));
 	const negativeZeroFloat = Uint8Array.of(0xfb, 0x80, 0, 0, 0, 0, 0, 0, 0);
 	expect(codec.decode(negativeZeroFloat)).toBe(-0);
@@ -612,7 +614,7 @@ describe.skipIf(!engineConfigured)('disposable engine transport matrix', () => {
 	it('V8.1: refuses checked negative zero and pins unsafe binding and engine read behavior', async () => {
 		await observeSignedZero(engine);
 	});
-	it('the engine and SDK reader preserve a literal and a string cast to negative float zero', async () => {
+	it('the engine preserves literal, string-cast, and SDK-bound negative float zero', async () => {
 		const [literal, cast, reciprocal, arrivedAsFloat] =
 			await engine.db.query<[number, number, number, boolean]>(
 				"RETURN -0.0f; RETURN <float>'-0'; RETURN 1.0f / -0.0f; RETURN type::is_float($sample);",
@@ -621,7 +623,7 @@ describe.skipIf(!engineConfigured)('disposable engine transport matrix', () => {
 		expect(literal).toBe(-0);
 		expect(cast).toBe(-0);
 		expect(reciprocal).toBe(-Infinity);
-		expect(arrivedAsFloat).toBe(false);
+		expect(arrivedAsFloat).toBe(true);
 	});
 	roundTrip(
 		'nanosecond datetime',

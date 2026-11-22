@@ -91,6 +91,16 @@ const baseCodecs = {
 	uuid: { name: 'UuidCodec', from: '../../scalars.js', source: 'Uuid' },
 };
 
+// These SurrealDB 4 results have different representations in cbor and cbor.2.
+const wireResults = {
+	date: { codec: 'DateResult', result: 'datetime' },
+	time: { codec: 'TimeResult', result: 'duration' },
+	timestamp: { codec: 'TimestampResult', result: 'datetime' },
+	interval: { codec: 'IntervalResult', result: 'string' },
+	'sized-float': { codec: 'SizedFloatResult', result: 'float' },
+	'sized-int': { codec: 'SizedIntResult', result: 'int' },
+};
+
 /**
  * The result kinds that build an array from the arguments they name
  * (`with:0,1`): how many they name, the helper and type that derive the
@@ -314,6 +324,13 @@ const validate = (table) => {
 				fail(`${where}: a variadic function has no optional argument`);
 		}
 		const result = parseKind(entry.result, `${where} result`, true);
+		if (
+			entry.wireResult !== undefined &&
+			(!Object.hasOwn(wireResults, entry.wireResult) ||
+				wireResults[entry.wireResult].result !== entry.result)
+		) {
+			fail(`${where}: invalid wire result for \`${entry.result}\``);
+		}
 		const index = result.same ?? result.item ?? result.items;
 		if (index !== undefined && entry.args[index] === undefined) {
 			fail(`${where}: result \`${entry.result}\` names no argument`);
@@ -453,11 +470,12 @@ const resultNote = (entry, result) => {
 
 const renderFunction = (entry) => {
 	const result = parseKind(entry.result, entry.name, true);
+	const wireCodec = wireResults[entry.wireResult]?.codec;
 	const doc = `/**\n * \`${signatureText(entry)}\`\n *\n${resultNote(entry, result)} * ${engineNote(entry)}\n */\n`;
 	const name = exportName(entry.name);
 	if (entry.constant === true) {
-		const codec = `C.${codecName(result)}`;
-		return `${doc}export const ${name}: Expr<typeof ${codec}, NoParams> = /*#__PURE__*/ constant('${entry.name}', ${codec});\n`;
+		const base = `C.${codecName(result)}`;
+		return `${doc}export const ${name}: Expr<typeof ${base}, NoParams> = /*#__PURE__*/ constant('${entry.name}', ${wireCodec ?? base});\n`;
 	}
 	const variadic = entry.variadic === true;
 	const params = entry.args.map((arg, index) => {
@@ -513,8 +531,9 @@ const renderFunction = (entry) => {
 		codecType = 'same' in result ? own : `ItemCodec<${own}>`;
 		codecValue = `${'same' in result ? 'same' : 'item'}(${index}, ${fallback})`;
 	} else {
+		// A wire codec has its base codec's type, so the signature is unchanged.
 		codecType = `typeof C.${codecName(result)}`;
-		codecValue = `C.${codecName(result)}`;
+		codecValue = wireCodec ?? `C.${codecName(result)}`;
 	}
 	const fixed = params.filter((param) => !param.rest);
 	const required = fixed.filter((param) => !param.optional).length;
@@ -562,12 +581,24 @@ const renderFamily = (family, entries) => {
 	].sort((a, b) =>
 		a.replace(/^type /u, '').localeCompare(b.replace(/^type /u, '')),
 	);
+	const wireCodecs = [
+		...new Set(
+			entries.flatMap((entry) =>
+				entry.wireResult === undefined
+					? []
+					: [wireResults[entry.wireResult].codec],
+			),
+		),
+	].sort();
 	const imports = [
 		`import type { ${exprTypes.join(', ')} } from '../../statement/expr.js';`,
 		...(uses(/NoParams/u)
 			? ["import type { NoParams } from '../../statement/statement.js';"]
 			: []),
 		`import { ${internal.join(', ')} } from '../internal.js';`,
+		...(wireCodecs.length === 0
+			? []
+			: [`import { ${wireCodecs.join(', ')} } from '../result.js';`]),
 		"import * as C from './codecs.js';",
 	];
 	return `${header(` (the \`${family}::\` family)`)}\n${imports.join('\n')}\n\n${text}`;

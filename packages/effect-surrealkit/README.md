@@ -6,7 +6,7 @@ that turns a SurrealKit schema document v2 into typed Effect modules, and
 typed statements built from those modules.
 
 ```sh
-npm i effect-surrealkit effect@4.0.6 surrealdb@2.1.1
+npm i effect-surrealkit effect@4.1.5 surrealdb@2.2.2
 ```
 
 Every runtime export imports only `effect` and `surrealdb` value classes, so it
@@ -272,10 +272,10 @@ the rest-record codec. Array and set elements still use the stored-value codec.
 ### Printer: SchemaRepresentation versus a template printer
 
 The emitter prints modules with its own small template printer. The
-alternative was to build live schemas from the codecs and print them with
-`SchemaRepresentation.toRepresentation` → `toCodeDocument`, which every codec
-supports (each carries `toCode` metadata; `test/to-code.test.ts` prints a
-struct of all of them). It works mechanically but was not adopted because:
+alternative was to build live schemas from the codecs, convert them with
+`SchemaRepresentation.toRepresentation`, and print them with Effect's code
+generator (`Codegen.Module.addSchemas` and `finalize` in 4.1.5). Every codec
+carries `toCode` metadata for this. The emitter uses templates because:
 
 - it emits one line per schema, so readable output needs an external
   formatter in the generation path;
@@ -498,6 +498,15 @@ it does not, the engine must reject the sample call as an unknown function. 32 f
 with their `type::is_*` checks. None exists only on 3.3. Non-deterministic
 functions (`rand::*`, `time::now`, salted hashes) are checked by decoding
 alone.
+
+Over the `cbor.2` protocol, which SDK 2.2.2 negotiates, SurrealDB 4 returns
+17 of these results as SDK classes of their own: `PlainDate`, `PlainTime`,
+`Timestamp`, `Interval` and the sized numbers. Their functions keep the result
+types the table records and decode the same values as over `cbor`: a date
+becomes midnight UTC (an infinite date becomes the engine's datetime bound), a
+time becomes a duration, a timestamp a datetime, an interval its ISO 8601
+text, and a sized number a float or a safe integer. A raw query still returns
+the SDK classes.
 
 Not in the table: functions that take a closure (`array::map`,
 `array::fold`, `array::reduce`, `value::chain`, `value::expect`); the
@@ -1510,7 +1519,7 @@ value, for an application that names its own services, one per session.
 For replay-sensitive WebSocket writes and for live queries that must report a
 lost connection, connect with `reconnect: false` on the root SDK connection.
 Forked sessions inherit that setting. With automatic reconnect enabled, SDK
-2.1.1 can resend a buffered request whose acknowledgement was lost, even
+2.2.2 can resend a buffered request whose acknowledgement was lost, even
 with conflict retries disabled. An unmanaged live listener can also keep
 waiting after its original socket is gone. The client counts its own sends;
 the SDK can make additional physical sends inside one attempt.
@@ -1556,7 +1565,8 @@ sends without loss: the package's `SurrealValue` shape (plus `undefined`
 for NONE, `ArrayBuffer` for bytes and the SDK's record id and range
 values), with well-formed strings and integers the SDK can encode. The SDK
 would otherwise send a class instance as its own fields, a `Map` as a
-document, a lone surrogate as U+FFFD, or a bound negative zero as positive zero. The check never throws; `{
+document or a lone surrogate as U+FFFD. Older supported SDK versions can also
+encode a bound negative zero as positive zero. The check never throws; `{
 unsafeSkipValueCheck: true }` turns it off.
 
 `{ retry: schedule }` takes an Effect `Schedule` and sends the same,
@@ -2021,7 +2031,7 @@ record IDs, and nested lists and objects.
 
 | Capability | 4.0.1 embedded | 4.0.0 WebSocket | 4.0.0 HTTP | 3.3.4 WebSocket | 3.3.4 HTTP |
 | --- | --- | --- | --- | --- | --- |
-| JavaScript SDK | 2.1.1 | 2.1.1 | 2.1.1 | 2.1.1 | 2.1.1 |
+| JavaScript SDK | 2.2.2 | 2.2.2 | 2.2.2 | 2.2.2 | 2.2.2 |
 | `run` | 1 request, client timing only | 1 request, client timing only | 1 request, client timing only | 1 request, client timing only | 1 request, client timing only |
 | `transaction` | 1 request, client timing only | 1 request, client timing only | 1 request, client timing only | 1 request, client timing only | 1 request, client timing only |
 | `pipeline`, each statement | 1 request, server timing | 1 request, server timing | 1 request, server timing | 1 request, server timing | 1 request, server timing |
@@ -2032,7 +2042,7 @@ record IDs, and nested lists and objects.
 | `bulk`, two chunks, atomic | 4 requests, server timing | 4 requests, server timing | 1 request, client timing only | 4 requests, server timing | 1 request, client timing only |
 | `bulk`, two chunks, non-atomic | 2 requests, client timing only | 2 requests, client timing only | 2 requests, client timing only | 2 requests, client timing only | 2 requests, client timing only |
 | Checked `-0` binding | refused before dispatch | refused before dispatch | refused before dispatch | refused before dispatch | refused before dispatch |
-| Unchecked `-0` binding | returned +0 | returned +0 | returned +0 | returned +0 | returned +0 |
+| Unchecked `-0` binding | returned -0 | returned -0 | returned -0 | returned -0 | returned -0 |
 | Engine float literal `-0.0f` | preserved | preserved | preserved | preserved | preserved |
 
 The counts include begin and commit for an interactive transaction, and
@@ -2040,10 +2050,11 @@ start and kill for a live query. The interactive example runs one
 statement. Each bulk example writes two chunks. Timing describes what
 the client reports for these requests.
 
-The SDK's CBOR encoder writes both signs of JavaScript zero as integer
-zero. With value checking enabled, a bound `-0` raises
-`StatementEncodeError` before dispatch and names the original binding
-path. `unsafeSkipValueCheck` allows the SDK to encode it.
+SDK 2.2.2 encodes JavaScript `-0` as a CBOR float and preserved it on all
+five transports when sent with `unsafeSkipValueCheck`. With value checking
+enabled, a bound `-0` still raises `StatementEncodeError` before dispatch
+and names the binding path. This protects callers on supported older SDK
+versions such as 2.1.1, which encode it as positive zero.
 
 #### Measured costs
 
@@ -2499,9 +2510,9 @@ see [Generating modules](#generating-modules).
 SDK surfaces NONE) before decoding, so exact `Schema.optionalKey` fields work
 on projections and object values; `null` is kept.
 
-Every schema carries `toCode` metadata, so
-`SchemaRepresentation.toCodeDocument` prints a schema built from them back to
-source.
+Every schema carries `toCode` metadata. In Effect 4.1.5,
+`Codegen.Module.addSchemas` and `finalize` print schemas built from them back
+to source after conversion with `SchemaRepresentation.toRepresentation`.
 
 ## What the codecs refuse, and why
 

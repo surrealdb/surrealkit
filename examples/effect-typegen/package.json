@@ -9,9 +9,9 @@
 		"typecheck": "tsc --noEmit"
 	},
 	"dependencies": {
-		"effect": "4.0.6",
+		"effect": "4.1.5",
 		"effect-surrealkit": "file:../../packages/effect-surrealkit",
-		"surrealdb": "2.1.1"
+		"surrealdb": "2.2.2"
 	},
 	"devDependencies": {
 		"typescript": "^5.9.2"

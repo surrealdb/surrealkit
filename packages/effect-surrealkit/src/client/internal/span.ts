@@ -5,6 +5,7 @@ import {
 	Effect,
 	Exit,
 	References,
+	Scope,
 	Stream,
 	Tracer,
 } from 'effect';
@@ -32,37 +33,68 @@ const end = (
 		);
 	});
 
+const start = (name: string, options: Tracer.SpanOptions) =>
+	Effect.gen(function* () {
+		const span = yield* Effect.makeSpan(name, options);
+		const clock = yield* Clock.Clock;
+		const timingEnabled = yield* References.TracerTimingEnabled;
+		return { span, clock, timingEnabled };
+	});
+
 export const withClientSpan =
 	(name: string, options: Tracer.SpanOptions) =>
 	<A, E, R>(effect: Effect.Effect<A, E, R>) =>
 		Effect.acquireUseRelease(
-			Effect.gen(function* () {
-				const span = yield* Effect.makeSpan(name, options);
-				const clock = yield* Clock.Clock;
-				const timingEnabled = yield* References.TracerTimingEnabled;
-				return { span, clock, timingEnabled };
-			}),
+			start(name, options),
 			({ span }) => effect.pipe(Effect.withParentSpan(span)),
 			({ span, clock, timingEnabled }, exit) =>
 				end(span, exit, clock, timingEnabled),
 		);
 
+/**
+ * Runs `stream` in a span. The stream gets a scope of its own. When the
+ * channel completes, one finalizer closes that scope and then ends the span,
+ * so the stream's finalizers can still annotate it: since Effect 4.0.7 a span
+ * ignores attributes once it has ended.
+ */
 export const withClientStreamSpan =
 	(name: string, options: Tracer.SpanOptions) =>
 	<A, E, R>(stream: Stream.Stream<A, E, R>) =>
 		Stream.fromChannel(
-			Channel.acquireUseRelease(
-				Effect.makeSpan(name, options),
-				(span) =>
-					Stream.toChannel(stream).pipe(
+			Channel.fromTransformBracket(
+				Effect.fnUntraced(function* (upstream, _scope, channelScope) {
+					const { span, streamScope } = yield* Effect.uninterruptible(
+						Effect.gen(function* () {
+							const { span, clock, timingEnabled } = yield* start(
+								name,
+								options,
+							);
+							const streamScope = yield* Scope.make('sequential');
+							yield* Scope.addFinalizerExit(
+								channelScope,
+								(exit) =>
+									Scope.close(streamScope, exit).pipe(
+										Effect.withParentSpan(span),
+										Effect.ensuring(
+											end(
+												span,
+												exit,
+												clock,
+												timingEnabled,
+											),
+										),
+									),
+							);
+							return { span, streamScope };
+						}),
+					);
+					const channel = Stream.toChannel(stream).pipe(
 						Channel.provideService(Tracer.ParentSpan, span),
-					),
-				(span, exit) =>
-					Effect.gen(function* () {
-						const clock = yield* Clock.Clock;
-						const timingEnabled =
-							yield* References.TracerTimingEnabled;
-						yield* end(span, exit, clock, timingEnabled);
-					}),
+					);
+					return yield* Channel.toTransform(channel)(
+						upstream,
+						streamScope,
+					);
+				}),
 			),
 		);

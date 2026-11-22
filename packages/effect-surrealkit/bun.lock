@@ -10,8 +10,8 @@
         "@surrealdb/node-native": "4.0.1",
         "@types/node": "^24.3.0",
         "ajv": "8.17.1",
-        "effect": "4.0.6",
-        "surrealdb": "2.1.1",
+        "effect": "4.1.5",
+        "surrealdb": "2.2.2",
         "tsup": "^8.2.4",
         "typescript": "^5.9.2",
         "vitest": "^3.2.4",
@@ -179,7 +179,7 @@
 
     "@surrealdb/node-native-win32-x64-msvc": ["@surrealdb/node-native-win32-x64-msvc@4.0.1", "", { "os": "win32", "cpu": "x64" }, "sha512-FEAVBNT/9/82UnUUsASLSKrnpNr9LkLkm9SOjGGJ/WuUFLXfjeNu6nyztxshG1b8QT1cGFBFNdEwsaRuO1isOQ=="],
 
-    "@surrealdb/sqon": ["@surrealdb/sqon@0.1.6", "", { "dependencies": { "@surrealdb/cbor": "2.0.0-alpha.4", "uuidv7": "^1.0.1" }, "peerDependencies": { "tslib": "^2.6.3", "typescript": "^5.0.0" } }, "sha512-rUUxuKYQJxsPy2ezYe2qy28Cd+LYUcYX7Qhi+eWl7d0KFnqBUGXyIkt6y7UgGhVlZjn0OBiGdJkM3fTzl8Qjjw=="],
+    "@surrealdb/sqon": ["@surrealdb/sqon@0.2.1", "", { "dependencies": { "@surrealdb/cbor": "2.0.0-alpha.4", "uuidv7": "^1.0.1" }, "peerDependencies": { "tslib": "^2.6.3", "typescript": "^5.0.0" } }, "sha512-syLKHRHMoyzbimUAOni3Jn8oeEIGXpsHJjIOaZ5qJ17BQHXQvlvlhqRL5/r83YKWz7ptgt2lVNyoU857lOfvAQ=="],
 
     "@types/chai": ["@types/chai@5.2.3", "", { "dependencies": { "@types/deep-eql": "*", "assertion-error": "^2.0.1" } }, "sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA=="],
 
@@ -231,7 +231,7 @@
 
     "deep-eql": ["deep-eql@5.0.2", "", {}, "sha512-h5k/5U50IJJFpzfL6nO9jaaumfjO/f2NjK/oYB2Djzm4p9L+3T9qWpZqZ2hAbLPuuYq9wrU08WQyBTL5GbPk5Q=="],
 
-    "effect": ["effect@4.0.6", "", {}, "sha512-Tc3mkzuLR6t6P9dhLt0D2GrxYtmU5td4XEJEiXCmILz53IRIfJyHsKZWjTA3xEjiwpNTtXBgI4iqYPxMztBDrw=="],
+    "effect": ["effect@4.1.5", "", {}, "sha512-xyR20KhQI0vg2gD8ILUSQRTTESEYJ0JKdP+QD8J37xbwPTqXRxFM/l0+vUVD9fuSvoYruoTqyt33C4FZv1s4TQ=="],
 
     "es-module-lexer": ["es-module-lexer@1.7.0", "", {}, "sha512-jEQoCwk8hyb2AZziIOLhDqpm5+2ww5uIE6lkO/6jcOCusfk6LhMHpXXfBLXTZ7Ydyt0j4VoUQv6uGNYbdW+kBA=="],
 
@@ -315,7 +315,7 @@
 
     "sucrase": ["sucrase@3.35.1", "", { "dependencies": { "@jridgewell/gen-mapping": "^0.3.2", "commander": "^4.0.0", "lines-and-columns": "^1.1.6", "mz": "^2.7.0", "pirates": "^4.0.1", "tinyglobby": "^0.2.11", "ts-interface-checker": "^0.1.9" }, "bin": { "sucrase": "bin/sucrase", "sucrase-node": "bin/sucrase-node" } }, "sha512-DhuTmvZWux4H1UOnWMB3sk0sbaCVOoQZjv8u1rDoTV0HTdGem9hkAZtl4JZy8P2z4Bg0nT+YMeOFyVr4zcG5Tw=="],
 
-    "surrealdb": ["surrealdb@2.1.1", "", { "dependencies": { "@surrealdb/sqon": "^0.1.6" }, "peerDependencies": { "tslib": "^2.6.3", "typescript": "^5.0.0 || ^6.0.0" } }, "sha512-FlJue1x8bH3gdLemHIwq3pQnxVLv7sKMFnMvAqlPtY/ePFjEylbWcQUORfD4S2V1RgABb9By8KRxOCA4QU5hgA=="],
+    "surrealdb": ["surrealdb@2.2.2", "", { "dependencies": { "@surrealdb/sqon": "^0.2.1" }, "peerDependencies": { "tslib": "^2.6.3", "typescript": "^5.0.0 || ^6.0.0" } }, "sha512-AYgr3NlNAeTO0HHe4TIVTXJbTEOJUeEuffMuHzq7VmHdcwy5YKWizADpM+R7rQODNYJXEOaGTx92nsaAXOL29Q=="],
 
     "thenify": ["thenify@3.3.1", "", { "dependencies": { "any-promise": "^1.0.0" } }, "sha512-RVZSIV5IG10Hk3enotrhvz0T9em6cyHBLkH/YAZuKqd8hRkKhSfCGIcP2KUY0EPxndzANBmNllzWPwak+bheSw=="],
 

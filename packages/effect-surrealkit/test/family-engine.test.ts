@@ -11,7 +11,6 @@ import { type Client, make as makeClient } from '../src/client/index.js';
 import {
 	type Engine,
 	engineConfigured,
-	engineMode,
 	engineSkipReason,
 	startEngine,
 	within,
@@ -84,14 +83,14 @@ describe.skipIf(!engineConfigured)('a statement family on an engine', () => {
 					: ['blue lamp', 'red lamp'],
 			);
 			expect(found.data?.readiness).toBe(key.vector ? 'ready' : 'empty');
-			// The embedded engine (SurrealDB 3.2) answers a nearest-neighbour search
-			// prefiltered on a local's field (`shelf = $shelf.id`) with no rows; 3.3.4
-			// answers both rows. Only the variant's text is the family's.
-			if (engineMode !== 'embedded' || !key.vector)
-				expect(
-					(found.data?.near ?? []).length > 0,
-					JSON.stringify({ key, found }),
-				).toBe(key.vector);
+			// For this prefilter on a local's field (`shelf = $shelf.id`), 3.3
+			// returns the nearest neighbours and 4.0 returns an empty array.
+			const near = (found.data?.near ?? [])
+				.map(({ title }) => title)
+				.sort();
+			expect(near, JSON.stringify({ key, found })).toEqual(
+				key.vector && engine.majorVersion === 3 ? titles : [],
+			);
 		}
 	});
 

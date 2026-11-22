@@ -3,6 +3,14 @@
 
 import type { Expr, ParamsOfAll } from '../../statement/expr.js';
 import { type Arg, apply, type In } from '../internal.js';
+import {
+	DateResult,
+	IntervalResult,
+	SizedFloatResult,
+	SizedIntResult,
+	TimeResult,
+	TimestampResult,
+} from '../result.js';
 import * as C from './codecs.js';
 
 /**
@@ -43,7 +51,7 @@ export const bytes = <const A0 extends Arg<In['any']>>(
 export const date = <const A0 extends Arg<In['any']>>(
 	value: A0,
 ): Expr<typeof C.DateTimeCodec, ParamsOfAll<A0>> =>
-	apply('type::date', C.DateTimeCodec, 1, [value]);
+	apply('type::date', DateResult, 1, [value]);
 
 /**
  * `type::datetime(value: any) -> datetime`
@@ -83,7 +91,7 @@ export const duration = <const A0 extends Arg<In['any']>>(
 export const f16 = <const A0 extends Arg<In['any']>>(
 	value: A0,
 ): Expr<typeof C.FloatCodec, ParamsOfAll<A0>> =>
-	apply('type::f16', C.FloatCodec, 1, [value]);
+	apply('type::f16', SizedFloatResult, 1, [value]);
 
 /**
  * `type::f32(value: any) -> float`
@@ -93,7 +101,7 @@ export const f16 = <const A0 extends Arg<In['any']>>(
 export const f32 = <const A0 extends Arg<In['any']>>(
 	value: A0,
 ): Expr<typeof C.FloatCodec, ParamsOfAll<A0>> =>
-	apply('type::f32', C.FloatCodec, 1, [value]);
+	apply('type::f32', SizedFloatResult, 1, [value]);
 
 /**
  * `type::field(field: string) -> any`
@@ -143,7 +151,7 @@ export const geometry = <const A0 extends Arg<In['any']>>(
 export const i16 = <const A0 extends Arg<In['any']>>(
 	value: A0,
 ): Expr<typeof C.IntCodec, ParamsOfAll<A0>> =>
-	apply('type::i16', C.IntCodec, 1, [value]);
+	apply('type::i16', SizedIntResult, 1, [value]);
 
 /**
  * `type::i32(value: any) -> int`
@@ -153,7 +161,7 @@ export const i16 = <const A0 extends Arg<In['any']>>(
 export const i32 = <const A0 extends Arg<In['any']>>(
 	value: A0,
 ): Expr<typeof C.IntCodec, ParamsOfAll<A0>> =>
-	apply('type::i32', C.IntCodec, 1, [value]);
+	apply('type::i32', SizedIntResult, 1, [value]);
 
 /**
  * `type::i8(value: any) -> int`
@@ -163,7 +171,7 @@ export const i32 = <const A0 extends Arg<In['any']>>(
 export const i8 = <const A0 extends Arg<In['any']>>(
 	value: A0,
 ): Expr<typeof C.IntCodec, ParamsOfAll<A0>> =>
-	apply('type::i8', C.IntCodec, 1, [value]);
+	apply('type::i8', SizedIntResult, 1, [value]);
 
 /**
  * `type::int(value: any) -> int`
@@ -183,7 +191,7 @@ export const int = <const A0 extends Arg<In['any']>>(
 export const interval = <const A0 extends Arg<In['any']>>(
 	value: A0,
 ): Expr<typeof C.StringCodec, ParamsOfAll<A0>> =>
-	apply('type::interval', C.StringCodec, 1, [value]);
+	apply('type::interval', IntervalResult, 1, [value]);
 
 /**
  * `type::is_array(value: any) -> bool`
@@ -671,7 +679,7 @@ export const table = <const A0 extends Arg<In['any']>>(
 export const time = <const A0 extends Arg<In['any']>>(
 	value: A0,
 ): Expr<typeof C.DurationCodec, ParamsOfAll<A0>> =>
-	apply('type::time', C.DurationCodec, 1, [value]);
+	apply('type::time', TimeResult, 1, [value]);
 
 /**
  * `type::timestamp(value: any) -> datetime`
@@ -681,7 +689,7 @@ export const time = <const A0 extends Arg<In['any']>>(
 export const timestamp = <const A0 extends Arg<In['any']>>(
 	value: A0,
 ): Expr<typeof C.DateTimeCodec, ParamsOfAll<A0>> =>
-	apply('type::timestamp', C.DateTimeCodec, 1, [value]);
+	apply('type::timestamp', TimestampResult, 1, [value]);
 
 /**
  * `type::u16(value: any) -> int`
@@ -691,7 +699,7 @@ export const timestamp = <const A0 extends Arg<In['any']>>(
 export const u16 = <const A0 extends Arg<In['any']>>(
 	value: A0,
 ): Expr<typeof C.IntCodec, ParamsOfAll<A0>> =>
-	apply('type::u16', C.IntCodec, 1, [value]);
+	apply('type::u16', SizedIntResult, 1, [value]);
 
 /**
  * `type::u32(value: any) -> int`
@@ -701,7 +709,7 @@ export const u16 = <const A0 extends Arg<In['any']>>(
 export const u32 = <const A0 extends Arg<In['any']>>(
 	value: A0,
 ): Expr<typeof C.IntCodec, ParamsOfAll<A0>> =>
-	apply('type::u32', C.IntCodec, 1, [value]);
+	apply('type::u32', SizedIntResult, 1, [value]);
 
 /**
  * `type::u64(value: any) -> int`
@@ -711,7 +719,7 @@ export const u32 = <const A0 extends Arg<In['any']>>(
 export const u64 = <const A0 extends Arg<In['any']>>(
 	value: A0,
 ): Expr<typeof C.IntCodec, ParamsOfAll<A0>> =>
-	apply('type::u64', C.IntCodec, 1, [value]);
+	apply('type::u64', SizedIntResult, 1, [value]);
 
 /**
  * `type::u8(value: any) -> int`
@@ -721,7 +729,7 @@ export const u64 = <const A0 extends Arg<In['any']>>(
 export const u8 = <const A0 extends Arg<In['any']>>(
 	value: A0,
 ): Expr<typeof C.IntCodec, ParamsOfAll<A0>> =>
-	apply('type::u8', C.IntCodec, 1, [value]);
+	apply('type::u8', SizedIntResult, 1, [value]);
 
 /**
  * `type::uuid(value: any) -> uuid`

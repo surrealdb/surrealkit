@@ -1,6 +1,6 @@
 /**
  * Property round trips through the SDK's own CBOR codec (the wire format of
- * surrealdb.js 2.1.1), in process. The engine suite repeats them through a
+ * surrealdb.js), in process. The engine suite repeats them through a
  * real server.
  */
 import { Arbitrary, Effect, Schema } from 'effect';
@@ -16,11 +16,7 @@ const viaJson = (value: unknown): unknown => JSON.parse(JSON.stringify(value));
 
 const native: ReadonlyArray<readonly [string, Schema.Codec<unknown, unknown>]> =
 	[
-		// The SDK's encoder writes -0 as the CBOR integer zero.
-		[
-			'Float',
-			S.Float.check(Schema.makeFilter((value) => !Object.is(value, -0))),
-		],
+		['Float', S.Float],
 		['Int', S.Int],
 		['Int64', S.Int64],
 		['DateTime', S.DateTime],

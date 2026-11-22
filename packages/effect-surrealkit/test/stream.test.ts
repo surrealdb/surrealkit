@@ -456,4 +456,120 @@ describe('stream failures and lifetime', () => {
 			/private input|private answer/u,
 		);
 	});
+
+	// Effect ignores attributes on an ended span, so each way a stream ends
+	// must record its rows and outcome before the span ends.
+	const tracing = () => {
+		const spans: Array<Tracer.Span> = [];
+		const tracer = Tracer.make({
+			span: (options) => {
+				const span = new Tracer.NativeSpan(options);
+				spans.push(span);
+				return span;
+			},
+		});
+		const span = (name: string) => spans.find((span) => span.name === name);
+		const attributes = (name: string) =>
+			Object.fromEntries(span(name)?.attributes ?? []);
+		return { tracer, span, attributes };
+	};
+	const runs = (statement: string, outcome: string) =>
+		Metric.value(
+			Metric.withAttributes(metrics.runs, { statement, outcome }),
+		).pipe(Effect.map(({ count }) => count));
+
+	it('annotates each concatenated stream span before it ends', async () => {
+		const trace = tracing();
+		const first = make({ ...numbers, name: 'first of two streams' });
+		const second = make({ ...numbers, name: 'second of two streams' });
+		const { client } = withFrames([row(7), done()]);
+		const rows = await run(
+			Stream.runCollect(
+				Stream.concat(client.stream(first), client.stream(second)),
+			).pipe(Effect.withTracer(trace.tracer)),
+		);
+		expect(rows).toEqual([7, 7]);
+		for (const { name } of [first, second]) {
+			expect(trace.attributes(name)).toMatchObject({
+				'db.response.returned_rows': 1,
+				'effect_surrealkit.sends': 1,
+			});
+		}
+		const ended = trace.span(first.name)?.status;
+		const started = trace.span(second.name)?.status;
+		expect(ended?._tag).toBe('Ended');
+		if (ended?._tag === 'Ended' && started !== undefined)
+			expect(ended.endTime <= started.startTime).toBe(true);
+	});
+
+	it('records a stream stopped early by its consumer as a success', async () => {
+		const trace = tracing();
+		const statement = make({ ...numbers, name: 'stream stopped early' });
+		const { client } = withFrames([row(1), row(2), row(3), done()]);
+		const result = await run(
+			Effect.gen(function* () {
+				const rows = yield* Stream.runCollect(
+					client.stream(statement).pipe(Stream.take(1)),
+				);
+				return {
+					rows,
+					success: yield* runs(statement.name, 'success'),
+				};
+			}).pipe(Effect.withTracer(trace.tracer)),
+		);
+		expect(result).toEqual({ rows: [1], success: 1 });
+		expect(trace.attributes(statement.name)).toMatchObject({
+			'db.response.returned_rows': 1,
+			'effect_surrealkit.sends': 1,
+		});
+	});
+
+	it('records an interrupted stream as interrupted on its span and metrics', async () => {
+		const trace = tracing();
+		const statement = make({ ...numbers, name: 'interrupted stream' });
+		const client = withSource(async function* (_request, signal) {
+			yield row(1);
+			await new Promise<void>((_resolve, reject) => {
+				signal.addEventListener('abort', () => reject(signal.reason), {
+					once: true,
+				});
+			});
+		});
+		const counts = await run(
+			Effect.gen(function* () {
+				const first = yield* Deferred.make<void>();
+				const fiber = yield* Effect.forkChild(
+					Stream.runDrain(
+						client
+							.stream(statement)
+							.pipe(
+								Stream.tap(() =>
+									Deferred.succeed(first, undefined),
+								),
+							),
+					),
+				);
+				yield* Deferred.await(first);
+				const exit = yield* Fiber.interrupt(fiber).pipe(
+					Effect.andThen(Fiber.await(fiber)),
+				);
+				expect(Exit.hasInterrupts(exit)).toBe(true);
+				return {
+					interrupted: yield* runs(statement.name, 'interrupted'),
+					success: yield* runs(statement.name, 'success'),
+				};
+			}).pipe(Effect.withTracer(trace.tracer)),
+		);
+		expect(counts).toEqual({ interrupted: 1, success: 0 });
+		const attributes = trace.attributes(statement.name);
+		expect(attributes).toMatchObject({
+			'db.response.returned_rows': 1,
+			'effect_surrealkit.sends': 1,
+		});
+		expect(attributes['error.type']).toBeUndefined();
+		const status = trace.span(statement.name)?.status;
+		expect(
+			status?._tag === 'Ended' && Exit.hasInterrupts(status.exit),
+		).toBe(true);
+	});
 });

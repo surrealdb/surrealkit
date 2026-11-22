@@ -8,6 +8,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
 
 import { Schema } from 'effect';
+import * as Surreal from 'surrealdb';
 import { Decimal } from 'surrealdb';
 import { describe, expect, it } from 'vitest';
 
@@ -484,5 +485,213 @@ describe('built-in functions', () => {
 		]);
 		expect(() => decode(pairs)([[1, { name: 'a' }]])).toThrow();
 		expect(decode(repeated)([])).toEqual([]);
+	});
+});
+
+// SDK 2.2.2 negotiates cbor.2, over which SurrealDB 4 returns these results as
+// their own SDK classes. Each pair is what SDK 2.2.2 received from SurrealDB
+// 4.0.0 and what SDK 2.1.1 received for the same query over cbor.
+describe('results SurrealDB 4 returns as cbor.2 values', () => {
+	const at = param('at', SurrealSchema.DateTime);
+	const n = param('n', SurrealSchema.Int);
+	const v = param('v', Schema.Unknown);
+	const results = {
+		age: time.age(at, at),
+		makeDate: time.makeDate(n, n, n),
+		makeTime: time.makeTime(n, n, n),
+		makeTimestamp: time.makeTimestamp(n, n, n, n, n, n),
+		date: type.date(v),
+		time: type.time(v),
+		timestamp: type.timestamp(v),
+		interval: type.interval(v),
+		f16: type.f16(v),
+		f32: type.f32(v),
+		i8: type.i8(v),
+		i16: type.i16(v),
+		i32: type.i32(v),
+		u8: type.u8(v),
+		u16: type.u16(v),
+		u32: type.u32(v),
+		u64: type.u64(v),
+	};
+	type R = typeof results;
+	const decode = (expr: Expr) =>
+		Schema.decodeUnknownSync(codecOf(expr) as Schema.Codec<unknown>);
+	const dateTime = (seconds: number, nanos: number) =>
+		new Surreal.DateTime([BigInt(seconds), BigInt(nanos)]);
+	const duration = (seconds: number, nanos: number) =>
+		new Surreal.Duration([BigInt(seconds), BigInt(nanos)]);
+
+	it('keep the result types of the table', () => {
+		const exact: ReadonlyArray<true> = [
+			true satisfies Exact<CodecOf<R['age']>, typeof C.StringCodec>,
+			true satisfies Exact<
+				CodecOf<R['makeDate']>,
+				typeof C.DateTimeCodec
+			>,
+			true satisfies Exact<
+				CodecOf<R['makeTime']>,
+				typeof C.DurationCodec
+			>,
+			true satisfies Exact<
+				CodecOf<R['makeTimestamp']>,
+				typeof C.DateTimeCodec
+			>,
+			true satisfies Exact<CodecOf<R['date']>, typeof C.DateTimeCodec>,
+			true satisfies Exact<CodecOf<R['time']>, typeof C.DurationCodec>,
+			true satisfies Exact<
+				CodecOf<R['timestamp']>,
+				typeof C.DateTimeCodec
+			>,
+			true satisfies Exact<CodecOf<R['interval']>, typeof C.StringCodec>,
+			true satisfies Exact<CodecOf<R['f16']>, typeof C.FloatCodec>,
+			true satisfies Exact<CodecOf<R['f32']>, typeof C.FloatCodec>,
+			true satisfies Exact<CodecOf<R['i8']>, typeof C.IntCodec>,
+			true satisfies Exact<CodecOf<R['i16']>, typeof C.IntCodec>,
+			true satisfies Exact<CodecOf<R['i32']>, typeof C.IntCodec>,
+			true satisfies Exact<CodecOf<R['u8']>, typeof C.IntCodec>,
+			true satisfies Exact<CodecOf<R['u16']>, typeof C.IntCodec>,
+			true satisfies Exact<CodecOf<R['u32']>, typeof C.IntCodec>,
+			true satisfies Exact<CodecOf<R['u64']>, typeof C.IntCodec>,
+		];
+		expect(exact).toHaveLength(Object.keys(results).length);
+	});
+
+	it('keep the annotations and encoding of the base codecs', () => {
+		const bases: Record<keyof R, Schema.Top> = {
+			age: C.StringCodec,
+			makeDate: C.DateTimeCodec,
+			makeTime: C.DurationCodec,
+			makeTimestamp: C.DateTimeCodec,
+			date: C.DateTimeCodec,
+			time: C.DurationCodec,
+			timestamp: C.DateTimeCodec,
+			interval: C.StringCodec,
+			f16: C.FloatCodec,
+			f32: C.FloatCodec,
+			i8: C.IntCodec,
+			i16: C.IntCodec,
+			i32: C.IntCodec,
+			u8: C.IntCodec,
+			u16: C.IntCodec,
+			u32: C.IntCodec,
+			u64: C.IntCodec,
+		};
+		for (const [name, expr] of Object.entries(results) as ReadonlyArray<
+			[keyof R, Expr]
+		>) {
+			const base = bases[name];
+			expect(codecOf(expr), name).not.toBe(base);
+			expect(codecOf(expr).ast.annotations, name).toBe(
+				base.ast.annotations,
+			);
+		}
+		const encode = (codec: Schema.Top, value: unknown) =>
+			Schema.encodeUnknownSync(codec as Schema.Codec<unknown>)(value);
+		const now = dateTime(1_704_190_272, 5);
+		expect(encode(codecOf(results.date), now)).toBe(
+			encode(C.DateTimeCodec, now),
+		);
+		expect(encode(codecOf(results.u64), 5)).toBe(5);
+		expect(() =>
+			encode(codecOf(results.u64), new Surreal.U64(5n)),
+		).toThrow();
+	});
+
+	it('read an interval as the text cbor sends', () => {
+		const cases: ReadonlyArray<[[number, number, bigint], string]> = [
+			// type::interval('1 year 2 months 3 days 4 hours 5 minutes 6.789 seconds')
+			[[14, 3, 14_706_789_000n], 'P1Y2M3DT4H5M6.789S'],
+			// type::interval('-1 month 3 days')
+			[[-1, 3, 0n], 'P-1M3D'],
+			// type::interval('1 microsecond')
+			[[0, 0, 1n], 'PT0.000001S'],
+			// type::interval('0 days')
+			[[0, 0, 0n], 'PT0S'],
+			// time::age(d'2020-01-01T00:00:00Z', d'2024-06-01T00:00:00Z')
+			[[-53, 0, 0n], 'P-4Y-5M'],
+			// time::age(d'2024-01-31T10:00:00Z', d'2024-03-01T09:30:15.123456Z')
+			[[-1, 0, -84_615_123_456n], 'P-1MT-23H-30M-15.123456S'],
+		];
+		for (const [parts, text] of cases) {
+			for (const expr of [results.age, results.interval])
+				expect(decode(expr)(new Surreal.Interval(parts))).toBe(text);
+		}
+		expect(decode(results.interval)('P1D')).toBe('P1D');
+	});
+
+	it('read dates, times and timestamps as the datetime or duration cbor sends', () => {
+		for (const expr of [results.date, results.makeDate]) {
+			expect(decode(expr)(new Surreal.PlainDate(19_724))).toEqual(
+				dateTime(1_704_153_600, 0),
+			);
+			expect(decode(expr)(new Surreal.PlainDate(-1))).toEqual(
+				dateTime(-86_400, 0),
+			);
+			// type::date('infinity') and type::date('-infinity')
+			expect(decode(expr)(Surreal.PlainDate.INFINITY)).toEqual(
+				dateTime(8_210_266_876_799, 999_999_999),
+			);
+			expect(decode(expr)(Surreal.PlainDate.NEG_INFINITY)).toEqual(
+				dateTime(-8_334_601_228_800, 0),
+			);
+			expect(decode(expr)(dateTime(0, 0))).toEqual(dateTime(0, 0));
+		}
+		for (const expr of [results.time, results.makeTime]) {
+			expect(
+				decode(expr)(new Surreal.PlainTime(86_399_999_999_999)),
+			).toEqual(duration(86_399, 999_999_999));
+			expect(
+				decode(expr)(new Surreal.PlainTime(86_400_000_000_000)),
+			).toEqual(duration(86_400, 0));
+			expect(decode(expr)(duration(1, 0))).toEqual(duration(1, 0));
+		}
+		for (const expr of [results.timestamp, results.makeTimestamp]) {
+			expect(
+				decode(expr)(new Surreal.Timestamp([-1, 500_000_000])),
+			).toEqual(dateTime(-1, 500_000_000));
+			expect(decode(expr)(Surreal.Timestamp.INFINITY)).toEqual(
+				dateTime(8_210_266_876_799, 999_999_999),
+			);
+		}
+		expect(() => decode(results.date)(new Surreal.PlainTime(0))).toThrow();
+		expect(() => decode(results.time)(new Surreal.PlainDate(0))).toThrow();
+	});
+
+	it('read sized numbers as the float or safe integer cbor sends', () => {
+		expect(decode(results.f16)(new Surreal.F16(0.0999755859375))).toBe(
+			0.0999755859375,
+		);
+		expect(Object.is(decode(results.f32)(new Surreal.F32(-0)), -0)).toBe(
+			true,
+		);
+		expect(decode(results.f32)(new Surreal.F32(Number.NaN))).toBeNaN();
+		expect(decode(results.f32)(1.5)).toBe(1.5);
+		const ints: ReadonlyArray<[Expr, Surreal.SizedNumber, number]> = [
+			[results.i8, new Surreal.I8(-128), -128],
+			[results.i16, new Surreal.I16(32_767), 32_767],
+			[results.i32, new Surreal.I32(-2_147_483_648), -2_147_483_648],
+			[results.u8, new Surreal.U8(255), 255],
+			[results.u16, new Surreal.U16(65_535), 65_535],
+			[results.u32, new Surreal.U32(4_294_967_295), 4_294_967_295],
+			[results.u64, new Surreal.U64(0n), 0],
+			[
+				results.u64,
+				new Surreal.U64(BigInt(Number.MAX_SAFE_INTEGER)),
+				Number.MAX_SAFE_INTEGER,
+			],
+		];
+		for (const [expr, value, expected] of ints)
+			expect(decode(expr)(value)).toBe(expected);
+		// Past the safe range a u64 stays a bigint, which Int refuses as before.
+		const unsafe = BigInt(Number.MAX_SAFE_INTEGER) + 1n;
+		expect(() => decode(results.u64)(new Surreal.U64(unsafe))).toThrow(
+			/safe JavaScript range/u,
+		);
+		expect(() => decode(results.u64)(unsafe)).toThrow(
+			/safe JavaScript range/u,
+		);
+		expect(() => decode(results.i8)(new Surreal.F16(1))).toThrow();
+		expect(() => decode(results.f16)(new Surreal.I8(1))).toThrow();
 	});
 });

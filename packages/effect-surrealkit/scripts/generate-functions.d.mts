@@ -11,6 +11,7 @@ export interface Entry {
 	readonly args: ReadonlyArray<Argument>;
 	readonly variadic?: boolean;
 	readonly result: string;
+	readonly wireResult?: string;
 	readonly engines: ReadonlyArray<string>;
 	readonly sample: ReadonlyArray<string>;
 	/** More argument sets the engine test calls, beside `sample`. */
