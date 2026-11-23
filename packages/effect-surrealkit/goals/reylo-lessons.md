@@ -251,6 +251,28 @@ Included by resolved decision 3. Build against the newest TypeScript 7.1 pre-rel
 - Tests cover a detected rename, definitions that differ, the ambiguous case, and rows that keep their values through `rollout up` and `rollout up --complete` on the embedded engine.
 - The `rollout_plan` MCP tool reports the proposal. The root README's "Migrating existing records" section describes it.
 
+Admission note, 2026-11-23, at `674c57b`:
+
+1. **What is worse today?** Yes. `rollout plan` refuses every field removal and addition on one table (`validate_autoplan`, ``cannot tell apart from a rename``), even when the two definitions are the same apart from the name, so every rename needs a manifest written by hand, backfill and all. The first test of the lane plans `person.email` to `person.mail` and fails on that refusal at this revision.
+2. **Is this the better way?** Yes, narrowed. SurrealDB has no native rename or copy, so an `UPDATE` in the expand phase is SurrealDB's own way, not an emulation. Alternatives checked:
+   - `ALTER FIELD … RENAME TO`, `ALTER TABLE … RENAME TO`, `ALTER FIELD … NAME` and `RENAME FIELD` are parse errors on the embedded engine (surrealdb-core 4.0.0, the crate's engine). The 4.x `ALTER` pages list no rename clause for a field or a table. The only rename they document is `ALTER TYPE`, which renames the values of a union type.
+   - `MIGRATE EXISTING ROWS … USING` reads only `$value`. The `DEFINE FIELD` page says so, and the engine refuses `$this.email`, `$parent.email` and a bare `email` with ``the transform reads only `$value` ``, through `DEFINE FIELD` and through `ALTER FIELD` alike. `ALTER TABLE … MIGRATE EXISTING ROWS` only removes undeclared fields.
+   - A `VALUE` clause that reads the old field applies only on a write ("Defining a field does not change the records already in the table"). `COMPUTED` stores nothing, and `GRAPHQL_ALIAS` renames only the GraphQL name. None of these moves stored values.
+   - SurrealDB University adds a field with `DEFINE FIELD` and then fills it with `UPDATE`.
+   - The proposal is unconfirmed, so nothing that plan inferred runs until the author has read it, as with a `revert_migration` step.
+3. **With SurrealDB or against it?** With it, for the narrowed part. The copy is an `UPDATE` in the expand phase, and the removal stays in the contract phase, which matters because at level 4 `REMOVE FIELD` clears the values. Measured on the embedded engine, at compatibility level 4:
+   - `UPDATE person SET mail = email WHERE email != NONE` copies every value, leaves a row with no value untouched, copies a `NULL` as `NULL`, and fills a new `UNIQUE` index.
+   - Adding a `TYPE string` field to a populated `SCHEMAFULL` table is refused without `MIGRATE EXISTING ROWS`. The catalog hash leaves that clause out, so a new field that carries it still pairs.
+   - `READONLY` on the new field makes the copy fail with ``Found changed value for field `b` … but field is readonly``, so such a pair is not proposed.
+   - The `UPDATE` evaluates `VALUE` clauses again on every row it touches. A `VALUE time::now()` field took a new value, so a pair with `VALUE` is not proposed, and `COMPUTED` holds nothing to copy.
+   - `UPDATE` events fire for each row. That is documented, not refused.
+
+   Not applicable to 3.3: the crate needs SurrealDB 4.0 or later (root README, "Migrating existing records").
+
+   Documentation read on 2026-11-23, every page marked `surrealdb_version: "4.x"`: <https://surrealdb.com/docs/surrealql/statements/alter>, <https://surrealdb.com/docs/reference/query-language/statements/alter/field>, <https://surrealdb.com/docs/reference/query-language/statements/alter/table>, <https://surrealdb.com/docs/surrealql/statements/define/field> and <https://surrealdb.com/learn/fundamentals/schemafull/schemafull-crud#updating-fields-and-tables>. The engine output is saved as `l11-engine-probe.txt` in the topic evidence of `20261123-decide-and-build-reylo-inspired-improvements`.
+
+Narrowed to: a pair is a removed field and an added field on the same table whose names are each one identifier, with no `.` or `[`. Their statements must hash the same once the added field's name is written as the removed one's, which compares the catalog's own hashes and needs no old SQL. The definition must not carry `READONLY`, `VALUE` or `COMPUTED`. Nested fields, indexes and other kinds are out of scope and are still refused as today.
+
 ### L12. Property tests for rollouts
 
 - `proptest` is added as a dev-dependency, with a generator of bounded schema pairs: tables, fields over a small set of kinds, indexes, and additions, removals and modifications between the two versions.
