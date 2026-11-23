@@ -602,7 +602,7 @@ export interface Ended<P extends Params, Throws extends string, R> {
 	readonly build: (
 		name?: string,
 		options?: { readonly writes?: boolean },
-	) => Statement<Simplify<P>, BlockResult<R>, Throws>;
+	) => Statement<Simplify<P>, BlockResult<R>, Throws, never>;
 }
 
 /**

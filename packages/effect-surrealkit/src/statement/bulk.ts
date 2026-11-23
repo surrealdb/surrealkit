@@ -41,7 +41,8 @@ export interface UpdateEach<
 	) => Statement<
 		Simplify<P>,
 		NoResult<'many'>,
-		M extends 'ignore' ? never : 'Record not found'
+		M extends 'ignore' ? never : 'Record not found',
+		never
 	>;
 }
 

@@ -40,9 +40,9 @@ const flag = make({
 });
 
 type Outcomes = readonly [
-	Result.Result<number, StatementError<never>>,
-	Result.Result<ReadonlyArray<string>, StatementError<'empty'>>,
-	Result.Result<boolean, StatementError<never>>,
+	Result.Result<number, StatementError<never, never>>,
+	Result.Result<ReadonlyArray<string>, StatementError<'empty', never>>,
+	Result.Result<boolean, StatementError<never, never>>,
 ];
 type RequestFailure =
 	| StatementEncodeError

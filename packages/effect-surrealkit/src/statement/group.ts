@@ -479,7 +479,12 @@ export interface GroupedSelect<
 	readonly build: (
 		name?: string,
 		options?: { readonly writes?: boolean },
-	) => Statement<Simplify<P>, GroupResult<ProjectedCodec<O>, All>>;
+	) => Statement<
+		Simplify<P>,
+		GroupResult<ProjectedCodec<O>, All>,
+		never,
+		never
+	>;
 }
 
 /** A `SELECT … GROUP BY` whose keys are set; add aggregates, or build. */

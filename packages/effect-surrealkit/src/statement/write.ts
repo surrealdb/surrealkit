@@ -1036,7 +1036,7 @@ export interface Delete<
 	) => Delete<T, P & P2, WriteResult<RowCodec<V>, S>, S>;
 
 	/** The finished statement. */
-	readonly build: (name?: string) => Statement<Simplify<P>, R>;
+	readonly build: (name?: string) => Statement<Simplify<P>, R, never, never>;
 }
 
 const deleting = <

@@ -1025,7 +1025,7 @@ export const evaluate = <S extends Codec, P extends Params>(
 	expr: Expr<S, P>,
 	name = 'evaluate',
 	options?: { readonly writes?: boolean },
-): Statement<Simplify<P>, S> => {
+): Statement<Simplify<P>, S, never, never> => {
 	admit(
 		{
 			own: undefined,

@@ -349,7 +349,12 @@ export interface Family<A extends Axes, N, P extends Params, R extends Codec> {
 	 */
 	readonly select: <const K extends KeyOf<A>>(
 		key: CheckedVariantKey<A, K>,
-	) => Statement<ParamsAt<P, FreeOf<N, K>>, R, ThrowsOf<N, K> & string>;
+	) => Statement<
+		ParamsAt<P, FreeOf<N, K>>,
+		R,
+		ThrowsOf<N, K> & string,
+		never
+	>;
 	/**
 	 * Every variant, built, with its key: for a build step, tests and
 	 * pinning. Each entry is a pinnable statement: `name` is the family's
@@ -364,7 +369,8 @@ export interface Family<A extends Axes, N, P extends Params, R extends Codec> {
 		readonly statement: Statement<
 			Params,
 			R,
-			ThrowsOf<N, KeyOf<A>> & string
+			ThrowsOf<N, KeyOf<A>> & string,
+			never
 		>;
 	}>;
 }
@@ -805,10 +811,12 @@ export const family = <const A extends Axes, const N extends TextNode>(
 				].join('; '),
 			);
 		}
-		const built = new Map<string, Statement<Params, R, string>>();
+		const built = new Map<string, Statement<Params, R, string, never>>();
 		const indexOf = (key: RuntimeKey): string =>
 			JSON.stringify(Object.keys(axes).map((axis) => key[axis]));
-		const build = (key: RuntimeKey): Statement<Params, R, string> => {
+		const build = (
+			key: RuntimeKey,
+		): Statement<Params, R, string, never> => {
 			const index = indexOf(key);
 			const known = built.get(index);
 			if (known !== undefined) return known;
@@ -865,7 +873,7 @@ export const family = <const A extends Axes, const N extends TextNode>(
 			});
 			// The key that selected it: its span records it, never a value.
 			const variant = describeKey(key);
-			const statement: Statement<Params, R, string> =
+			const statement: Statement<Params, R, string, never> =
 				variant === '' ? made : { ...made, variant };
 			built.set(index, statement);
 			return statement;
