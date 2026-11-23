@@ -44,7 +44,7 @@ Verified on 2026-11-23 against this branch at `88d37cc`. Verify each row again b
 | The engine reports an unknown `fn::` function, a wrong number of arguments and a wrong argument kind only when the call runs. `EXPLAIN` does not report an unknown function, and is a parse error after `CREATE`. | Measured |
 | `SELECT nope FROM person` on a `SCHEMAFULL` table succeeds without an error. | Measured |
 | Statements inside `BEGIN … CANCEL` come back as `The query was not executed due to a cancelled transaction`, so a cancelled transaction cannot be used to try a text. | Measured |
-| The analyzer is compared with an engine for one generated part, in two tests. There are 23 authored fixture files. | `test/analyze-engine.test.ts`; `test/fixtures/statements`, `statements-binds`, `statements-presence` |
+| The analyzer is compared with an engine for every complete authored fixture (9 of 23; the other 14 are named fragments and templates), and the generated `counter` part runs through the client (lane L01). | `test/analyze-engine.test.ts`; `test/fixtures/statements`, `statements-binds`, `statements-presence` |
 | 34 TypeScript files under `test/` contain a skip. The PR description reports the skipped counts by hand. | `grep -rl --include='*.ts' "skipIf\|\.skip(" test` |
 | The analyzer records what a binding is used as in three patterns (`argument`, `key`, `field` with `compare` or `assign`). It records nothing about projected fields. | `src/analyze/uses.ts`; README, "What bindings are used as" |
 | A generated part's doc comment holds only its file name. | `src/analyze/render.ts:440` |
@@ -142,6 +142,14 @@ Extend `test/analyze-engine.test.ts` from one generated part to every `.surql` f
 - A fragment, a template or any other file that cannot be sent as it stands is named in the test with its reason. The test fails when a named file no longer exists.
 - One test changes a derived `slots` by one and asserts that the comparison fails, so the check is shown to be able to fail.
 - It runs on the embedded engine and on `SURREAL_BIN`.
+
+Admission note, 2026-11-23, at `3a5100f`:
+
+1. **What is worse today?** Yes. Of the 23 authored fixture files, one (`counter/step.surql`) is sent to an engine; the `slots` of the other eight complete texts are checked only against the analyzer's own goldens, so an analyzer that miscounts a result agrees with itself and passes. A new fixture is not sent anywhere unless someone edits the test.
+2. **Is this the better way?** Yes. Alternatives: the goldens (they compare the analyzer with its own earlier output, never with an engine); lane L05's `statements --verify` (a user-facing feature that does the same check for an author's files, and still needs a test of its own); `EXPLAIN` (a parse error after `CREATE`, per Current state). Sending each text once with no bindings uses the engine's own parser and its own result list, which is what the client counts against `slots`.
+3. **With SurrealDB or against it?** With it. The test relies on two behaviours: a parse error refuses the whole text, and the engine returns one result per top-level statement, also when one errors for lack of a binding. Both are pinned by this test itself on both engine lanes (embedded 4.0.1 and `SURREAL_BIN` 3.3.4), since every complete fixture is sent with no bindings.
+
+**State: closed, implemented.** `test/analyze-engine.test.ts` walks the three fixture directories, sends the 9 complete texts (`kind: "part"`, no holes) once each with no bindings, and names the other 14 files with their reason (5 fragments, 8 templates, 1 both). Measured on embedded 4.0.1 and `SURREAL_BIN` 3.3.4: every complete text is accepted and returns exactly `slots` results, including the texts whose statements error for lack of a binding. The off-by-one test changes every derived count by one in each direction and expects the comparison to fail. A fixture with a parse error added by hand failed the suite with ``Parse error: Unexpected token `WHERE` ``, and a named file moved away failed the list check. The lane needed nothing beyond the existing engine helpers.
 
 ### L02. Pin the skipped tests of each lane
 
