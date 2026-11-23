@@ -314,9 +314,14 @@ async fn rollout_plan_reports_the_renames_it_proposes() {
 	assert_ne!(result.is_error, Some(true), "{result:?}");
 	assert_eq!(
 		result.structured_content.as_ref().map(|v| v["renames"].clone()),
-		Some(
-			serde_json::json!([{ "kind": "field", "scope": "person", "from": "email", "to": "mail" }])
-		)
+		Some(serde_json::json!([{
+			"kind": "field",
+			"scope": "person",
+			"from": "email",
+			"to": "mail",
+			"step": "copy_person_email_to_mail",
+			"confirmed": false
+		}]))
 	);
 	let text = serde_json::to_string(&result.content).expect("serialize");
 	assert!(text.contains("proposed 1 field rename whose copy step must be confirmed"), "{text}");

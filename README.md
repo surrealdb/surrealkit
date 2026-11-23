@@ -1051,20 +1051,26 @@ kind = "field"
 scope = "person"
 from = "email"
 to = "mail"
+step = "copy_person_email_to_mail"
+confirmed = false
 
 [[steps]]
 id = "copy_person_email_to_mail"
 phase = "start"
 kind = "run_sql"
 sql = "UPDATE person SET mail = email WHERE email != NONE;"
-unconfirmed = true
 ```
 
 The copy runs in the start phase, after the new field is defined. The old field
 is removed in the complete phase, so between the two both fields hold the
-values. `rollout lint` and `rollout start` (and `up`) refuse the manifest while
-a step says `unconfirmed = true`: check the SQL, then delete that line, or
-delete the step and its `[[renames]]` entry if it is not a rename.
+values. `rollout lint`, `rollout start` and `rollout up` refuse the manifest
+until you have checked the copy and set `confirmed = true`. They also refuse
+an entry whose copy step is gone: without it the rollout would add the new
+field empty and remove the old one with its values.
+
+If it is not a rename, do not edit the manifest. Run `surrealkit rollout
+discard <id>`, which deletes it and puts the snapshots back, and plan the
+addition and the removal in separate rollouts.
 
 - Whitespace and comments do not count, and neither does a `MIGRATE EXISTING
   ROWS` clause on the new field, which level 4 needs when the table holds

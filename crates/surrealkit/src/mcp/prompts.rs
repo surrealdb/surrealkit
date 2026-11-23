@@ -87,8 +87,9 @@ impl SurrealKitMcp {
                    change had. It also refuses an add and a remove in the same scope,
                    which is the rename-a-field case, unless the two fields are defined the
                    same apart from the name: then it proposes the rename, with a copy step
-                   marked `unconfirmed = true` that I have to check and confirm. Otherwise,
-                   if that is what we have, hand-write the manifest.
+                   and a `[[renames]]` entry whose `confirmed = false` I have to check and
+                   set to true. Otherwise, if that is what we have, hand-write the
+                   manifest.
 
                 Split the work across the three phases and respect what each is for:
 

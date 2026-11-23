@@ -427,9 +427,9 @@ fn manifest_count(root: &Path) -> usize {
 }
 
 /// A field whose definition is the same apart from its name is planned as a
-/// rename: the pair is recorded, an unconfirmed copy runs in the expand phase,
-/// and the old field is still removed only in the contract phase. Lint refuses
-/// the manifest until the author confirms the copy.
+/// rename: the pair is recorded, unconfirmed and naming its copy, the copy runs
+/// in the expand phase, and the old field is still removed only in the contract
+/// phase. Lint refuses the manifest until the author confirms the rename.
 #[test]
 fn plan_proposes_a_rename_that_lint_refuses_until_it_is_confirmed() {
 	let temp = TempDir::new().expect("tempdir");
@@ -443,14 +443,15 @@ fn plan_proposes_a_rename_that_lint_refuses_until_it_is_confirmed() {
 
 	assert!(
 		manifest.contains(
-			"[[renames]]\nkind = \"field\"\nscope = \"person\"\nfrom = \"email\"\nto = \"mail\"\n"
+			"[[renames]]\nkind = \"field\"\nscope = \"person\"\nfrom = \"email\"\nto = \"mail\"\n\
+			 step = \"copy_person_email_to_mail\"\nconfirmed = false\n"
 		),
 		"{manifest}"
 	);
 	assert!(
 		manifest.contains(
 			"[[steps]]\nid = \"copy_person_email_to_mail\"\nphase = \"start\"\nkind = \"run_sql\"\n\
-			 sql = \"UPDATE person SET mail = email WHERE email != NONE;\"\nunconfirmed = true\n"
+			 sql = \"UPDATE person SET mail = email WHERE email != NONE;\"\n"
 		),
 		"{manifest}"
 	);
@@ -470,7 +471,7 @@ fn plan_proposes_a_rename_that_lint_refuses_until_it_is_confirmed() {
 	for args in [&["rollout", "lint", id.as_str()][..], &["rollout", "lint"][..]] {
 		let output = run(root, args);
 		let text = combined(&output);
-		assert!(!output.status.success(), "{args:?} accepted an unconfirmed step: {text}");
+		assert!(!output.status.success(), "{args:?} accepted an unconfirmed rename: {text}");
 		assert!(
 			text.contains("'copy_person_email_to_mail'") && text.contains("is unconfirmed"),
 			"{text}"
@@ -478,11 +479,52 @@ fn plan_proposes_a_rename_that_lint_refuses_until_it_is_confirmed() {
 	}
 
 	let path = root.join("database/rollouts").join(format!("{id}.toml"));
-	fs::write(&path, manifest.replace("unconfirmed = true\n", "")).unwrap();
+	fs::write(&path, manifest.replace("confirmed = false\n", "confirmed = true\n")).unwrap();
 	let output = run(root, &["rollout", "lint", &id]);
 	assert!(output.status.success(), "the confirmed manifest: {}", combined(&output));
 	let output = run(root, &["rollout", "lint"]);
 	assert!(output.status.success(), "the confirmed chain: {}", combined(&output));
+}
+
+/// Deleting the copy step must not leave a plan that adds `mail` empty and
+/// removes `email` with its values, which `plan` refused before it proposed
+/// renames. Lint refuses an entry without its copy, confirmed or not, and
+/// points at `discard`.
+#[test]
+fn lint_refuses_a_rename_whose_copy_step_was_deleted() {
+	let temp = TempDir::new().expect("tempdir");
+	let root = temp.path();
+	write_project(root, "");
+	write_person(root, PERSON_EMAIL);
+	plan_named(root, "people").expect("first plan");
+	write_person(root, PERSON_MAIL);
+	let (id, manifest) = plan_named(root, "rename_email").expect("a rename is planned");
+
+	let without_copy: Vec<&str> = manifest
+		.split("[[steps]]")
+		.filter(|block| !block.contains("id = \"copy_person_email_to_mail\""))
+		.collect();
+	let without_copy = without_copy.join("[[steps]]");
+	assert!(!without_copy.contains("kind = \"run_sql\""), "{without_copy}");
+	let path = root.join("database/rollouts").join(format!("{id}.toml"));
+	for edited in
+		[without_copy.clone(), without_copy.replace("confirmed = false\n", "confirmed = true\n")]
+	{
+		fs::write(&path, &edited).unwrap();
+		for args in [&["rollout", "lint", id.as_str()][..], &["rollout", "lint"][..]] {
+			let output = run(root, args);
+			let text = combined(&output);
+			assert!(
+				!output.status.success(),
+				"{args:?} accepted a rename without its copy: {text}"
+			);
+			assert!(
+				text.contains("its copy step 'copy_person_email_to_mail' is not in the rollout")
+					&& text.contains(&format!("rollout discard {id}")),
+				"{text}"
+			);
+		}
+	}
 }
 
 /// Definitions that differ in more than the name are not a rename, and are
