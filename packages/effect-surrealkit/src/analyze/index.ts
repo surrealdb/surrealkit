@@ -26,6 +26,7 @@ export {
 	pinnedStatementProblems,
 	renderPinnedStatements,
 } from './pin.js';
+export type { ProjectedField } from './projections.js';
 export {
 	type DeclaredDetail,
 	type DeclaredNames,

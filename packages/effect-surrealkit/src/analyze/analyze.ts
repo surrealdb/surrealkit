@@ -12,6 +12,7 @@ import {
 	lex,
 	type Token,
 } from './lexer.js';
+import { analyzeProjections, type ProjectedField } from './projections.js';
 import { analyzeTargets } from './targets.js';
 import { analyzeUses, type BindingUses } from './uses.js';
 
@@ -105,6 +106,19 @@ export interface Analysis {
 	 * is not certain; a binding with no such use is absent.
 	 */
 	readonly uses: BindingUses;
+	/**
+	 * The fields each `SELECT` projects from the one static table it reads
+	 * (a table name, a record id, or `type::record`, `type::thing` or
+	 * `type::table` with a literal table, after an optional `ONLY`, and
+	 * nothing after it but the query's clauses): each projected item that
+	 * is a bare field name, or `*`, sorted by line, table and field, without
+	 * duplicates. A
+	 * `SELECT VALUE`, an `OMIT`, two targets, an open target and any item
+	 * that is not a bare name or `*` (a call, a path, an expression, an
+	 * alias, a graph step, a subquery) record nothing; a parenthesised
+	 * subquery is a query of its own.
+	 */
+	readonly projected: ReadonlyArray<ProjectedField>;
 	/**
 	 * For each hole, what the text around it does with names (empty for a
 	 * text without holes): `bound`, the names visible at every occurrence of
@@ -650,6 +664,7 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 		functions: targets.functions,
 		openTargets: targets.openTargets,
 		uses: analyzeUses(tokens, sorted(free)),
+		projected: analyzeProjections(tokens),
 		holeScopes: holeScopesOf(holeSites, unboundReads, kind),
 		diagnostics,
 	};

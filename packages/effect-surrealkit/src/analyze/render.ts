@@ -372,6 +372,44 @@ const checkUses = (
 	return { problems, binds, rejectsNone };
 };
 
+/** Whether `table` declares `field`, or a field nested under it. */
+const declaresField = (table: DeclaredTable, field: string): boolean =>
+	field === '*' ||
+	field === 'id' ||
+	Object.hasOwn(table.fields, field) ||
+	Object.keys(table.fields).some(
+		(path) => path.startsWith(`${field}.`) || path.startsWith(`${field}[`),
+	);
+
+/**
+ * The projected fields that a table of `detail` does not declare and does
+ * not accept: a field of a `SCHEMAFULL` table. A table the schema does not
+ * declare is reported by the names check; with `schemaChanges` the text
+ * changes the schema itself, so nothing is checked.
+ */
+const checkProjected = (
+	projected: Analysis['projected'],
+	detail: DeclaredDetail,
+	schemaChanges: boolean,
+): ReadonlyArray<{ readonly line: number; readonly message: string }> =>
+	schemaChanges
+		? []
+		: projected.flatMap(({ table, field, line }) => {
+				const declared = Object.hasOwn(detail.tables, table)
+					? detail.tables[table]
+					: undefined;
+				return declared === undefined ||
+					declared.acceptsUndeclared ||
+					declaresField(declared, field)
+					? []
+					: [
+							{
+								line,
+								message: `selects \`${field}\` of \`${table}\`, which declares no such field`,
+							},
+						];
+			});
+
 /** Whether `sql` defines, alters or removes a table or a field. */
 const changesSchema = (
 	sql: string,
@@ -609,19 +647,24 @@ export const renderStatementModulesSync = (
 		let rejectsNone: Readonly<Record<string, RejectedNone>> | undefined;
 		if (source.declared !== undefined) {
 			const detail = source.declared.detail;
+			const schemaChanges =
+				detail !== undefined && changesSchema(source.sql, input.holes);
 			const checked =
 				detail === undefined
 					? undefined
-					: checkUses(
-							analysis.uses,
-							detail,
-							changesSchema(source.sql, input.holes),
-						);
+					: checkUses(analysis.uses, detail, schemaChanges);
 			binds = checked?.binds;
 			rejectsNone = checked?.rejectsNone;
 			for (const problem of [
 				...undeclared(source.sql, source.declared, input.holes),
 				...(checked?.problems ?? []),
+				...(detail === undefined
+					? []
+					: checkProjected(
+							analysis.projected,
+							detail,
+							schemaChanges,
+						)),
 			].sort((a, b) => a.line - b.line))
 				problems.push({
 					kind: 'undeclared',

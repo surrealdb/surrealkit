@@ -1293,6 +1293,46 @@ longer expression, a path, two tables or an open target, a comparison
 inside a block). A binding with no recorded use is never checked against
 the schema.
 
+#### Projected fields
+
+On a `SCHEMAFULL` table SurrealDB 3.3 and 4.0 both answer `SELECT nmae
+FROM person` with `{}` and no error, so a misspelt field quietly comes back
+missing. `analyze(sql)` also reports `projected`: what each `SELECT`
+projects, as `{ table, field, line }` (`field` is `*` for `*`), sorted by
+line, table and field, without duplicates. A `SELECT` is read when it is a
+top-level statement (possibly after `LET $name =` or `RETURN`) or a
+parenthesised subquery, which is a query of its own, and when all of this
+holds on tokens outside strings and comments:
+
+- it has exactly one `FROM` outside brackets;
+- it is not `SELECT VALUE` and has no `OMIT`;
+- after `FROM` (and an optional `ONLY`) comes exactly one target: a table
+  name, a record id `table:key` whose key is one token or one bracket
+  group, or `type::record('table', …)`, `type::thing('table', …)` or
+  `type::table('table')` with a plain string literal; then the end of the
+  query or one of its clauses (`WHERE`, `SPLIT`, `GROUP`, `ORDER`, `LIMIT`,
+  `START`, `FETCH`, `TIMEOUT`, `PARALLEL`, `EXPLAIN`, `WITH`, `VERSION`,
+  `TEMPFILES`).
+
+Of such a `SELECT`, each projected item that is exactly one bare field name
+(a word or a quoted name) or exactly `*` is recorded, against that table.
+Every other item records nothing: a function call, a path (`address.city`,
+`tags[0]`), an expression, anything with `AS` (a bare field included), a
+graph step and a subquery. Two targets, an open target (`$owner`,
+`type::table($t)`, a subquery, a range or a graph step after the table), a
+hole after the target and a statement in a block that is not parenthesised
+record nothing.
+
+With `--schema` (or a scope's `declared` detail), a recorded field that a
+`SCHEMAFULL` table does not declare fails generation with its file and line:
+``shop/q.surql:2: selects `staton` of `gauge`, which declares no such
+field``. `*`, `id`, a declared field and a field with declared nested
+fields (`pos` when `pos.x` is declared) resolve. Nothing is checked on a
+schemaless table, on a table the schema does not declare (the names check
+reports it once), or in a text that defines, alters or removes a table or
+field itself. The generated modules do not change: `projected` is not
+written into a part.
+
 #### Rendering in process
 
 The command is a thin wrapper over `renderStatementModules` from

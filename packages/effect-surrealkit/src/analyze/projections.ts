@@ -1,0 +1,222 @@
+/**
+ * The fields a `SELECT` projects from the one static table it reads: each
+ * bare field name and `*`, in the patterns a lexer can read with certainty.
+ * Anything else records nothing: refuse rather than guess.
+ */
+import type { Token } from './lexer.js';
+
+/** One projected field (`*` for all of them), at the 1-based line of its name. */
+export interface ProjectedField {
+	readonly table: string;
+	readonly field: string;
+	readonly line: number;
+}
+
+const upper = (token: Token | undefined): string =>
+	token?.kind === 'word' ? token.value.toUpperCase() : '';
+
+const isPunct = (token: Token | undefined, char: string): boolean =>
+	token?.kind === 'punct' && token.value === char;
+
+const isOpen = (token: Token | undefined): boolean =>
+	isPunct(token, '(') || isPunct(token, '[') || isPunct(token, '{');
+
+const isClose = (token: Token | undefined): boolean =>
+	isPunct(token, ')') || isPunct(token, ']') || isPunct(token, '}');
+
+const isPlainString = (token: Token | undefined): token is Token =>
+	token?.kind === 'string' &&
+	(token.prefix === undefined || token.prefix === 's');
+
+/** Words that may follow a `SELECT`'s target. */
+const AFTER_TARGET: ReadonlySet<string> = new Set([
+	'WHERE',
+	'SPLIT',
+	'GROUP',
+	'ORDER',
+	'LIMIT',
+	'START',
+	'FETCH',
+	'TIMEOUT',
+	'PARALLEL',
+	'EXPLAIN',
+	'WITH',
+	'VERSION',
+	'TEMPFILES',
+]);
+
+/** Words that are values, not field names. */
+const VALUES: ReadonlySet<string> = new Set(['NONE', 'NULL', 'TRUE', 'FALSE']);
+
+export const analyzeProjections = (
+	tokens: ReadonlyArray<Token>,
+): ReadonlyArray<ProjectedField> => {
+	const found = new Map<string, ProjectedField>();
+
+	/** The index of the bracket closing the one at `at`. */
+	const closing = (at: number): number => {
+		let depth = 0;
+		for (let j = at; j < tokens.length; j++) {
+			if (isOpen(tokens[j])) depth++;
+			else if (isClose(tokens[j])) {
+				depth--;
+				if (depth === 0) return j;
+			}
+		}
+		return tokens.length;
+	};
+
+	/** A bare field name at `at`, as one token: a word or a quoted name. */
+	const bareName = (at: number): string | undefined => {
+		const token = tokens[at];
+		if (token?.kind === 'ident') return token.value;
+		if (token?.kind !== 'word') return undefined;
+		if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(token.value)) return undefined;
+		return VALUES.has(token.value.toUpperCase()) ? undefined : token.value;
+	};
+
+	/**
+	 * The table of the one static target from `at` up to `end`: a table
+	 * name, a record id `table:key` (one token or one bracket group), or
+	 * `type::record`, `type::thing` or `type::table` with a plain string
+	 * literal, after an optional `ONLY`, and followed by the query's end or
+	 * one of its clauses. Anything else, a second target included, is not
+	 * certain.
+	 */
+	const targetTable = (at: number, end: number): string | undefined => {
+		let j = at;
+		if (upper(tokens[j]) === 'ONLY') j++;
+		const token = tokens[j];
+		let table: string | undefined;
+		if (
+			token?.kind === 'word' &&
+			token.value.toLowerCase() === 'type' &&
+			isPunct(tokens[j + 1], ':')
+		) {
+			const fn = tokens[j + 3];
+			const name = fn?.kind === 'word' ? fn.value.toLowerCase() : '';
+			if (
+				!isPunct(tokens[j + 2], ':') ||
+				!['record', 'thing', 'table'].includes(name) ||
+				!isPunct(tokens[j + 4], '(') ||
+				!isPlainString(tokens[j + 5]) ||
+				!isPunct(tokens[j + 6], name === 'table' ? ')' : ',')
+			)
+				return undefined;
+			table = (tokens[j + 5] as Token).value;
+			j = closing(j + 4) + 1;
+		} else {
+			table = bareName(j);
+			if (table === undefined || AFTER_TARGET.has(upper(token)))
+				return undefined;
+			j++;
+			if (isPunct(tokens[j], ':')) {
+				const key = tokens[j + 1];
+				if (key === undefined || (key.kind === 'punct' && !isOpen(key)))
+					return undefined;
+				j = isOpen(key) ? closing(j + 1) + 1 : j + 2;
+			}
+		}
+		const next = tokens[j];
+		return j >= end || isPunct(next, ';') || AFTER_TARGET.has(upper(next))
+			? table
+			: undefined;
+	};
+
+	/** Every parenthesised query in `start`..`stop`, each a query of its own. */
+	const nested = (start: number, stop: number): void => {
+		for (let i = start; i < stop; i++) {
+			if (!isOpen(tokens[i])) continue;
+			const close = closing(i);
+			if (isPunct(tokens[i], '(') && upper(tokens[i + 1]) === 'SELECT')
+				select(i + 1, close);
+			else nested(i + 1, close);
+			i = close;
+		}
+	};
+
+	/** The `SELECT` from `from` (its first token) to `end` (exclusive). */
+	const select = (from: number, end: number): void => {
+		nested(from + 1, end);
+		const froms: number[] = [];
+		for (let j = from + 1; j < end; j++) {
+			if (isOpen(tokens[j])) {
+				j = closing(j);
+				continue;
+			}
+			if (
+				upper(tokens[j]) === 'FROM' &&
+				!isPunct(tokens[j - 1], '.') &&
+				!isPunct(tokens[j - 1], ':')
+			)
+				froms.push(j);
+		}
+		// No FROM, or a field named `from`: not certain where the list ends.
+		if (froms.length !== 1) return;
+		const at = froms[0] as number;
+		if (upper(tokens[from + 1]) === 'VALUE') return;
+		const table = targetTable(at + 1, end);
+		if (table === undefined) return;
+		const fields: Array<{ field: string; line: number }> = [];
+		let start = from + 1;
+		for (let k = from + 1; k <= at; k++) {
+			if (k < at && isOpen(tokens[k])) {
+				k = closing(k);
+				continue;
+			}
+			if (k < at && upper(tokens[k]) === 'OMIT') return;
+			if (k !== at && !isPunct(tokens[k], ',')) continue;
+			const item = tokens[start] as Token;
+			if (k - start === 1) {
+				const name = isPunct(item, '*') ? '*' : bareName(start);
+				if (name !== undefined)
+					fields.push({ field: name, line: item.line });
+			}
+			start = k + 1;
+		}
+		for (const { field, line } of fields) {
+			const entry = { table, field, line };
+			found.set(JSON.stringify([line, table, field]), entry);
+		}
+	};
+
+	// Top-level statements: a query when it starts with SELECT, possibly
+	// after `LET $name =` or `RETURN`; elsewhere only parenthesised ones.
+	let start = 0;
+	for (let i = 0; i <= tokens.length; i++) {
+		const token = tokens[i];
+		if (token !== undefined && isOpen(token)) {
+			i = closing(i);
+			continue;
+		}
+		if (token !== undefined && !isPunct(token, ';')) continue;
+		let first = start;
+		if (
+			upper(tokens[first]) === 'LET' &&
+			tokens[first + 1]?.kind === 'param' &&
+			isPunct(tokens[first + 2], '=') &&
+			!isPunct(tokens[first + 3], '=')
+		)
+			first += 3;
+		else if (upper(tokens[first]) === 'RETURN') first += 1;
+		if (first < i) {
+			if (upper(tokens[first]) === 'SELECT') select(first, i);
+			else nested(start, i);
+		}
+		start = i + 1;
+	}
+
+	return [...found.values()].sort((a, b) =>
+		a.line !== b.line
+			? a.line - b.line
+			: a.table !== b.table
+				? a.table < b.table
+					? -1
+					: 1
+				: a.field < b.field
+					? -1
+					: a.field > b.field
+						? 1
+						: 0,
+	);
+};

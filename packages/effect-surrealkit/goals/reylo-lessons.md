@@ -46,8 +46,8 @@ Verified on 2026-11-23 against this branch at `88d37cc`. Verify each row again b
 | Statements inside `BEGIN … CANCEL` come back as `The query was not executed due to a cancelled transaction`, so a cancelled transaction cannot be used to try a text. | Measured |
 | The analyzer is compared with an engine for every complete authored fixture (9 of 23; the other 14 are named fragments and templates), and the generated `counter` part runs through the client (lane L01). | `test/analyze-engine.test.ts`; `test/fixtures/statements`, `statements-binds`, `statements-presence` |
 | 34 TypeScript files under `test/` contain a skip. The skipped tests are pinned for the embedded lane (51) and `SURREAL_BIN` 3.3 (22) by `npm run test:skips`; the `SURREAL_URL` lanes are unpinned (lane L02). | `grep -rl --include='*.ts' "skipIf\|\.skip(" test`; `test/skips/` |
-| The analyzer records what a binding is used as in three patterns (`argument`, `key`, `field` with `compare` or `assign`). It records nothing about projected fields. | `src/analyze/uses.ts`; README, "What bindings are used as" |
-| A generated part's doc comment holds only its file name. | `src/analyze/render.ts:440` |
+| The analyzer records what a binding is used as in three patterns (`argument`, `key`, `field` with `compare` or `assign`), and, since lane L04, the bare fields and `*` a `SELECT` projects from one static table (`projected`). | `src/analyze/uses.ts`, `src/analyze/projections.ts`; README, "What bindings are used as" and "Projected fields" |
+| Since lane L08, a generated part's doc comment holds the comment that opens its file, its SurrealQL in a fenced block, and its file name. | `src/analyze/render.ts`, `docComment` |
 | `IndexDescriptor.type` distinguishes `'unique'`, and the generated descriptors keep each index under its name as a literal key. | `src/table.ts:67-83`; README, "What is generated" |
 | Effect 4.1.5 exports `Schema.toJsonSchemaDocument` and `Schema.toStandardSchemaV1`. No statement exposes a JSON Schema. | `node_modules/effect/dist/Schema.d.ts`; no match for `JsonSchema` under `src/statement` or `src/client` |
 | `vite-plugin-surrealkit` runs `surrealkit sync` or `compile`. It does not load `.surql` imports. | `packages/vite-plugin-surrealkit/src/index.ts` |
@@ -264,6 +264,48 @@ Ready statements:
 - Its parameters take the codecs of the fields they are compared with, brands included, and its result is built from the descriptor's field codecs.
 - Every other file is still a `part`.
 - An engine test runs each generated ready statement through `run` on both engine lanes and decodes its rows. A type test uses one with no hand-written codec.
+
+Measured on 2026-11-23 at `1e3c9d5`, before any change, on two corpora: the 23 authored fixtures under `test/fixtures/statements*`, and the 190 query files (18 scope directories) of a consuming project, read only, each checked scope with the schema document its generator uses. A prototype of each step's recognised shape was run over both, and the built analyzer was run again over both after the change. The probe scripts and their output are `l04-measurement.txt` in the topic evidence of `20261123-decide-and-build-reylo-inspired-improvements`.
+
+| | Fixtures (23) | Consumer files (190) |
+| --- | --- | --- |
+| Contain a `SELECT` whose projection the check reads | 4, all templates in `statements/catalog` (`byVector`, `byWords`, `guarded`, `summary`) | 50: 43 with a bare field, 7 with only `*` |
+| Of those, with a bare field on a `SCHEMAFULL` table of a schema the project checks | none: no fixture directory with such a file has a schema document | 36 files, 225 distinct field reads; the other 7 are in the two scopes the project leaves unchecked |
+| Problems the check raises on the text as written | 0 | 0 |
+| Only `SELECT VALUE` (read by neither step) | 4 | 34; a single bare field after `VALUE` would add 5 files |
+| Exactly one `SELECT` of the ready shape | 0 | 0 |
+
+So the third finding of "What would disprove it" does not hold for projected fields: the single-table pattern matches 4 fixtures and 50 consumer files.
+
+Plans with bound parameters, through the SDK, on embedded 4.0.1 and `SURREAL_BIN` 3.3.4 alike: `WHERE id = $id` with `$id` bound as a `RecordId` plans as `RecordIdScan`, and with `$id` bound as the string `'person:1'` as `TableScan`, matching no row. `FROM $id` plans as `RecordIdScan`. A filter on a field with no index is `TableScan`, on a unique or standard index `IndexScan` (also with the parameter on the left, and with a second unindexed comparison joined by `AND`, as `Filter` over the `IndexScan`), and `!=` on an indexed field is `TableScan`.
+
+Admission note, projected fields, 2026-11-23, at `1e3c9d5`:
+
+1. **What is worse today?** Yes. On a `SCHEMAFULL` table both engines answer `SELECT nmae FROM person` with `[{}]` and `SELECT name, nmae FROM person` with `[{ name: 'Ada' }]`, without an error (`test/projections-engine.test.ts`, both lanes). Generation does not look at a projection at all: misspelling any one of the 225 projected field reads in the consumer's 36 checked files still generated its module at `1e3c9d5`. Written first, 20 of the 27 tests of `test/projections.test.ts` failed there; the 7 that passed are refusals and the unchanged output.
+2. **Is this the better way?** Yes. Alternatives considered: the engine itself, which does not refuse an undeclared field on read (above); a typed result codec, which reports the missing field only when the statement runs and decodes a row; lane L05's `--verify`, which checks only parse errors and result counts, so it cannot see a missing field; reading the field in the existing `uses`, which records bindings, not projections. The check reuses the schema detail `--schema` already loads, costs no engine, and runs where a misspelt table already fails.
+3. **With SurrealDB or against it?** With it. <https://surrealdb.com/docs/surrealql/statements/define/table>, read on 2026-11-23 (`surrealdb_version: "4.x"`; none is published for 3.x): a `SCHEMAFULL` table "rejects any field that has not been defined" on write, so a field it does not declare can hold no value to read. The page says nothing of reads, and the engine test pins the read on 3.3.4 and 4.0.1. <https://surrealdb.com/docs/surrealql/statements/select>, read the same day, says `SELECT VALUE` "only works if you select a single un-nested field", and describes `OMIT`; both are left unread. Nothing is checked on a schemaless table, which accepts any field.
+
+Admission note, ready statements, 2026-11-23, at `1e3c9d5`:
+
+1. **What is worse today?** No file shows it. Of 213 authored texts, none is exactly one `SELECT` of the recognised shape. The 8 consumer files that are one `SELECT` miss it on `SELECT VALUE` with an aggregate, `FROM ONLY $id`, `FROM $ids`, a full-text `@1@` or vector `<|k,ef|>` operator, `search::score` or `vector::distance::knn()` aliased in the projection, and comparisons with literals. The nearest, `nativeScale/verifyCorpus` (`SELECT VALUE ordinal … WHERE corpus = $corpus ORDER BY ordinal LIMIT 1`), uses `VALUE` and is in a scope with no schema, so no descriptor would serve it even with a wider shape.
+2. **Is this the better way?** Not shown. The package's own `select` builder already gives a statement over a descriptor its parameter codecs and its result, so the step would add a second way to write a statement that no authored text uses.
+3. **With SurrealDB or against it?** Either way, by the measurement above: `WHERE id = $id` is a `RecordIdScan` on 3.3.4 and 4.0.1 when the binding is a record id, and a `TableScan` when it is a string; an unindexed filter is a `TableScan`.
+
+**Ready statements: closed, not admitted.** The shape matches no real file, so nothing of the step is built: no `--store` flag, no change to `src/cli/statements.ts`, and the generated output stays byte for byte as it was. If the step is reopened, the plans above set its conditions: the `id` parameter takes the table's record id codec, and a filter no index of the descriptor serves is reported.
+
+Implementation, projected fields: `analyzeProjections` (`src/analyze/projections.ts`) gives `Analysis.projected`, `{ table, field, line }` per bare field or `*` (`ProjectedField`, exported from `effect-surrealkit/analyze`). A `SELECT` is read at the top level (after `LET $name =` or `RETURN`) or as a parenthesised subquery, which is a query of its own. It needs exactly one `FROM` outside brackets, no `VALUE` and no `OMIT`. It needs one target after an optional `ONLY`: a table name, a record id whose key is one token or one bracket group, or `type::record`, `type::thing` or `type::table` with a plain string literal, followed by the end of the query or one of its clauses. Each item that is exactly one bare name or `*` is recorded. `checkProjected` in `src/analyze/render.ts`, called by `renderStatementModulesSync` with a scope's `declared` detail, reports ``<scope>/<file>.surql:<line>: selects `<field>` of `<table>`, which declares no such field`` as an `undeclared` problem. `*`, `id`, a declared field and a field with declared nested paths resolve. A schemaless table, a table the schema does not declare and a text that changes the schema itself are not checked. Nothing is rendered from it: the goldens are unchanged. Tests: `test/projections.test.ts` (27: what is read, one test per case that records nothing, the check and what it does not check), and `test/projections-engine.test.ts` (both lanes).
+
+Measured again after the build: the consumer's 190 files render with no new problem, and each of the 225 projected field reads, misspelt one at a time, now fails generation with `selects \`<name>Typo\` of \`<table>\``: 225 of 225.
+
+Gate at the lane's head: `bun run lint`, `bun run typecheck` and `bun run build` pass; `npm run test:skips` passes on the embedded lane (1,928 passed, 51 skipped, as listed) and with `SURREAL_BIN` 3.3.4 (1,957 passed, 22 skipped, as listed). The type-check budgets are unchanged from `1e3c9d5`: 300 statements 221,107 instantiations and 49,261 types; 30 blocks 184,366; 30 families 240,485; 30 pipeline calls 118,430; 30 bulk calls 23,465; no limit raised.
+
+**State: projected fields implemented, awaiting review; ready statements closed, not admitted.**
+
+Questions for the reviewer:
+
+- `SELECT VALUE <bare field> FROM <table>` is a single un-nested field, as certain as a one-field projection, and would add 5 consumer files. The lane's text says `VALUE` records nothing, so it does not. Should it be read?
+- An aliased bare field (`name AS label`) reads `name` from the table with certainty, and records nothing under "an aliased expression". The same question applies here.
+- A subquery in the projection records nothing for the outer table, and is read as a query of its own against its own table. Is that within "nothing is recorded for … a subquery in the projection"?
 
 ### L05. `statements --verify`
 
