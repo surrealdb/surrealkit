@@ -941,3 +941,115 @@ async fn plan_refuses_to_overwrite_an_existing_rollout() {
 		fs::read_dir(project.root.join("rollouts")).unwrap().all(|e| !e.unwrap().path().is_file())
 	);
 }
+
+// ---- rename proposals ------------------------------------------------------
+
+const PERSON_EMAIL: &str = "DEFINE TABLE person SCHEMAFULL;\n\
+	DEFINE FIELD name ON person TYPE string;\n\
+	DEFINE FIELD email ON person TYPE string;\n";
+
+/// At compatibility level 4 a new `TYPE string` field on a table with records
+/// needs `MIGRATE EXISTING ROWS`. The catalog leaves the clause out of the
+/// definition, so this still pairs with `email`.
+const PERSON_MAIL: &str = "DEFINE TABLE person SCHEMAFULL;\n\
+	DEFINE FIELD name ON person TYPE string;\n\
+	DEFINE FIELD mail ON person TYPE string\n    \
+	MIGRATE EXISTING ROWS AS add_mail USING $value FALLBACK '';\n";
+
+async fn people(db: &Surreal<Any>, field: &str) -> Vec<serde_json::Value> {
+	let mut res = db
+		.query(format!("SELECT VALUE [record::id(id), {field}] FROM person ORDER BY id;"))
+		.await
+		.unwrap()
+		.check()
+		.unwrap();
+	res.take(0).unwrap()
+}
+
+/// A project at `PERSON_EMAIL` with two people, and a rollout planned that
+/// renames `email` to `mail`.
+async fn planned_rename() -> (Project, Surreal<Any>, String) {
+	let project = Project::new();
+	project.write("person.surql", PERSON_EMAIL);
+	let db = mem_db().await;
+	project.sync(&db).await;
+	project.baseline(&db).await;
+	db.query(
+		"CREATE person:ann SET name = 'Ann', email = 'ann@example.test'; \
+		 CREATE person:bob SET name = 'Bob', email = 'bob@example.test';",
+	)
+	.await
+	.unwrap()
+	.check()
+	.unwrap();
+	project.write("person.surql", PERSON_MAIL);
+	let id = project.plan("rename_email").await;
+	(project, db, id)
+}
+
+fn confirm(project: &Project, id: &str) {
+	let path = project.manifest(id);
+	let raw = fs::read_to_string(&path).unwrap();
+	assert!(raw.contains("unconfirmed = true\n"), "{raw}");
+	fs::write(path, raw.replace("unconfirmed = true\n", "")).unwrap();
+}
+
+#[tokio::test]
+async fn a_confirmed_rename_keeps_every_value_through_up_and_complete() {
+	let (project, db, id) = planned_rename().await;
+	let spec: RolloutSpec =
+		toml::from_str(&fs::read_to_string(project.manifest(&id)).unwrap()).unwrap();
+	assert_eq!(spec.renames.len(), 1, "{:?}", spec.renames);
+	assert_eq!(
+		(spec.renames[0].kind.as_str(), spec.renames[0].scope.as_deref()),
+		("field", Some("person"))
+	);
+	assert_eq!((spec.renames[0].from.as_str(), spec.renames[0].to.as_str()), ("email", "mail"));
+
+	// Nothing runs while the copy is unconfirmed.
+	let err = project.up(&db, false).await.expect_err("an unconfirmed step").to_string();
+	assert!(err.contains("is unconfirmed"), "{err}");
+	assert_eq!(status(&db, &id).await, None);
+	assert!(project.start(&db, &id).await.is_err());
+
+	confirm(&project, &id);
+	let report = project.up(&db, false).await.expect("up");
+	assert_eq!(report.waiting.as_deref(), Some(id.as_str()));
+	// Between start and complete both fields hold the values, so the old and
+	// the new application can each read theirs.
+	assert_eq!(field_names(&db, "person").await, vec!["email", "mail", "name"]);
+	let expected = serde_json::json!([["ann", "ann@example.test"], ["bob", "bob@example.test"]]);
+	assert_eq!(serde_json::json!(people(&db, "email").await), expected);
+	assert_eq!(serde_json::json!(people(&db, "mail").await), expected);
+
+	project.up(&db, true).await.expect("up --complete");
+	assert_eq!(status(&db, &id).await.as_deref(), Some("completed"));
+	assert_eq!(field_names(&db, "person").await, vec!["mail", "name"]);
+	assert_eq!(serde_json::json!(people(&db, "mail").await), expected);
+	let mut res = db.query("SELECT * FROM person WHERE email != NONE;").await.unwrap();
+	let left: Vec<serde_json::Value> = res.take(0).unwrap();
+	assert!(left.is_empty(), "the old field's values are cleared: {left:?}");
+
+	// The catalog matches the schema, so the next plan has nothing to do.
+	assert_eq!(catalog_keys(&db).await, snapshot_keys(&project));
+}
+
+#[tokio::test]
+async fn a_rolled_back_rename_leaves_the_old_field_and_its_values() {
+	let (project, db, id) = planned_rename().await;
+	confirm(&project, &id);
+	project.start(&db, &id).await.expect("start");
+	run_rollback(
+		&db,
+		&project.folder(),
+		RolloutExecutionOpts::new(Some(id.clone())),
+		&TemplateVars::default(),
+	)
+	.await
+	.expect("rollback");
+	assert_eq!(field_names(&db, "person").await, vec!["email", "name"]);
+	assert_eq!(
+		serde_json::json!(people(&db, "email").await),
+		serde_json::json!([["ann", "ann@example.test"], ["bob", "bob@example.test"]])
+	);
+}

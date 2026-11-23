@@ -1010,8 +1010,8 @@ Keep the clause in the schema file. Each name runs once per table:
   land.
 - A name reused for a different transform is refused. Give each transform a name
   of its own.
-- `USING` reads only `$value`, the field's own value, so a rename still needs an
-  `UPDATE` in a rollout `run_sql` step.
+- `USING` reads only `$value`, the field's own value, so a rename needs an
+  `UPDATE` that copies the values, which `rollout plan` proposes (see below).
 - A field an index reads cannot be migrated while the index exists. SurrealKit
   removes such indexes, applies the file and defines them again. Define an index
   after the field it reads.
@@ -1037,6 +1037,54 @@ rollout.
 At level 4, `REMOVE FIELD` on a `SCHEMAFULL` table also clears the values the
 field held. Sync's prune and a rollout's contract phase say so for each field
 they remove.
+
+#### Renaming a field
+
+SurrealDB has no statement that renames a field or carries its values to a new
+name, so a rename is a new field, a copy, and the removal of the old field.
+When a plan removes one field and adds another on the same table, and the two
+are defined the same apart from the name, `rollout plan` proposes the rename:
+
+```toml
+[[renames]]
+kind = "field"
+scope = "person"
+from = "email"
+to = "mail"
+
+[[steps]]
+id = "copy_person_email_to_mail"
+phase = "start"
+kind = "run_sql"
+sql = "UPDATE person SET mail = email WHERE email != NONE;"
+unconfirmed = true
+```
+
+The copy runs in the start phase, after the new field is defined. The old field
+is removed in the complete phase, so between the two both fields hold the
+values. `rollout lint` and `rollout start` (and `up`) refuse the manifest while
+a step says `unconfirmed = true`: check the SQL, then delete that line, or
+delete the step and its `[[renames]]` entry if it is not a rename.
+
+- Whitespace and comments do not count, and neither does a `MIGRATE EXISTING
+  ROWS` clause on the new field, which level 4 needs when the table holds
+  records and the field's `TYPE` does not accept `NONE`.
+- Only top-level fields pair. A nested field moves with its parent.
+- A field with `READONLY` gets no proposal, because SurrealDB refuses the
+  copy. Neither does one with `VALUE`, which the `UPDATE` would evaluate again,
+  or `COMPUTED`, which stores nothing.
+- When the fields could pair in more than one way, `plan` proposes none of them
+  and names the candidates.
+- Without a proposal, `plan` refuses an add and a remove on one table as
+  before. Rename one field per rollout, or write the manifest by hand.
+- The copy is an `UPDATE`, so it fires `UPDATE` events, and it evaluates the
+  `VALUE` clause of every field on each record it touches, an `updated_at`
+  for example.
+- A record the old application writes after `start` keeps that write only in
+  the old field, which `complete` removes. Stop those writes during the
+  rollout, or add your own copy for them before completing.
+
+The `rollout_plan` MCP tool lists the proposals in its result as `renames`.
 
 A database a 3.x datastore created stays at level 3 after the upgrade to 4.0.
 `surrealkit compat status` shows the level and what SurrealDB is doing to each

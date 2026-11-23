@@ -1300,6 +1300,86 @@ fn parse_define_entity(stmt: &crate::surql_scan::Stmt, src: &str) -> Option<Cata
 	})
 }
 
+/// A field definition as `rollout plan` compares it with a removed field.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct FieldUnderName {
+	/// The catalog's `statement_hash` the definition would have if the field
+	/// were named the other name instead.
+	pub statement_hash: String,
+	/// A clause that keeps an `UPDATE` from copying values into the field as
+	/// they were: `READONLY`, `VALUE` or `COMPUTED`.
+	pub uncopyable: Option<&'static str>,
+}
+
+/// How the `DEFINE FIELD` for `name` on `table` in `file` reads under the name
+/// `as_name`: its hash, computed exactly as the catalog computes it, with only
+/// the name written differently.
+///
+/// Comparing that hash with a removed field's recorded hash says whether the
+/// two definitions are the same apart from the name, without needing the
+/// removed field's SQL, which the catalog does not keep. `None` when the file
+/// does not define the field.
+pub(crate) fn field_under_name(
+	file: &SchemaFile,
+	table: &str,
+	name: &str,
+	as_name: &str,
+) -> Result<Option<FieldUnderName>> {
+	let src = file.sql.as_str();
+	let statements = crate::surql_scan::scan(src)
+		.map_err(|err| anyhow!("schema file '{}': {err}", file.path))?;
+	for stmt in &statements {
+		let Some(entity) = parse_define_entity(stmt, src) else {
+			continue;
+		};
+		if entity.kind != EntityKind::Field
+			|| entity.scope.as_deref() != Some(table)
+			|| entity.name != name
+		{
+			continue;
+		}
+		let Some(head) = define_head(stmt, src) else {
+			continue;
+		};
+		let end = glued_end(stmt, src, head.name_index);
+		let name_span = stmt.tokens[head.name_index].span.start..stmt.tokens[end - 1].span.end;
+		let renamed = SchemaFile {
+			path: file.path.clone(),
+			sql: format!("{}{as_name}{}", &src[..name_span.start], &src[name_span.end..]),
+			hash: file.hash.clone(),
+		};
+		let (entities, _) = parse_schema_statements(&renamed, true)?;
+		let Some(hash) = entities
+			.into_iter()
+			.find(|e| {
+				e.kind == EntityKind::Field
+					&& e.scope.as_deref() == Some(table)
+					&& e.name == as_name
+			})
+			.map(|e| e.statement_hash)
+		else {
+			return Ok(None);
+		};
+		// Clauses come after `ON [TABLE] <table>`, so a field or table that is
+		// itself called `value` is not mistaken for one.
+		let after_table = find_word(stmt, src, end, "ON")
+			.map(|on| on + 1 + usize::from(stmt.is_word(src, on + 1, "TABLE")) + 1)
+			.unwrap_or(stmt.tokens.len());
+		let uncopyable = (after_table..stmt.tokens.len())
+			.filter(|&i| stmt.tokens[i].depth == stmt.tokens[0].depth)
+			.find_map(|i| {
+				["READONLY", "VALUE", "COMPUTED"]
+					.into_iter()
+					.find(|word| stmt.is_word(src, i, word))
+			});
+		return Ok(Some(FieldUnderName {
+			statement_hash: hash,
+			uncopyable,
+		}));
+	}
+	Ok(None)
+}
+
 /// The identifier starting at token `idx`: that token plus every token written
 /// directly against it, so `a.b[*]`, `fn::greet` and `ml::model<1.0.0>` come back
 /// whole. It stops at whitespace and at `( , ; { } )`, which is where the old

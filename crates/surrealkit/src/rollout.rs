@@ -33,6 +33,7 @@ mod discard;
 mod freeze;
 mod frozen;
 pub(crate) mod migrations;
+mod renames;
 mod up;
 
 #[doc(hidden)]
@@ -185,6 +186,12 @@ pub enum RolloutAction {
 	/// to re-run: on retry the step executes again from scratch.
 	RunSql {
 		sql: String,
+		/// Written by `rollout plan` on a step it inferred, such as the copy for a
+		/// rename. `rollout lint` and `rollout start` refuse the rollout until the
+		/// author deletes it (or the step). Absent, and not written, otherwise, so
+		/// every other step serializes as it always has.
+		#[serde(default, skip_serializing_if = "std::ops::Not::not")]
+		unconfirmed: bool,
 	},
 	/// Run a query and assert its stringified output equals `expect`; fails the
 	/// rollout otherwise.
@@ -466,7 +473,13 @@ pub struct RolloutSpec {
 	/// The migration strategy. See [`RolloutCompatibility`].
 	#[serde(default)]
 	pub compatibility: RolloutCompatibility,
-	/// Reserved for future rename hints; currently unused by execution.
+	/// The renames `rollout plan` inferred, each with the `run_sql` step that
+	/// copies its values. A record for the reader: execution runs the steps and
+	/// never reads this.
+	///
+	/// Deliberately serialized even when empty, as `renames = []`: every manifest
+	/// and code-defined rollout written so far carries it, and their checksums
+	/// are hashes of that text.
 	#[serde(default)]
 	pub renames: Vec<RolloutRename>,
 	/// The steps to execute, grouped by [`RolloutPhase`].
@@ -521,14 +534,28 @@ impl RolloutSpec {
 	}
 }
 
-/// Reserved rename hint. Currently inert — carried for forward compatibility but
-/// not consumed by rollout execution.
+/// A rename `rollout plan` inferred: an entity removed and another added that
+/// are the same apart from the name. Only fields are inferred, as
+/// `kind = "field"` with the table as `scope`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RolloutRename {
+	/// The entity kind, as [`EntityKind`] spells it.
 	pub kind: String,
+	/// The table, for a field.
 	pub scope: Option<String>,
+	/// The name the schema had before, as written there.
 	pub from: String,
+	/// The name it has now, as written there.
 	pub to: String,
+}
+
+/// What `rollout plan` planned, for a caller that reports it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[doc(hidden)]
+pub struct RolloutPlanned {
+	/// The renames it proposed. Each has an unconfirmed copy step in the
+	/// manifest.
+	pub renames: Vec<RolloutRename>,
 }
 
 /// One step in a rollout. Build steps with the constructors
@@ -587,6 +614,7 @@ impl RolloutStep {
 			phase,
 			action: RolloutAction::RunSql {
 				sql: sql.into(),
+				unconfirmed: false,
 			},
 		}
 	}
@@ -1035,7 +1063,7 @@ pub async fn run_baseline(db: &Surreal<Any>, folder: &str, module: &Module) -> R
 }
 
 #[doc(hidden)]
-pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
+pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<RolloutPlanned> {
 	ensure_local_state_dirs(folder)?;
 	let files = collect_schema_files(folder)?;
 	let old_schema = load_schema_snapshot(folder)?;
@@ -1052,7 +1080,13 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 	let file_diff = diff_schema(&old_schema, &new_schema);
 	let catalog_diff = diff_catalog(&old_catalog, &new_catalog);
 
-	validate_autoplan(&catalog_diff, opts.allow_modified, &overwrite_sequences(&files))?;
+	let renames = renames::find(&catalog_diff, &files)?;
+	validate_autoplan(
+		&catalog_diff,
+		opts.allow_modified,
+		&overwrite_sequences(&files),
+		&renames::paired_keys(&renames),
+	)?;
 
 	let name = opts.name.unwrap_or_else(|| "schema_rollout".to_string());
 	let slug = slugify(&name);
@@ -1069,7 +1103,7 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 		);
 	}
 
-	let spec = build_rollout_spec(
+	let mut spec = build_rollout_spec(
 		&rollout_id,
 		&name,
 		&files,
@@ -1078,6 +1112,10 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 		&old_schema,
 		&new_schema,
 	)?;
+	renames::apply(&mut spec, &renames);
+	let planned = RolloutPlanned {
+		renames: spec.renames.clone(),
+	};
 	check_plan_delta(&spec, &files, &old_catalog, &new_catalog)?;
 	if let Ok(existing) = chain::RolloutChain::load(&rollouts)
 		&& let Some(tail) = existing.order.last()
@@ -1111,7 +1149,7 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 		);
 		log::info!("  would create: {}", path.display());
 		log::info!("  would freeze into: {}", rollouts.join(&rollout_id).display());
-		return Ok(());
+		return Ok(planned);
 	}
 
 	// Frozen files first, then the manifest: a manifest only ever exists with all
@@ -1158,7 +1196,7 @@ pub async fn run_plan(folder: &str, opts: RolloutPlanOpts) -> Result<()> {
 		"Commit the manifest, its directory and the snapshots together; reverting means reverting \
 		 all three."
 	);
-	Ok(())
+	Ok(planned)
 }
 
 /// Rewrite a loaded manifest's recorded file paths onto this project's canonical
@@ -1222,6 +1260,7 @@ pub async fn run_lint(folder: &str, opts: RolloutExecutionOpts) -> Result<()> {
 fn lint_one(folder: &str, selector: &str) -> Result<()> {
 	let mut rollout = load_rollout_spec(resolve_rollout_path(folder, Some(selector))?)?;
 	validate_rollout_spec(&rollout.spec)?;
+	renames::check_confirmed(&rollout.spec)?;
 	if rollout.spec.has_frozen_files() {
 		preflight_frozen(&rollout)?;
 		migrations::check_steps(&rollout)?;
@@ -1254,6 +1293,7 @@ fn lint_all(folder: &str) -> Result<()> {
 	let mut legacy = Vec::new();
 	for rollout in chain.order.iter().chain(&chain.unchained) {
 		validate_rollout_spec(&rollout.spec)?;
+		renames::check_confirmed(&rollout.spec)?;
 		lint_base_snapshot(rollout);
 		if rollout.spec.has_frozen_files() {
 			preflight_frozen(rollout)?;
@@ -1684,6 +1724,7 @@ async fn start_inner(
 	target: &TargetCatalog,
 	ctx: &StepContext<'_>,
 ) -> Result<()> {
+	renames::check_confirmed(&rollout.spec)?;
 	let lock = acquire_lock(db, &rollout.spec.module()?, "global").await?;
 	let keep_alive = LockKeepAlive::spawn(db, &lock);
 	let result = async {
@@ -2845,6 +2886,7 @@ fn validate_autoplan(
 	diff: &CatalogDiff,
 	allow_modified: bool,
 	overwrite_sequences: &BTreeSet<String>,
+	renamed: &BTreeSet<EntityKey>,
 ) -> Result<()> {
 	// A changed sequence without OVERWRITE is applied with IF NOT EXISTS, which
 	// leaves an existing one alone, so there is nothing for a rollback to undo
@@ -2897,17 +2939,25 @@ fn validate_autoplan(
 
 	// An add and a remove of the same kind in the same scope cannot be told apart
 	// from a rename without heuristics, and a misread rename plans as a drop of the
-	// original, so this stays refused.
+	// original, so this stays refused. The one exception is a pair `renames::find`
+	// proved: two fields whose definitions differ only in the name, and nothing
+	// else they could pair with. Those are planned with a copy the author has to
+	// confirm.
 	//
 	// It is deliberately NOT gated on --allow-modified. That flag is about changing
 	// an entity that stays in place; this is about one that may be disappearing.
 	// Tables, functions, params, analyzers and users all carry `scope: None`, so
 	// treating an unnamed scope as "not a collision" would switch the guard off for
 	// exactly the entity kinds whose removal destroys data.
+	let unpaired = |entities: &[CatalogEntity]| -> Vec<CatalogEntity> {
+		entities.iter().filter(|entity| !renamed.contains(&entity.key())).cloned().collect()
+	};
+	let removed = unpaired(&diff.removed);
+	let added = unpaired(&diff.added);
 	let removed_by_scope: BTreeSet<(EntityKind, Option<String>)> =
-		diff.removed.iter().map(|entity| (entity.kind.clone(), entity.scope.clone())).collect();
+		removed.iter().map(|entity| (entity.kind.clone(), entity.scope.clone())).collect();
 	let added_by_scope: BTreeSet<(EntityKind, Option<String>)> =
-		diff.added.iter().map(|entity| (entity.kind.clone(), entity.scope.clone())).collect();
+		added.iter().map(|entity| (entity.kind.clone(), entity.scope.clone())).collect();
 
 	let colliding: Vec<&(EntityKind, Option<String>)> =
 		removed_by_scope.intersection(&added_by_scope).collect();
@@ -2917,14 +2967,12 @@ fn validate_autoplan(
 			.iter()
 			.map(|(kind, scope)| {
 				let scope_name = scope.as_deref().unwrap_or("<database>");
-				let added: Vec<&str> = diff
-					.added
+				let added: Vec<&str> = added
 					.iter()
 					.filter(|e| &e.kind == kind && &e.scope == scope)
 					.map(|e| e.name.as_str())
 					.collect();
-				let removed: Vec<&str> = diff
-					.removed
+				let removed: Vec<&str> = removed
 					.iter()
 					.filter(|e| &e.kind == kind && &e.scope == scope)
 					.map(|e| e.name.as_str())
@@ -2940,9 +2988,11 @@ fn validate_autoplan(
 		bail!(
 			"rollout plan sees additions and removals of the same kind in one scope, which it \
 			 cannot tell apart from a rename:\n  - {detail}\n\n\
-			 If that is a rename, planning it automatically would drop the original and its \
-			 data rather than move it, so author a manual manifest with an explicit backfill \
-			 between the add and the remove. MIGRATE EXISTING ROWS cannot do that backfill: \
+			 `rollout plan` proposes a field rename only when the two definitions are the same \
+			 apart from the name and no other pairing is possible. Otherwise, if that is a \
+			 rename, planning it automatically would drop the original and its data rather \
+			 than move it, so author a manual manifest with an explicit backfill between the \
+			 add and the remove. MIGRATE EXISTING ROWS cannot do that backfill: \
 			 its USING reads only the field's own `$value`, so copy the values with an UPDATE \
 			 in a run_sql step. At compatibility level 4, removing the old field also deletes \
 			 its values, so keep the remove in the complete phase. If the changes are genuinely unrelated, splitting \
@@ -3161,6 +3211,7 @@ fn validate_rollout_spec(spec: &RolloutSpec) -> Result<()> {
 			}
 			RolloutAction::RunSql {
 				sql,
+				..
 			} => {
 				if sql.trim().is_empty() {
 					bail!("run_sql step '{}' requires non-empty sql", step.id);
@@ -3639,7 +3690,13 @@ async fn execute_step(
 		}
 		RolloutAction::RunSql {
 			sql,
+			unconfirmed,
 		} => {
+			// `start` refuses such a rollout before anything runs; this keeps a
+			// resumed one from getting past that.
+			if *unconfirmed {
+				renames::check_confirmed(&rollout.spec)?;
+			}
 			let substituted = vars.apply(sql)?;
 			run(substituted).await
 		}
@@ -4603,7 +4660,7 @@ mod tests {
 			migrated: Vec::new(),
 		};
 
-		let err = validate_autoplan(&diff, false, &BTreeSet::new())
+		let err = validate_autoplan(&diff, false, &BTreeSet::new(), &BTreeSet::new())
 			.expect_err("should reject modified entities");
 		let message = err.to_string();
 		assert!(
@@ -4621,7 +4678,7 @@ mod tests {
 		);
 
 		// With the opt-in, the same diff plans.
-		validate_autoplan(&diff, true, &BTreeSet::new())
+		validate_autoplan(&diff, true, &BTreeSet::new(), &BTreeSet::new())
 			.expect("--allow-modified should permit the change");
 	}
 
@@ -4648,7 +4705,7 @@ mod tests {
 			migrated: Vec::new(),
 		};
 
-		let err = validate_autoplan(&diff, false, &BTreeSet::new())
+		let err = validate_autoplan(&diff, false, &BTreeSet::new(), &BTreeSet::new())
 			.expect_err("a table rename must be refused");
 		let message = err.to_string();
 		assert!(message.contains("person") && message.contains("people"), "got: {message}");
@@ -4656,7 +4713,7 @@ mod tests {
 		// --allow-modified is about changing an entity that stays in place. It must
 		// not wave through one that may be disappearing.
 		assert!(
-			validate_autoplan(&diff, true, &BTreeSet::new()).is_err(),
+			validate_autoplan(&diff, true, &BTreeSet::new(), &BTreeSet::new()).is_err(),
 			"--allow-modified must not bypass the rename guard"
 		);
 	}
@@ -4680,7 +4737,7 @@ mod tests {
 			migrated: Vec::new(),
 		};
 		assert!(
-			validate_autoplan(&diff, false, &BTreeSet::new()).is_err(),
+			validate_autoplan(&diff, false, &BTreeSet::new(), &BTreeSet::new()).is_err(),
 			"a field rename must be refused"
 		);
 	}
@@ -5902,10 +5959,15 @@ mod tests {
 			modified: vec![changed(EntityKind::Sequence, None, "order_no")],
 			..CatalogDiff::default()
 		};
-		validate_autoplan(&diff, false, &BTreeSet::new())
+		validate_autoplan(&diff, false, &BTreeSet::new(), &BTreeSet::new())
 			.expect("a sequence applied with IF NOT EXISTS changes nothing to roll back");
-		let err = validate_autoplan(&diff, false, &BTreeSet::from(["order_no".to_string()]))
-			.expect_err("an OVERWRITE sequence resets the counter, so it stays gated");
+		let err = validate_autoplan(
+			&diff,
+			false,
+			&BTreeSet::from(["order_no".to_string()]),
+			&BTreeSet::new(),
+		)
+		.expect_err("an OVERWRITE sequence resets the counter, so it stays gated");
 		assert!(err.to_string().contains("1 modified entity"), "{err}");
 	}
 
@@ -6384,6 +6446,68 @@ sql = "UPDATE person SET x = 1;"
 			serde_json::to_string(&spec.steps[0]).unwrap(),
 			r#"{"id":"apply_expand_schema","phase":"start","kind":"apply_files","files":["schema/a.surql","schema/b.surql"]}"#
 		);
+		// A run_sql step is not marked confirmed or not: `unconfirmed` is written
+		// only when it is set.
+		assert_eq!(
+			serde_json::to_string(&spec.steps[1]).unwrap(),
+			r#"{"id":"backfill","phase":"start","kind":"run_sql","sql":"UPDATE person SET x = 1;"}"#
+		);
+		assert_eq!(make_loaded_spec(&spec, None).checksum, sha256_hex(LEGACY_GOLDEN.as_bytes()));
+	}
+
+	/// What `rollout plan` writes for a rename: the pair under `renames`, and a
+	/// copy step after the schema step, marked unconfirmed until the author
+	/// deletes the marker.
+	#[test]
+	fn a_rename_adds_its_record_and_an_unconfirmed_copy() {
+		let mut spec = golden_spec(vec!["schema/a.surql".into(), "schema/b.surql".into()]);
+		spec.steps.truncate(1);
+		renames::apply(
+			&mut spec,
+			&[renames::FieldRename {
+				table: "person".into(),
+				from: "email".into(),
+				to: "mail".into(),
+			}],
+		);
+		let raw = toml::to_string_pretty(&spec).unwrap();
+		assert_eq!(
+			raw,
+			r#"id = "20260101000000__golden"
+name = "golden"
+source_schema_hash = "aaa"
+target_schema_hash = "bbb"
+compatibility = "phased"
+
+[[renames]]
+kind = "field"
+scope = "person"
+from = "email"
+to = "mail"
+
+[[steps]]
+id = "apply_expand_schema"
+phase = "start"
+kind = "apply_files"
+files = [
+    "schema/a.surql",
+    "schema/b.surql",
+]
+
+[[steps]]
+id = "copy_person_email_to_mail"
+phase = "start"
+kind = "run_sql"
+sql = "UPDATE person SET mail = email WHERE email != NONE;"
+unconfirmed = true
+"#
+		);
+		assert_eq!(toml::from_str::<RolloutSpec>(&raw).unwrap(), spec);
+
+		let confirmed = raw.replace("unconfirmed = true\n", "");
+		let confirmed: RolloutSpec = toml::from_str(&confirmed).unwrap();
+		renames::check_confirmed(&confirmed).unwrap();
+		assert!(renames::check_confirmed(&spec).is_err());
 	}
 
 	#[test]
