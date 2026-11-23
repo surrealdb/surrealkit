@@ -314,6 +314,47 @@ Admission note, 2026-11-23, at `674c57b`:
 
 Narrowed to: a pair is a removed field and an added field on the same table whose names are each one identifier, with no `.` or `[`. Their statements must hash the same once the added field's name is written as the removed one's, which compares the catalog's own hashes and needs no old SQL. The definition must not carry `READONLY`, `VALUE` or `COMPUTED`. Nested fields, indexes and other kinds are out of scope and are still refused as today.
 
+**State: implemented, awaiting review.** Built on the narrowed scope above.
+
+What was built:
+
+- `rollout plan` pairs the fields in `crates/surrealkit/src/rollout/renames.rs`, with `schema_state::field_under_name` beside it. A proved pair is left out of the add-and-remove guard. Its record goes under `renames` (`kind = "field"`, the table as `scope`).
+- The pair's step, `copy_<table>_<from>_to_<to>`, runs in the start phase after the schema step. Its SQL is `UPDATE <table> SET <to> = <from> WHERE <from> != NONE;`, and it carries `unconfirmed = true`. The removal stays in `remove_legacy_entities`, in the complete phase.
+- A pairing with more than one possibility proposes nothing for that table, and a warning names every candidate. A pair with a clause that cannot be copied gets a warning with the reason. Either way the existing refusal follows.
+- `rollout lint` (with or without an id), `rollout start`, `rollout up` (before any rollout starts), `Rollout::start` and step execution refuse an unconfirmed step.
+- `run_plan` returns the proposals, and the `rollout_plan` MCP tool reports them as `renames`. The `author_rollout` prompt and the root README, "Migrating existing records", describe the feature.
+
+What the lane turned out to need:
+
+- `RolloutAction::RunSql` gained `unconfirmed: bool`. It is skipped when false, so every existing step serializes, and checksums, as before. Code that builds or matches `RunSql { sql }` exhaustively has to add the field or `..`. That is a public API change at 1.0.0-rc.1, which the reviewer should judge.
+- `renames` keeps serializing as `renames = []` when empty, so it gets no `skip_serializing_if`. Every manifest written so far carries that line, including the three under `examples/rollout-testing/database/rollouts/`. A file manifest's checksum is the hash of its text, and a code-defined rollout's is the hash of `toml::to_string_pretty`. Skipping the empty list would have changed the second.
+- At level 4 a new `TYPE string` field on a table with records needs `MIGRATE EXISTING ROWS`. The catalog hash leaves that clause out, so such a field still pairs.
+
+What was measured after the build:
+
+- The first-question test, `plan_proposes_a_rename_that_lint_refuses_until_it_is_confirmed`, failed on ``cannot tell apart from a rename`` before the change and passes now.
+- On the embedded engine, `a_confirmed_rename_keeps_every_value_through_up_and_complete` runs `up` and `up --complete`. Both fields hold every value between the two, `mail` holds them after, `email` is gone, and the catalog equals the snapshot. `a_rolled_back_rename_leaves_the_old_field_and_its_values` covers rollback.
+- The ambiguous case is `plan_proposes_nothing_when_fields_could_pair_in_more_than_one_way` (CLI) and `renames::tests::anything_else_is_not`, which has three ambiguity shapes. Differing definitions are `plan_proposes_no_rename_when_the_definitions_differ`, and the clauses are `plan_proposes_no_rename_for_a_field_a_copy_cannot_carry`.
+- Checksum compatibility is pinned by `a_legacy_manifest_serializes_exactly_as_before`. It now also pins the `run_sql` step's JSON, which is the per-step checksum, and the code-defined checksum of the beta.5 golden. `a_rename_adds_its_record_and_an_unconfirmed_copy` pins the new form.
+- MCP: `rollout_plan_reports_the_renames_it_proposes`.
+
+Gate, 2026-11-23, rustup 1.95.0, run on the tree of this change. The Homebrew `cargo` 1.100 that comes first on `PATH` ignores `rust-toolchain.toml`, so the gate ran with `~/.cargo/bin` first. Every credential-free step of `.github/workflows/cargo.yml` passed:
+
+- the three `cargo clippy` invocations with `-D warnings`
+- `cargo doc` with `RUSTDOCFLAGS=-D warnings`
+- `cargo check` of the binary with only `cli`
+- `cargo fmt --all --check`
+- `cargo test --workspace --all-features --locked`: 1,050 passed, 0 failed, 8 ignored
+- `cargo publish --workspace --dry-run --locked`, with `--allow-dirty` because the change was not yet committed
+- the package contents check: `build.rs` and 23 `templates/` files
+
+Questions for the reviewer:
+
+- Whether the `RunSql` field change is acceptable at rc.1.
+- Whether deleting the copy step should still plan the drop and the add. Today an author who deletes the step gets an add and a remove that the guard used to refuse.
+- Records the old application writes after `start` keep their new value only in the old field. The README says so and proposes no event or second copy. Is that enough?
+- An index on a renamed field has to change. Measured with the CLI: an index that keeps its name and changes `FIELDS` is a modified index, and `plan --allow-modified` plans it together with the rename. An index whose name changes as well is an add and a remove of an index on one table, which is still refused. Should index pairs be inferred too? Removing an index loses no data.
+
 ### L12. Property tests for rollouts
 
 - `proptest` is added as a dev-dependency, with a generator of bounded schema pairs: tables, fields over a small set of kinds, indexes, and additions, removals and modifications between the two versions.

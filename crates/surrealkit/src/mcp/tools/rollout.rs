@@ -19,7 +19,7 @@ use super::{
 use crate::mcp::SurrealKitMcp;
 use crate::mcp::error;
 use crate::mcp::result::run_captured;
-use crate::rollout::{RolloutExecutionOpts, RolloutPlanOpts, RolloutUpOpts};
+use crate::rollout::{RolloutExecutionOpts, RolloutPlanOpts, RolloutRename, RolloutUpOpts};
 
 /// Build the rollout tool router.
 pub(super) fn router() -> ToolRouter<SurrealKitMcp> {
@@ -126,6 +126,11 @@ pub struct RolloutPlanReport {
 	pub rollouts_dir: String,
 	pub dry_run: bool,
 	pub name: Option<String>,
+	/// Field renames the plan proposed. Each has a `run_sql` step marked
+	/// `unconfirmed = true` that copies the values in the start phase;
+	/// `rollout_lint` and `rollout_start` refuse the manifest until the marker,
+	/// or the step, is deleted.
+	pub renames: Vec<RolloutRename>,
 }
 
 #[tool_router(router = rollout_router)]
@@ -212,7 +217,9 @@ impl SurrealKitMcp {
 		               applied and no database is touched. NOT idempotent: each call writes \
 		               a new timestamped manifest and updates the snapshots, so calling it \
 		               twice leaves the second manifest empty. Use dry_run to see the plan \
-		               without writing.",
+		               without writing. A removed and an added field defined the same apart \
+		               from the name are proposed as a rename, listed in `renames`, with a \
+		               copy step that must be confirmed before the rollout can start.",
 		annotations(
 			title = "Plan a rollout",
 			read_only_hint = false,
@@ -228,16 +235,28 @@ impl SurrealKitMcp {
 		let server = self.clone();
 		run_captured(
 			|report: &RolloutPlanReport| {
-				if report.dry_run {
+				let planned = if report.dry_run {
 					format!("planned (dry run) into {}", report.rollouts_dir)
 				} else {
 					format!("wrote a rollout manifest into {}", report.rollouts_dir)
+				};
+				match report.renames.len() {
+					0 => planned,
+					n => format!(
+						"{planned}; proposed {n} field rename{} whose copy step must be confirmed \
+						 before the rollout can start",
+						if n == 1 {
+							""
+						} else {
+							"s"
+						}
+					),
 				}
 			},
 			|| async move {
 				let ctx = server.context(&input.work)?;
 				let _guard = server.lock_folder(&ctx.folder).await;
-				crate::rollout::run_plan(
+				let planned = crate::rollout::run_plan(
 					&ctx.folder,
 					RolloutPlanOpts {
 						name: input.name.clone(),
@@ -252,6 +271,7 @@ impl SurrealKitMcp {
 						.into_owned(),
 					dry_run: input.dry_run,
 					name: input.name.clone(),
+					renames: planned.renames,
 				})
 			},
 		)
