@@ -186,12 +186,6 @@ pub enum RolloutAction {
 	/// to re-run: on retry the step executes again from scratch.
 	RunSql {
 		sql: String,
-		/// Written by `rollout plan` on a step it inferred, such as the copy for a
-		/// rename. `rollout lint` and `rollout start` refuse the rollout until the
-		/// author deletes it (or the step). Absent, and not written, otherwise, so
-		/// every other step serializes as it always has.
-		#[serde(default, skip_serializing_if = "std::ops::Not::not")]
-		unconfirmed: bool,
 	},
 	/// Run a query and assert its stringified output equals `expect`; fails the
 	/// rollout otherwise.
@@ -473,9 +467,10 @@ pub struct RolloutSpec {
 	/// The migration strategy. See [`RolloutCompatibility`].
 	#[serde(default)]
 	pub compatibility: RolloutCompatibility,
-	/// The renames `rollout plan` inferred, each with the `run_sql` step that
-	/// copies its values. A record for the reader: execution runs the steps and
-	/// never reads this.
+	/// The renames `rollout plan` inferred. Each names the `run_sql` step that
+	/// copies its values, and holds whether the author has confirmed it: `lint`,
+	/// `start` and `up` refuse a rollout with an unconfirmed entry, or with one
+	/// whose copy step is gone.
 	///
 	/// Deliberately serialized even when empty, as `renames = []`: every manifest
 	/// and code-defined rollout written so far carries it, and their checksums
@@ -534,9 +529,15 @@ impl RolloutSpec {
 	}
 }
 
-/// A rename `rollout plan` inferred: an entity removed and another added that
-/// are the same apart from the name. Only fields are inferred, as
+/// A rename `rollout plan` inferred: a field removed and another added on the
+/// same table that are defined the same apart from the name, as
 /// `kind = "field"` with the table as `scope`.
+///
+/// The pairing is inferred, so the rollout does not start until the author has
+/// checked the copy and set `confirmed = true`. The entry and its step stand
+/// together: a rollout whose entry names no start-phase `run_sql` step is
+/// refused, so deleting the step does not turn the rename into a removal of the
+/// old field and its values.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct RolloutRename {
 	/// The entity kind, as [`EntityKind`] spells it.
@@ -547,13 +548,20 @@ pub struct RolloutRename {
 	pub from: String,
 	/// The name it has now, as written there.
 	pub to: String,
+	/// The id of the start-phase `run_sql` step that copies the values.
+	#[serde(default, skip_serializing_if = "Option::is_none")]
+	pub step: Option<String>,
+	/// Whether the author has checked the copy step. `rollout plan` writes
+	/// `false`.
+	#[serde(default)]
+	pub confirmed: bool,
 }
 
 /// What `rollout plan` planned, for a caller that reports it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[doc(hidden)]
 pub struct RolloutPlanned {
-	/// The renames it proposed. Each has an unconfirmed copy step in the
+	/// The renames it proposed, unconfirmed, each with its copy step in the
 	/// manifest.
 	pub renames: Vec<RolloutRename>,
 }
@@ -614,7 +622,6 @@ impl RolloutStep {
 			phase,
 			action: RolloutAction::RunSql {
 				sql: sql.into(),
-				unconfirmed: false,
 			},
 		}
 	}
@@ -1260,7 +1267,7 @@ pub async fn run_lint(folder: &str, opts: RolloutExecutionOpts) -> Result<()> {
 fn lint_one(folder: &str, selector: &str) -> Result<()> {
 	let mut rollout = load_rollout_spec(resolve_rollout_path(folder, Some(selector))?)?;
 	validate_rollout_spec(&rollout.spec)?;
-	renames::check_confirmed(&rollout.spec)?;
+	renames::check_renames(&rollout.spec)?;
 	if rollout.spec.has_frozen_files() {
 		preflight_frozen(&rollout)?;
 		migrations::check_steps(&rollout)?;
@@ -1293,7 +1300,7 @@ fn lint_all(folder: &str) -> Result<()> {
 	let mut legacy = Vec::new();
 	for rollout in chain.order.iter().chain(&chain.unchained) {
 		validate_rollout_spec(&rollout.spec)?;
-		renames::check_confirmed(&rollout.spec)?;
+		renames::check_renames(&rollout.spec)?;
 		lint_base_snapshot(rollout);
 		if rollout.spec.has_frozen_files() {
 			preflight_frozen(rollout)?;
@@ -1724,7 +1731,7 @@ async fn start_inner(
 	target: &TargetCatalog,
 	ctx: &StepContext<'_>,
 ) -> Result<()> {
-	renames::check_confirmed(&rollout.spec)?;
+	renames::check_renames(&rollout.spec)?;
 	let lock = acquire_lock(db, &rollout.spec.module()?, "global").await?;
 	let keep_alive = LockKeepAlive::spawn(db, &lock);
 	let result = async {
@@ -3211,7 +3218,6 @@ fn validate_rollout_spec(spec: &RolloutSpec) -> Result<()> {
 			}
 			RolloutAction::RunSql {
 				sql,
-				..
 			} => {
 				if sql.trim().is_empty() {
 					bail!("run_sql step '{}' requires non-empty sql", step.id);
@@ -3690,13 +3696,7 @@ async fn execute_step(
 		}
 		RolloutAction::RunSql {
 			sql,
-			unconfirmed,
 		} => {
-			// `start` refuses such a rollout before anything runs; this keeps a
-			// resumed one from getting past that.
-			if *unconfirmed {
-				renames::check_confirmed(&rollout.spec)?;
-			}
 			let substituted = vars.apply(sql)?;
 			run(substituted).await
 		}
@@ -6446,18 +6446,25 @@ sql = "UPDATE person SET x = 1;"
 			serde_json::to_string(&spec.steps[0]).unwrap(),
 			r#"{"id":"apply_expand_schema","phase":"start","kind":"apply_files","files":["schema/a.surql","schema/b.surql"]}"#
 		);
-		// A run_sql step is not marked confirmed or not: `unconfirmed` is written
-		// only when it is set.
+	}
+
+	/// The checksums a rollout without renames is held to: a code-defined
+	/// rollout's is the hash of its serialization, and each step's is the hash
+	/// of its JSON.
+	#[test]
+	fn a_rollout_without_renames_keeps_its_checksums() {
+		let spec = golden_spec(vec!["schema/a.surql".into(), "schema/b.surql".into()]);
+		assert_eq!(make_loaded_spec(&spec, None).checksum, sha256_hex(LEGACY_GOLDEN.as_bytes()));
 		assert_eq!(
 			serde_json::to_string(&spec.steps[1]).unwrap(),
 			r#"{"id":"backfill","phase":"start","kind":"run_sql","sql":"UPDATE person SET x = 1;"}"#
 		);
-		assert_eq!(make_loaded_spec(&spec, None).checksum, sha256_hex(LEGACY_GOLDEN.as_bytes()));
+		renames::check_renames(&spec).unwrap();
 	}
 
-	/// What `rollout plan` writes for a rename: the pair under `renames`, and a
-	/// copy step after the schema step, marked unconfirmed until the author
-	/// deletes the marker.
+	/// What `rollout plan` writes for a rename: the pair under `renames`,
+	/// unconfirmed and naming its copy, and the copy as an ordinary `run_sql`
+	/// step after the schema step.
 	#[test]
 	fn a_rename_adds_its_record_and_an_unconfirmed_copy() {
 		let mut spec = golden_spec(vec!["schema/a.surql".into(), "schema/b.surql".into()]);
@@ -6484,6 +6491,8 @@ kind = "field"
 scope = "person"
 from = "email"
 to = "mail"
+step = "copy_person_email_to_mail"
+confirmed = false
 
 [[steps]]
 id = "apply_expand_schema"
@@ -6499,15 +6508,14 @@ id = "copy_person_email_to_mail"
 phase = "start"
 kind = "run_sql"
 sql = "UPDATE person SET mail = email WHERE email != NONE;"
-unconfirmed = true
 "#
 		);
 		assert_eq!(toml::from_str::<RolloutSpec>(&raw).unwrap(), spec);
+		assert!(renames::check_renames(&spec).is_err());
 
-		let confirmed = raw.replace("unconfirmed = true\n", "");
+		let confirmed = raw.replace("confirmed = false\n", "confirmed = true\n");
 		let confirmed: RolloutSpec = toml::from_str(&confirmed).unwrap();
-		renames::check_confirmed(&confirmed).unwrap();
-		assert!(renames::check_confirmed(&spec).is_err());
+		renames::check_renames(&confirmed).unwrap();
 	}
 
 	#[test]

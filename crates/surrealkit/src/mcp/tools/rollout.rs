@@ -126,10 +126,9 @@ pub struct RolloutPlanReport {
 	pub rollouts_dir: String,
 	pub dry_run: bool,
 	pub name: Option<String>,
-	/// Field renames the plan proposed. Each has a `run_sql` step marked
-	/// `unconfirmed = true` that copies the values in the start phase;
-	/// `rollout_lint` and `rollout_start` refuse the manifest until the marker,
-	/// or the step, is deleted.
+	/// Field renames the plan proposed, each naming the start-phase `run_sql`
+	/// step that copies its values. `rollout_lint`, `rollout_start` and
+	/// `rollout_up` refuse the manifest until the entry says `confirmed = true`.
 	pub renames: Vec<RolloutRename>,
 }
 

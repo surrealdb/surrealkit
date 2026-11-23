@@ -990,8 +990,8 @@ async fn planned_rename() -> (Project, Surreal<Any>, String) {
 fn confirm(project: &Project, id: &str) {
 	let path = project.manifest(id);
 	let raw = fs::read_to_string(&path).unwrap();
-	assert!(raw.contains("unconfirmed = true\n"), "{raw}");
-	fs::write(path, raw.replace("unconfirmed = true\n", "")).unwrap();
+	assert!(raw.contains("confirmed = false\n"), "{raw}");
+	fs::write(path, raw.replace("confirmed = false\n", "confirmed = true\n")).unwrap();
 }
 
 #[tokio::test]
@@ -1005,9 +1005,11 @@ async fn a_confirmed_rename_keeps_every_value_through_up_and_complete() {
 		("field", Some("person"))
 	);
 	assert_eq!((spec.renames[0].from.as_str(), spec.renames[0].to.as_str()), ("email", "mail"));
+	assert_eq!(spec.renames[0].step.as_deref(), Some("copy_person_email_to_mail"));
+	assert!(!spec.renames[0].confirmed);
 
-	// Nothing runs while the copy is unconfirmed.
-	let err = project.up(&db, false).await.expect_err("an unconfirmed step").to_string();
+	// Nothing runs while the rename is unconfirmed.
+	let err = project.up(&db, false).await.expect_err("an unconfirmed rename").to_string();
 	assert!(err.contains("is unconfirmed"), "{err}");
 	assert_eq!(status(&db, &id).await, None);
 	assert!(project.start(&db, &id).await.is_err());
@@ -1047,6 +1049,32 @@ async fn a_rolled_back_rename_leaves_the_old_field_and_its_values() {
 	)
 	.await
 	.expect("rollback");
+	assert_eq!(field_names(&db, "person").await, vec!["email", "name"]);
+	assert_eq!(
+		serde_json::json!(people(&db, "email").await),
+		serde_json::json!([["ann", "ann@example.test"], ["bob", "bob@example.test"]])
+	);
+}
+
+/// A rename whose copy step was deleted is refused by `up` and `start` before
+/// anything runs, confirmed or not, so the old field keeps its values.
+#[tokio::test]
+async fn a_rename_without_its_copy_step_does_not_start() {
+	let (project, db, id) = planned_rename().await;
+	confirm(&project, &id);
+	let path = project.manifest(&id);
+	let raw = fs::read_to_string(&path).unwrap();
+	let kept: Vec<&str> = raw
+		.split("[[steps]]")
+		.filter(|block| !block.contains("id = \"copy_person_email_to_mail\""))
+		.collect();
+	fs::write(&path, kept.join("[[steps]]")).unwrap();
+
+	let err = project.up(&db, true).await.expect_err("up without the copy").to_string();
+	assert!(err.contains("is not in the rollout"), "{err}");
+	let err = project.start(&db, &id).await.expect_err("start without the copy").to_string();
+	assert!(err.contains("is not in the rollout"), "{err}");
+	assert_eq!(status(&db, &id).await, None);
 	assert_eq!(field_names(&db, "person").await, vec!["email", "name"]);
 	assert_eq!(
 		serde_json::json!(people(&db, "email").await),

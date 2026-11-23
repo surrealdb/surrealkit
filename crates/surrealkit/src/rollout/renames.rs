@@ -6,12 +6,18 @@
 //! them, run while both fields exist.
 //!
 //! So when a plan removes one field and adds another on the same table, and the
-//! two definitions are the same apart from the name, `plan` records the pair in
-//! the manifest's `renames` and adds an expand-phase `run_sql` step with that
-//! copy. The step is marked `unconfirmed`: the pairing is inferred, and
-//! `rollout lint` and `rollout start` refuse the manifest until the author
-//! deletes the marker or the step. The old field is still removed in the
-//! contract phase, like any other removal.
+//! two definitions are the same apart from the name, `plan` adds an
+//! expand-phase `run_sql` step with that copy, and records the pair in the
+//! manifest's `renames` with the step's id and `confirmed = false`. The
+//! pairing is inferred, so `rollout lint`, `rollout start` and `rollout up`
+//! refuse the manifest until the author sets `confirmed = true`. They also
+//! refuse an entry whose copy step is gone: deleting the step must not leave a
+//! plan that adds the new field empty and removes the old one with its values,
+//! which `plan` refused before it could propose renames. The old field is still
+//! removed in the contract phase, like any other removal.
+//!
+//! An author who reads the pair as no rename discards the rollout and plans the
+//! addition and the removal separately, as the refusal always advised.
 //!
 //! Anything less certain proposes nothing, and the plan is refused as an add
 //! and a remove that could be a rename, as it was before.
@@ -43,13 +49,16 @@ impl FieldRename {
 		field_key(&self.table, &self.to)
 	}
 
-	/// The manifest's record of the pair.
-	pub(crate) fn record(&self) -> RolloutRename {
+	/// The manifest's record of the pair, copied by the step `step`, and not
+	/// yet confirmed.
+	pub(crate) fn record(&self, step: &str) -> RolloutRename {
 		RolloutRename {
 			kind: FIELD.to_string(),
 			scope: Some(self.table.clone()),
 			from: self.from.clone(),
 			to: self.to.clone(),
+			step: Some(step.to_string()),
+			confirmed: false,
 		}
 	}
 
@@ -208,8 +217,8 @@ fn step_id(rename: &FieldRename, taken: &BTreeSet<String>) -> String {
 	(2..).map(|n| format!("{base}_{n}")).find(|id| !taken.contains(id)).unwrap_or(base)
 }
 
-/// Record the proposals in `spec` and add their copy steps, unconfirmed, right
-/// after the expand phase's schema step so the new fields exist when they run.
+/// Record the proposals in `spec`, unconfirmed, and add their copy steps after
+/// the start phase's other steps, so the new fields exist when they run.
 pub(crate) fn apply(spec: &mut RolloutSpec, renames: &[FieldRename]) {
 	let mut taken: BTreeSet<String> = spec.steps.iter().map(|step| step.id.clone()).collect();
 	let at = spec
@@ -217,51 +226,67 @@ pub(crate) fn apply(spec: &mut RolloutSpec, renames: &[FieldRename]) {
 		.iter()
 		.rposition(|step| step.phase == RolloutPhase::Start)
 		.map_or(0, |idx| idx + 1);
-	let steps: Vec<RolloutStep> = renames
-		.iter()
-		.map(|rename| {
-			let id = step_id(rename, &taken);
-			taken.insert(id.clone());
-			log::warn!(
-				"`rollout plan` reads `{table}.{from}` and `{table}.{to}` as a rename, and step \
-				 '{id}' copies the values in the start phase. The step is unconfirmed: check its \
-				 SQL, then delete `unconfirmed = true`, or delete the step. Records the old \
-				 application writes after the copy keep their value only in `{from}`, which the \
-				 complete phase removes",
-				table = rename.table,
-				from = rename.from,
-				to = rename.to
-			);
-			RolloutStep {
-				id,
-				phase: RolloutPhase::Start,
-				action: RolloutAction::RunSql {
-					sql: rename.sql(),
-					unconfirmed: true,
-				},
-			}
-		})
-		.collect();
+	let mut steps = Vec::with_capacity(renames.len());
+	for rename in renames {
+		let id = step_id(rename, &taken);
+		taken.insert(id.clone());
+		log::warn!(
+			"`rollout plan` reads `{table}.{from}` and `{table}.{to}` as a rename: step '{id}' \
+			 copies the values in the start phase, and the complete phase removes `{from}`. The \
+			 rename is unconfirmed: check the step's SQL, then set `confirmed = true` on its \
+			 `[[renames]]` entry. If it is not a rename, run `surrealkit rollout discard {rollout}` \
+			 and plan the addition and the removal in separate rollouts. Records the old \
+			 application writes after the copy keep that write only in `{from}`",
+			table = rename.table,
+			from = rename.from,
+			to = rename.to,
+			rollout = spec.id
+		);
+		spec.renames.push(rename.record(&id));
+		steps.push(RolloutStep::run_sql(id, RolloutPhase::Start, rename.sql()));
+	}
 	spec.steps.splice(at..at, steps);
-	spec.renames.extend(renames.iter().map(FieldRename::record));
 }
 
-/// Refuse a rollout with a step nobody has confirmed. `lint` and every way of
+/// Refuse a rollout whose renames cannot run as recorded: an entry the author
+/// has not confirmed, or one whose copy step is gone. `lint` and every way of
 /// starting a rollout call this, as they refuse an empty `revert_migration`.
-pub(crate) fn check_confirmed(spec: &RolloutSpec) -> Result<()> {
-	for step in &spec.steps {
-		if let RolloutAction::RunSql {
-			unconfirmed: true,
-			..
-		} = &step.action
-		{
+pub(crate) fn check_renames(spec: &RolloutSpec) -> Result<()> {
+	for rename in &spec.renames {
+		let what = match &rename.scope {
+			Some(scope) => {
+				format!("the rename of `{scope}.{}` to `{scope}.{}`", rename.from, rename.to)
+			}
+			None => format!("the rename of `{}` to `{}`", rename.from, rename.to),
+		};
+		let copy = rename.step.as_deref().and_then(|id| spec.steps.iter().find(|s| s.id == id));
+		let copies = copy.is_some_and(|step| {
+			step.phase == RolloutPhase::Start && matches!(step.action, RolloutAction::RunSql { .. })
+		});
+		if !copies {
 			bail!(
-				"run_sql step '{}' in rollout '{}' is unconfirmed. `rollout plan` proposed it for a \
-				 rename it inferred from two definitions that differ only in the name. Check that \
-				 its SQL copies what you mean, then delete `unconfirmed = true` from the step, or \
-				 delete the step (and its entry under `renames`) if it is not a rename",
-				step.id,
-				spec.id
+				"rollout '{rollout}' records {what}, but {}. Without its copy the rollout would add \
+				 the new field empty and remove the old one, with its values. If it is a rename, \
+				 put the copy step back. If it is not, run `surrealkit rollout discard {rollout}` \
+				 and plan the addition and the removal in separate rollouts",
+				match (&rename.step, copy) {
+					(Some(id), None) => format!("its copy step '{id}' is not in the rollout"),
+					(Some(id), Some(_)) =>
+						format!("its copy step '{id}' is not a start-phase run_sql step"),
+					(None, _) => "names no copy step".to_string(),
+				},
+				rollout = spec.id
+			);
+		}
+		if !rename.confirmed {
+			bail!(
+				"{what} in rollout '{rollout}' is unconfirmed. `rollout plan` inferred it from two \
+				 definitions that differ only in the name. Check that step '{}' copies what you \
+				 mean, then set `confirmed = true` on its `[[renames]]` entry. If it is not a \
+				 rename, run `surrealkit rollout discard {rollout}` and plan the addition and the \
+				 removal in separate rollouts",
+				rename.step.as_deref().unwrap_or_default(),
+				rollout = spec.id
 			);
 		}
 	}
@@ -437,20 +462,40 @@ mod tests {
 				"copy_person_email_to_mail"
 			]
 		);
-		assert_eq!(spec.renames, vec![rename.record()]);
-		let err = check_confirmed(&spec).unwrap_err().to_string();
+		// The copy is an ordinary run_sql step; the entry carries the rest.
+		assert_eq!(
+			spec.steps[1],
+			RolloutStep::run_sql("copy_person_email_to_mail_2", RolloutPhase::Start, rename.sql())
+		);
+		assert_eq!(spec.renames, vec![rename.record("copy_person_email_to_mail_2")]);
+		let err = check_renames(&spec).unwrap_err().to_string();
 		assert!(
-			err.contains("'copy_person_email_to_mail_2'") && err.contains("is unconfirmed"),
+			err.contains("is unconfirmed") && err.contains("'copy_person_email_to_mail_2'"),
 			"{err}"
 		);
 
-		if let RolloutAction::RunSql {
-			unconfirmed,
-			..
-		} = &mut spec.steps[1].action
-		{
-			*unconfirmed = false;
-		}
-		check_confirmed(&spec).unwrap();
+		spec.renames[0].confirmed = true;
+		check_renames(&spec).unwrap();
+
+		// Confirmed or not, an entry stands only with a start-phase run_sql copy.
+		let refusal = |spec: &RolloutSpec| check_renames(spec).unwrap_err().to_string();
+		let mut wrong = spec.clone();
+		wrong.renames[0].step = Some("copy_person_email_to_mail".into());
+		assert!(
+			refusal(&wrong).contains("is not a start-phase run_sql step"),
+			"{}",
+			refusal(&wrong)
+		);
+		let mut missing = spec.clone();
+		missing.steps.remove(1);
+		assert!(refusal(&missing).contains("is not in the rollout"), "{}", refusal(&missing));
+		assert!(
+			refusal(&missing).contains("rollout discard 20260101000000__r"),
+			"{}",
+			refusal(&missing)
+		);
+		let mut unnamed = spec.clone();
+		unnamed.renames[0].step = None;
+		assert!(refusal(&unnamed).contains("names no copy step"), "{}", refusal(&unnamed));
 	}
 }
