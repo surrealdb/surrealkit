@@ -2,7 +2,17 @@
 
 import * as $statement from "effect-surrealkit/statement";
 
-/** `gauges/readings.surql`: a part. */
+/**
+ * The readings of one station at or above a floor.
+ *
+ * ```surql
+ * SELECT VALUE reading FROM gauge
+ * 	WHERE station = $station AND reading >= $floor
+ * 	ORDER BY reading;
+ * ```
+ *
+ * `gauges/readings.surql`: a part.
+ */
 export const readings = $statement.part({
 	name: "gauges.readings",
 	source: "gauges/readings.surql",
@@ -21,7 +31,15 @@ SELECT VALUE reading FROM gauge
 	binds: { "floor": "option<float>", "station": "option<string>" },
 } as const);
 
-/** `gauges/record.surql`: a part. */
+/**
+ * Records a reading, scaled by the schema function.
+ *
+ * ```surql
+ * CREATE gauge SET station = $station, reading = fn::scaled($raw), site = $site, tags = $tags;
+ * ```
+ *
+ * `gauges/record.surql`: a part.
+ */
 export const record = $statement.part({
 	name: "gauges.record",
 	source: "gauges/record.surql",
@@ -39,7 +57,15 @@ CREATE gauge SET station = $station, reading = fn::scaled($raw), site = $site, t
 	rejectsNone: { "site": { table: "gauge", field: "site", kind: "record<site>" }, "station": { table: "gauge", field: "station", kind: "string" }, "tags": { table: "gauge", field: "tags", kind: "array<string>" } },
 } as const);
 
-/** `gauges/site.surql`: a part. */
+/**
+ * One site, by its string key.
+ *
+ * ```surql
+ * SELECT VALUE label FROM type::record('site', $siteKey);
+ * ```
+ *
+ * `gauges/site.surql`: a part.
+ */
 export const site = $statement.part({
 	name: "gauges.site",
 	source: "gauges/site.surql",

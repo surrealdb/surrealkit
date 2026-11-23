@@ -1113,17 +1113,38 @@ namespace:
 effect-surrealkit statements --input queries --out src/generated/statements
 ```
 
-```text
-queries/accounts/bindOwner.surql     LET $owner = $boundOwner; LET $principal = $auth.id;
-queries/accounts/requireOwner.surql  IF $owner != $principal { THROW 'Not the owner' };
+`queries/accounts/bindOwner.surql`:
+
+```surql
+-- Binds the owner a caller names, and the caller.
+LET $owner = $boundOwner;
+LET $principal = $auth.id;
+```
+
+`queries/accounts/requireOwner.surql`:
+
+```surql
+IF $owner != $principal { THROW 'Not the owner' };
 ```
 
 ```ts
 // src/generated/statements/accounts/statements.ts (excerpt)
+/**
+ * Binds the owner a caller names, and the caller.
+ *
+ * ```surql
+ * LET $owner = $boundOwner;
+ * LET $principal = $auth.id;
+ * ```
+ *
+ * `accounts/bindOwner.surql`: a part.
+ */
 export const bindOwner = $statement.part({
 	name: "accounts.bindOwner",
 	source: "accounts/bindOwner.surql",
-	sql: `LET $owner = $boundOwner; LET $principal = $auth.id;`,
+	sql: `-- Binds the owner a caller names, and the caller.
+LET $owner = $boundOwner;
+LET $principal = $auth.id;`,
 	free: ["boundOwner"],
 	defines: ["owner", "principal"],
 	slots: 2,
@@ -1133,6 +1154,16 @@ export const bindOwner = $statement.part({
 	functions: [],
 } as const);
 ```
+
+The doc comment is what an editor's hover shows where the part is used:
+the comments that open the file as prose (`--`, `//` and `#` without their
+marker, a `/* … */` without its delimiters and `*` margin; a comment after the
+first token is not read), then the SurrealQL after them in a fenced block, then
+the file name. `analyze(sql).comment` returns the same prose. Templates and
+fragments get the same comment. In it a `*/` is written `*\/` and an `@` after
+whitespace (SurrealQL's `@@` and `@1@`) `\@`, so neither ends the comment or
+starts a tag, and the fence is longer than any run of backticks in the text;
+`sql` is never changed.
 
 ```ts
 import { accounts } from './generated/statements/index.js';
