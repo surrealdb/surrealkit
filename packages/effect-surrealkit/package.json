@@ -56,6 +56,7 @@
 		"prepare": "tsup",
 		"lint": "biome ci .",
 		"test": "vitest run",
+		"test:skips": "node scripts/skips.mjs",
 		"test:roundtrip": "node scripts/roundtrip.mjs",
 		"bench": "node scripts/bench.mjs",
 		"generate:functions": "node scripts/generate-functions.mjs",

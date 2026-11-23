@@ -45,7 +45,7 @@ Verified on 2026-11-23 against this branch at `88d37cc`. Verify each row again b
 | `SELECT nope FROM person` on a `SCHEMAFULL` table succeeds without an error. | Measured |
 | Statements inside `BEGIN … CANCEL` come back as `The query was not executed due to a cancelled transaction`, so a cancelled transaction cannot be used to try a text. | Measured |
 | The analyzer is compared with an engine for every complete authored fixture (9 of 23; the other 14 are named fragments and templates), and the generated `counter` part runs through the client (lane L01). | `test/analyze-engine.test.ts`; `test/fixtures/statements`, `statements-binds`, `statements-presence` |
-| 34 TypeScript files under `test/` contain a skip. The PR description reports the skipped counts by hand. | `grep -rl --include='*.ts' "skipIf\|\.skip(" test` |
+| 34 TypeScript files under `test/` contain a skip. The skipped tests are pinned for the embedded lane (51) and `SURREAL_BIN` 3.3 (22) by `npm run test:skips`; the `SURREAL_URL` lanes are unpinned (lane L02). | `grep -rl --include='*.ts' "skipIf\|\.skip(" test`; `test/skips/` |
 | The analyzer records what a binding is used as in three patterns (`argument`, `key`, `field` with `compare` or `assign`). It records nothing about projected fields. | `src/analyze/uses.ts`; README, "What bindings are used as" |
 | A generated part's doc comment holds only its file name. | `src/analyze/render.ts:440` |
 | `IndexDescriptor.type` distinguishes `'unique'`, and the generated descriptors keep each index under its name as a literal key. | `src/table.ts:67-83`; README, "What is generated" |
@@ -157,6 +157,16 @@ Admission note, 2026-11-23, at `3a5100f`:
 - One command runs the suite for a lane and exits 1 when the skipped tests differ from the list in either direction, printing the differences. An environment variable rewrites the list.
 - The package's CI workflow runs the command on the lanes it already runs.
 - The README's Development section says how to run and update it.
+
+Admission note, 2026-11-23, at `674c57b`:
+
+1. **What is worse today?** Yes. Every engine suite is behind `describe.skipIf(!engineConfigured)`, and the embedded engine reports a load failure by setting that flag, so an engine that stops loading turns those suites into skips and `bun run test` stays green. Measured at `674c57b`: the embedded lane skips 51 tests and `SURREAL_BIN` 3.3.4 skips 22, and nothing compares either figure with anything; the PR description restates them by hand. A test that starts skipping, or a skip that should have ended, is not reported.
+2. **Is this the better way?** Yes. Alternatives: vitest has no baseline of skipped tests (`--allowOnly` and `passWithNoTests` concern other things); comparing only the count misses one test swapped for another; failing on any skip would forbid the HTTP-only suites that cannot run on the embedded engine. A list of full names per lane, compared in both directions from vitest's own JSON report, catches each case and needs no dependency.
+3. **With SurrealDB or against it?** Neutral: the lane changes only how the suite's results are read. It touches no engine behaviour, and the lists are measured on each engine they pin.
+
+**State: closed, implemented, narrowed for `SURREAL_URL`.** `npm run test:skips` (`scripts/skips.mjs`) runs the whole suite with vitest's JSON reporter, names each skipped, pending or todo test as `<file> > <describe> > … > <test>`, and compares the names with `test/skips/<lane>.txt` as a multiset. It exits 1 on a failing suite or on any difference, printing `+` for a test skipped and not listed and `-` for one listed and not skipped; `UPDATE_SKIPS=1` rewrites the list from a passing run. The lane is `embedded`, `binary-<major>.<minor>` from `surreal version`, or `remote`, with `-http` for `SURREAL_TRANSPORT=http` and `-exec` under `SURREALKIT_EXEC_ENDPOINT`. Committed and measured on 2026-11-23: `embedded.txt` (SurrealDB 4.0.1) with 51 names and `binary-3.3.txt` (3.3.4) with 22. A list edited to drop one name and add a false one made the command exit 1 and print both. `test/skips.test.ts` covers the lane names, the naming, the comparison in both directions and that both committed lists are sorted and in the written form. The CI workflow runs `test:skips` in place of `npm test` in the `check` job (Node 20.19 and 24) and both `SURREAL_URL` steps of the `engine` job.
+
+Narrowed: the `SURREAL_URL` lanes (`remote`, `remote-http`) have no committed list, because no server was run here and a list is not written without a run. The command reports them as unpinned and fails there only when the suite fails. To pin one, run `UPDATE_SKIPS=1 SURREAL_URL=… npm run test:skips` against a throwaway server and commit the file. The `check` job's Node 20.19 run was not measured locally (Node 26 here); it compares with `embedded.txt`, so a skip that differs on Node 20.19 fails that job, which is the point of the lane.
 
 ### L03. Typed constraint errors
 
