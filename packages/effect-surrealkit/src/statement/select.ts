@@ -388,7 +388,7 @@ export interface Split<
 	readonly build: (
 		name?: string,
 		options?: { readonly writes?: boolean },
-	) => Statement<Simplify<P>, Schema.$Array<Row>>;
+	) => Statement<Simplify<P>, Schema.$Array<Row>, never, never>;
 }
 
 /** What a `SELECT` returns: every row, or with `ONLY` one row or NONE. */
@@ -781,7 +781,7 @@ export interface Select<
 	readonly build: (
 		name?: string,
 		options?: { readonly writes?: boolean },
-	) => Statement<Simplify<P>, SelectResult<Row, Only>>;
+	) => Statement<Simplify<P>, SelectResult<Row, Only>, never, never>;
 }
 
 /** Why a method that changes what a select returns cannot follow `fetch`. */
@@ -852,7 +852,7 @@ export interface FetchedSelect<
 	readonly build: (
 		name?: string,
 		options?: { readonly writes?: boolean },
-	) => Statement<Simplify<P>, SelectResult<Row, Only>>;
+	) => Statement<Simplify<P>, SelectResult<Row, Only>, never, never>;
 }
 
 /**

@@ -116,8 +116,8 @@ export const clientContract = (session: Queryable, client: Client): void => {
 	const fromClient = client.pipeline(bounds, options);
 	const fromContext = pipeline(bounds, options);
 	type Pipeline = readonly [
-		Result.Result<number, StatementError<never>>,
-		Result.Result<ReadonlyArray<string>, StatementError<'miss'>>,
+		Result.Result<number, StatementError<never, never>>,
+		Result.Result<ReadonlyArray<string>, StatementError<'miss', never>>,
 	];
 	same<PipelineResults<typeof bounds>, Pipeline>(true);
 	same<typeof fromClient, Effect.Effect<Pipeline, PipelineFailure>>(true);
@@ -204,7 +204,9 @@ export const clientContract = (session: Queryable, client: Client): void => {
 				again: number;
 				summary: BulkSummary<ReadonlyArray<string>>;
 			},
-			StatementError<'miss'> | BulkWriteError<'miss'> | TransactionError
+			| StatementError<'miss', never>
+			| BulkWriteError<'miss', never>
+			| TransactionError
 		>
 	>(true);
 	const throughContext = withTransaction(run(count), transactionOptions);
@@ -212,7 +214,7 @@ export const clientContract = (session: Queryable, client: Client): void => {
 		typeof throughContext,
 		Effect.Effect<
 			number,
-			StatementError<never> | TransactionError,
+			StatementError<never, never> | TransactionError,
 			SurrealClient
 		>
 	>(true);
@@ -258,8 +260,8 @@ export const clientContract = (session: Queryable, client: Client): void => {
 		typeof bulk,
 		Effect.Effect<
 			BulkSummary<ReadonlyArray<string>>,
-			| StatementError<'miss'>
-			| BulkWriteError<'miss'>
+			| StatementError<'miss', never>
+			| BulkWriteError<'miss', never>
 			| StatementUnsupported
 			| TransactionOutcomeUnknown
 			| 'source',
@@ -274,13 +276,16 @@ export const clientContract = (session: Queryable, client: Client): void => {
 	const contextStream = stream(names, { names: ['Ada'], include: true });
 	same<
 		typeof clientStream,
-		Stream.Stream<string, StatementError<'miss'> | StatementUnsupported>
+		Stream.Stream<
+			string,
+			StatementError<'miss', never> | StatementUnsupported
+		>
 	>(true);
 	same<
 		typeof contextStream,
 		Stream.Stream<
 			string,
-			StatementError<'miss'> | StatementUnsupported,
+			StatementError<'miss', never> | StatementUnsupported,
 			SurrealClient
 		>
 	>(true);
@@ -301,18 +306,18 @@ export const statementContract = (client: Client): void => {
 	).build();
 	same<
 		typeof optionalUpdate,
-		Statement<RowsBinding, NoResult<'many'>, 'Record not found'>
+		Statement<RowsBinding, NoResult<'many'>, 'Record not found', never>
 	>(true);
 	const updateIgnoringMissing = updateEach(PersonTable, updateRows, {
 		missing: 'ignore',
 	}).build();
 	same<
 		typeof update,
-		Statement<RowsBinding, NoResult<'many'>, 'Record not found'>
+		Statement<RowsBinding, NoResult<'many'>, 'Record not found', never>
 	>(true);
 	same<
 		typeof updateIgnoringMissing,
-		Statement<RowsBinding, NoResult<'many'>, never>
+		Statement<RowsBinding, NoResult<'many'>, never, never>
 	>(true);
 	same<ReturnType<typeof renameNames>, string | undefined>(true);
 	renameNames('$amount', { amount: 'amount__1' });

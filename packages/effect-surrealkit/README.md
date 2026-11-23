@@ -183,6 +183,27 @@ encode instead of reaching SurrealDB (see
 [Interpretation notes](#interpretation-notes)). The generated modules need
 an `effect-surrealkit` that exports `EmptyObject`.
 
+### What changes for existing users of the client
+
+- A `CREATE` or `INSERT` of a record id that already exists now fails with
+  `StatementRecordExists` instead of `StatementRequestError`, whatever
+  made the statement: a write builder, a `block`, a `family`, `part`,
+  `sequence` or `make`. `StatementRecordExists` is in every statement's
+  error type, a `select` of stored fields included: leaving it out of a
+  read would need one more type parameter on every statement, which this
+  version does not add.
+- A write builder (`create`, `insert`, `insertRelation`, `update`, `upsert`,
+  `relate`) over a table with a unique index now fails with
+  `StatementIndexConflict` on a duplicate value instead of
+  `StatementRequestError`, on the engine versions the client reads (see
+  [A value that may already be taken](#a-value-that-may-already-be-taken)).
+- `Statement` takes a fourth type parameter, the unique indexes it
+  declares, and `StatementError` a second. Left out, each means any
+  index, so `Statement<P, R>`, `Statement<P, R, Throws>`, a bare
+  `Statement` and `StatementError<Throws>` accept the statements and
+  errors they did before. A type compared exactly with `toEqualTypeOf` (or
+  similar) sees `never` where a statement declares no unique index.
+
 ### Refinements
 
 `PersonFields` holds the field schemas that are identical in every operation;
@@ -703,8 +724,18 @@ const added = run(createPerson, { person }).pipe(
 );
 ```
 
-On SurrealDB 3.3 and 4.0 (`test/conformance.test.ts`, "constraint errors",
-on both): `INSERT IGNORE` raises neither error. `ON DUPLICATE KEY UPDATE`
+The duplicate is read from the engine's message, which is pinned on
+SurrealDB 3.3.4 and 4.0.1 only (`test/conformance.test.ts`, "constraint
+errors"). On any other version a duplicate may arrive as a
+`StatementRequestError`, and `Effect.catchTag('StatementIndexConflict', …)`
+then catches nothing. Prefer `upsert`, `INSERT IGNORE` and
+`.onDuplicate(…)` wherever they fit, and when you upgrade the engine run
+`checkConstraintErrors` from `effect-surrealkit/testing` against it: it
+reports whether each error is still classified. A record that exists is
+read from a structured error, not a message.
+
+On SurrealDB 3.3 and 4.0 (the same conformance rows, on both):
+`INSERT IGNORE` raises neither error. `ON DUPLICATE KEY UPDATE`
 still raises `StatementIndexConflict` for a taken unique value given under
 another explicit id, and for a value its own assignments make a duplicate,
 so `.onDuplicate(…)` keeps the declaration. `RELATE` onto an existing edge
@@ -1082,17 +1113,38 @@ namespace:
 effect-surrealkit statements --input queries --out src/generated/statements
 ```
 
-```text
-queries/accounts/bindOwner.surql     LET $owner = $boundOwner; LET $principal = $auth.id;
-queries/accounts/requireOwner.surql  IF $owner != $principal { THROW 'Not the owner' };
+`queries/accounts/bindOwner.surql`:
+
+```surql
+-- Binds the owner a caller names, and the caller.
+LET $owner = $boundOwner;
+LET $principal = $auth.id;
+```
+
+`queries/accounts/requireOwner.surql`:
+
+```surql
+IF $owner != $principal { THROW 'Not the owner' };
 ```
 
 ```ts
 // src/generated/statements/accounts/statements.ts (excerpt)
+/**
+ * Binds the owner a caller names, and the caller.
+ *
+ * ```surql
+ * LET $owner = $boundOwner;
+ * LET $principal = $auth.id;
+ * ```
+ *
+ * `accounts/bindOwner.surql`: a part.
+ */
 export const bindOwner = $statement.part({
 	name: "accounts.bindOwner",
 	source: "accounts/bindOwner.surql",
-	sql: `LET $owner = $boundOwner; LET $principal = $auth.id;`,
+	sql: `-- Binds the owner a caller names, and the caller.
+LET $owner = $boundOwner;
+LET $principal = $auth.id;`,
 	free: ["boundOwner"],
 	defines: ["owner", "principal"],
 	slots: 2,
@@ -1102,6 +1154,16 @@ export const bindOwner = $statement.part({
 	functions: [],
 } as const);
 ```
+
+The doc comment is what an editor's hover shows where the part is used:
+the comments that open the file as prose (`--`, `//` and `#` without their
+marker, a `/* … */` without its delimiters and `*` margin; a comment after the
+first token is not read), then the SurrealQL after them in a fenced block, then
+the file name. `analyze(sql).comment` returns the same prose. Templates and
+fragments get the same comment. In it a `*/` is written `*\/` and an `@` after
+whitespace (SurrealQL's `@@` and `@1@`) `\@`, so neither ends the comment or
+starts a tag, and the fence is longer than any run of backticks in the text;
+`sql` is never changed.
 
 ```ts
 import { accounts } from './generated/statements/index.js';
@@ -1604,7 +1666,8 @@ of kind `Record`), which is what `StatementRecordExists` reads. It reports a
 duplicate on a unique index as an `Internal` error that names the index only
 in its message, and its protocol documentation says a message may change
 between releases. The client therefore reads that message only in the form
-the conformance suite pins on SurrealDB 3.3 and 4.0, and only for an index
+the conformance suite pins on SurrealDB 3.3.4 and 4.0.1 (on another version
+it may be a `StatementRequestError`; `checkConstraintErrors` tells), and only for an index
 name the statement declares; any other message stays a
 `StatementRequestError`, as does a duplicate raised inside an event (the
 engine prefixes the event's name). The message names the index and not its
@@ -2458,6 +2521,7 @@ const test = Effect.gen(function* () {
 | `expectIndex(statement, input, index)`, `expectNoIndex(…)` | Succeed when the engine's plan of a `SELECT` does (does not) read `index`; otherwise an `IndexExpectationError` naming the indexes it does read. `explain(statement, input)` returns the plan and its indexes. |
 | `fake(script)`, `fakeLayer(script)` | A client without an engine. It answers each statement by name with a value, a scripted reply, or a function of its encoded bindings. `calls` records requests and lifecycle operations. |
 | `result(value)`, `thrown(message)`, `conflict()`, `failure(message)` | Reply constructors for ordinary result slots and failures. |
+| `checkConstraintErrors` | An effect over `SurrealClient` that defines the table `effect_surrealkit_constraint_check` with a unique index, writes a duplicate value and an id that exists, removes the table, and returns `{ indexConflict, recordExists, got }`: whether each failed as `StatementIndexConflict` and `StatementRecordExists`, and the tag each failed with. Run it against a disposable database on a new engine version before relying on the two errors. |
 | `indexConflict(index)`, `recordExists()` | A duplicate on the unique index `index`, and a record id that exists, as SurrealDB reports them: `StatementIndexConflict` for a statement that declares `index` (otherwise `StatementRequestError`), and `StatementRecordExists`. |
 | `events(list)`, `unsupported(feature)` | Script a live subscription's events or a feature refusal, such as `{ begin: unsupported('interactive transaction') }`. |
 | `conflictingSession(session, { marker, times })` | Wraps an SDK session, injecting a transaction conflict into the first `times` sent requests with matching text. Returns the wrapped `session` and the `matched.count` readback. |

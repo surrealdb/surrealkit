@@ -3,7 +3,13 @@
 import * as $analyze from "effect-surrealkit/analyze";
 import * as $statement from "effect-surrealkit/statement";
 
-/** `catalog/byVector.surql`: a template. */
+/**
+ * ```surql
+ * SELECT id, title FROM listing WHERE __WHERE__ AND embedding <|5,40|> $vector ORDER BY id LIMIT __LIMIT__
+ * ```
+ *
+ * `catalog/byVector.surql`: a template.
+ */
 export const byVector = $analyze.text({
 	name: "catalog.byVector",
 	source: "catalog/byVector.surql",
@@ -19,7 +25,13 @@ export const byVector = $analyze.text({
 	throwsAt: {},
 } as const);
 
-/** `catalog/byWords.surql`: a template. */
+/**
+ * ```surql
+ * SELECT id, title FROM listing WHERE __WHERE__ AND title \@1@ $terms ORDER BY id LIMIT 10
+ * ```
+ *
+ * `catalog/byWords.surql`: a template.
+ */
 export const byWords = $analyze.text({
 	name: "catalog.byWords",
 	source: "catalog/byWords.surql",
@@ -35,7 +47,14 @@ export const byWords = $analyze.text({
 	throwsAt: {},
 } as const);
 
-/** `catalog/counts.surql`: a part. */
+/**
+ * ```surql
+ * LET $total = array::len($rows);
+ * LET $unused = $total + $offset;
+ * ```
+ *
+ * `catalog/counts.surql`: a part.
+ */
 export const counts = $statement.part({
 	name: "catalog.counts",
 	source: "catalog/counts.surql",
@@ -50,7 +69,20 @@ LET $unused = $total + $offset;`,
 	functions: [],
 } as const);
 
-/** `catalog/guarded.surql`: a template. */
+/**
+ * ```surql
+ * RETURN IF $tenant = NONE {
+ *   { status: 'denied' }
+ * } ELSE {
+ *   LET $shelf = (SELECT id, version FROM ONLY type::record('shelf', $tenant));
+ *   IF $shelf = NONE { THROW 'No shelf' } ELSE {
+ *     { status: 'ready', version: $shelf.version, data: (__BODY__) }
+ *   }
+ * };
+ * ```
+ *
+ * `catalog/guarded.surql`: a template.
+ */
 export const guarded = $analyze.text({
 	name: "catalog.guarded",
 	source: "catalog/guarded.surql",
@@ -73,7 +105,13 @@ export const guarded = $analyze.text({
 	throwsAt: { "No shelf": [5] },
 } as const);
 
-/** `catalog/noRows.surql`: a fragment. */
+/**
+ * ```surql
+ * []
+ * ```
+ *
+ * `catalog/noRows.surql`: a fragment.
+ */
 export const noRows = $analyze.text({
 	name: "catalog.noRows",
 	source: "catalog/noRows.surql",
@@ -88,7 +126,13 @@ export const noRows = $analyze.text({
 	throwsAt: {},
 } as const);
 
-/** `catalog/notReady.surql`: a fragment. */
+/**
+ * ```surql
+ * 'empty'
+ * ```
+ *
+ * `catalog/notReady.surql`: a fragment.
+ */
 export const notReady = $analyze.text({
 	name: "catalog.notReady",
 	source: "catalog/notReady.surql",
@@ -103,7 +147,13 @@ export const notReady = $analyze.text({
 	throwsAt: {},
 } as const);
 
-/** `catalog/priceCap.surql`: a fragment. */
+/**
+ * ```surql
+ * AND price <= $maxPrice
+ * ```
+ *
+ * `catalog/priceCap.surql`: a fragment.
+ */
 export const priceCap = $analyze.text({
 	name: "catalog.priceCap",
 	source: "catalog/priceCap.surql",
@@ -118,7 +168,13 @@ export const priceCap = $analyze.text({
 	throwsAt: {},
 } as const);
 
-/** `catalog/readiness.surql`: a fragment. */
+/**
+ * ```surql
+ * IF $shelf.version > 0 { 'ready' } ELSE { 'empty' }
+ * ```
+ *
+ * `catalog/readiness.surql`: a fragment.
+ */
 export const readiness = $analyze.text({
 	name: "catalog.readiness",
 	source: "catalog/readiness.surql",
@@ -133,7 +189,13 @@ export const readiness = $analyze.text({
 	throwsAt: {},
 } as const);
 
-/** `catalog/regionIs.surql`: a fragment. */
+/**
+ * ```surql
+ * AND region = $region
+ * ```
+ *
+ * `catalog/regionIs.surql`: a fragment.
+ */
 export const regionIs = $analyze.text({
 	name: "catalog.regionIs",
 	source: "catalog/regionIs.surql",
@@ -148,7 +210,13 @@ export const regionIs = $analyze.text({
 	throwsAt: {},
 } as const);
 
-/** `catalog/rowTitle.surql`: a fragment. */
+/**
+ * ```surql
+ * string::uppercase($row.title)
+ * ```
+ *
+ * `catalog/rowTitle.surql`: a fragment.
+ */
 export const rowTitle = $analyze.text({
 	name: "catalog.rowTitle",
 	source: "catalog/rowTitle.surql",
@@ -163,7 +231,18 @@ export const rowTitle = $analyze.text({
 	throwsAt: {},
 } as const);
 
-/** `catalog/search.surql`: a template. */
+/**
+ * ```surql
+ * {
+ *   LET $words = (__WORDS__);
+ *   LET $readiness = __READINESS__;
+ *   LET $near = IF $readiness = 'ready' { (__NEAR__) } ELSE { [] };
+ *   { words: $words, near: $near, readiness: $readiness }
+ * }
+ * ```
+ *
+ * `catalog/search.surql`: a template.
+ */
 export const search = $analyze.text({
 	name: "catalog.search",
 	source: "catalog/search.surql",
@@ -184,7 +263,17 @@ export const search = $analyze.text({
 	throwsAt: {},
 } as const);
 
-/** `catalog/summary.surql`: a template. */
+/**
+ * ```surql
+ * {
+ *   LET $rows = (SELECT id, title, tags FROM listing WHERE shelf = $shelf.id LIMIT 10);
+ *   __COUNTS__
+ *   { total: $total, titles: array::map($rows, |$row| __TITLE__) }
+ * }
+ * ```
+ *
+ * `catalog/summary.surql`: a template.
+ */
 export const summary = $analyze.text({
 	name: "catalog.summary",
 	source: "catalog/summary.surql",
@@ -204,7 +293,13 @@ export const summary = $analyze.text({
 	throwsAt: {},
 } as const);
 
-/** `catalog/visible.surql`: a template. */
+/**
+ * ```surql
+ * shelf = $shelf.id __PRICE__ __REGION__
+ * ```
+ *
+ * `catalog/visible.surql`: a template.
+ */
 export const visible = $analyze.text({
 	name: "catalog.visible",
 	source: "catalog/visible.surql",

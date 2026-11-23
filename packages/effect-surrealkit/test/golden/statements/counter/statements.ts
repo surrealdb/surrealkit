@@ -2,7 +2,17 @@
 
 import * as $statement from "effect-surrealkit/statement";
 
-/** `counter/step.surql`: a part. */
+/**
+ * ```surql
+ * LET $start = $boundStart;
+ * LET $next = $start + 1;
+ * IF $next > 100 { THROW 'Too large' };
+ * FOR $i IN [1, 2] { LET $local = $i; };
+ * RETURN $next * 2;
+ * ```
+ *
+ * `counter/step.surql`: a part.
+ */
 export const step = $statement.part({
 	name: "counter.step",
 	source: "counter/step.surql",

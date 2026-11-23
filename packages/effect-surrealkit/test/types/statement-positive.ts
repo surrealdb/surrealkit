@@ -387,7 +387,11 @@ same<
 export const ranWithoutInput = run(everyone);
 same<
 	typeof ranWithoutInput,
-	Effect.Effect<ReadonlyArray<PersonRow>, StatementError, SurrealClient>
+	Effect.Effect<
+		ReadonlyArray<PersonRow>,
+		StatementError<never, never>,
+		SurrealClient
+	>
 >(true);
 
 export const atomic = transaction([
@@ -469,6 +473,32 @@ export const definedWrite = sequence(bindWrite).define({
 	uniqueIndexes: ['cutover_producer'],
 });
 same<UniqueIndexes<typeof definedWrite>, 'cutover_producer'>(true);
+// A statement written without `Unique` may duplicate any index, so a write
+// that declares its indexes is still assignable to the forms code wrote
+// before they existed: an annotation, a parameter, an array and bare
+// `Statement`.
+export const annotated: Statement<
+	{ readonly person: typeof PersonCreate },
+	typeof createPerson.result
+> = createPerson;
+export const takesStatement = <P extends Params, R extends Codec>(
+	statement: Statement<P, R>,
+): string => statement.name;
+export const takenName = takesStatement(createPerson);
+export const listed: ReadonlyArray<Statement> = [
+	createPerson,
+	createdTeam,
+	names,
+	authoredWrite,
+];
+export const bare: Statement = createPerson;
+same<UniqueIndexes<typeof annotated>, string>(true);
+// Running one runs with any index's conflict, which `StatementError` without
+// `Unique` includes.
+export const ranAnnotated = run(annotated, { person: {} as PersonCreate });
+same<Effect.Error<typeof ranAnnotated>, StatementError<never, string>>(true);
+same<StatementError, StatementError<never, string>>(true);
+
 // A transaction's error is the union over its statements.
 export const atomicWrites = transaction([
 	bind(createdTeam, { team: { name: 't' } }),

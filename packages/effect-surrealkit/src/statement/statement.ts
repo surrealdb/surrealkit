@@ -123,7 +123,7 @@ export interface Statement<
 	P extends Params = Params,
 	R extends Codec = Codec,
 	Throws extends string = never,
-	Unique extends string = never,
+	Unique extends string = string,
 > {
 	readonly [StatementTypeId]: typeof StatementTypeId;
 	readonly name: string;

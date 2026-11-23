@@ -2,7 +2,15 @@
 
 import * as $statement from "effect-surrealkit/statement";
 
-/** `presence/assign.surql`: a part. */
+/**
+ * Sets the optional and the required string of every record.
+ *
+ * ```surql
+ * UPDATE m SET opt = $opt, req = $req;
+ * ```
+ *
+ * `presence/assign.surql`: a part.
+ */
 export const assign = $statement.part({
 	name: "presence.assign",
 	source: "presence/assign.surql",

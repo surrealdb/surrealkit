@@ -117,7 +117,7 @@ same<
 	typeof ranInvite,
 	Effect.Effect<
 		Result<typeof acceptInvite>,
-		StatementError<Thrown<typeof acceptInvite>>,
+		StatementError<Thrown<typeof acceptInvite>, never>,
 		SurrealClient
 	>
 >(true);

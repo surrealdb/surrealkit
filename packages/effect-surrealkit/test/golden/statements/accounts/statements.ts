@@ -3,7 +3,16 @@
 import * as $analyze from "effect-surrealkit/analyze";
 import * as $statement from "effect-surrealkit/statement";
 
-/** `accounts/bindOwner.surql`: a part. */
+/**
+ * Binds the owner a caller names, and the caller.
+ *
+ * ```surql
+ * LET $owner = $boundOwner;
+ * LET $principal = $auth.id;
+ * ```
+ *
+ * `accounts/bindOwner.surql`: a part.
+ */
 export const bindOwner = $statement.part({
 	name: "accounts.bindOwner",
 	source: "accounts/bindOwner.surql",
@@ -19,7 +28,13 @@ LET $principal = $auth.id;`,
 	functions: [],
 } as const);
 
-/** `accounts/listWhere.surql`: a template. */
+/**
+ * ```surql
+ * SELECT VALUE name FROM profile WHERE __FILTER__ ORDER BY name;
+ * ```
+ *
+ * `accounts/listWhere.surql`: a template.
+ */
 export const listWhere = $analyze.text({
 	name: "accounts.listWhere",
 	source: "accounts/listWhere.surql",
@@ -35,7 +50,13 @@ export const listWhere = $analyze.text({
 	throwsAt: {},
 } as const);
 
-/** `accounts/ownerFilter.surql`: a fragment. */
+/**
+ * ```surql
+ * owner = $owner
+ * ```
+ *
+ * `accounts/ownerFilter.surql`: a fragment.
+ */
 export const ownerFilter = $analyze.text({
 	name: "accounts.ownerFilter",
 	source: "accounts/ownerFilter.surql",
@@ -50,7 +71,13 @@ export const ownerFilter = $analyze.text({
 	throwsAt: {},
 } as const);
 
-/** `accounts/readProfile.surql`: a part. */
+/**
+ * ```surql
+ * SELECT VALUE name FROM ONLY $owner;
+ * ```
+ *
+ * `accounts/readProfile.surql`: a part.
+ */
 export const readProfile = $statement.part({
 	name: "accounts.readProfile",
 	source: "accounts/readProfile.surql",
@@ -65,7 +92,13 @@ export const readProfile = $statement.part({
 	openTargets: true,
 } as const);
 
-/** `accounts/requireOwner.surql`: a part. */
+/**
+ * ```surql
+ * IF $owner != $principal { THROW 'Not the owner' };
+ * ```
+ *
+ * `accounts/requireOwner.surql`: a part.
+ */
 export const requireOwner = $statement.part({
 	name: "accounts.requireOwner",
 	source: "accounts/requireOwner.surql",

@@ -10,6 +10,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
 	type Bound,
 	bind,
+	layer,
 	make as makeClient,
 	run,
 	StatementConflict,
@@ -33,6 +34,7 @@ import {
 	sequence,
 } from '../src/statement/index.js';
 import {
+	checkConstraintErrors,
 	conflict,
 	expectIndex,
 	expectNoIndex,
@@ -42,6 +44,7 @@ import {
 	IndexExpectationError,
 	loadSchema,
 	memoryLayer,
+	recordExists,
 	recordUser,
 	result,
 	type TestDatabase,
@@ -508,4 +511,60 @@ describe('fake', () => {
 			{ name: 'Kit' },
 		]);
 	});
+});
+
+describe('checkConstraintErrors', () => {
+	it('reports what each write failed with when the engine is not read', async () => {
+		const client = fake({
+			'constraint check setup': result(undefined),
+			'constraint check duplicate': failure('a message of another form'),
+			'constraint check existing': recordExists(),
+			'constraint check cleanup': result(undefined),
+		});
+		const report = await Effect.runPromise(
+			checkConstraintErrors.pipe(
+				Effect.provideService(SurrealClient, client),
+			),
+		);
+		expect(report).toStrictEqual({
+			indexConflict: false,
+			recordExists: true,
+			got: {
+				duplicate: 'StatementRequestError',
+				existing: 'StatementRecordExists',
+			},
+		});
+		expect(client.calls.map((call) => call.statement)).toContain(
+			'constraint check cleanup',
+		);
+	});
+
+	it.skipIf(!engineConfigured)(
+		'finds both classified on the engine this suite runs, and leaves no table behind',
+		async () => {
+			const engine = await startEngine();
+			try {
+				const report = await Effect.runPromise(
+					checkConstraintErrors.pipe(
+						Effect.provide(layer(engine.db)),
+					),
+				);
+				expect(report).toStrictEqual({
+					indexConflict: true,
+					recordExists: true,
+					got: {
+						duplicate: 'StatementIndexConflict',
+						existing: 'StatementRecordExists',
+					},
+				});
+				const [tables] =
+					await engine.db.query<[unknown]>('INFO FOR DB;');
+				expect(JSON.stringify(tables)).not.toContain(
+					'effect_surrealkit_constraint_check',
+				);
+			} finally {
+				await engine.stop();
+			}
+		},
+	);
 });

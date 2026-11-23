@@ -389,12 +389,53 @@ const changesSchema = (
 	);
 };
 
+/**
+ * The doc comment an editor shows on a generated constant: the comment that
+ * opens the text, the text after it in a fenced block, then `title`. A `*\/`
+ * is written `*\\/` so it cannot end the comment, an `@` after whitespace
+ * `\@` so TypeScript does not read a tag (SurrealQL's `@@` and `@1@`), and
+ * the fence is longer than any run of backticks in the text.
+ */
+const docComment = (
+	analysis: Analysis,
+	title: string,
+	holes: HoleDelimiters | undefined,
+): string => {
+	const first = lex(analysis.sql, holeDelimiters(holes)).tokens[0];
+	const body = analysis.sql.slice(first?.start ?? 0);
+	const longest = Math.max(
+		0,
+		...[...body.matchAll(/`+/gu)].map(([run]) => run.length),
+	);
+	const fence = '`'.repeat(Math.max(3, longest + 1));
+	const lines = [
+		...(analysis.comment === '' ? [] : [analysis.comment, '']),
+		`${fence}surql`,
+		body,
+		fence,
+		'',
+		title,
+	]
+		.join('\n')
+		.split(/\r\n|[\n\r\u2028\u2029]/u)
+		.map((line) =>
+			line
+				.replaceAll('*/', '*\\/')
+				.replace(/(^|\s)@/gu, '$1\\@')
+				.trimEnd(),
+		);
+	return ['/**', ...lines.map((line) => ` * ${line}`.trimEnd()), ' */'].join(
+		'\n',
+	);
+};
+
 const renderConstant = (
 	scope: string,
 	name: string,
 	analysis: Analysis,
 	binds: Readonly<Record<string, string>> | undefined,
 	rejectsNone: Readonly<Record<string, RejectedNone>> | undefined,
+	holes: HoleDelimiters | undefined,
 ): string => {
 	const file = `${scope}/${name}.surql`;
 	const complete = analysis.kind === 'part' && analysis.holes.length === 0;
@@ -437,7 +478,7 @@ const renderConstant = (
 			: []),
 	];
 	return [
-		`/** \`${file}\`: a ${what}. */`,
+		docComment(analysis, `\`${file}\`: a ${what}.`, holes),
 		`export const ${name} = ${complete ? '$statement.part' : '$analyze.text'}({`,
 		...fields.map((field) => `\t${field},`),
 		'} as const);',
@@ -620,6 +661,7 @@ export const renderStatementModulesSync = (
 				analysis,
 				binds,
 				rejectsNone,
+				input.holes,
 			),
 		);
 		byScope.set(source.scope, constants);

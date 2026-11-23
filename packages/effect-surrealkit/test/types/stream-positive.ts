@@ -31,14 +31,17 @@ export const streamTypes = (client: Client): void => {
 	const direct = client.stream(people);
 	same<
 		typeof direct,
-		Stream.Stream<PersonRow, StatementError<never> | StatementUnsupported>
+		Stream.Stream<
+			PersonRow,
+			StatementError<never, never> | StatementUnsupported
+		>
 	>(true);
 	const inContext = stream(guarded, { enabled: true });
 	same<
 		typeof inContext,
 		Stream.Stream<
 			number,
-			StatementError<'disabled'> | StatementUnsupported,
+			StatementError<'disabled', never> | StatementUnsupported,
 			SurrealClient
 		>
 	>(true);

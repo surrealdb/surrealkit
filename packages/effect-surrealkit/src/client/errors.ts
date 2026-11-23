@@ -234,11 +234,12 @@ export class StatementWriteOutcomeError extends Data.TaggedError(
 
 /**
  * Every error of running a statement that can `THROW` the messages `Throws`
- * and duplicate a value of the unique indexes `Unique`.
+ * and duplicate a value of the unique indexes `Unique`. As for
+ * `Statement`, leaving `Unique` out means any index.
  */
 export type StatementError<
 	Throws extends string = never,
-	Unique extends string = never,
+	Unique extends string = string,
 > =
 	| StatementEncodeError
 	| StatementScopeError
@@ -283,7 +284,7 @@ export class TransactionOutcomeUnknown extends Data.TaggedError(
 /** A non-atomic bulk write failed after committing any preceding chunks. */
 export class BulkWriteError<
 	Throws extends string = never,
-	Unique extends string = never,
+	Unique extends string = string,
 > extends Data.TaggedError('BulkWriteError')<{
 	readonly statement: string;
 	/** Zero-based index of the failed chunk. */
