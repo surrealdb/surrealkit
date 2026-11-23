@@ -55,7 +55,9 @@ export const indexesOf = (plan: unknown): ReadonlyArray<string> => {
 	return found;
 };
 
-const explainable = (statement: Statement<Params, Codec, string>): string => {
+const explainable = (
+	statement: Statement<Params, Codec, string, string>,
+): string => {
 	const text = statement.sql.trim();
 	if (statement.slots !== 1 || !/^SELECT\s/iu.test(text)) {
 		throw new TypeError(
@@ -66,12 +68,17 @@ const explainable = (statement: Statement<Params, Codec, string>): string => {
 };
 
 /** The plan of `statement` for `input`, and the indexes it reads. */
-export const explain = <P extends Params, R extends Codec, T extends string>(
-	statement: Statement<P, R, T>,
+export const explain = <
+	P extends Params,
+	R extends Codec,
+	T extends string,
+	U extends string = never,
+>(
+	statement: Statement<P, R, T, U>,
 	input: Input<P>,
 ): Effect.Effect<
 	{ readonly plan: unknown; readonly indexes: ReadonlyArray<string> },
-	StatementError<T>,
+	StatementError<T, U>,
 	SurrealClient
 > =>
 	Effect.suspend(() => {
@@ -87,20 +94,25 @@ export const explain = <P extends Params, R extends Codec, T extends string>(
 			Effect.map((tree) => ({ plan: tree, indexes: indexesOf(tree) })),
 		) as Effect.Effect<
 			{ readonly plan: unknown; readonly indexes: ReadonlyArray<string> },
-			StatementError<T>,
+			StatementError<T, U>,
 			SurrealClient
 		>;
 	});
 
 const expecting =
 	(expected: 'used' | 'unused') =>
-	<P extends Params, R extends Codec, T extends string>(
-		statement: Statement<P, R, T>,
+	<
+		P extends Params,
+		R extends Codec,
+		T extends string,
+		U extends string = never,
+	>(
+		statement: Statement<P, R, T, U>,
 		input: Input<P>,
 		index: string,
 	): Effect.Effect<
 		void,
-		IndexExpectationError | StatementError<T>,
+		IndexExpectationError | StatementError<T, U>,
 		SurrealClient
 	> =>
 		Effect.flatMap(explain(statement, input), ({ indexes, plan }) =>

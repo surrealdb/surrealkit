@@ -3,7 +3,7 @@
  * `effect-surrealkit/client`: each `@ts-expect-error` must be an actual
  * error, or `tsc -p test/types` fails.
  */
-import { Schema } from 'effect';
+import { Effect, Schema } from 'effect';
 import * as SurrealSchema from 'effect-surrealkit';
 
 import { bind, run, transaction } from '../../src/client/index.js';
@@ -582,4 +582,23 @@ export const rejectedArithmetic = () => {
 	}));
 	// @ts-expect-error [arithmetic/string-constant] a constant operand is a number
 	add(param('i', SurrealSchema.Int), '1');
+};
+
+export const rejectedIndexConflict = () => {
+	const createPerson = create(Corpus.PersonTable)
+		.content(param('person', Corpus.PersonCreate))
+		.build();
+	run(createPerson, { person: {} as Corpus.PersonCreate }).pipe(
+		Effect.catchTag('StatementIndexConflict', (error) =>
+			// @ts-expect-error [conflict/undeclared-index] `person` declares only the unique index `uniq_email`
+			Effect.succeed(error.index === 'uniq_handle'),
+		),
+	);
+	make({
+		sql: 'CREATE person CONTENT $person;',
+		params: { person: Corpus.PersonCreate },
+		result: Schema.Unknown,
+		// @ts-expect-error [conflict/index-not-a-string] a unique index is declared by its name
+		uniqueIndexes: [1],
+	});
 };

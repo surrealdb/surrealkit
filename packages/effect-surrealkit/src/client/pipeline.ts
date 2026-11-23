@@ -8,7 +8,6 @@ import {
 } from './errors.js';
 import {
 	classify,
-	declarer,
 	firstFailure,
 	requestErrorText,
 } from './internal/classify.js';
@@ -37,14 +36,14 @@ export interface PipelineOptions {
 
 /** One result for each bound statement, in request order. */
 export type PipelineResults<S extends ReadonlyArray<unknown>> = {
-	readonly [I in keyof S]: S[I] extends Bound<infer R, infer T>
-		? Result.Result<R['Type'], StatementError<T>>
+	readonly [I in keyof S]: S[I] extends Bound<infer R, infer T, infer U>
+		? Result.Result<R['Type'], StatementError<T, U>>
 		: never;
 };
 
 const wrap = { before: 'BEGIN;', after: 'COMMIT;' };
 
-type Outcome = Result.Result<unknown, StatementError<string>>;
+type Outcome = Result.Result<unknown, StatementError<string, string>>;
 
 const decodePart = (
 	{ statement, slots: expected }: RequestPart,
@@ -54,13 +53,7 @@ const decodePart = (
 	const failed = firstFailure(answers);
 	if (failed !== undefined) {
 		return Effect.succeed(
-			Result.fail(
-				classify(
-					statement.name,
-					(reason) => declarer([statement], reason),
-					failed.error,
-				),
-			),
+			Result.fail(classify(statement.name, [statement], failed.error)),
 		);
 	}
 	const writes = changesOf([statement]);

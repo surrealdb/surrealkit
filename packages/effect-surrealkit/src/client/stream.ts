@@ -20,11 +20,7 @@ import {
 	StatementUnsupported,
 	StatementWriteOutcomeError,
 } from './errors.js';
-import {
-	classify,
-	declarer,
-	isCollateralFailure,
-} from './internal/classify.js';
+import { classify, isCollateralFailure } from './internal/classify.js';
 import {
 	changesOf,
 	committedNote,
@@ -39,8 +35,14 @@ import type { Request, Transport } from './internal/transport.js';
 
 export const makeStream =
 	(transport: Transport): Client['stream'] =>
-	<P extends Params, Row extends Codec, Throws extends string, I>(
-		statement: Statement<P, Schema.$Array<Row>, Throws>,
+	<
+		P extends Params,
+		Row extends Codec,
+		Throws extends string,
+		Unique extends string,
+		I,
+	>(
+		statement: Statement<P, Schema.$Array<Row>, Throws, Unique>,
 		...args: InputOf<P, I>
 	) => {
 		const { name, sql, result, slots, valueSlot } = statement;
@@ -58,11 +60,7 @@ export const makeStream =
 							'the connection does not support streaming queries',
 						cause,
 					})
-				: classify<Throws>(
-						name,
-						(reason) => declarer([statement], reason),
-						cause,
-					);
+				: classify<Throws, Unique>(name, [statement], cause);
 
 		return Stream.unwrap(
 			Effect.gen(function* () {
@@ -310,6 +308,6 @@ export const makeStream =
 			}),
 		) as Stream.Stream<
 			Row['Type'],
-			StatementError<Throws> | StatementUnsupported
+			StatementError<Throws, Unique> | StatementUnsupported
 		>;
 	};

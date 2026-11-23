@@ -41,6 +41,8 @@ export type Reply =
 	  }
 	| { readonly [ReplyTypeId]: 'throw'; readonly message: string }
 	| { readonly [ReplyTypeId]: 'conflict' }
+	| { readonly [ReplyTypeId]: 'duplicate'; readonly index: string }
+	| { readonly [ReplyTypeId]: 'exists' }
 	| { readonly [ReplyTypeId]: 'failure'; readonly message: string }
 	| {
 			readonly [ReplyTypeId]: 'events';
@@ -62,6 +64,20 @@ export const thrown = (message: string): Reply => ({
 
 /** The request conflicts with another transaction. */
 export const conflict = (): Reply => ({ [ReplyTypeId]: 'conflict' });
+
+/**
+ * The write would duplicate a value of the unique index `index`, as
+ * SurrealDB 3.3 and 4.0 report it. A statement that declares the index in
+ * `uniqueIndexes` fails with `StatementIndexConflict`; any other with
+ * `StatementRequestError`.
+ */
+export const indexConflict = (index: string): Reply => ({
+	[ReplyTypeId]: 'duplicate',
+	index,
+});
+
+/** The write creates a record whose id already exists. */
+export const recordExists = (): Reply => ({ [ReplyTypeId]: 'exists' });
 
 /** The request fails, as a SurrealQL or transport error would. */
 export const failure = (message: string): Reply => ({
@@ -140,6 +156,22 @@ const rejection = (reply: Reply): Error | undefined => {
 			return sdkError(
 				'Transaction conflict: the transaction was retried but still conflicted',
 				{ isTransactionConflict: true },
+			);
+		case 'duplicate':
+			return sdkError(
+				`Database index \`${reply.index}\` already contains 'scripted value', with record \`scripted:record\``,
+				{ kind: 'Internal' },
+			);
+		case 'exists':
+			return sdkError(
+				'Database record `scripted:record` already exists',
+				{
+					kind: 'AlreadyExists',
+					details: {
+						kind: 'Record',
+						details: { id: 'scripted:record' },
+					},
+				},
 			);
 		case 'failure':
 			return sdkError(reply.message);

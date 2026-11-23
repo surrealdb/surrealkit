@@ -863,7 +863,11 @@ const unboundOf = (parts: ReadonlyArray<Part>): ReadonlyArray<string> => {
 export const sequence = <const Parts extends ReadonlyArray<Part>>(
 	...parts: Parts
 ) => ({
-	define: <const P extends Params, R extends Codec>(contract: {
+	define: <
+		const P extends Params,
+		R extends Codec,
+		const Unique extends string = never,
+	>(contract: {
 		readonly name?: string;
 		/**
 		 * What the sequence writes, when its parts leave it unknown: `false`
@@ -874,7 +878,14 @@ export const sequence = <const Parts extends ReadonlyArray<Part>>(
 		readonly writes?: boolean;
 		readonly params: Contract<Parts, P>;
 		readonly result: R;
-	}): Statement<P, R, ThrownBy<Parts>> => {
+		/**
+		 * The unique indexes a write of the parts can duplicate a value of,
+		 * by name: a duplicate on one of them fails with
+		 * `StatementIndexConflict`. The analyzer cannot tell them from the
+		 * text, so they are declared. Default none.
+		 */
+		readonly uniqueIndexes?: ReadonlyArray<Unique>;
+	}): Statement<P, R, ThrownBy<Parts>, Unique> => {
 		const analyses = parts.map((item, index) =>
 			verify(
 				item,
@@ -956,6 +967,9 @@ export const sequence = <const Parts extends ReadonlyArray<Part>>(
 				),
 			],
 			...(throwSites !== undefined && { throwSites }),
+			...(contract.uniqueIndexes !== undefined && {
+				uniqueIndexes: contract.uniqueIndexes,
+			}),
 		});
 	},
 });

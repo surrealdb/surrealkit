@@ -38,7 +38,7 @@ import {
 	TransactionOutcomeUnknown,
 } from './errors.js';
 import { makeWithTransaction, type TransactionClient } from './interactive.js';
-import { classify, declarer, firstFailure } from './internal/classify.js';
+import { classify, firstFailure } from './internal/classify.js';
 import {
 	changesOf,
 	countOf,
@@ -120,8 +120,8 @@ type RootSender = {
 type ScopedSender = { readonly transaction: Pick<TransactionHandle, 'send'> };
 type BulkSender = RootSender | ScopedSender;
 type BulkFailure<E> =
-	| StatementError<string>
-	| BulkWriteError<string>
+	| StatementError<string, string>
+	| BulkWriteError<string, string>
 	| StatementUnsupported
 	| TransactionOutcomeUnknown
 	| E;
@@ -224,11 +224,7 @@ const failureOf = (
 	)
 		return cause;
 	if (!atomic || cause instanceof Error) {
-		const classified = classify(
-			statement.name,
-			(reason) => declarer([statement], reason),
-			cause,
-		);
+		const classified = classify(statement.name, [statement], cause);
 		if (
 			!atomic ||
 			!(classified instanceof StatementRequestError) ||
@@ -264,7 +260,7 @@ const submit = <Row, E, R>(
 	atomic: boolean,
 ): Effect.Effect<
 	ReadonlyArray<unknown>,
-	StatementError<string> | TransactionOutcomeUnknown
+	StatementError<string, string> | TransactionOutcomeUnknown
 > => {
 	const { statement, input, options } = job;
 	const scoped = 'transaction' in sender;
@@ -485,8 +481,9 @@ export function makeBulk(sender: BulkSender): Client['bulk'] {
 		K extends ListBindingsOf<P>,
 		E = never,
 		C = never,
+		U extends string = never,
 	>(
-		statement: Statement<P, R, T>,
+		statement: Statement<P, R, T, U>,
 		input: BulkInput<P, K, E, C>,
 		options: BulkOptions<K, ElementOf<P[K]['Type']>, E, C>,
 	) => {
@@ -537,7 +534,7 @@ export function makeBulk(sender: BulkSender): Client['bulk'] {
 				const scoped = makeWithTransaction(sender.transport)(
 					(tx) => {
 						bodyStarted = true;
-						return tx.bulk<P, R, T, K, SourceFailure<E>, C>(
+						return tx.bulk<P, R, T, K, SourceFailure<E>, C, U>(
 							statement,
 							inputWith(
 								input,
@@ -595,8 +592,8 @@ export function makeBulk(sender: BulkSender): Client['bulk'] {
 			}),
 		) as Effect.Effect<
 			BulkSummary<R['Type']>,
-			| StatementError<T>
-			| BulkWriteError<T>
+			| StatementError<T, U>
+			| BulkWriteError<T, U>
 			| StatementUnsupported
 			| TransactionOutcomeUnknown
 			| E,

@@ -123,6 +123,59 @@ export class StatementConflict extends Data.TaggedError('StatementConflict')<{
 }
 
 /**
+ * A write would duplicate a value of a unique index the statement declares
+ * (`uniqueIndexes`; a write builder declares its table's). Nothing was
+ * written by the statement that failed. SurrealDB reports the index by name
+ * only, so a write that calls a function writing to another table with an
+ * index of the same name reports that index under this name.
+ *
+ * The message names the statement and the index. The duplicated value and
+ * the record that holds it are only in the engine's error, `cause`.
+ *
+ * `UPSERT`, `INSERT IGNORE` and `INSERT … ON DUPLICATE KEY UPDATE` are
+ * SurrealDB's own ways to write a row whose value may be taken; this error
+ * is for a write that expects the value to be free.
+ */
+export class StatementIndexConflict<
+	Index extends string = string,
+> extends Data.TaggedError('StatementIndexConflict')<{
+	/** The statement that declares the index; in a transaction, `one of …` when several do. */
+	readonly statement: string;
+	readonly index: string;
+	readonly cause: unknown;
+}> {
+	declare readonly index: Index;
+
+	override get message(): string {
+		return `\`${this.statement}\` would duplicate a value of the unique index \`${this.index}\``;
+	}
+
+	override toJSON(): unknown {
+		const { _tag, statement, index, message } = this;
+		return { _tag, statement, index, message };
+	}
+}
+
+/**
+ * A write tried to create a record whose id already exists (`CREATE` or
+ * `INSERT` of an id that is taken). The id is only in the engine's error,
+ * `cause`. `UPSERT`, `INSERT IGNORE` and `INSERT … ON DUPLICATE KEY UPDATE`
+ * write such a record without this error.
+ */
+export class StatementRecordExists extends Data.TaggedError(
+	'StatementRecordExists',
+)<{
+	/** The statement, or the transaction, that was sent. */
+	readonly statement: string;
+	readonly message: string;
+	readonly cause: unknown;
+}> {
+	override toJSON(): unknown {
+		return requestDisplay(this);
+	}
+}
+
+/**
  * The engine answered, and the answer is not what the statement declares:
  * a different number of results, a value where NONE was required, or a
  * final result its codec refuses. For a write, the client reports the failure
@@ -179,17 +232,25 @@ export class StatementWriteOutcomeError extends Data.TaggedError(
 	}
 }
 
-/** Every error of running a statement that can `THROW` the messages `T`. */
-export type StatementError<Throws extends string = never> =
+/**
+ * Every error of running a statement that can `THROW` the messages `Throws`
+ * and duplicate a value of the unique indexes `Unique`.
+ */
+export type StatementError<
+	Throws extends string = never,
+	Unique extends string = never,
+> =
 	| StatementEncodeError
 	| StatementScopeError
 	| StatementRequestError
 	| StatementUnexpectedThrow
 	| StatementConflict
+	| StatementRecordExists
 	| StatementDecodeError
 	| StatementEmptyResult
 	| StatementWriteOutcomeError
-	| ([Throws] extends [never] ? never : StatementThrown<Throws>);
+	| ([Throws] extends [never] ? never : StatementThrown<Throws>)
+	| ([Unique] extends [never] ? never : StatementIndexConflict<Unique>);
 
 /** The transport or engine lacks a required feature. No write request was sent. */
 export class StatementUnsupported extends Data.TaggedError(
@@ -222,13 +283,14 @@ export class TransactionOutcomeUnknown extends Data.TaggedError(
 /** A non-atomic bulk write failed after committing any preceding chunks. */
 export class BulkWriteError<
 	Throws extends string = never,
+	Unique extends string = never,
 > extends Data.TaggedError('BulkWriteError')<{
 	readonly statement: string;
 	/** Zero-based index of the failed chunk. */
 	readonly chunk: number;
 	readonly chunksCommitted: number;
 	readonly rowsCommitted: number;
-	readonly cause: StatementError<Throws>;
+	readonly cause: StatementError<Throws, Unique>;
 }> {}
 
 /** The live query ended without the caller closing it. */

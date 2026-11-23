@@ -327,6 +327,7 @@ export {
 	StatementTypeId,
 	type Thrown,
 	type ThrowSite,
+	type UniqueIndexes,
 } from './statement.js';
 export {
 	type Condition,
@@ -365,6 +366,7 @@ export {
 	type RelationTable,
 	relate,
 	type Shape,
+	type UniqueIndexesOf,
 	type Update,
 	type UpdateTarget,
 	type Upsert,

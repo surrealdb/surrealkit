@@ -3,7 +3,7 @@
  * `effect-surrealkit/client`: what the builders derive from the golden
  * generated modules. Compiled by `tsc -p test/types`.
  */
-import { type Brand, type Effect, Schema } from 'effect';
+import { type Brand, Effect, Schema } from 'effect';
 import * as SurrealSchema from 'effect-surrealkit';
 import type { DateTime, Decimal } from 'surrealdb';
 
@@ -16,6 +16,8 @@ import {
 	type StatementEmptyResult,
 	type StatementEncodeError,
 	type StatementError,
+	type StatementIndexConflict,
+	type StatementRecordExists,
 	type StatementRequestError,
 	type StatementScopeError,
 	type StatementThrown,
@@ -48,6 +50,7 @@ import {
 	inside,
 	isNone,
 	literal,
+	make,
 	max,
 	mean,
 	median,
@@ -56,6 +59,7 @@ import {
 	not,
 	or,
 	type Params,
+	type PureTable,
 	param,
 	part,
 	type Result,
@@ -70,6 +74,8 @@ import {
 	sum,
 	timeMax,
 	timeMin,
+	type UniqueIndexes,
+	type UniqueIndexesOf,
 	update,
 	upsert,
 	variance,
@@ -87,6 +93,7 @@ import {
 	PersonMerge,
 	type PersonRow,
 	PersonTable,
+	TeamCreate,
 	TeamId,
 	TeamTable,
 } from '../golden/example/index.js';
@@ -367,6 +374,7 @@ same<
 		| StatementRequestError
 		| StatementUnexpectedThrow
 		| StatementConflict
+		| StatementRecordExists
 		| StatementDecodeError
 		| StatementEmptyResult
 		| StatementWriteOutcomeError
@@ -391,9 +399,85 @@ same<
 	typeof atomic,
 	Effect.Effect<
 		readonly [PersonRow, ReadonlyArray<string>, string],
-		StatementError<'Not the owner'>,
+		StatementError<'Not the owner', 'uniq_email'>,
 		SurrealClient
 	>
+>(true);
+
+// ---- Client: a write declares its table's unique indexes, and a duplicate
+// on one is a typed error whose `index` is the union of their names.
+
+same<UniqueIndexes<typeof createPerson>, 'uniq_email'>(true);
+same<UniqueIndexes<typeof names>, never>(true);
+same<UniqueIndexesOf<typeof PersonTable>, 'uniq_email'>(true);
+same<UniqueIndexesOf<typeof TeamTable>, never>(true);
+same<UniqueIndexesOf<PureTable>, string>(true);
+export const createdTeam = create(TeamTable)
+	.content(param('team', TeamCreate))
+	.build();
+same<UniqueIndexes<typeof createdTeam>, never>(true);
+export const removed = deleteFrom(PersonTable).build();
+same<UniqueIndexes<typeof removed>, never>(true);
+export const createdOnce = run(createPerson, { person: {} as PersonCreate });
+same<
+	typeof createdOnce,
+	Effect.Effect<PersonRow, StatementError<never, 'uniq_email'>, SurrealClient>
+>(true);
+export const conflictIndex = createdOnce.pipe(
+	Effect.catchTag('StatementIndexConflict', (error) =>
+		Effect.succeed(error.index),
+	),
+);
+same<
+	typeof conflictIndex,
+	Effect.Effect<
+		PersonRow | 'uniq_email',
+		Exclude<
+			StatementError<never, 'uniq_email'>,
+			StatementIndexConflict<'uniq_email'>
+		>,
+		SurrealClient
+	>
+>(true);
+export const existing = createdOnce.pipe(
+	Effect.catchTag('StatementRecordExists', (error) =>
+		Effect.succeed(error.statement),
+	),
+);
+same<Effect.Success<typeof existing>, PersonRow | string>(true);
+// A table with no unique index adds no index conflict.
+export const ranTeam = run(createdTeam, { team: { name: 't' } });
+same<
+	Extract<
+		Effect.Error<typeof ranTeam>,
+		{ readonly _tag: 'StatementIndexConflict' }
+	>,
+	never
+>(true);
+// Authored text declares its unique indexes.
+export const authoredWrite = make({
+	sql: 'CREATE person CONTENT $person;',
+	params: { person: PersonCreate },
+	result: Schema.Unknown,
+	writes: true,
+	uniqueIndexes: ['uniq_email', 'uniq_handle'],
+});
+same<UniqueIndexes<typeof authoredWrite>, 'uniq_email' | 'uniq_handle'>(true);
+export const definedWrite = sequence(bindWrite).define({
+	params: { boundProducer: SurrealSchema.String },
+	result: Schema.Unknown,
+	uniqueIndexes: ['cutover_producer'],
+});
+same<UniqueIndexes<typeof definedWrite>, 'cutover_producer'>(true);
+// A transaction's error is the union over its statements.
+export const atomicWrites = transaction([
+	bind(createdTeam, { team: { name: 't' } }),
+	bind(authoredWrite, { person: {} as PersonCreate }),
+	bind(createPerson, { person: {} as PersonCreate }),
+]);
+same<
+	Effect.Error<typeof atomicWrites>,
+	StatementError<never, 'uniq_email' | 'uniq_handle'>
 >(true);
 
 // The input checks accept what the statement reads: a member of a literal

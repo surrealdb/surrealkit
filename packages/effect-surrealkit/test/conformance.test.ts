@@ -23,6 +23,10 @@ import {
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
+	conflictingIndex,
+	isRecordExists,
+} from '../src/client/internal/classify.js';
+import {
 	type Engine,
 	engineConfigured,
 	engineSkipReason,
@@ -842,6 +846,289 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 					edge: { out: new RecordId('rw', 'b') },
 				}),
 			).rejects.toThrow(/property 'in' is: NONE/);
+		});
+	});
+
+	// What the client's constraint errors read (`src/client/internal/classify.ts`).
+	// A record that exists is structured. A duplicate on a unique index is
+	// `Internal` with no details, and the index is named only in the message,
+	// which the SurrealDB protocol documentation says may change between
+	// releases: these rows are what lets the client read it (resolved decision
+	// 8 of `goals/reylo-lessons.md`), so a release that changes it fails here.
+	describe('constraint errors: a duplicate on a unique index and a record that exists', () => {
+		interface Shape {
+			readonly kind: unknown;
+			readonly details: unknown;
+			readonly message: string;
+		}
+		const shapeOf = (error: unknown): Shape => {
+			if (!(error instanceof Error)) throw error;
+			const { kind, details } = error as Error & {
+				readonly kind?: unknown;
+				readonly details?: unknown;
+			};
+			return { kind, details, message: error.message };
+		};
+		/** The error of a request that must fail, as the engine reports it. */
+		const failureOf = async (
+			sql: string,
+			bindings?: Record<string, unknown>,
+		): Promise<Shape> => {
+			try {
+				await query(sql, bindings);
+			} catch (error) {
+				return shapeOf(error);
+			}
+			throw new Error(`expected \`${sql}\` to fail`);
+		};
+		const declared = ['uq_email', 'uq_name', 'uq-nick', 'uq_edge_pair'];
+		/** The engine's message for a duplicate value of `index`. */
+		const duplicate = (index: string, value: string, record: string) => ({
+			kind: 'Internal',
+			details: undefined,
+			message: `Database index \`${index}\` already contains ${value}, with record \`${record}\``,
+		});
+		const exists = (record: string) => ({
+			kind: 'AlreadyExists',
+			details: { kind: 'Record', details: { id: record } },
+			message: `Database record \`${record}\` already exists`,
+		});
+
+		beforeAll(async () => {
+			await query(`
+				DEFINE TABLE uq SCHEMAFULL;
+				DEFINE FIELD email ON uq TYPE string;
+				DEFINE FIELD first ON uq TYPE option<string>;
+				DEFINE FIELD last ON uq TYPE option<string>;
+				DEFINE FIELD nick ON uq TYPE option<string>;
+				DEFINE INDEX uq_email ON uq FIELDS email UNIQUE;
+				DEFINE INDEX uq_name ON uq FIELDS first, last UNIQUE;
+				DEFINE INDEX \`uq-nick\` ON uq FIELDS nick UNIQUE;
+				DEFINE TABLE uq_edge TYPE RELATION IN uq OUT uq SCHEMAFULL;
+				DEFINE INDEX uq_edge_pair ON uq_edge FIELDS in, out UNIQUE;
+				DEFINE TABLE uq_audit SCHEMAFULL;
+				DEFINE FIELD email ON uq_audit TYPE string;
+				DEFINE INDEX uq_email ON uq_audit FIELDS email UNIQUE;
+				DEFINE TABLE uq_member SCHEMAFULL;
+				DEFINE FIELD email ON uq_member TYPE string;
+				DEFINE EVENT copy ON uq_member WHEN $event = 'CREATE' THEN { CREATE uq_audit SET email = $after.email };
+				DEFINE FUNCTION fn::uq_audit($email: string) { CREATE uq_audit SET email = $email };
+				CREATE uq:1 SET email = 'a@x.io', first = 'Ada', last = 'L', nick = 'ada';
+				CREATE uq:2 SET email = 'b@x.io';
+				RELATE uq:1->uq_edge:1->uq:2;
+				CREATE uq_audit:1 SET email = 'k@x.io';
+			`);
+		});
+
+		it('a duplicate through CREATE, INSERT, UPDATE and UPSERT is Internal, with the index only in the message', async () => {
+			const taken = duplicate('uq_email', "'a@x.io'", 'uq:1');
+			for (const sql of [
+				"CREATE uq:10 SET email = 'a@x.io';",
+				"CREATE uq SET email = 'a@x.io';",
+				'CREATE uq:11 SET email = $email;',
+				"INSERT INTO uq { id: uq:12, email: 'a@x.io' };",
+				"INSERT INTO uq [{ id: uq:13, email: 'c@x.io' }, { id: uq:14, email: 'a@x.io' }];",
+				"UPDATE uq:2 SET email = 'a@x.io';",
+				"UPSERT uq:15 SET email = 'a@x.io';",
+				"UPSERT uq:2 SET email = 'a@x.io';",
+			]) {
+				const shape = await failureOf(sql, { email: 'a@x.io' });
+				expect(shape, sql).toStrictEqual(taken);
+				expect(conflictingIndex(shape, declared), sql).toBe('uq_email');
+			}
+			// Nothing was written by any of them.
+			expect(
+				await query("SELECT VALUE id FROM uq WHERE email = 'c@x.io';"),
+			).toStrictEqual([[]]);
+		});
+
+		it('a duplicate through RELATE and INSERT RELATION names the index of the relation', async () => {
+			const taken = duplicate(
+				'uq_edge_pair',
+				'[uq:1, uq:2]',
+				'uq_edge:1',
+			);
+			for (const sql of [
+				'RELATE uq:1->uq_edge->uq:2;',
+				'INSERT RELATION INTO uq_edge { in: uq:1, out: uq:2 };',
+			]) {
+				const shape = await failureOf(sql);
+				expect(shape, sql).toStrictEqual(taken);
+				expect(conflictingIndex(shape, declared), sql).toBe(
+					'uq_edge_pair',
+				);
+			}
+		});
+
+		it('a composite index lists its values, and a name that needs quoting is written in backticks as it is', async () => {
+			const composite = await failureOf(
+				"CREATE uq:16 SET email = 'd@x.io', first = 'Ada', last = 'L';",
+			);
+			expect(composite).toStrictEqual(
+				duplicate('uq_name', "['Ada', 'L']", 'uq:1'),
+			);
+			expect(conflictingIndex(composite, declared)).toBe('uq_name');
+			const quoted = await failureOf(
+				"CREATE uq:17 SET email = 'e@x.io', nick = 'ada';",
+			);
+			expect(quoted).toStrictEqual(duplicate('uq-nick', "'ada'", 'uq:1'));
+			expect(conflictingIndex(quoted, declared)).toBe('uq-nick');
+		});
+
+		it('only an index that is declared is read from the message', async () => {
+			const shape = await failureOf("CREATE uq:18 SET email = 'a@x.io';");
+			expect(conflictingIndex(shape, [])).toBeUndefined();
+			expect(conflictingIndex(shape, ['uq'])).toBeUndefined();
+			expect(conflictingIndex(shape, ['uq_email_2'])).toBeUndefined();
+			expect(conflictingIndex(shape, ['email'])).toBeUndefined();
+		});
+
+		it('a value that imitates the message is stored, and a THROW of it is Thrown, not Internal', async () => {
+			const imitation =
+				"x', with record `uq:1`; Database index `uq_name` already contains 'y";
+			expect(
+				await query(
+					'CREATE ONLY uq:19 SET email = $email RETURN VALUE email;',
+					{
+						email: imitation,
+					},
+				),
+			).toStrictEqual([imitation]);
+			const thrown = await failureOf(
+				"THROW 'Database index `uq_email` already contains 1, with record `uq:1`';",
+			);
+			expect(thrown.kind).toBe('Thrown');
+			expect(conflictingIndex(thrown, declared)).toBeUndefined();
+		});
+
+		it('a duplicate raised inside an event is prefixed with the event, so it is not read; inside a function it reads as the caller’s own', async () => {
+			const inEvent = await failureOf(
+				"CREATE uq_member:1 SET email = 'k@x.io';",
+			);
+			expect(inEvent).toStrictEqual({
+				...duplicate('uq_email', "'k@x.io'", 'uq_audit:1'),
+				message: `Error while processing event copy: ${duplicate('uq_email', "'k@x.io'", 'uq_audit:1').message}`,
+			});
+			expect(conflictingIndex(inEvent, declared)).toBeUndefined();
+			// The index of another table with the same name: the message names
+			// the index and not its table, so the client reports the name only.
+			const inFunction = await failureOf(
+				"RETURN fn::uq_audit('k@x.io');",
+			);
+			expect(inFunction).toStrictEqual(
+				duplicate('uq_email', "'k@x.io'", 'uq_audit:1'),
+			);
+			expect(conflictingIndex(inFunction, declared)).toBe('uq_email');
+		});
+
+		it('when two unique indexes are violated, the engine reports one of them', async () => {
+			const shape = await failureOf(
+				"CREATE uq:20 SET email = 'a@x.io', nick = 'ada';",
+			);
+			expect(shape).toStrictEqual(duplicate('uq-nick', "'ada'", 'uq:1'));
+		});
+
+		it('a record that exists, through CREATE, INSERT and INSERT RELATION, is AlreadyExists of kind Record', async () => {
+			for (const [sql, record] of [
+				["CREATE uq:1 SET email = 'z1@x.io';", 'uq:1'],
+				["INSERT INTO uq { id: uq:1, email: 'z2@x.io' };", 'uq:1'],
+				[
+					"INSERT INTO uq [{ id: uq:21, email: 'z3@x.io' }, { id: uq:1, email: 'z4@x.io' }];",
+					'uq:1',
+				],
+				[
+					'INSERT RELATION INTO uq_edge { id: uq_edge:1, in: uq:2, out: uq:1 };',
+					'uq_edge:1',
+				],
+			] as const) {
+				const shape = await failureOf(sql);
+				expect(shape, sql).toStrictEqual(exists(record));
+				expect(isRecordExists(shape), sql).toBe(true);
+				expect(conflictingIndex(shape, declared), sql).toBeUndefined();
+			}
+			expect(
+				await query("SELECT VALUE id FROM uq WHERE email = 'z3@x.io';"),
+			).toStrictEqual([[]]);
+		});
+
+		it('RELATE onto an existing edge id is no AlreadyExists: a different Internal message on SurrealDB 3 and 4', async () => {
+			const shape = await failureOf('RELATE uq:1->uq_edge:1->uq:1;');
+			expect(shape.kind).toBe('Internal');
+			expect(shape.message).toBe(
+				engine.majorVersion >= 4
+					? 'Cannot change the `out` endpoint of an existing edge'
+					: 'Found uq:2 for the `out` field, which does not match the existing field value',
+			);
+			expect(isRecordExists(shape)).toBe(false);
+			expect(conflictingIndex(shape, declared)).toBeUndefined();
+		});
+
+		it('INSERT IGNORE raises neither: it skips a row whose id exists or whose unique value is taken', async () => {
+			expect(
+				await query(
+					[
+						"INSERT IGNORE INTO uq { id: uq:1, email: 'z5@x.io' };",
+						"INSERT IGNORE INTO uq { id: uq:22, email: 'a@x.io' };",
+						"INSERT IGNORE INTO uq { email: 'a@x.io' };",
+						"INSERT IGNORE INTO uq [{ id: uq:23, email: 'n@x.io' }, { id: uq:24, email: 'a@x.io' }, { id: uq:1, email: 'm@x.io' }] RETURN VALUE <string> id;",
+						'INSERT RELATION IGNORE INTO uq_edge { in: uq:1, out: uq:2 };',
+					].join('\n'),
+				),
+			).toStrictEqual([[], [], [], ['uq:23'], []]);
+		});
+
+		it('ON DUPLICATE KEY UPDATE updates a row whose id exists or whose unique value is taken, but a taken value under another explicit id, or one its update sets, is a duplicate', async () => {
+			expect(
+				await query(
+					[
+						"INSERT INTO uq { id: uq:1, email: 'a@x.io' } ON DUPLICATE KEY UPDATE first = 'Ada' RETURN VALUE <string> id;",
+						"INSERT INTO uq { email: 'a@x.io' } ON DUPLICATE KEY UPDATE last = 'L' RETURN VALUE <string> id;",
+						'INSERT RELATION INTO uq_edge { in: uq:1, out: uq:2 } ON DUPLICATE KEY UPDATE in = uq:1 RETURN VALUE <string> id;',
+					].join('\n'),
+				),
+			).toStrictEqual([['uq:1'], ['uq:1'], ['uq_edge:1']]);
+			const taken = duplicate('uq_email', "'a@x.io'", 'uq:1');
+			for (const sql of [
+				"INSERT INTO uq { id: uq:25, email: 'a@x.io' } ON DUPLICATE KEY UPDATE nick = 'x';",
+				"INSERT INTO uq { id: uq:2, email: 'b@x.io' } ON DUPLICATE KEY UPDATE email = 'a@x.io';",
+			]) {
+				const shape = await failureOf(sql);
+				expect(shape, sql).toStrictEqual(taken);
+				expect(conflictingIndex(shape, declared), sql).toBe('uq_email');
+			}
+		});
+
+		it('UPSERT by a condition on the unique field changes the record that holds the value', async () => {
+			expect(
+				await query(
+					"UPSERT uq SET email = 'a@x.io' WHERE email = 'a@x.io' RETURN VALUE <string> id;",
+				),
+			).toStrictEqual([['uq:1']]);
+		});
+
+		it('in a transaction the duplicate is its statement’s own result, and the others were not executed', async () => {
+			const responses = await within(
+				db
+					.query(
+						"BEGIN; CREATE uq:30 SET email = 'q@x.io'; CREATE uq:31 SET email = 'a@x.io'; COMMIT;",
+					)
+					.responses(),
+			);
+			const errors = responses.map((response) =>
+				response.success ? undefined : shapeOf(response.error),
+			);
+			expect(errors[0]).toBeUndefined();
+			expect(errors[1]).toMatchObject({
+				kind: 'Query',
+				details: { kind: 'NotExecuted' },
+			});
+			expect(errors[2]).toStrictEqual(
+				duplicate('uq_email', "'a@x.io'", 'uq:1'),
+			);
+			expect(errors[3]).toMatchObject({
+				kind: 'Query',
+				details: { kind: 'NotExecuted' },
+			});
 		});
 	});
 
