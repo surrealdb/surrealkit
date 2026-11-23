@@ -89,6 +89,33 @@ export type NoResult<S extends Shape> = S extends 'many'
 	? Schema.Tuple<readonly []>
 	: Schema.Undefined;
 
+/**
+ * The names of the unique indexes of `T`: the indexes a write to it can
+ * duplicate a value of, which its statements declare. An index whose `type`
+ * is not a literal (a descriptor not generated as one) counts as unique.
+ */
+export type UniqueIndexesOf<T extends PureTable> = T extends {
+	readonly indexes?: infer I;
+}
+	? {
+			readonly [K in keyof NonNullable<I>]: 'unique' extends (
+				NonNullable<I>[K] extends { readonly type: infer Type }
+					? Type
+					: never
+			)
+				? K
+				: never;
+		}[keyof NonNullable<I>] &
+			string
+	: never;
+
+/** The names of the unique indexes of `table`, sorted. */
+const uniqueIndexesOf = (table: PureTable): ReadonlyArray<string> =>
+	Object.entries(table.indexes ?? {})
+		.filter(([, index]) => index.type === 'unique')
+		.map(([name]) => name)
+		.sort();
+
 /** The schema a table declares for an operation, or `never` without one. */
 export type OperationOf<
 	T extends PureTable,
@@ -405,10 +432,10 @@ const nonEmpty = (state: State): boolean => {
 	);
 };
 
-const finish = <P extends Params, R extends Codec>(
+const finish = <P extends Params, R extends Codec, U extends string = never>(
 	state: State,
 	name: string | undefined,
-): Statement<Simplify<P>, R> => {
+): Statement<Simplify<P>, R, never, U> => {
 	const label =
 		name ??
 		`${state.verb.toLowerCase()}${state.relation === true ? ' relation' : ''} ${state.table.name}`;
@@ -424,6 +451,10 @@ const finish = <P extends Params, R extends Codec>(
 		result: resultOf(state) as R,
 		writes: true,
 		nonEmpty: nonEmpty(state),
+		// A DELETE removes values and cannot duplicate one.
+		uniqueIndexes: (state.verb === 'DELETE'
+			? []
+			: uniqueIndexesOf(state.table)) as ReadonlyArray<U>,
 	});
 };
 
@@ -604,8 +635,13 @@ export interface Create<
 		pick: (row: RowExprs<T>) => Expr<S, P2>,
 	) => Create<T, P & P2, RowCodec<S>>;
 
-	/** The finished statement. */
-	readonly build: (name?: string) => Statement<Simplify<P>, R>;
+	/**
+	 * The finished statement. It declares the table's unique indexes, so a
+	 * duplicate on one fails as `StatementIndexConflict`.
+	 */
+	readonly build: (
+		name?: string,
+	) => Statement<Simplify<P>, R, never, UniqueIndexesOf<T>>;
 }
 
 const creating = <T extends PureTable, P extends Params, R extends Codec>(
@@ -688,8 +724,13 @@ export interface Update<
 		pick: (row: RowExprs<T>) => Expr<V, P2>,
 	) => Update<T, P & P2, WriteResult<RowCodec<V>, S>, S>;
 
-	/** The finished statement. */
-	readonly build: (name?: string) => Statement<Simplify<P>, R>;
+	/**
+	 * The finished statement. It declares the table's unique indexes, so a
+	 * duplicate on one fails as `StatementIndexConflict`.
+	 */
+	readonly build: (
+		name?: string,
+	) => Statement<Simplify<P>, R, never, UniqueIndexesOf<T>>;
 }
 
 const updating = <
@@ -840,8 +881,13 @@ export interface Upsert<
 		pick: (row: RowExprs<T>) => Expr<V, P2>,
 	) => Upsert<T, P & P2, WriteResult<RowCodec<V>, S>, S>;
 
-	/** The finished statement. */
-	readonly build: (name?: string) => Statement<Simplify<P>, R>;
+	/**
+	 * The finished statement. It declares the table's unique indexes, so a
+	 * duplicate on one fails as `StatementIndexConflict`.
+	 */
+	readonly build: (
+		name?: string,
+	) => Statement<Simplify<P>, R, never, UniqueIndexesOf<T>>;
 }
 
 const upserting = <
@@ -1084,8 +1130,13 @@ export interface Relate<
 		pick: (row: RowExprs<T>) => Expr<S, P2>,
 	) => Relate<T, P & P2, RowCodec<S>>;
 
-	/** The finished statement. */
-	readonly build: (name?: string) => Statement<Simplify<P>, R>;
+	/**
+	 * The finished statement. It declares the table's unique indexes, so a
+	 * duplicate on one fails as `StatementIndexConflict`.
+	 */
+	readonly build: (
+		name?: string,
+	) => Statement<Simplify<P>, R, never, UniqueIndexesOf<T>>;
 }
 
 const relating = <T extends PureTable, P extends Params, R extends Codec>(
@@ -1248,8 +1299,13 @@ export interface Insert<
 		pick: (row: RowExprs<T>) => Expr<V, P2>,
 	) => Insert<T, P & P2, WriteResult<RowCodec<V>, 'many'>>;
 
-	/** The finished statement. */
-	readonly build: (name?: string) => Statement<Simplify<P>, R>;
+	/**
+	 * The finished statement. It declares the table's unique indexes, so a
+	 * duplicate on one fails as `StatementIndexConflict`.
+	 */
+	readonly build: (
+		name?: string,
+	) => Statement<Simplify<P>, R, never, UniqueIndexesOf<T>>;
 }
 
 const inserting = <T extends PureTable, P extends Params, R extends Codec>(

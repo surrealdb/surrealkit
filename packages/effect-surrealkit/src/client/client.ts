@@ -51,7 +51,7 @@ import {
 	type TransactionOptions,
 	withTransactionContext,
 } from './interactive.js';
-import { classify, declarer } from './internal/classify.js';
+import { classify } from './internal/classify.js';
 import {
 	changesOf,
 	countOf,
@@ -134,9 +134,10 @@ declare const BoundTypeId: unique symbol;
 export interface Bound<
 	R extends Codec = Codec,
 	Throws extends string = string,
+	Unique extends string = string,
 > {
 	readonly [BoundTypeId]: 'made by bind';
-	readonly statement: Statement<Params, R, Throws>;
+	readonly statement: Statement<Params, R, Throws, Unique>;
 	readonly input: Readonly<Record<string, unknown>>;
 }
 
@@ -145,15 +146,16 @@ export const bind = <
 	P extends Params,
 	R extends Codec,
 	Throws extends string,
+	Unique extends string = never,
 	I = Input<P>,
 >(
-	statement: Statement<P, R, Throws>,
+	statement: Statement<P, R, Throws, Unique>,
 	...input: InputOf<P, I>
-): Bound<R, Throws> =>
+): Bound<R, Throws, Unique> =>
 	({
 		statement,
 		input: (input[0] ?? {}) as Readonly<Record<string, unknown>>,
-	}) as unknown as Bound<R, Throws>;
+	}) as unknown as Bound<R, Throws, Unique>;
 
 /**
  * The statements sent together as the caller wrote them, `S`: each one
@@ -170,14 +172,18 @@ export type BoundStatements<S extends ReadonlyArray<unknown>> = {
 
 /** The decoded results of the statements of a transaction, in order. */
 export type Results<S extends ReadonlyArray<unknown>> = {
-	readonly [I in keyof S]: S[I] extends Bound<infer R, string>
+	readonly [I in keyof S]: S[I] extends Bound<infer R, string, string>
 		? R['Type']
 		: never;
 };
 
 /** The messages any statement of a transaction can `THROW`. */
 export type ThrownByAny<S extends ReadonlyArray<unknown>> =
-	S[number] extends Bound<Codec, infer T> ? T : never;
+	S[number] extends Bound<Codec, infer T, string> ? T : never;
+
+/** The unique indexes any statement of a transaction can duplicate a value of. */
+export type UniqueIndexesOfAny<S extends ReadonlyArray<unknown>> =
+	S[number] extends Bound<Codec, string, infer U> ? U : never;
 
 export interface Client {
 	/**
@@ -191,11 +197,12 @@ export interface Client {
 		P extends Params,
 		R extends Codec,
 		Throws extends string,
+		Unique extends string = never,
 		I = Input<P>,
 	>(
-		statement: Statement<P, R, Throws>,
+		statement: Statement<P, R, Throws, Unique>,
 		...args: RunArgs<P, I>
-	) => Effect.Effect<R['Type'], StatementError<Throws>>;
+	) => Effect.Effect<R['Type'], StatementError<Throws, Unique>>;
 
 	/**
 	 * Runs several statements as one atomic request and decodes each result:
@@ -211,7 +218,10 @@ export interface Client {
 	readonly transaction: <const S extends ReadonlyArray<unknown>>(
 		statements: BoundStatements<S>,
 		options?: RunOptions,
-	) => Effect.Effect<Results<S>, StatementError<ThrownByAny<S>>>;
+	) => Effect.Effect<
+		Results<S>,
+		StatementError<ThrownByAny<S>, UniqueIndexesOfAny<S>>
+	>;
 
 	/** Sends a list together and returns one outcome per statement. */
 	readonly pipeline: <const S extends ReadonlyArray<unknown>>(
@@ -236,14 +246,15 @@ export interface Client {
 		K extends ListBindingsOf<P>,
 		E = never,
 		C = never,
+		U extends string = never,
 	>(
-		statement: Statement<P, R, T>,
+		statement: Statement<P, R, T, U>,
 		input: BulkInput<P, K, E, C>,
 		options: BulkOptions<K, ElementOf<P[K]['Type']>, E, C>,
 	) => Effect.Effect<
 		BulkSummary<R['Type']>,
-		| StatementError<T>
-		| BulkWriteError<T>
+		| StatementError<T, U>
+		| BulkWriteError<T, U>
 		| StatementUnsupported
 		| TransactionOutcomeUnknown
 		| E,
@@ -255,11 +266,15 @@ export interface Client {
 		P extends Params,
 		Row extends Codec,
 		T extends string,
+		U extends string = never,
 		I = Input<P>,
 	>(
-		statement: Statement<P, Schema.$Array<Row>, T>,
+		statement: Statement<P, Schema.$Array<Row>, T, U>,
 		...input: InputOf<P, I>
-	) => Stream.Stream<Row['Type'], StatementError<T> | StatementUnsupported>;
+	) => Stream.Stream<
+		Row['Type'],
+		StatementError<T, U> | StatementUnsupported
+	>;
 
 	/** Acquires a live query in the current scope. */
 	readonly liveScoped: <
@@ -305,8 +320,14 @@ export const make = (db: Queryable): Client => makeWith(sdkTransport(db));
 
 const makeRun =
 	(transport: Transport): Client['run'] =>
-	<P extends Params, R extends Codec, Throws extends string, I>(
-		statement: Statement<P, R, Throws>,
+	<
+		P extends Params,
+		R extends Codec,
+		Throws extends string,
+		Unique extends string,
+		I,
+	>(
+		statement: Statement<P, R, Throws, Unique>,
 		...args: RunArgs<P, I>
 	) => {
 		const input = (args[0] ?? {}) as Readonly<Record<string, unknown>>;
@@ -351,8 +372,7 @@ const makeRun =
 								catch: (cause) =>
 									classify(
 										statement.name,
-										(reason) =>
-											declarer([statement], reason),
+										[statement],
 										cause,
 									),
 							}),
@@ -380,7 +400,7 @@ const makeRun =
 					return decoded;
 				}),
 			),
-		) as Effect.Effect<R['Type'], StatementError<Throws>>;
+		) as Effect.Effect<R['Type'], StatementError<Throws, Unique>>;
 	};
 
 const makeTransaction =
@@ -441,12 +461,7 @@ const makeTransaction =
 								try: (signal) =>
 									transport.collect(request, signal),
 								catch: (cause) =>
-									classify(
-										name,
-										(reason) =>
-											declarer(descriptors, reason),
-										cause,
-									),
+									classify(name, descriptors, cause),
 							}),
 						),
 						options,
@@ -487,7 +502,10 @@ const makeTransaction =
 					);
 				}),
 			),
-		) as Effect.Effect<Results<S>, StatementError<ThrownByAny<S>>>;
+		) as Effect.Effect<
+			Results<S>,
+			StatementError<ThrownByAny<S>, UniqueIndexesOfAny<S>>
+		>;
 	};
 
 /** A client over a {@link Transport}. @internal */
@@ -510,20 +528,25 @@ export const run = <
 	P extends Params,
 	R extends Codec,
 	Throws extends string,
+	Unique extends string = never,
 	I = Input<P>,
 >(
-	statement: Statement<P, R, Throws>,
+	statement: Statement<P, R, Throws, Unique>,
 	...args: RunArgs<P, I>
-): Effect.Effect<R['Type'], StatementError<Throws>, SurrealClient> =>
+): Effect.Effect<R['Type'], StatementError<Throws, Unique>, SurrealClient> =>
 	Effect.flatMap(Effect.service(SurrealClient), (client) =>
-		client.run<P, R, Throws, I>(statement, ...args),
+		client.run<P, R, Throws, Unique, I>(statement, ...args),
 	);
 
 /** Runs statements atomically through the {@link SurrealClient} in context. */
 export const transaction = <const S extends ReadonlyArray<unknown>>(
 	statements: BoundStatements<S>,
 	options?: RunOptions,
-): Effect.Effect<Results<S>, StatementError<ThrownByAny<S>>, SurrealClient> =>
+): Effect.Effect<
+	Results<S>,
+	StatementError<ThrownByAny<S>, UniqueIndexesOfAny<S>>,
+	SurrealClient
+> =>
 	Effect.flatMap(Effect.service(SurrealClient), (client) =>
 		client.transaction<S>(statements, options),
 	);
@@ -555,17 +578,18 @@ export const stream = <
 	P extends Params,
 	Row extends Codec,
 	T extends string,
+	U extends string = never,
 	I = Input<P>,
 >(
-	statement: Statement<P, Schema.$Array<Row>, T>,
+	statement: Statement<P, Schema.$Array<Row>, T, U>,
 	...input: InputOf<P, I>
 ): Stream.Stream<
 	Row['Type'],
-	StatementError<T> | StatementUnsupported,
+	StatementError<T, U> | StatementUnsupported,
 	SurrealClient
 > =>
 	Stream.unwrap(
 		Effect.map(Effect.service(SurrealClient), (client) =>
-			client.stream<P, Row, T, I>(statement, ...input),
+			client.stream<P, Row, T, U, I>(statement, ...input),
 		),
 	);

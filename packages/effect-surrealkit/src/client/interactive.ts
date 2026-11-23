@@ -31,6 +31,7 @@ import {
 	type RunOptions,
 	SurrealClient,
 	type ThrownByAny,
+	type UniqueIndexesOfAny,
 } from './client.js';
 import {
 	type BulkWriteError,
@@ -43,7 +44,6 @@ import {
 } from './errors.js';
 import {
 	classify,
-	declarer,
 	firstFailure,
 	requestErrorText,
 } from './internal/classify.js';
@@ -71,16 +71,20 @@ export interface TransactionClient {
 		P extends Params,
 		R extends Codec,
 		T extends string,
+		U extends string = never,
 		I = Input<P>,
 	>(
-		statement: Statement<P, R, T>,
+		statement: Statement<P, R, T, U>,
 		...args: RunArgsWithOptions<P, I, TransactionRunOptions>
-	) => Effect.Effect<R['Type'], StatementError<T>>;
+	) => Effect.Effect<R['Type'], StatementError<T, U>>;
 
 	readonly transaction: <const S extends ReadonlyArray<unknown>>(
 		statements: BoundStatements<S>,
 		options?: TransactionRunOptions,
-	) => Effect.Effect<Results<S>, StatementError<ThrownByAny<S>>>;
+	) => Effect.Effect<
+		Results<S>,
+		StatementError<ThrownByAny<S>, UniqueIndexesOfAny<S>>
+	>;
 
 	readonly bulk: <
 		P extends Params,
@@ -89,8 +93,9 @@ export interface TransactionClient {
 		K extends ListBindingsOf<P>,
 		E = never,
 		C = never,
+		U extends string = never,
 	>(
-		statement: Statement<P, R, T>,
+		statement: Statement<P, R, T, U>,
 		input: BulkInput<P, K, E, C>,
 		options: Omit<
 			BulkOptions<K, ElementOf<P[K]['Type']>, E, C>,
@@ -98,7 +103,7 @@ export interface TransactionClient {
 		>,
 	) => Effect.Effect<
 		BulkSummary<R['Type']>,
-		StatementError<T> | BulkWriteError<T> | StatementUnsupported | E,
+		StatementError<T, U> | BulkWriteError<T, U> | StatementUnsupported | E,
 		C
 	>;
 }
@@ -146,7 +151,7 @@ const commitUnknown = (cause: unknown): TransactionOutcomeUnknown =>
 	});
 
 const commitError = (cause: unknown): TransactionError => {
-	const classified = classify(name, () => undefined, cause);
+	const classified = classify(name, [], cause);
 	if (classified instanceof StatementConflict) return classified;
 	// The server answered, or the SDK refused to send the request.
 	if (
@@ -233,7 +238,7 @@ const execute = (
 	requestName: string,
 	statements: ReadonlyArray<Bound>,
 	options?: TransactionRunOptions,
-): Effect.Effect<ReadonlyArray<unknown>, StatementError<string>> =>
+): Effect.Effect<ReadonlyArray<unknown>, StatementError<string, string>> =>
 	recording('interactive', requestName, (recorder) =>
 		Effect.gen(function* () {
 			if (statements.length === 0) return [];
@@ -263,13 +268,7 @@ const execute = (
 					? cause
 					: classify(
 							requestName,
-							(reason) =>
-								declarer(
-									statements.map(
-										({ statement }) => statement,
-									),
-									reason,
-								),
+							statements.map(({ statement }) => statement),
 							cause,
 						);
 			const answers = yield* recorder.wait(
@@ -327,15 +326,21 @@ const execute = (
 const transactionClient = (
 	send: TransactionHandle['send'],
 ): TransactionClient => ({
-	run: <P extends Params, R extends Codec, T extends string, I>(
-		statement: Statement<P, R, T>,
+	run: <
+		P extends Params,
+		R extends Codec,
+		T extends string,
+		U extends string,
+		I,
+	>(
+		statement: Statement<P, R, T, U>,
 		...args: RunArgsWithOptions<P, I, TransactionRunOptions>
 	) => {
 		const input = (args[0] ?? {}) as Readonly<Record<string, unknown>>;
 		const bound = { statement, input } as unknown as Bound;
 		return execute(send, statement.name, [bound], args[1]).pipe(
 			Effect.map(([value]) => value),
-		) as Effect.Effect<R['Type'], StatementError<T>>;
+		) as Effect.Effect<R['Type'], StatementError<T, U>>;
 	},
 	transaction: <const S extends ReadonlyArray<unknown>>(
 		given: BoundStatements<S>,
@@ -350,7 +355,10 @@ const transactionClient = (
 			`transaction(${labels})`,
 			statements,
 			options,
-		) as Effect.Effect<Results<S>, StatementError<ThrownByAny<S>>>;
+		) as Effect.Effect<
+			Results<S>,
+			StatementError<ThrownByAny<S>, UniqueIndexesOfAny<S>>
+		>;
 	},
 	bulk: makeBulk({ transaction: { send } }),
 });

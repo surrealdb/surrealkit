@@ -671,6 +671,45 @@ stored record's own fields are not offered: SurrealDB 4.0 reads them there
 and 3.3 reads them as NONE. The conformance suite pins every cell of the
 table and both differences.
 
+#### A value that may already be taken
+
+SurrealDB has its own statements for a row whose id or unique value may
+already be in the table, and they are the first choice when that is
+expected:
+
+- `upsert(table, id)` changes the record when it is there and creates it
+  when it is not; `upsert(table).where(…)` does the same for the record a
+  condition finds, so a condition on a unique field changes the record
+  that holds the value.
+- `.onDuplicate(…)` (`INSERT … ON DUPLICATE KEY UPDATE`) updates the record
+  a row collides with, by id or by a unique index.
+- `INSERT IGNORE` skips such a row and inserts the others. No builder
+  writes it; use authored text (`part`, `make`).
+
+A write that expects the value to be free fails instead, and the client
+says why with a typed error. Each of `create`, `insert`, `insertRelation`,
+`update`, `upsert` and `relate` declares the unique indexes of its table
+(`uniqueIndexes`, from the descriptor's `indexes`), so a duplicate on one is
+a `StatementIndexConflict` whose `index` is typed as the union of their
+names; a table with no unique index adds none to the statement's errors,
+and `deleteFrom` declares none. A `CREATE` or `INSERT` of an id that exists
+is a `StatementRecordExists`:
+
+```ts
+const added = run(createPerson, { person }).pipe(
+  Effect.catchTag('StatementIndexConflict', (error) =>
+    Effect.fail(new EmailTaken({ index: error.index })), // error.index: 'uniq_email'
+  ),
+);
+```
+
+On SurrealDB 3.3 and 4.0 (`test/conformance.test.ts`, "constraint errors",
+on both): `INSERT IGNORE` raises neither error. `ON DUPLICATE KEY UPDATE`
+still raises `StatementIndexConflict` for a taken unique value given under
+another explicit id, and for a value its own assignments make a duplicate,
+so `.onDuplicate(…)` keeps the declaration. `RELATE` onto an existing edge
+id is a different error on each version and stays a `StatementRequestError`.
+
 ### Grouping
 
 `.groupBy((row) => ({ role: row.role, city: row.address.city }))` groups
@@ -1024,7 +1063,12 @@ see [Running statements](#running-statements) for what each means when a
 result does not decode) and `nonEmpty` (the last result is a row whenever
 the statement applies, so an empty one is reported as
 `StatementEmptyResult`, false unless declared); builders set both
-themselves. Only `part` and `sequence` import the
+themselves. `make` and `sequence(…).define` also take `uniqueIndexes`, the
+unique indexes the text can duplicate a value of, by name (the analyzer
+cannot tell them from the text), so a duplicate on one is a typed
+`StatementIndexConflict` (see [A value that may already be
+taken](#a-value-that-may-already-be-taken)); a statement declared not to
+write is refused one. Only `part` and `sequence` import the
 analyzer, so code that uses only the builders does not bundle it.
 
 ### Statements from `.surql` files
@@ -1536,7 +1580,9 @@ const client = make(db);
 | `StatementThrown<Message>` | a `THROW` the statement declares; in a transaction, `statement` names the one that declares it (`one of …` when several do); `source` and `lines` say where, when the part records them | not by a transaction; a single statement's earlier statements commit on their own |
 | `StatementUnexpectedThrow` | a `THROW` whose message the statement does not declare (a dynamic message), with the thrown text as `reason` and the SDK's error as `cause` | as for `StatementThrown` |
 | `StatementConflict` | a transaction conflict that `retry` did not resolve | the conflicting transaction rolled back. Earlier independent statements may have committed |
-| `StatementRequestError` | any other failure of the request: transport, authentication, a SurrealQL error, or the SDK refusing to send (a `RETURN` followed by another statement in a transaction), with the SDK's error as `cause` | unknown for a transport failure; otherwise no |
+| `StatementIndexConflict<Index>` | a write would duplicate a value of a unique index the statement declares (`uniqueIndexes`; a write builder declares its table's), named by `index`; in a transaction, `statement` names the one that declares it (`one of …` when several do). Prefer `upsert`, `INSERT IGNORE` or `.onDuplicate(…)` where a taken value is expected | not by that statement, nor by a transaction; a single statement's earlier statements commit on their own |
+| `StatementRecordExists` | a `CREATE` or `INSERT` of a record id that already exists | as for `StatementIndexConflict` |
+| `StatementRequestError` | any other failure of the request: transport, authentication, a SurrealQL error (a duplicate on an index the statement does not declare included), or the SDK refusing to send (a `RETURN` followed by another statement in a transaction), with the SDK's error as `cause` | unknown for a transport failure; otherwise no |
 | `StatementEmptyResult` | a `create` or `relate` that returns rows (`nonEmpty`) returned NONE or an empty list: SurrealDB reports a write the session may not make as an empty result, without an error, so the session may lack permission | not by that statement |
 | `StatementDecodeError` | the answer of a statement or transaction known not to write (`writes: false`) is not what it declares: the number of results, a value where NONE belongs, or a last result its codec refuses | no |
 | `StatementWriteOutcomeError` | the same, for a request not known to be read-only; `request` names the statement or transaction and `cause` is the `StatementDecodeError` (naming the statement and result), with `committed: true` and a message saying the request succeeded and either its writes are committed (`writes: true`) or it may have written (`writes` unknown) | yes, whatever it wrote is committed: read it back before resending |
@@ -1546,10 +1592,26 @@ const client = make(db);
 | `LiveQueryClosed` | the engine killed the live query or the connection was lost | closing the subscription does not write data |
 
 Client error messages, default inspection, and JSON output omit raw server
-diagnostics, undeclared `THROW` text, and keys from preflight binding values.
+diagnostics, undeclared `THROW` text, keys from preflight binding values,
+and the duplicated value and record id of a constraint error (a
+`StatementIndexConflict` shows the statement and the index name only).
 Read `cause`, `reason`, or `path` directly when you need those details and
 can handle them privately. Formatters that traverse those fields, including
 Effect's `Cause.pretty`, can display their contents.
+
+SurrealDB reports a record that exists as a structured error (`AlreadyExists`
+of kind `Record`), which is what `StatementRecordExists` reads. It reports a
+duplicate on a unique index as an `Internal` error that names the index only
+in its message, and its protocol documentation says a message may change
+between releases. The client therefore reads that message only in the form
+the conformance suite pins on SurrealDB 3.3 and 4.0, and only for an index
+name the statement declares; any other message stays a
+`StatementRequestError`, as does a duplicate raised inside an event (the
+engine prefixes the event's name). The message names the index and not its
+table: a write that calls a function writing to another table with a
+unique index of the same name reports that index under this name. A
+`block` and a `family` declare no unique index, so a duplicate inside one is
+a `StatementRequestError`.
 
 An `update` or `delete` by condition may match nothing, so its empty list is
 a result, not an error; so is a denied one (the conformance suite pins
@@ -2396,6 +2458,7 @@ const test = Effect.gen(function* () {
 | `expectIndex(statement, input, index)`, `expectNoIndex(…)` | Succeed when the engine's plan of a `SELECT` does (does not) read `index`; otherwise an `IndexExpectationError` naming the indexes it does read. `explain(statement, input)` returns the plan and its indexes. |
 | `fake(script)`, `fakeLayer(script)` | A client without an engine. It answers each statement by name with a value, a scripted reply, or a function of its encoded bindings. `calls` records requests and lifecycle operations. |
 | `result(value)`, `thrown(message)`, `conflict()`, `failure(message)` | Reply constructors for ordinary result slots and failures. |
+| `indexConflict(index)`, `recordExists()` | A duplicate on the unique index `index`, and a record id that exists, as SurrealDB reports them: `StatementIndexConflict` for a statement that declares `index` (otherwise `StatementRequestError`), and `StatementRecordExists`. |
 | `events(list)`, `unsupported(feature)` | Script a live subscription's events or a feature refusal, such as `{ begin: unsupported('interactive transaction') }`. |
 | `conflictingSession(session, { marker, times })` | Wraps an SDK session, injecting a transaction conflict into the first `times` sent requests with matching text. Returns the wrapped `session` and the `matched.count` readback. |
 

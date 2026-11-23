@@ -5,6 +5,7 @@
  * strictly by the codec its statement derived.
  */
 import { readFileSync } from 'node:fs';
+import { inspect } from 'node:util';
 
 import { Arbitrary, Effect, Schedule, Schema } from 'effect';
 import { DateTime, RecordId } from 'surrealdb';
@@ -18,6 +19,9 @@ import {
 	StatementDecodeError,
 	StatementEmptyResult,
 	StatementEncodeError,
+	StatementIndexConflict,
+	StatementRecordExists,
+	StatementRequestError,
 	StatementScopeError,
 	StatementThrown,
 	StatementUnexpectedThrow,
@@ -1641,6 +1645,338 @@ describe.skipIf(!engineConfigured)('statements on a disposable engine', () => {
 			);
 			expect(row).toMatchObject({ name: 'Ann' });
 			expect(row && 'nickname' in row).toBe(false);
+		});
+	});
+
+	// The shapes these rely on are pinned by `test/conformance.test.ts`,
+	// "constraint errors", on both engine lanes.
+	describe('constraint errors', () => {
+		/** Data values that must not reach a message or a display. */
+		const email = 'holder-private-value@example.com';
+		const key = 'holder_private_key';
+		const asPerson = Schema.decodeUnknownSync(PersonId);
+		const holderId = asPerson(new RecordId('person', key));
+		/** `member_of` with a unique index on its endpoints, as the engine has it here. */
+		const MemberPairTable = SurrealSchema.table({
+			...MemberOfTable,
+			indexes: {
+				member_pair: { type: 'unique', columns: [['in'], ['out']] },
+			},
+		});
+		const EmailChange = Schema.Struct({ email: PersonMerge.fields.email });
+		const Upserted = Schema.Struct({
+			address: PersonCreate.fields.address,
+			bio: PersonCreate.fields.bio,
+			email: PersonCreate.fields.email,
+			name: PersonCreate.fields.name,
+			score: PersonCreate.fields.score,
+		});
+		const otherId = asPerson(new RecordId('person', 'holder_other'));
+		let team: { readonly id: TeamId };
+
+		const expectSafe = (error: unknown) => {
+			if (!(error instanceof Error)) throw error;
+			for (const text of [
+				error.message,
+				String(error),
+				JSON.stringify(error),
+				inspect(error, { depth: null }),
+			]) {
+				expect(text).not.toContain(email);
+				expect(text).not.toContain(key);
+				expect(text).not.toContain('holder_other');
+				expect(text).not.toContain('already contains');
+				expect(text).not.toContain('with record');
+			}
+		};
+		const expectConflict = (
+			error: unknown,
+			statement: string,
+			index: string,
+		) => {
+			expect(error).toBeInstanceOf(StatementIndexConflict);
+			expect(error).toMatchObject({ statement, index });
+			expect((error as Error).message).toBe(
+				`\`${statement}\` would duplicate a value of the unique index \`${index}\``,
+			);
+			expectSafe(error);
+		};
+		const expectExists = (error: unknown, statement: string) => {
+			expect(error).toBeInstanceOf(StatementRecordExists);
+			expect(error).toMatchObject({ statement });
+			expect((error as Error).message).toBe(
+				`\`${statement}\` tried to create a record whose id already exists`,
+			);
+			expectSafe(error);
+		};
+		const createAt = create(PersonTable, param('id', PersonId))
+			.content(param('person', PersonCreate))
+			.build('createHolder');
+
+		beforeAll(async () => {
+			await ok(
+				client.run(createAt, {
+					id: holderId,
+					person: { ...person('Holder'), email },
+				}),
+			);
+			await ok(
+				client.run(createAt, {
+					id: otherId,
+					person: person('HolderOther'),
+				}),
+			);
+			team = await ok(
+				client.run(
+					create(TeamTable)
+						.content(param('team', TeamCreate))
+						.build(),
+					{ team: { name: 'pairs' } },
+				),
+			);
+			await within(
+				engine.db.query(
+					'DEFINE INDEX member_pair ON member_of FIELDS in, out UNIQUE;',
+				),
+			);
+			await ok(
+				client.run(
+					relate(
+						MemberPairTable,
+						param('person', PersonId),
+						param('team', TeamId),
+					).build(),
+					{ person: holderId, team: team.id },
+				),
+			);
+		});
+		afterAll(async () => {
+			await within(
+				engine.db.query('REMOVE INDEX member_pair ON member_of;'),
+			);
+		});
+
+		it('a duplicate through create, insert, update and upsert names the unique index', async () => {
+			const duplicate = { ...person('Dup'), email };
+			expectConflict(
+				await failure(
+					client.run(
+						create(PersonTable)
+							.content(param('person', PersonCreate))
+							.build('createDup'),
+						{ person: duplicate },
+					),
+				),
+				'createDup',
+				'uniq_email',
+			);
+			const insertRows = insert(
+				PersonTable,
+				param('rows', Schema.Array(PersonCreate)),
+			);
+			expectConflict(
+				await failure(
+					client.run(insertRows.build('insertDup'), {
+						rows: [person('Fresh'), duplicate],
+					}),
+				),
+				'insertDup',
+				'uniq_email',
+			);
+			expectConflict(
+				await failure(
+					client.run(
+						update(PersonTable, param('id', PersonId))
+							.merge(param('changes', EmailChange))
+							.build('updateDup'),
+						{ id: otherId, changes: { email } },
+					),
+				),
+				'updateDup',
+				'uniq_email',
+			);
+			expectConflict(
+				await failure(
+					client.run(
+						upsert(
+							PersonTable,
+							recordId(
+								PersonTable,
+								param('key', SurrealSchema.String),
+							),
+						)
+							.merge(param('changes', Upserted))
+							.build('upsertDup'),
+						{
+							key: 'holder_upsert',
+							changes: {
+								address: { city: 'Leeds' },
+								bio: null,
+								email,
+								name: 'Up',
+								score: 1,
+							},
+						},
+					),
+				),
+				'upsertDup',
+				'uniq_email',
+			);
+			// None of them wrote anything.
+			expect(
+				await ok(client.run(byEmail, { email: 'fresh@example.com' })),
+			).toBeUndefined();
+		});
+
+		it('ON DUPLICATE KEY UPDATE still raises it for a taken value under another explicit id', async () => {
+			const statement = insert(
+				PersonTable,
+				param(
+					'row',
+					Schema.Struct({ ...PersonCreate.fields, id: PersonId }),
+				),
+			)
+				.onDuplicate((input) => ({ name: input.name }))
+				.build('insertOrUpdate');
+			expectConflict(
+				await failure(
+					client.run(statement, {
+						row: {
+							...person('Taken'),
+							email,
+							id: asPerson(
+								new RecordId('person', 'holder_third'),
+							),
+						},
+					}),
+				),
+				'insertOrUpdate',
+				'uniq_email',
+			);
+		});
+
+		it('a duplicate through relate and insertRelation names the index of the relation', async () => {
+			expectConflict(
+				await failure(
+					client.run(
+						relate(
+							MemberPairTable,
+							param('person', PersonId),
+							param('team', TeamId),
+						).build('relateDup'),
+						{ person: holderId, team: team.id },
+					),
+				),
+				'relateDup',
+				'member_pair',
+			);
+			expectConflict(
+				await failure(
+					client.run(
+						insertRelation(
+							MemberPairTable,
+							param(
+								'edge',
+								Schema.Struct({ in: PersonId, out: TeamId }),
+							),
+						).build('insertRelationDup'),
+						{ edge: { in: holderId, out: team.id } },
+					),
+				),
+				'insertRelationDup',
+				'member_pair',
+			);
+		});
+
+		it('a record that exists, through create and insert, is StatementRecordExists', async () => {
+			expectExists(
+				await failure(
+					client.run(createAt, {
+						id: holderId,
+						person: person('Again'),
+					}),
+				),
+				'createHolder',
+			);
+			expectExists(
+				await failure(
+					client.run(
+						insert(
+							PersonTable,
+							param(
+								'row',
+								Schema.Struct({
+									...PersonCreate.fields,
+									id: PersonId,
+								}),
+							),
+						).build('insertExisting'),
+						{ row: { ...person('Again2'), id: holderId } },
+					),
+				),
+				'insertExisting',
+			);
+		});
+
+		it('authored text names the unique indexes it declares, and nothing else', async () => {
+			const authored = (uniqueIndexes?: ReadonlyArray<string>) =>
+				make({
+					name: 'authored',
+					sql: 'CREATE person CONTENT $person RETURN NONE;',
+					params: { person: PersonCreate },
+					result: Schema.Tuple([]),
+					writes: true,
+					...(uniqueIndexes !== undefined && { uniqueIndexes }),
+				});
+			const input = { person: { ...person('Authored'), email } };
+			expectConflict(
+				await failure(client.run(authored(['uniq_email']), input)),
+				'authored',
+				'uniq_email',
+			);
+			for (const declared of [undefined, ['uniq_name'], ['uniq']]) {
+				const error = await failure(
+					client.run(authored(declared), input),
+				);
+				expect(error).toBeInstanceOf(StatementRequestError);
+				expect(error).toMatchObject({
+					message: 'SurrealDB request failed',
+				});
+				expectSafe(error);
+			}
+		});
+
+		it('in a transaction, the error names the statement that declares the index, and nothing is written', async () => {
+			const createFresh = create(PersonTable)
+				.content(param('fresh', PersonCreate))
+				.build('createFresh');
+			const createTeamOnly = create(TeamTable)
+				.content(param('team', TeamCreate))
+				.build('createTeamOnly');
+			const createDup = create(PersonTable)
+				.content(param('person', PersonCreate))
+				.build('createDupInTransaction');
+			const error = await failure(
+				client.transaction([
+					bind(createTeamOnly, { team: { name: 'never' } }),
+					bind(createDup, { person: { ...person('Dup2'), email } }),
+				]),
+			);
+			expectConflict(error, 'createDupInTransaction', 'uniq_email');
+			const twice = await failure(
+				client.transaction([
+					bind(createFresh, { fresh: person('Fresh2') }),
+					bind(createDup, { person: { ...person('Dup3'), email } }),
+				]),
+			);
+			expectConflict(
+				twice,
+				'one of `createFresh`, `createDupInTransaction`',
+				'uniq_email',
+			);
+			expect(
+				await ok(client.run(byEmail, { email: 'fresh2@example.com' })),
+			).toBeUndefined();
 		});
 	});
 });

@@ -84,6 +84,11 @@ export const StatementTypeId = '~effect-surrealkit/Statement';
  *   derives it; `make` takes it as declared).
  * - `throws`: the `THROW` messages the text can raise, which a client
  *   surfaces as a typed error rather than a request failure.
+ * - `uniqueIndexes`: the unique indexes a write of the text can duplicate a
+ *   value of, by name (absent when none), which a client surfaces as a typed
+ *   `StatementIndexConflict` rather than a request failure. Write builders
+ *   take them from the table's `indexes`; `make` and `sequence` take them as
+ *   declared.
  * - `defines`: the names the text `LET`s at the top level. Statements in one
  *   transaction share one variable scope, so a client refuses to bind a name
  *   another statement of the same transaction defines.
@@ -118,6 +123,7 @@ export interface Statement<
 	P extends Params = Params,
 	R extends Codec = Codec,
 	Throws extends string = never,
+	Unique extends string = never,
 > {
 	readonly [StatementTypeId]: typeof StatementTypeId;
 	readonly name: string;
@@ -127,6 +133,7 @@ export interface Statement<
 	readonly slots: number;
 	readonly valueSlot: number;
 	readonly throws: ReadonlyArray<Throws>;
+	readonly uniqueIndexes?: ReadonlyArray<Unique>;
 	readonly defines: ReadonlyArray<string>;
 	readonly transactional: boolean;
 	readonly writes?: boolean;
@@ -156,15 +163,20 @@ export interface ThrowSite {
 	readonly lines: ReadonlyArray<number>;
 }
 
-/** Any statement, whatever it binds, returns and throws. */
-export type AnyStatement = Statement<Params, Codec, string>;
+/** Any statement, whatever it binds, returns, throws and can duplicate. */
+export type AnyStatement = Statement<Params, Codec, string, string>;
 
 /** The decoded result of a statement. */
 export type Result<S> =
-	S extends Statement<Params, infer R, string> ? R['Type'] : never;
+	S extends Statement<Params, infer R, string, string> ? R['Type'] : never;
 
 /** The messages a statement declares it can `THROW`. */
-export type Thrown<S> = S extends Statement<Params, Codec, infer T> ? T : never;
+export type Thrown<S> =
+	S extends Statement<Params, Codec, infer T, string> ? T : never;
+
+/** The unique indexes a statement declares it can duplicate a value of. */
+export type UniqueIndexes<S> =
+	S extends Statement<Params, Codec, string, infer U> ? U : never;
 
 export const isStatement = (value: unknown): value is AnyStatement =>
 	typeof value === 'object' && value !== null && StatementTypeId in value;
@@ -259,6 +271,24 @@ const assertStatement = (statement: AnyStatement): void => {
 	}
 	for (const name of Object.keys(statement.params)) assertBindingName(name);
 	for (const name of statement.defines) assertIdentifier(name);
+};
+
+/**
+ * A unique index is declared by a name, and only by a statement that may
+ * write: one that certainly does not write cannot duplicate a value.
+ */
+const assertUniqueIndexes = (statement: AnyStatement): void => {
+	const declared = statement.uniqueIndexes ?? [];
+	if (declared.some((index) => index.length === 0)) {
+		throw new RangeError(
+			`statement \`${statement.name}\` declares a unique index with no name`,
+		);
+	}
+	if (declared.length > 0 && statement.writes === false) {
+		throw new RangeError(
+			`statement \`${statement.name}\` is declared not to write, so it cannot duplicate a value of a unique index; remove \`uniqueIndexes\` or declare \`writes\``,
+		);
+	}
 };
 
 const wordChar = /[A-Za-z0-9_]/u;
@@ -379,6 +409,7 @@ export const make = <
 	const P extends Params,
 	R extends Codec,
 	const Throws extends string = never,
+	const Unique extends string = never,
 >(options: {
 	readonly name?: string;
 	readonly sql: string;
@@ -388,6 +419,12 @@ export const make = <
 	/** The 1-based result `result` decodes, in `1..slots`. Default `slots`. */
 	readonly valueSlot?: number;
 	readonly throws?: ReadonlyArray<Throws>;
+	/**
+	 * The unique indexes a write of the text can duplicate a value of, by
+	 * name. A duplicate on one of them fails with `StatementIndexConflict`,
+	 * on any other with `StatementRequestError`. Default none.
+	 */
+	readonly uniqueIndexes?: ReadonlyArray<Unique>;
 	/** The names the text `LET`s at the top level. Default none. */
 	readonly defines?: ReadonlyArray<string>;
 	/** The text writes its own `BEGIN`, `COMMIT` or `CANCEL`. Default false. */
@@ -414,8 +451,9 @@ export const make = <
 	readonly openTargets?: boolean;
 	/** What each binding is used as, where known. Default unknown. */
 	readonly uses?: BindingUses;
-}): Statement<P, R, Throws> => {
-	const statement: Statement<P, R, Throws> = {
+}): Statement<P, R, Throws, Unique> => {
+	const uniqueIndexes = [...new Set(options.uniqueIndexes ?? [])].sort();
+	const statement: Statement<P, R, Throws, Unique> = {
 		[StatementTypeId]: StatementTypeId,
 		name: options.name ?? 'statement',
 		sql: terminated(options.sql),
@@ -426,6 +464,7 @@ export const make = <
 		slots: options.slots ?? 1,
 		valueSlot: options.valueSlot ?? options.slots ?? 1,
 		throws: options.throws ?? [],
+		...(uniqueIndexes.length > 0 && { uniqueIndexes }),
 		defines: options.defines ?? [],
 		transactional: options.transactional ?? false,
 		...(options.writes !== undefined && { writes: options.writes }),
@@ -445,6 +484,7 @@ export const make = <
 		...(options.uses !== undefined && { uses: options.uses }),
 	};
 	assertStatement(statement);
+	assertUniqueIndexes(statement);
 	assertResolved(options.params, `statement \`${statement.name}\``);
 	if (options.defines === undefined) {
 		const { lets } = scanTopLevel(statement.sql);

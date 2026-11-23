@@ -27,6 +27,7 @@ export {
 	stream,
 	type ThrownByAny,
 	transaction,
+	type UniqueIndexesOfAny,
 	withTransaction,
 } from './client.js';
 export {
@@ -37,6 +38,8 @@ export {
 	StatementEmptyResult,
 	StatementEncodeError,
 	type StatementError,
+	StatementIndexConflict,
+	StatementRecordExists,
 	StatementRequestError,
 	StatementScopeError,
 	StatementThrown,
