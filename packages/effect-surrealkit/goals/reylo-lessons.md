@@ -58,7 +58,7 @@ Verified on 2026-11-23 against this branch at `88d37cc`. Verify each row again b
 | At `5550053` the package gate passes on the embedded engine: 1,838 tests passed, 51 skipped, none failed. | `bun run lint`, `bun run typecheck` and `bun run test` on 2026-11-23 |
 | `RolloutSpec.renames` exists, is documented as reserved, and execution ignores it. | `crates/surrealkit/src/rollout.rs:469-471` |
 | The root README says a field rename needs a hand-written `UPDATE` in a `run_sql` step. | Root `README.md:1013` |
-| Rollouts have 51 example tests in three files and no property test. The crate has no property-testing dev-dependency. | `crates/surrealkit/tests/rollout_cli.rs`, `rollout_catchup.rs`, `migrate_rows.rs`; `crates/surrealkit/Cargo.toml`, `[dev-dependencies]` |
+| Rollouts have 61 example tests in three files and, since lane L12, a property test over generated schema pairs with `proptest` as a dev-dependency. | `crates/surrealkit/tests/rollout_cli.rs`, `rollout_catchup.rs`, `migrate_rows.rs`, `rollout_properties.rs`; `crates/surrealkit/Cargo.toml`, `[dev-dependencies]` |
 | The repository has no agent skill, `AGENTS.md` or `llms.txt`. The package README is 2,619 lines. | `find` from the repository root |
 
 Everything marked measured above ran on the embedded 4.0.1 engine only. A lane that relies on one of those rows measures it on SurrealDB 3.3 first.
@@ -445,6 +445,42 @@ Finding, 2026-11-23, by lane L12's property 4 (a rollout that records itself as 
 - On the embedded engine, for each pair: after `plan` and `up --complete` the catalog equals that of a fresh database synced to the second version; planning again produces nothing; a row's values in fields whose definition did not change are equal before and after; and for a plan the tool reports as reversible, `rollback` after `start` restores the first version's catalog and rows.
 - A failure is shrunk, and its minimal case is committed as a fixture that runs as an ordinary test from then on.
 - The number of cases is set by an environment variable. The default's measured run time is recorded in the test file's header.
+
+Admission note, 2026-11-23, at `06c250d`:
+
+1. **What is worse today?** Yes. Rollouts have example tests only: `crates/surrealkit/tests/rollout_cli.rs`, `rollout_catchup.rs` and `migrate_rows.rs` each fix one hand-picked schema change, and `crates/surrealkit/Cargo.toml` had no property-testing dev-dependency. No test checked that `up --complete` reaches the catalog a fresh sync reaches, or that `rollback` restores rows, for changes nobody wrote down. Measured: the first run of the properties found a defect no example covered (below).
+2. **Is this the better way?** Yes. The alternative is more example tests. Each covers one combination, while the interactions (a rename beside a table mode, an index on a removed field, a modification beside an addition) grow with the product of the entity kinds, and L11 had just added one more. A generator of bounded pairs covers the combinations, and a failure becomes an example test. SurrealKit and the engine offer nothing for this job.
+3. **With SurrealDB or against it?** Neither: the lane adds tests only, on the embedded engine (surrealdb-core 4.0, the crate's engine). The generator keeps to what `plan` and the engine accept at level 4, as the root README, "Migrating existing records", documents. Not applicable to 3.3: the crate needs 4.0.
+
+**State: closed, implemented.**
+
+What was built, in `crates/surrealkit/tests/rollout_properties.rs`:
+
+- `proptest` 1.9.0 as a dev-dependency with `default-features = false, features = ['std']`. The lockfile gains `proptest`, `rand_xorshift` and `unarray` and nothing else changes.
+- A generator of bounded pairs: up to three tables, `SCHEMAFULL` or `SCHEMALESS`, each with up to four fields over `int`, `string` and `bool` (optional or not) and up to two indexes (unique or not), with additions, removals, modifications (comments, assertions, index uniqueness) and at most one rename per table, and up to three records per table under the first version. A pure normalizer keeps each pair to what `plan` accepts; `generated_pairs_keep_to_what_plan_accepts` checks one of its rules without an engine.
+- The four properties on the embedded engine, against three in-memory datastores per case: after `plan` and `up --complete` the catalog equals a fresh sync of the second version; planning again gives a manifest with no steps and no renames; values in fields whose definition did not change, and in a renamed field, are kept; and for a rollout that records `full` or `definition_only`, `rollback` after `start` restores the first version's catalog and rows. A rename `plan` must refuse is checked as refused, with no manifest written.
+- The catalog is `INFO FOR DB`, each table's `INFO FOR TABLE` and SurrealKit's `__entity` schema rows. The table's `migrations` entry is left out: it counts every schema change and records each level-4 `REMOVE FIELD`, so it is history a fresh database cannot share. Both differences were the generator's first two failures and were not product defects.
+- Shrinking is proptest's. `SURREALKIT_ROLLOUT_PROPTEST_CASES` sets the case count; failure persistence is off, and a failure is committed as an ordinary test under `regressions`.
+
+Finding: property 4 failed on a rename on a `SCHEMALESS` table, whose rollback left the copied values. The shrinker stopped at three tables; the case was reduced by hand to one, and is committed as `regressions::a_rename_on_a_schemaless_table_is_refused_rather_than_left_behind_by_rollback` beside its `SCHEMAFULL` counterpart. The fix narrowed lane L11; see "Finding" in L11's section.
+
+What was measured:
+
+- The default, 12 cases, took 16.5 to 17.3 s over three runs of the property test alone, about 1.4 s a case (debug build, Apple silicon). That is the time it adds to `cargo test --workspace --all-features --locked`.
+- `SURREALKIT_ROLLOUT_PROPTEST_CASES=200` passed in 291 s, with no further finding.
+- The first-question measurement again: before the lane no test exercised these combinations; after it the properties hold for every generated pair, and the defect they found is fixed.
+
+Gate, 2026-11-23, rustup 1.95.0 with `~/.cargo/bin` first on `PATH`, on the tree of the L12 commit, which sits on the commit that narrowed L11. Every credential-free step of `.github/workflows/cargo.yml` passed:
+
+- the three `cargo clippy` invocations with `-D warnings`
+- `cargo doc` with `RUSTDOCFLAGS=-D warnings`
+- `cargo check` of the binary with only `cli`
+- `cargo fmt --all --check`
+- `cargo test --workspace --all-features --locked`: 1,060 passed, 0 failed, 8 ignored, in 152 s including the build
+- `cargo publish --workspace --dry-run --locked`, with `--allow-dirty` because the change was not yet committed
+- the package contents check: `build.rs` and 23 `templates/` files
+
+Not proven: hosted CI has not run this revision.
 
 ### L13. Ask SurrealDB for structured constraint errors
 
