@@ -134,6 +134,15 @@ describe('analyze: read tables', () => {
 		expect(names('RETURN gizmo:one;')).toEqual(none);
 	});
 
+	it.each([
+		'SELECT * FROM gizmo:1 FOR UPDATE;',
+		'SELECT * FROM ONLY gizmo:1 WHERE a = $a FOR UPDATE;',
+		'SELECT * FROM gizmo:1, gizmo:2 FOR UPDATE EXPLAIN;',
+		"SELECT * FROM ONLY type::record('gizmo', $k) FOR UPDATE;",
+	])('the record ids before FOR UPDATE: %s', (sql) => {
+		expect(names(sql)).toEqual({ ...none, read: ['gizmo'] });
+	});
+
 	it('a table both read and written is in both lists', () => {
 		expect(
 			names('UPDATE gizmo SET n = n + 1; SELECT * FROM gizmo;'),
@@ -158,6 +167,15 @@ describe('analyze: open targets', () => {
 		'SELECT * FROM gizmo WHERE x IN (SELECT * FROM $other);',
 		'SELECT from FROM gizmo;',
 		'SELECT VALUE ->?->gadget FROM gizmo;',
+		// FOR UPDATE the engines refuse: on a table, a range, an array, with
+		// GROUP, SPLIT or VERSION, or followed by another clause.
+		'SELECT * FROM gizmo FOR UPDATE;',
+		'SELECT * FROM gizmo WHERE a = 1 FOR UPDATE;',
+		"SELECT * FROM type::table('gizmo') FOR UPDATE;",
+		'SELECT * FROM gizmo:1..5 FOR UPDATE;',
+		'SELECT * FROM [gizmo:1] FOR UPDATE;',
+		'SELECT * FROM gizmo:1 GROUP BY a FOR UPDATE;',
+		'SELECT * FROM gizmo:1 FOR UPDATE FETCH a;',
 	])('%s', (sql) => {
 		expect(analyzeSync(sql).openTargets).toBe(true);
 	});

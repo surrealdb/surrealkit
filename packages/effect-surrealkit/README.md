@@ -1357,8 +1357,20 @@ strings and comments:
   group, or `type::record('table', …)`, `type::thing('table', …)` or
   `type::table('table')` with a plain string literal; then the end of the
   query or one of its clauses (`WHERE`, `SPLIT`, `GROUP`, `ORDER`, `LIMIT`,
-  `START`, `FETCH`, `TIMEOUT`, `PARALLEL`, `EXPLAIN`, `WITH`, `VERSION`,
-  `TEMPFILES`).
+  `START`, `FETCH`, `TIMEOUT`, `EXPLAIN`, `WITH`, `VERSION`, `TEMPFILES`);
+- it has no `PARALLEL` after `FROM`, a parse error on both versions;
+- a `FOR UPDATE` is read only in the form both versions accept: every
+  target a record id (`table:key`, `type::record` or `type::thing`), no
+  `GROUP`, `SPLIT` or `VERSION`, and nothing after it but `TEMPFILES` and
+  `EXPLAIN [FULL]`. The lock changes neither the target nor the fields
+  returned. On a table, a range or an array the engine refuses it
+  ("requires record ids as targets"), and the analyzer records nothing.
+
+A pinned engine test runs each of these clauses on both versions and
+checks that it returns the same fields as the query without it (`EXPLAIN`
+returns a plan, which names the same projection); `VERSION`, which needs a
+versioned store, was checked the same way on one. The same `FOR UPDATE`
+rule decides the tables a text reads and the binding uses of its `WHERE`.
 
 Of such a `SELECT`, each projected item of exactly one of these forms is
 recorded, against that table:

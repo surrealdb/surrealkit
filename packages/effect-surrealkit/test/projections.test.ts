@@ -278,6 +278,73 @@ describe('analyze: projected fields', () => {
 	});
 });
 
+/**
+ * The clauses that may follow a SELECT's target. Each is read through only
+ * when both engines return the same fields with it as without it
+ * (`test/projections-engine.test.ts`); `FOR UPDATE` only after record ids,
+ * the one target both engines accept it with.
+ */
+describe('analyze: trailing clauses of a SELECT', () => {
+	it.each([
+		'SELECT name, age FROM person WHERE age > $min TIMEOUT 1s;',
+		'SELECT name, age FROM person WHERE age > $min TEMPFILES;',
+		'SELECT name, age FROM person WITH INDEX by_age WHERE age > $min;',
+		'SELECT name, age FROM person WITH NOINDEX WHERE age > $min;',
+		'SELECT name, age FROM person WHERE age > $min EXPLAIN;',
+		'SELECT name, age FROM person WHERE age > $min EXPLAIN FULL;',
+		'SELECT name, age FROM person VERSION d"2026-01-01T00:00:00Z";',
+		'SELECT name, age FROM person:1 FOR UPDATE;',
+		'SELECT name, age FROM person:1 for update;',
+		'SELECT name, age FROM ONLY person:1 WHERE age > $min FOR UPDATE;',
+		'SELECT name, age FROM person:1 ORDER BY age LIMIT 1 START 0 FOR UPDATE;',
+		'SELECT name, age FROM ONLY person:1 TIMEOUT 1s FOR UPDATE;',
+		'SELECT name, age FROM ONLY person:1 WITH NOINDEX FOR UPDATE;',
+		'SELECT name, age FROM ONLY person:1 FETCH team FOR UPDATE;',
+		'SELECT name, age FROM ONLY person:1 FOR UPDATE EXPLAIN;',
+		'SELECT name, age FROM ONLY person:1 FOR UPDATE EXPLAIN FULL;',
+		'SELECT name, age FROM ONLY person:1 FOR UPDATE TEMPFILES;',
+		"SELECT name, age FROM ONLY type::record('person', $key) FOR UPDATE;",
+		"LET $row = (SELECT name, age FROM ONLY type::record('person', $key) FOR UPDATE);",
+	])('reads the projection through %s', (sql) => {
+		expect(projected(sql)).toEqual([
+			at('person', 'age'),
+			at('person', 'name'),
+		]);
+	});
+
+	it('reads `VALUE` through FOR UPDATE', () => {
+		expect(
+			projected(
+				"LET $p = (SELECT VALUE enabled FROM ONLY type::record('principal', $id) FOR UPDATE);",
+			),
+		).toEqual([at('principal', 'enabled')]);
+	});
+
+	describe('records nothing', () => {
+		it.each([
+			// Both engines: "SELECT ... FOR UPDATE requires record ids as targets".
+			'SELECT name FROM person FOR UPDATE;',
+			'SELECT name FROM ONLY person WHERE age > $min FOR UPDATE;',
+			"SELECT name FROM type::table('person') FOR UPDATE;",
+			'SELECT name FROM person:1..5 FOR UPDATE;',
+			// "cannot be combined with GROUP BY or SPLIT", "… with VERSION".
+			'SELECT name FROM person:1 GROUP BY name FOR UPDATE;',
+			'SELECT name FROM person:1 SPLIT name FOR UPDATE;',
+			'SELECT name FROM person:1 VERSION d"2026-01-01T00:00:00Z" FOR UPDATE;',
+			// Parse errors on both engines.
+			'SELECT name FROM ONLY person:1 FOR UPDATE FETCH team;',
+			'SELECT name FROM ONLY person:1 EXPLAIN FOR UPDATE;',
+			'SELECT name FROM ONLY person:1 FOR UPDATE WHERE age > $min;',
+			'SELECT name FROM person:1 FOR SHARE;',
+			'SELECT name FROM person:1 FOR;',
+			'SELECT name FROM person PARALLEL;',
+			'SELECT name FROM person WHERE age > $min PARALLEL;',
+		])('for %s', (sql) => {
+			expect(projected(sql)).toEqual([]);
+		});
+	});
+});
+
 const bindsDocument = join(import.meta.dirname, 'fixtures', 'binds.v2.json');
 const declared = async (): Promise<DeclaredNames> =>
 	declaredNames(

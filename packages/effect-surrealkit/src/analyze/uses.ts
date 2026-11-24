@@ -284,6 +284,10 @@ export const analyzeUses = (
 		);
 	};
 
+	/** `FOR UPDATE` at `at`, which ends a `SELECT` (`lock.ts`). */
+	const forUpdateAt = (at: number): boolean =>
+		upper(tokens[at]) === 'FOR' && upper(tokens[at + 1]) === 'UPDATE';
+
 	/** Whether a comparison has ended at the token at `at`. */
 	const endsAt = (at: number): boolean => {
 		const token = tokens[at];
@@ -292,7 +296,8 @@ export const analyzeUses = (
 			isPunct(token, ';') ||
 			isPunct(token, ')') ||
 			isPunct(token, ',') ||
-			AFTER.has(upper(token))
+			AFTER.has(upper(token)) ||
+			forUpdateAt(at)
 		);
 	};
 
@@ -339,6 +344,10 @@ export const analyzeUses = (
 				) {
 					clause = token.value.toUpperCase();
 					if (clause === 'WHERE' || clause === 'SET') clauses++;
+					continue;
+				}
+				if (depth === 0 && forUpdateAt(i)) {
+					clause = 'FOR';
 					continue;
 				}
 				if (!certain || table === undefined || clauses > 1) continue;

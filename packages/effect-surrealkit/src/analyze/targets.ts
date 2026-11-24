@@ -5,6 +5,7 @@
  * than guess.
  */
 import type { Token } from './lexer.js';
+import { lockOf } from './lock.js';
 
 /** The names a text uses, where each is first used, and what it defines. */
 export interface Targets {
@@ -190,6 +191,8 @@ export const analyzeTargets = (tokens: ReadonlyArray<Token>): Targets => {
 				readonly kind: 'table';
 				readonly name: string;
 				readonly next: number;
+				/** A record id: `table:key`, `type::record` or `type::thing`. */
+				readonly record: boolean;
 		  }
 		| { readonly kind: 'subquery'; readonly next: number }
 		| { readonly kind: 'open' };
@@ -213,7 +216,12 @@ export const analyzeTargets = (tokens: ReadonlyArray<Token>): Targets => {
 				isPlainString(literal) &&
 				(fn === 'table' ? isPunct(after, ')') : isPunct(after, ','));
 			return certain
-				? { kind: 'table', name: literal.value, next }
+				? {
+						kind: 'table',
+						name: literal.value,
+						next,
+						record: fn !== 'table',
+					}
 				: { kind: 'open' };
 		}
 		return undefined;
@@ -256,9 +264,14 @@ export const analyzeTargets = (tokens: ReadonlyArray<Token>): Targets => {
 			const next = isOpen(keyToken) ? pastGroup(key) : key + 1;
 			if (!isOpen(keyToken) && keyToken.kind === 'punct')
 				return { kind: 'open' };
-			return { kind: 'table', name: token.value, next };
+			return { kind: 'table', name: token.value, next, record: true };
 		}
-		return { kind: 'table', name: token.value, next: at + 1 };
+		return {
+			kind: 'table',
+			name: token.value,
+			next: at + 1,
+			record: false,
+		};
 	};
 
 	/** Whether the token at `at` ends a target. */
@@ -276,18 +289,24 @@ export const analyzeTargets = (tokens: ReadonlyArray<Token>): Targets => {
 	/**
 	 * A comma-separated list of targets from `at` up to a clause: each
 	 * static name is added to `into`; anything else sets `openTargets`.
+	 * With a `FOR UPDATE` at `lock`, each target must be a record id, the
+	 * only target both engines lock.
 	 */
 	const targetList = (
 		at: number,
 		into: Map<string, number>,
 		subqueries: boolean,
+		lock?: number,
 	): void => {
 		let j = at;
 		if (upper(tokens[j]) === 'ONLY') j++;
 		const found: Array<{ name: string; token: Token }> = [];
 		for (;;) {
 			const item = target(j, subqueries);
-			if (item.kind === 'open') {
+			if (
+				item.kind === 'open' ||
+				(lock !== undefined && !(item.kind === 'table' && item.record))
+			) {
 				open = true;
 				return;
 			}
@@ -300,7 +319,7 @@ export const analyzeTargets = (tokens: ReadonlyArray<Token>): Targets => {
 				j++;
 				continue;
 			}
-			if (!ends(j)) {
+			if (!ends(j) && j !== lock) {
 				open = true;
 				return;
 			}
@@ -324,7 +343,17 @@ export const analyzeTargets = (tokens: ReadonlyArray<Token>): Targets => {
 			open = true;
 			return;
 		}
-		targetList((froms[0] as number) + 1, readAt, true);
+		const lock = lockOf(tokens, at, end);
+		if (lock.kind === 'refused') {
+			open = true;
+			return;
+		}
+		targetList(
+			(froms[0] as number) + 1,
+			readAt,
+			true,
+			lock.kind === 'locked' ? lock.at : undefined,
+		);
 	};
 
 	const write = (at: number, word: string): void => {
@@ -515,6 +544,8 @@ export const analyzeTargets = (tokens: ReadonlyArray<Token>): Targets => {
 				select(i);
 				continue;
 			}
+			// The lock clause of a SELECT (`lock.ts`), never a statement.
+			if (word === 'UPDATE' && upper(tokens[i - 1]) === 'FOR') continue;
 			if (WRITES.has(word)) {
 				if (statementPosition(i) || isPunct(tokens[i - 1], '[')) {
 					write(i, word);

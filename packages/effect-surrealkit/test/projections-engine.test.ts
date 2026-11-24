@@ -223,3 +223,99 @@ describe.skipIf(!engineConfigured)(
 		});
 	},
 );
+
+/**
+ * The clauses that may follow a SELECT's target, on both engines: each the
+ * analyzer reads through returns the same fields as the query without it
+ * (EXPLAIN, a plan, names the same projection), and each it refuses is one
+ * the engine refuses. VERSION needs a versioned store, so it is pinned by
+ * the probe recorded in lane L04 of `goals/reylo-lessons.md` instead.
+ */
+describe.skipIf(!engineConfigured)('a trailing clause of a SELECT', () => {
+	let engine: Engine;
+
+	beforeAll(async () => {
+		engine = await startEngine();
+		await within(
+			engine.db
+				.query(
+					'DEFINE TABLE ledger SCHEMAFULL; DEFINE FIELD alpha ON ledger TYPE int; DEFINE FIELD beta ON ledger TYPE int; DEFINE FIELD gamma ON ledger TYPE int; DEFINE INDEX by_gamma ON ledger FIELDS gamma; CREATE ledger:1 SET alpha = 1, beta = 2, gamma = 3; CREATE ledger:2 SET alpha = 4, beta = 5, gamma = 6;',
+				)
+				.collect(),
+		);
+	});
+	afterAll(async () => {
+		await engine?.stop();
+	});
+
+	const first = async (sql: string): Promise<unknown> =>
+		(await within(engine.db.query(sql).collect()))[0];
+
+	const fields = [
+		{ table: 'ledger', field: 'alpha', line: 1 },
+		{ table: 'ledger', field: 'beta', line: 1 },
+	];
+
+	it.each([
+		[' WHERE gamma = 3 TIMEOUT 1s', ' WHERE gamma = 3'],
+		[' WHERE gamma = 3 TEMPFILES', ' WHERE gamma = 3'],
+		[' WITH INDEX by_gamma WHERE gamma = 3', ' WHERE gamma = 3'],
+		[' WITH NOINDEX WHERE gamma = 3', ' WHERE gamma = 3'],
+		[' WHERE gamma = 3 FETCH alpha', ' WHERE gamma = 3'],
+		[':1 FOR UPDATE', ':1'],
+		[':1 WHERE gamma = 3 FOR UPDATE', ':1 WHERE gamma = 3'],
+		[':1 WHERE gamma = 4 FOR UPDATE', ':1 WHERE gamma = 4'],
+		[':1 ORDER BY alpha LIMIT 1 START 0 FOR UPDATE', ':1'],
+		[':1 TIMEOUT 1s FOR UPDATE', ':1'],
+		[':1 WITH NOINDEX FOR UPDATE', ':1'],
+		[':1 FETCH alpha FOR UPDATE', ':1'],
+		[':1 FOR UPDATE TEMPFILES', ':1'],
+	])('reads through ledger%s: the same rows and fields', async (clause, plain) => {
+		for (const only of ['', 'ONLY ']) {
+			if (only !== '' && !clause.startsWith(':')) continue;
+			const sql = `SELECT alpha, beta FROM ${only}ledger${clause};`;
+			const without = `SELECT alpha, beta FROM ${only}ledger${plain};`;
+			expect(await first(sql), sql).toEqual(await first(without));
+			expect(analyzeSync(sql).projected, sql).toEqual(fields);
+		}
+	});
+
+	it('reads VALUE through FOR UPDATE on a literal type::record', async () => {
+		const sql =
+			"SELECT VALUE alpha FROM ONLY type::record('ledger', 1) FOR UPDATE;";
+		expect(await first(sql)).toEqual(1);
+		expect(analyzeSync(sql).projected).toEqual([fields[0]]);
+	});
+
+	it.each([
+		'ledger WHERE gamma = 3 EXPLAIN',
+		'ledger WHERE gamma = 3 EXPLAIN FULL',
+		'ONLY ledger:1 FOR UPDATE EXPLAIN',
+		'ONLY ledger:1 FOR UPDATE EXPLAIN FULL',
+	])('reads through %s: a plan that projects the same fields', async (rest) => {
+		const sql = `SELECT alpha, beta FROM ${rest};`;
+		const plan = JSON.stringify(await first(sql));
+		expect(plan).toMatch(/\balpha\b/u);
+		expect(plan).toMatch(/\bbeta\b/u);
+		expect(analyzeSync(sql).projected).toEqual(fields);
+	});
+
+	it.each([
+		'ledger FOR UPDATE',
+		'ledger WHERE gamma = 3 FOR UPDATE',
+		"type::table('ledger') FOR UPDATE",
+		'ledger:1..3 FOR UPDATE',
+		'ledger:1 GROUP BY alpha FOR UPDATE',
+		'ledger:1 SPLIT alpha FOR UPDATE',
+		'ledger:1 VERSION d"2099-01-01T00:00:00Z" FOR UPDATE',
+		'ONLY ledger:1 FOR UPDATE FETCH alpha',
+		'ONLY ledger:1 EXPLAIN FOR UPDATE',
+		'ledger:1 FOR SHARE',
+		'ledger PARALLEL',
+		'ledger WHERE gamma = 3 PARALLEL',
+	])('refuses %s, which the engine refuses too', async (rest) => {
+		const sql = `SELECT alpha, beta FROM ${rest};`;
+		await expect(first(sql), sql).rejects.toThrow();
+		expect(analyzeSync(sql).projected, sql).toEqual([]);
+	});
+});

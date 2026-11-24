@@ -4,6 +4,7 @@
  * Anything else records nothing: refuse rather than guess.
  */
 import type { Token } from './lexer.js';
+import { lockOf } from './lock.js';
 
 /** One projected field (`*` for all of them), at the 1-based line of its name. */
 export interface ProjectedField {
@@ -28,7 +29,13 @@ const isPlainString = (token: Token | undefined): token is Token =>
 	token?.kind === 'string' &&
 	(token.prefix === undefined || token.prefix === 's');
 
-/** Words that may follow a `SELECT`'s target. */
+/**
+ * Words that may follow a `SELECT`'s target, each read through because it
+ * changes neither the target nor the projection: both engines return the
+ * same fields with it as without it (`test/projections-engine.test.ts`).
+ * `PARALLEL` is not one: both engines refuse it as a parse error. `FOR
+ * UPDATE` is read by {@link lockOf}, after record ids only.
+ */
 const AFTER_TARGET: ReadonlySet<string> = new Set([
 	'WHERE',
 	'SPLIT',
@@ -38,7 +45,6 @@ const AFTER_TARGET: ReadonlySet<string> = new Set([
 	'START',
 	'FETCH',
 	'TIMEOUT',
-	'PARALLEL',
 	'EXPLAIN',
 	'WITH',
 	'VERSION',
@@ -89,13 +95,19 @@ export const analyzeProjections = (
 	 * `type::record`, `type::thing` or `type::table` with a plain string
 	 * literal, after an optional `ONLY`, and followed by the query's end or
 	 * one of its clauses. Anything else, a second target included, is not
-	 * certain.
+	 * certain. With a `FOR UPDATE` at `lock`, the target must be a record
+	 * id, the only target both engines lock.
 	 */
-	const targetTable = (at: number, end: number): string | undefined => {
+	const targetTable = (
+		at: number,
+		end: number,
+		lock: number | undefined,
+	): string | undefined => {
 		let j = at;
 		if (upper(tokens[j]) === 'ONLY') j++;
 		const token = tokens[j];
 		let table: string | undefined;
+		let record = false;
 		if (
 			token?.kind === 'word' &&
 			token.value.toLowerCase() === 'type' &&
@@ -112,6 +124,7 @@ export const analyzeProjections = (
 			)
 				return undefined;
 			table = (tokens[j + 5] as Token).value;
+			record = name !== 'table';
 			j = closing(j + 4) + 1;
 		} else {
 			table = bareName(j);
@@ -123,10 +136,15 @@ export const analyzeProjections = (
 				if (key === undefined || (key.kind === 'punct' && !isOpen(key)))
 					return undefined;
 				j = isOpen(key) ? closing(j + 1) + 1 : j + 2;
+				record = true;
 			}
 		}
+		if (lock !== undefined && !record) return undefined;
 		const next = tokens[j];
-		return j >= end || isPunct(next, ';') || AFTER_TARGET.has(upper(next))
+		return j >= end ||
+			j === lock ||
+			isPunct(next, ';') ||
+			AFTER_TARGET.has(upper(next))
 			? table
 			: undefined;
 	};
@@ -166,7 +184,23 @@ export const analyzeProjections = (
 		// No FROM, or a field named `from`: not certain where the list ends.
 		if (froms.length !== 1) return;
 		const at = froms[0] as number;
-		const table = targetTable(at + 1, end);
+		const lock = lockOf(tokens, from, end);
+		if (lock.kind === 'refused') return;
+		// `PARALLEL`, a parse error on both engines, anywhere after FROM.
+		for (let j = at + 1; j < end; j++) {
+			if (isOpen(tokens[j])) j = closing(j);
+			else if (
+				upper(tokens[j]) === 'PARALLEL' &&
+				!isPunct(tokens[j - 1], '.') &&
+				!isPunct(tokens[j - 1], ':')
+			)
+				return;
+		}
+		const table = targetTable(
+			at + 1,
+			end,
+			lock.kind === 'locked' ? lock.at : undefined,
+		);
 		if (table === undefined) return;
 		const fields: Array<{ field: string; line: number }> = [];
 		if (upper(tokens[from + 1]) === 'VALUE') {

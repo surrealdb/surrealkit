@@ -205,6 +205,27 @@ describe('analyze: field uses', () => {
 	])('records nothing for %s', (_, sql) => {
 		expect(uses(sql)).toEqual({});
 	});
+
+	it.each([
+		'SELECT * FROM gizmo:1 WHERE a = $a AND $b < b FOR UPDATE;',
+		'SELECT * FROM ONLY gizmo:1 WHERE a = $a AND $b < b for update;',
+		'SELECT * FROM ONLY gizmo:1 WHERE a = $a AND $b < b FOR UPDATE EXPLAIN;',
+		"LET $row = (SELECT * FROM ONLY type::record('gizmo', 1) WHERE a = $a AND $b < b FOR UPDATE);",
+	])('comparisons before FOR UPDATE on a record id: %s', (sql) => {
+		expect(uses(sql)).toEqual({
+			a: [field('gizmo', 'a')],
+			b: [field('gizmo', 'b')],
+		});
+	});
+
+	it.each([
+		// The engines refuse FOR UPDATE on a table: it needs record ids.
+		'SELECT * FROM gizmo WHERE a = $a FOR UPDATE;',
+		'SELECT * FROM gizmo:1 WHERE a = $a GROUP BY a FOR UPDATE;',
+		'SELECT * FROM gizmo:1 WHERE a = $a FOR UPDATE FETCH b;',
+	])('records nothing before FOR UPDATE the engines refuse: %s', (sql) => {
+		expect(uses(sql)).toEqual({});
+	});
 });
 
 describe('part and sequence: uses', () => {
