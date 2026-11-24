@@ -8,7 +8,9 @@ import type { Plugin, ResolvedConfig, ViteDevServer } from 'vite';
 import { killTree, stopOnExit } from './process.js';
 
 // Inlined from Vite so that nothing is imported from `vite` at runtime: the
-// plugin only depends on Vite's types, never on its export surface.
+// plugin only depends on Vite's types, never on its export surface. The one
+// exception is the `surql` option, which imports `transformWithOxc` from
+// Vite, and effect-surrealkit's loader, when a `.surql` file is loaded.
 const isWindows = process.platform === 'win32';
 
 function normalizePath(id: string): string {
@@ -180,17 +182,51 @@ function resolveOptions(options: SurrealkitPluginOptions): ResolvedOptions {
 	};
 }
 
-type Mapper = typeof import('effect-surrealkit/mapper');
+/**
+ * What the `surql` option uses from `effect-surrealkit/mapper`, typed here so
+ * that the plugin builds and type-checks without effect-surrealkit.
+ */
+export interface SurqlMapper {
+	/** The TypeScript module of a `.surql` file; throws `SurqlModuleError`. */
+	loadSurqlModule(file: string, options: { tsconfig?: string }): string;
+	/** The `tsconfig.json` and schema documents the file is rendered with. */
+	surqlProjectFor(
+		file: string,
+		tsconfig?: string,
+	): { readonly config?: string; readonly documents: ReadonlyArray<string> };
+}
 
-let mapper: Promise<Mapper> | undefined;
+const MAPPER_MODULE = 'effect-surrealkit/mapper';
 
-/** effect-surrealkit's loader, imported only when `surql` is on. */
-function loadMapper(): Promise<Mapper> {
-	mapper ??= import('effect-surrealkit/mapper').catch((cause: unknown) => {
+let mapper: Promise<SurqlMapper> | undefined;
+
+/**
+ * effect-surrealkit's loader, imported only when `surql` is on. A version
+ * without the loader is refused by name rather than failing later.
+ */
+function loadMapper(): Promise<SurqlMapper> {
+	mapper ??= (import(MAPPER_MODULE) as Promise<Partial<SurqlMapper>>).then(
+		(loaded) => {
+			if (
+				typeof loaded.loadSurqlModule !== 'function' ||
+				typeof loaded.surqlProjectFor !== 'function'
+			)
+				throw new Error(
+					'[vite-plugin-surrealkit] the surql option needs an effect-surrealkit with the .surql loader (effect-surrealkit/mapper exporting loadSurqlModule and surqlProjectFor); the installed one lacks it',
+				);
+			return loaded as SurqlMapper;
+		},
+		(cause: unknown) => {
+			const code = (cause as { code?: unknown }).code;
+			throw new Error(
+				code === 'ERR_PACKAGE_PATH_NOT_EXPORTED'
+					? '[vite-plugin-surrealkit] the surql option needs an effect-surrealkit with the .surql loader; the installed one has no effect-surrealkit/mapper'
+					: `[vite-plugin-surrealkit] the surql option needs effect-surrealkit installed: ${cause instanceof Error ? cause.message : String(cause)}`,
+			);
+		},
+	);
+	mapper.catch(() => {
 		mapper = undefined;
-		throw new Error(
-			`[vite-plugin-surrealkit] the surql option needs effect-surrealkit installed: ${cause instanceof Error ? cause.message : String(cause)}`,
-		);
 	});
 	return mapper;
 }
@@ -627,12 +663,7 @@ export function surrealkitPlugin(
 			if (surql === false || id.startsWith('\0')) return null;
 			const file = id.split('?', 1)[0] ?? id;
 			if (!file.endsWith('.surql')) return null;
-			const {
-				loadSurqlModule,
-				SurqlModuleError,
-				surqlProjectFor,
-				surqlScript,
-			} = await loadMapper();
+			const { loadSurqlModule, surqlProjectFor } = await loadMapper();
 			const tsconfig =
 				surql.tsconfig === undefined
 					? undefined
@@ -640,27 +671,32 @@ export function surrealkitPlugin(
 							config?.root ?? process.cwd(),
 							surql.tsconfig,
 						);
-			// A schema document change renders the module again in dev.
-			for (const document of surqlProjectFor(file, tsconfig).documents) {
+			// The tsconfig.json and the schema documents render the module
+			// again in dev when they change.
+			const project = surqlProjectFor(file, tsconfig);
+			if (project.config !== undefined) this.addWatchFile(project.config);
+			for (const document of project.documents) {
 				this.addWatchFile(document);
 			}
+			let text: string;
 			try {
-				// The mapper's module as JavaScript: Vite's dev server strips
-				// TypeScript only from ids that end in a TypeScript extension.
-				return {
-					code: surqlScript(
-						loadSurqlModule(
-							file,
-							tsconfig === undefined ? {} : { tsconfig },
-						),
-					),
-					moduleType: 'js',
-				};
+				text = loadSurqlModule(
+					file,
+					tsconfig === undefined ? {} : { tsconfig },
+				);
 			} catch (error) {
-				if (error instanceof SurqlModuleError)
+				if (error instanceof Error && error.name === 'SurqlModuleError')
 					this.error(error.message);
 				throw error;
 			}
+			// The mapper's module is TypeScript. Vite's dev server strips
+			// types only from ids with a TypeScript extension, so it is
+			// transformed here, by the same transform, in dev and in builds.
+			const { transformWithOxc } = await import('vite');
+			const script = await transformWithOxc(text, `${file}.ts`, {
+				lang: 'ts',
+			});
+			return { code: script.code, map: script.map, moduleType: 'js' };
 		},
 
 		async buildStart() {

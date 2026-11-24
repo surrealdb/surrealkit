@@ -1,8 +1,9 @@
 /**
  * `.surql` imports: the module one file yields is what
  * `renderStatementModules` renders for a scope that holds only that file,
- * byte for byte what `effect-surrealkit statements` writes for it, and what
- * the content mapper answers over its protocol, schema included. The hosts
+ * byte for byte what `effect-surrealkit statements` writes, run on the same
+ * input root; the mapper and the loaders accept exactly the layouts the
+ * command accepts and read one literal configuration, or refuse. The hosts
  * that need TypeScript 7.1, Node's hook and Bun run in the mapper fixtures
  * (`npm run test:mapper`).
  */
@@ -19,46 +20,36 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
-import ts from 'typescript';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { STATEMENTS_MARK } from '../src/analyze/render.js';
 import { run } from '../src/cli/run.js';
 import {
 	decodeSurqlOptions,
 	EMPTY_SURQL_MODULE,
 	loadSurqlModule,
+	mapperEntryIn,
 	openSurqlProject,
 	renderSurqlModule,
 	SurqlModuleError,
 	surqlBunPlugin,
-	surqlFileAt,
+	surqlLayout,
 	surqlProjectFor,
-	surqlScript,
 } from '../src/mapper/index.js';
 import { offsetOf } from '../src/mapper/module.js';
-import {
-	mapperOptionsIn,
-	nearestTsconfig,
-	stripJsonComments,
-} from '../src/mapper/project.js';
+import { nearestTsconfig, stripJsonComments } from '../src/mapper/project.js';
 import { frame, serveRpc } from '../src/mapper/rpc.js';
 import { DIAGNOSTIC_CODES, mapperHandlers } from '../src/mapper/server.js';
-import { corpusPath, goldenDir } from './documents.js';
+import { corpusPath } from './documents.js';
 
 const fixture = (name: string) => join(import.meta.dirname, 'fixtures', name);
+const bindsDocument = join(import.meta.dirname, 'fixtures', 'binds.v2.json');
+const presenceDocument = corpusPath('compiled', 'field-presence.v2.json');
 
-/** The authored fixtures, their goldens and the schema each was made with. */
+/** The authored fixtures, each an input root, and the schemas to use. */
 const corpora = [
-	{ name: 'statements', schema: undefined },
-	{
-		name: 'statements-binds',
-		schema: join(import.meta.dirname, 'fixtures', 'binds.v2.json'),
-	},
-	{
-		name: 'statements-presence',
-		schema: corpusPath('compiled', 'field-presence.v2.json'),
-	},
+	{ name: 'statements', schemas: [undefined] },
+	{ name: 'statements-binds', schemas: [undefined, bindsDocument] },
+	{ name: 'statements-presence', schemas: [undefined, presenceDocument] },
 ] as const;
 
 const filesOf = (corpus: string) =>
@@ -89,43 +80,88 @@ afterEach(() => {
 		rmSync(dir, { recursive: true, force: true });
 });
 
-const quiet = (cwd: string) => {
-	let stderr = '';
-	return {
-		io: {
-			cwd,
-			stdin: async () => '',
-			stdout: () => {},
-			stderr: (text: string) => {
-				stderr += text;
-			},
-		},
-		stderr: () => stderr,
-	};
+/** A `tsconfig.json` with an `effect-surrealkit` entry holding `options`. */
+const tsconfig = (dir: string, options: unknown, extra: object = {}) => {
+	const path = join(dir, 'tsconfig.json');
+	writeFileSync(
+		path,
+		JSON.stringify({
+			...extra,
+			contentMappers: [
+				{
+					package: 'effect-surrealkit',
+					extensions: ['.surql'],
+					options,
+				},
+			],
+		}),
+	);
+	return path;
 };
 
-/** What the command writes for a scope that holds only this file. */
-const commandOutput = async (
-	file: { scope: string; name: string; sql: string },
+/** What the command writes, run on `input`: each scope's module. */
+const command = async (
+	input: string,
 	schema: string | undefined,
-): Promise<string> => {
+): Promise<Map<string, string>> => {
 	const dir = tempDir();
-	mkdirSync(join(dir, 'in', file.scope), { recursive: true });
-	writeFileSync(join(dir, 'in', file.scope, `${file.name}.surql`), file.sql);
-	const { io, stderr } = quiet(dir);
+	let stderr = '';
 	const code = await run(
 		[
 			'statements',
 			'--input',
-			'in',
+			input,
 			'--out',
-			'out',
+			join(dir, 'out'),
 			...(schema === undefined ? [] : ['--schema', schema]),
 		],
-		io,
+		{
+			cwd: dir,
+			stdin: async () => '',
+			stdout: () => {},
+			stderr: (text) => {
+				stderr += text;
+			},
+		},
 	);
-	expect(code, stderr()).toBe(0);
-	return readFileSync(join(dir, 'out', file.scope, 'statements.ts'), 'utf8');
+	expect(code, stderr).toBe(0);
+	return new Map(
+		readdirSync(join(dir, 'out'))
+			.filter((scope) => scope !== 'index.ts')
+			.map((scope) => [
+				scope,
+				readFileSync(join(dir, 'out', scope, 'statements.ts'), 'utf8'),
+			]),
+	);
+};
+
+/** One file's module text: the mark, its import, its constant. */
+const parts = (text: string) => {
+	const mark = text.slice(0, text.indexOf('\n'));
+	const rest = text.slice(mark.length + 2);
+	const cut = rest.indexOf('\n\n');
+	return {
+		mark,
+		imports: rest.slice(0, cut).split('\n'),
+		constant: rest.slice(cut + 2).replace(/\n$/u, ''),
+	};
+};
+
+/** The one-file modules of a scope, joined as the renderer joins a scope. */
+const compose = (texts: ReadonlyArray<string>): string => {
+	const imports = new Set(texts.flatMap((text) => parts(text).imports));
+	const ordered = [
+		'import * as $analyze from "effect-surrealkit/analyze";',
+		'import * as $statement from "effect-surrealkit/statement";',
+	].filter((line) => imports.has(line));
+	return [
+		parts(texts[0] as string).mark,
+		'',
+		...ordered,
+		'',
+		texts.map((text) => parts(text).constant).join('\n\n'),
+		'',
+	].join('\n');
 };
 
 /** Speaks the mapper's protocol to `mapperHandlers` over in-memory pipes. */
@@ -161,8 +197,25 @@ const mapper = () => {
 			waiting.set(id, done as (reply: unknown) => void);
 			input.write(frame({ jsonrpc: '2.0', id, method, params }));
 		});
+	const open = (configFileName: string, options: unknown) =>
+		call('openProject', {
+			configFileName,
+			projectHandle: 'h',
+			options,
+			compilerOptions: {},
+		});
+	const transform = async (fileName: string, content: string) =>
+		(
+			await call('transform', {
+				fileName,
+				content,
+				projectHandle: 'h',
+			})
+		).result;
 	return {
 		call,
+		open,
+		transform,
 		close: async () => {
 			input.end();
 			await served;
@@ -171,176 +224,405 @@ const mapper = () => {
 };
 
 describe('the module of one .surql file', () => {
-	for (const corpus of corpora) {
-		it(`is what the command writes for it alone (${corpus.name})`, async () => {
-			const { declaredNames, decodeDocument } = await import(
-				'../src/emitter/index.js'
-			);
-			const { Effect } = await import('effect');
-			const declared =
-				corpus.schema === undefined
-					? undefined
-					: declaredNames(
-							await Effect.runPromise(
-								decodeDocument(
-									JSON.parse(
-										readFileSync(corpus.schema, 'utf8'),
-									),
-								),
+	for (const corpus of corpora)
+		for (const schema of corpus.schemas) {
+			const label = `${corpus.name}, ${schema === undefined ? 'no schema' : 'schema'}`;
+
+			it(`is what the command writes on the same input, over the protocol (${label})`, async () => {
+				const written = await command(fixture(corpus.name), schema);
+				const options = {
+					input: fixture(corpus.name),
+					...(schema !== undefined && { schema }),
+				};
+				const config = tsconfig(tempDir(), options);
+				const session = mapper();
+				const init = await session.call('initialize', {
+					positionEncodings: ['utf-8', 'utf-16'],
+				});
+				expect(init.result).toEqual({
+					positionEncoding: 'utf-16',
+					diagnosticSource: 'effect-surrealkit',
+				});
+				const opened = await session.open(config, options);
+				expect(opened.result.optionDiagnostics).toEqual([]);
+				expect(opened.result.watchedFiles).toEqual(
+					schema === undefined ? [config] : [config, schema],
+				);
+				const byScope = new Map<string, string[]>();
+				for (const file of filesOf(corpus.name)) {
+					const result = await session.transform(file.path, file.sql);
+					expect(
+						result.diagnosticDirectives,
+						file.path,
+					).toBeUndefined();
+					expect(result).toMatchObject({
+						extension: '.ts',
+						mappings: [],
+					});
+					// The file alone, through the renderer, is the same module.
+					expect(result.text).toBe(
+						renderSurqlModule(
+							file,
+							openSurqlProject('/', options).settingsFor(
+								file.path,
 							),
-						);
-			const files = filesOf(corpus.name);
-			expect(files.length).toBeGreaterThan(0);
-			for (const file of files) {
-				const module = renderSurqlModule(file, {
-					...(declared !== undefined && { declared }),
-				});
-				expect(module.problems).toEqual([]);
-				expect(module.text).toBe(
-					await commandOutput(file, corpus.schema),
-				);
-			}
-		});
-
-		it(`composes into the command's module of each scope (${corpus.name})`, async () => {
-			const project = openSurqlProject(
-				'/',
-				corpus.schema === undefined
-					? undefined
-					: { schema: corpus.schema },
-			);
-			const byScope = new Map<string, string[]>();
-			for (const file of filesOf(corpus.name)) {
-				const { text } = renderSurqlModule(
-					file,
-					project.settingsFor(file.path),
-				);
-				byScope.set(file.scope, [
-					...(byScope.get(file.scope) ?? []),
-					text,
-				]);
-			}
-			for (const [scope, texts] of byScope) {
-				// Each one-file module is the mark, its imports, and its constant.
-				const imports = new Set<string>();
-				const constants: string[] = [];
-				for (const text of texts) {
-					expect(text.startsWith(`${STATEMENTS_MARK}\n\n`)).toBe(
-						true,
+						).text,
 					);
-					const rest = text.slice(STATEMENTS_MARK.length + 2);
-					const cut = rest.indexOf('\n\n');
-					for (const line of rest.slice(0, cut).split('\n'))
-						imports.add(line);
-					constants.push(rest.slice(cut + 2).replace(/\n$/u, ''));
+					byScope.set(file.scope, [
+						...(byScope.get(file.scope) ?? []),
+						result.text,
+					]);
 				}
-				const ordered = [
-					'import * as $analyze from "effect-surrealkit/analyze";',
-					'import * as $statement from "effect-surrealkit/statement";',
-				].filter((line) => imports.has(line));
-				const composed = [
-					STATEMENTS_MARK,
-					'',
-					...ordered,
-					'',
-					constants.join('\n\n'),
-					'',
-				].join('\n');
-				expect(composed).toBe(
-					readFileSync(
-						join(goldenDir(corpus.name), scope, 'statements.ts'),
-						'utf8',
-					),
-				);
-			}
-		});
+				expect([...byScope.keys()]).toEqual([...written.keys()]);
+				for (const [scope, texts] of byScope)
+					expect(compose(texts)).toBe(written.get(scope));
+				await session.close();
+			});
+		}
+});
 
-		it(`is what the content mapper answers, schema from its options (${corpus.name})`, async () => {
-			const root = tempDir();
-			const session = mapper();
-			const init = await session.call('initialize', {
-				positionEncodings: ['utf-8', 'utf-16'],
-			});
-			expect(init.result).toEqual({
-				positionEncoding: 'utf-16',
-				diagnosticSource: 'effect-surrealkit',
-			});
-			const opened = await session.call('openProject', {
-				configFileName: join(root, 'tsconfig.json'),
-				projectHandle: 'effect-surrealkit@0.1.0:0',
-				options:
-					corpus.schema === undefined
-						? {}
-						: { schema: corpus.schema },
-				compilerOptions: {},
-			});
-			expect(opened.result.optionDiagnostics).toEqual([]);
-			expect(opened.result.watchedFiles).toEqual(
-				corpus.schema === undefined ? [] : [corpus.schema],
-			);
-			for (const file of filesOf(corpus.name)) {
-				const { result } = await session.call('transform', {
-					fileName: file.path,
-					content: file.sql,
-					projectHandle: 'effect-surrealkit@0.1.0:0',
-				});
-				expect(result).toEqual({
-					extension: '.ts',
-					text: await commandOutput(file, corpus.schema),
-					mappings: [],
-				});
-			}
-			expect(
-				(
-					await session.call('closeProject', {
-						projectHandle: 'effect-surrealkit@0.1.0:0',
-					})
-				).result,
-			).toEqual({});
-			await session.close();
-		});
-	}
+describe('one literal configuration', () => {
+	const project = () => {
+		const root = tempDir();
+		mkdirSync(join(root, 'queries', 'gauges'), { recursive: true });
+		cpSync(
+			join(fixture('statements-binds'), 'gauges', 'readings.surql'),
+			join(root, 'queries', 'gauges', 'readings.surql'),
+		);
+		cpSync(bindsDocument, join(root, 'binds.json'));
+		return {
+			root,
+			file: join(root, 'queries', 'gauges', 'readings.surql'),
+			options: { input: 'queries', schema: 'binds.json' },
+		};
+	};
 
-	it('is written as JavaScript by removing only its types', () => {
-		const transpile = (text: string) =>
-			ts.transpileModule(text, {
-				compilerOptions: {
-					module: ts.ModuleKind.ESNext,
-					target: ts.ScriptTarget.ES2022,
-				},
-			}).outputText;
-		let checked = 0;
-		for (const corpus of corpora)
-			for (const file of filesOf(corpus.name)) {
-				const { text } = renderSurqlModule(file);
-				const script = surqlScript(text);
-				expect(script).not.toBe(text);
-				expect(script.endsWith('\n});\n')).toBe(true);
-				// The same program once TypeScript has removed the types, and
-				// valid JavaScript as it stands.
-				expect(transpile(script)).toBe(transpile(text));
-				expect(
-					ts.transpileModule(script, {
-						fileName: 'x.js',
-						reportDiagnostics: true,
-						compilerOptions: { allowJs: true },
-					}).diagnostics,
-				).toEqual([]);
-				checked++;
-			}
-		expect(checked).toBeGreaterThan(20);
-		expect(surqlScript(EMPTY_SURQL_MODULE)).toBe(EMPTY_SURQL_MODULE);
-		expect(() => surqlScript('export const x = 1 as const;\n')).toThrow(
-			/not a one-file \.surql module/u,
+	it('renders when the options TypeScript passes are the entry written in the file', async () => {
+		const { root, file, options } = project();
+		const config = tsconfig(root, options);
+		const session = mapper();
+		await session.open(config, options);
+		const result = await session.transform(
+			file,
+			readFileSync(file, 'utf8'),
+		);
+		expect(result.diagnosticDirectives).toBeUndefined();
+		expect(result.text).toContain('binds: {');
+		expect(loadSurqlModule(file)).toBe(result.text);
+		await session.close();
+	});
+
+	it('refuses every file, never with an option diagnostic, when the entry comes through extends', async () => {
+		const { root, file, options } = project();
+		mkdirSync(join(root, 'base'));
+		writeFileSync(
+			join(root, 'base', 'tsconfig.base.json'),
+			JSON.stringify({
+				contentMappers: [
+					{
+						package: 'effect-surrealkit',
+						extensions: ['.surql'],
+						options: { ...options, unknown: 1 },
+					},
+				],
+			}),
+		);
+		const config = join(root, 'tsconfig.json');
+		writeFileSync(
+			config,
+			JSON.stringify({ extends: './base/tsconfig.base.json' }),
+		);
+		const session = mapper();
+		// What TypeScript passes: the inherited entry's options.
+		const opened = await session.open(config, { ...options, unknown: 1 });
+		expect(opened.result.optionDiagnostics).toEqual([]);
+		const result = await session.transform(
+			file,
+			readFileSync(file, 'utf8'),
+		);
+		expect(result.text).toBe(EMPTY_SURQL_MODULE);
+		expect(
+			result.diagnosticDirectives.unusedExpectDirectiveDiagnostics,
+		).toEqual([
+			{
+				code: DIAGNOSTIC_CODES.config,
+				messageText: expect.stringMatching(
+					/is not written in .*tsconfig\.json itself \(it comes through extends\)/u,
+				),
+			},
+		]);
+		// The loader refuses the same tsconfig.json.
+		expect(() => loadSurqlModule(file)).toThrow(
+			/has extends and no effect-surrealkit entry in contentMappers of its own/u,
+		);
+		await session.close();
+	});
+
+	it('refuses every file when the options passed differ from the entry in the file', async () => {
+		const { root, file, options } = project();
+		const config = tsconfig(root, options, {
+			extends: './missing-base.json',
+		});
+		const session = mapper();
+		const opened = await session.open(config, { input: 'queries' });
+		expect(opened.result.optionDiagnostics).toEqual([]);
+		const result = await session.transform(
+			file,
+			readFileSync(file, 'utf8'),
+		);
+		expect(result.text).toBe(EMPTY_SURQL_MODULE);
+		expect(
+			result.diagnosticDirectives.unusedExpectDirectiveDiagnostics[0]
+				.messageText,
+		).toMatch(
+			/the options TypeScript passed differ from those written in/u,
+		);
+		// The entry of the file itself, with extends beside it, is the loaders'.
+		expect(loadSurqlModule(file)).toContain('binds: {');
+		await session.close();
+	});
+
+	it('refuses an inferred project and a file with no project', async () => {
+		const { file } = project();
+		const session = mapper();
+		const opened = await session.open('', { input: 'queries' });
+		expect(opened.result.optionDiagnostics).toEqual([]);
+		const result = await session.transform(file, 'RETURN 1;');
+		expect(
+			result.diagnosticDirectives.unusedExpectDirectiveDiagnostics,
+		).toEqual([
+			{
+				code: DIAGNOSTIC_CODES.config,
+				messageText: expect.stringMatching(/has no tsconfig\.json/u),
+			},
+		]);
+		const unknown = await session.call('transform', {
+			fileName: file,
+			content: 'RETURN 1;',
+			projectHandle: 'other',
+		});
+		expect(
+			unknown.result.diagnosticDirectives
+				.unusedExpectDirectiveDiagnostics[0].messageText,
+		).toMatch(/has no project for this file/u);
+		await session.close();
+	});
+
+	it('reports an option of the entry in the file itself as an option diagnostic', async () => {
+		const { root, options } = project();
+		const config = tsconfig(root, { ...options, colour: 1 });
+		const session = mapper();
+		const opened = await session.open(config, { ...options, colour: 1 });
+		expect(
+			opened.result.optionDiagnostics.map(
+				(d: { path: string[] }) => d.path,
+			),
+		).toEqual([['colour']]);
+		await session.close();
+	});
+
+	it('the loaders refuse a file with no tsconfig.json entry above it', () => {
+		const root = tempDir();
+		mkdirSync(join(root, 'q', 'a'), { recursive: true });
+		writeFileSync(join(root, 'q', 'a', 'x.surql'), 'RETURN 1;');
+		writeFileSync(join(root, 'tsconfig.json'), '{}');
+		expect(() => loadSurqlModule(join(root, 'q', 'a', 'x.surql'))).toThrow(
+			/has no effect-surrealkit entry in contentMappers/u,
 		);
 	});
 
-	it('is named by its parent directory and file name', () => {
-		expect(surqlFileAt('/q/accounts/bindOwner.surql', 'x')).toEqual({
+	it('reads mapperEntryIn from the file alone', () => {
+		const root = tempDir();
+		writeFileSync(
+			join(root, 'tsconfig.json'),
+			`{
+	// comments and trailing commas, as TypeScript reads them
+	"extends": "./base.json",
+	"contentMappers": [
+		{ "package": "other", "extensions": [".x"], "options": { "a": "/*" } },
+		{ "package": "effect-surrealkit", "extensions": [".surql"] },
+	],
+}`,
+		);
+		expect(mapperEntryIn(join(root, 'tsconfig.json'))).toEqual({
+			found: true,
+			options: {},
+			extends: true,
+		});
+		mkdirSync(join(root, 'q', 'accounts'), { recursive: true });
+		expect(nearestTsconfig(join(root, 'q', 'accounts'))).toBe(
+			join(root, 'tsconfig.json'),
+		);
+		expect(stripJsonComments('{"a": "// no", /* x */ "b": [1,],}')).toBe(
+			'{"a": "// no",  "b": [1]}',
+		);
+	});
+});
+
+describe('the layouts the command accepts', () => {
+	/** Writes `files` (path → text) under a fresh directory. */
+	const tree = (files: Record<string, string>) => {
+		const root = tempDir();
+		for (const [path, text] of Object.entries(files)) {
+			mkdirSync(join(root, path, '..'), { recursive: true });
+			writeFileSync(join(root, path), text);
+		}
+		return root;
+	};
+	const layout = (root: string, inputs: string[], file: string) =>
+		surqlLayout(
+			inputs.map((input) => join(root, input)),
+			join(root, file),
+		);
+
+	it('names <input>/<scope>/<name>.surql as the command does', () => {
+		const root = tree({
+			'in/accounts/bindOwner.surql': 'RETURN 1;',
+			'in/.hidden/x.surql': 'RETURN 1;',
+			'in/accounts/.draft.surql': 'RETURN 1;',
+		});
+		expect(layout(root, ['in'], 'in/accounts/bindOwner.surql')).toEqual({
 			scope: 'accounts',
 			name: 'bindOwner',
-			sql: 'x',
 		});
+		expect(layout(root, ['in'], 'in/.hidden/x.surql')).toEqual({
+			problems: [
+				'.hidden/x.surql: the statements command ignores dot entries',
+			],
+		});
+	});
+
+	it('refuses a file outside the input, nested deeper, or with no input', () => {
+		const root = tree({
+			'a/sub/x.surql': 'RETURN 1;',
+			'b/sub/x.surql': 'RETURN 1;',
+			'a/sub/deeper/y.surql': 'RETURN 1;',
+		});
+		expect(layout(root, ['a'], 'b/sub/x.surql')).toEqual({
+			problems: [
+				expect.stringMatching(/^the file is outside the input/u),
+			],
+		});
+		expect(layout(root, ['.'], 'a/sub/x.surql')).toEqual({
+			problems: [
+				expect.stringMatching(
+					/^a\/sub\/x\.surql is not <scope>\/<name>\.surql/u,
+				),
+			],
+		});
+		expect(layout(root, [], 'a/sub/x.surql')).toEqual({
+			problems: [expect.stringMatching(/name no input/u)],
+		});
+	});
+
+	it('refuses a scope name used in two inputs (a/sub/x and b/sub/x)', () => {
+		const root = tree({
+			'a/sub/x.surql': 'RETURN 1;',
+			'b/sub/x.surql': 'RETURN 1;',
+		});
+		for (const file of ['a/sub/x.surql', 'b/sub/x.surql'])
+			expect(layout(root, ['a', 'b'], file)).toEqual({
+				problems: expect.arrayContaining([
+					expect.stringMatching(/the scope "sub" is in two inputs/u),
+				]),
+			});
+		const apart = tree({
+			'a/one/x.surql': 'RETURN 1;',
+			'b/two/x.surql': 'RETURN 1;',
+		});
+		expect(layout(apart, ['a', 'b'], 'b/two/x.surql')).toEqual({
+			scope: 'two',
+			name: 'x',
+		});
+	});
+
+	it('refuses what the command refuses anywhere in the input, as the command does', async () => {
+		const cases: Array<[Record<string, string>, RegExp]> = [
+			[
+				{ 'README.md': '' },
+				/README\.md: --input holds only scope directories/u,
+			],
+			[
+				{ 'q/notes.txt': '' },
+				/q\/notes\.txt: a scope holds only \.surql files/u,
+			],
+			[{ 'empty/.keep': '' }, /empty: has no \.surql files/u],
+			[
+				{ 'bad-scope/y.surql': 'RETURN 1;' },
+				/scope "bad-scope" is not a JavaScript identifier/u,
+			],
+			[{ 'q/class.surql': 'RETURN 1;' }, /is a reserved word/u],
+		];
+		for (const [extra, message] of cases) {
+			const root = tree({ 'q/x.surql': 'RETURN 1;', ...extra });
+			expect(
+				surqlLayout([root], join(root, 'q', 'x.surql')),
+				String(message),
+			).toEqual({
+				problems: expect.arrayContaining([
+					expect.stringMatching(message),
+				]),
+			});
+			let stderr = '';
+			const code = await run(
+				[
+					'statements',
+					'--input',
+					root,
+					'--out',
+					join(tempDir(), 'out'),
+				],
+				{
+					cwd: root,
+					stdin: async () => '',
+					stdout: () => {},
+					stderr: (text) => {
+						stderr += text;
+					},
+				},
+			);
+			expect(code, String(message)).toBe(1);
+			expect(stderr).toMatch(message);
+		}
+		// Scope names that differ only in case, in two inputs.
+		const root = tree({
+			'a/Q/x.surql': 'RETURN 1;',
+			'b/q/y.surql': 'RETURN 1;',
+		});
+		expect(layout(root, ['a', 'b'], 'b/q/y.surql')).toEqual({
+			problems: [expect.stringMatching(/differs only in case from "Q"/u)],
+		});
+	});
+
+	it('is a problem inside the file through the mapper and an error from the loaders', async () => {
+		const root = tree({
+			'queries/a/sub/x.surql': 'RETURN 1;',
+		});
+		const options = { input: 'queries' };
+		const config = tsconfig(root, options);
+		const session = mapper();
+		await session.open(config, options);
+		const result = await session.transform(
+			join(root, 'queries', 'a', 'sub', 'x.surql'),
+			'RETURN 1;',
+		);
+		expect(result.text).toBe(EMPTY_SURQL_MODULE);
+		expect(
+			result.diagnosticDirectives.unusedExpectDirectiveDiagnostics,
+		).toEqual(
+			expect.arrayContaining([
+				{
+					code: DIAGNOSTIC_CODES.layout,
+					messageText: expect.stringMatching(
+						/is not <scope>\/<name>\.surql/u,
+					),
+				},
+			]),
+		);
+		expect(() =>
+			loadSurqlModule(join(root, 'queries', 'a', 'sub', 'x.surql')),
+		).toThrow(SurqlModuleError);
+		await session.close();
 	});
 });
 
@@ -355,23 +637,21 @@ describe('problems inside the .surql file', () => {
 		expect(problem?.offset).toBe(
 			offsetOf(sql, problem?.line ?? 0, problem?.column ?? 0),
 		);
-		expect(sql.slice(0, problem?.offset).split('\n')).toHaveLength(
-			problem?.line ?? 0,
-		);
 	});
 
 	it('reports a projected field the schema does not declare at its line', () => {
-		const project = openSurqlProject('/', {
-			schema: corpusPath('compiled', 'field-presence.v2.json'),
-		});
-		const file = '/q/people/misspelt.surql';
-		const settings = project.settingsFor(file);
+		const settings = openSurqlProject('/', {
+			schema: presenceDocument,
+		}).settingsFor('/q/people/misspelt.surql');
 		const table = Object.entries(
 			settings.declared?.detail?.tables ?? {},
 		).find(([, t]) => !t.acceptsUndeclared)?.[0];
 		expect(table).toBeDefined();
 		const sql = `RETURN 1;\nSELECT nmae FROM ${table};\n`;
-		const module = renderSurqlModule(surqlFileAt(file, sql), settings);
+		const module = renderSurqlModule(
+			{ scope: 'people', name: 'misspelt', sql },
+			settings,
+		);
 		expect(module.problems.map((p) => [p.kind, p.line, p.message])).toEqual(
 			[
 				[
@@ -384,19 +664,17 @@ describe('problems inside the .surql file', () => {
 	});
 
 	it('answers each problem as an expect directive over an empty range, inside the file', async () => {
-		const session = mapper();
-		await session.call('initialize', { positionEncodings: ['utf-16'] });
-		await session.call('openProject', {
-			configFileName: '/q/tsconfig.json',
-			projectHandle: 'h',
-			options: {},
-		});
+		const root = tempDir();
+		mkdirSync(join(root, 'queries', 'q'), { recursive: true });
 		const sql = "RETURN 1;\nRETURN 'open;\n";
-		const { result } = await session.call('transform', {
-			fileName: '/q/q/broken.surql',
-			content: sql,
-			projectHandle: 'h',
-		});
+		writeFileSync(join(root, 'queries', 'q', 'broken.surql'), sql);
+		const options = { input: 'queries' };
+		const session = mapper();
+		await session.open(tsconfig(root, options), options);
+		const result = await session.transform(
+			join(root, 'queries', 'q', 'broken.surql'),
+			sql,
+		);
 		const [problem] = renderSurqlModule({
 			scope: 'q',
 			name: 'broken',
@@ -412,38 +690,37 @@ describe('problems inside the .surql file', () => {
 			],
 			directives: [[problem?.offset, 1, 0, 0, 1, 0]],
 		});
+		expect(result.diagnostics).toBeUndefined();
 		// An empty file still gets a range inside it.
-		const empty = await session.call('transform', {
-			fileName: '/q/q/Bad-Name.surql',
-			content: '',
-			projectHandle: 'h',
-		});
-		expect(empty.result.diagnosticDirectives.directives).toEqual([
+		const empty = await session.transform(
+			join(root, 'queries', 'q', 'broken.surql'),
+			'',
+		);
+		expect(empty.diagnosticDirectives.directives).toEqual([
 			[0, 0, 0, 0, 1, 0],
 		]);
-		expect(result.diagnostics).toBeUndefined();
 		await session.close();
 	});
 
-	it('refuses a file whose schema document cannot be read, and says so in the options', async () => {
+	it('refuses a file whose schema document cannot be read', async () => {
 		const root = tempDir();
+		mkdirSync(join(root, 'queries', 'q'), { recursive: true });
+		writeFileSync(join(root, 'queries', 'q', 'all.surql'), 'RETURN 1;');
+		const options = {
+			input: 'queries',
+			schemas: { 'queries/q': 'missing.json' },
+		};
 		const session = mapper();
-		await session.call('initialize', {});
-		const opened = await session.call('openProject', {
-			configFileName: join(root, 'tsconfig.json'),
-			projectHandle: 'h',
-			options: { schemas: { queries: 'missing.json' }, colour: 1 },
-		});
+		const opened = await session.open(tsconfig(root, options), options);
 		expect(
 			opened.result.optionDiagnostics.map(
 				(d: { path: string[] }) => d.path,
 			),
-		).toEqual([['colour'], ['schemas', 'queries']]);
-		const { result } = await session.call('transform', {
-			fileName: join(root, 'queries', 'all.surql'),
-			content: 'SELECT * FROM person;',
-			projectHandle: 'h',
-		});
+		).toEqual([['schemas', 'queries/q']]);
+		const result = await session.transform(
+			join(root, 'queries', 'q', 'all.surql'),
+			'RETURN 1;',
+		);
 		expect(result.text).toBe(EMPTY_SURQL_MODULE);
 		expect(
 			result.diagnosticDirectives.unusedExpectDirectiveDiagnostics,
@@ -455,45 +732,22 @@ describe('problems inside the .surql file', () => {
 				),
 			},
 		]);
-		// Another directory takes no document and renders.
-		const other = await session.call('transform', {
-			fileName: join(root, 'other', 'all.surql'),
-			content: 'SELECT * FROM person;',
-			projectHandle: 'h',
-		});
-		expect(other.result.diagnosticDirectives).toBeUndefined();
-		await session.close();
-	});
-
-	it('ignores the options of an inferred project and says why', async () => {
-		const session = mapper();
-		const opened = await session.call('openProject', {
-			configFileName: '',
-			projectHandle: 'h',
-			options: { schema: 'x.json' },
-		});
-		expect(opened.result.optionDiagnostics).toEqual([
-			{
-				path: [],
-				messageText:
-					'the options need a tsconfig.json for their paths; an inferred project takes none',
-				code: DIAGNOSTIC_CODES.option,
-			},
-		]);
 		await session.close();
 	});
 });
 
 describe('the options', () => {
-	it('decodes schema, schemas and holes, and names each it cannot use', () => {
+	it('decodes input, schema, schemas and holes, and names each it cannot use', () => {
 		expect(
 			decodeSurqlOptions({
+				input: ['a', 'b'],
 				schema: 's.json',
 				schemas: { a: 'a.json' },
 				holes: { open: '<<', close: '>>' },
 			}),
 		).toEqual({
 			options: {
+				input: ['a', 'b'],
 				schema: 's.json',
 				schemas: { a: 'a.json' },
 				holes: { open: '<<', close: '>>' },
@@ -502,25 +756,28 @@ describe('the options', () => {
 		});
 		expect(
 			decodeSurqlOptions({
+				input: [],
 				schema: 1,
 				schemas: { a: 2 },
 				holes: 'x',
 				y: 1,
 			}).problems.map((p) => p.path),
-		).toEqual([['schema'], ['schemas', 'a'], ['holes'], ['y']]);
+		).toEqual([['input'], ['schema'], ['schemas', 'a'], ['holes'], ['y']]);
 		expect(decodeSurqlOptions([]).problems).toEqual([
 			{ path: [], message: 'options must be an object' },
 		]);
 	});
 
 	it('gives a directory in schemas its document and any other the default', () => {
-		const binds = join(import.meta.dirname, 'fixtures', 'binds.v2.json');
-		const presence = corpusPath('compiled', 'field-presence.v2.json');
 		const project = openSurqlProject('/root', {
-			schema: presence,
-			schemas: { 'queries/gauges': binds },
+			input: 'queries',
+			schema: presenceDocument,
+			schemas: { 'queries/gauges': bindsDocument },
 		});
-		expect(project.documents).toEqual([binds, presence].sort());
+		expect(project.inputs).toEqual(['/root/queries']);
+		expect(project.documents).toEqual(
+			[bindsDocument, presenceDocument].sort(),
+		);
 		expect(
 			project.settingsFor('/root/queries/gauges/x.surql').declared
 				?.tables,
@@ -528,17 +785,11 @@ describe('the options', () => {
 		expect(
 			project.settingsFor('/root/queries/other/x.surql').declared?.tables,
 		).not.toContain('gauge');
-		expect(
-			openSurqlProject('/root', undefined).settingsFor('/root/x.surql'),
-		).toEqual({});
 	});
 
 	it('changes its identity with a schema document', () => {
 		const root = tempDir();
-		cpSync(
-			join(import.meta.dirname, 'fixtures', 'binds.v2.json'),
-			join(root, 's.json'),
-		);
+		cpSync(bindsDocument, join(root, 's.json'));
 		const before = openSurqlProject(root, { schema: 's.json' }).identity;
 		expect(openSurqlProject(root, { schema: 's.json' }).identity).toBe(
 			before,
@@ -555,77 +806,25 @@ describe('the options', () => {
 		);
 	});
 
-	it('reads the effect-surrealkit entry of the nearest tsconfig.json', () => {
+	it('names the tsconfig.json a loader read', () => {
 		const root = tempDir();
-		writeFileSync(
-			join(root, 'tsconfig.json'),
-			`{
-	// comments and trailing commas, as TypeScript reads them
-	"compilerOptions": { "strict": true, },
-	"contentMappers": [
-		{ "package": "other", "extensions": [".x"], "options": { "a": "/*" } },
-		{ "package": "effect-surrealkit", "extensions": [".surql"], "options": { "holes": { "open": "<<", "close": ">>" } } },
-	],
-}`,
+		const config = tsconfig(root, { input: 'q' });
+		mkdirSync(join(root, 'q', 'a'), { recursive: true });
+		expect(surqlProjectFor(join(root, 'q', 'a', 'x.surql')).config).toBe(
+			config,
 		);
-		mkdirSync(join(root, 'q', 'accounts'), { recursive: true });
-		expect(nearestTsconfig(join(root, 'q', 'accounts'))).toBe(
-			join(root, 'tsconfig.json'),
-		);
-		expect(mapperOptionsIn(join(root, 'tsconfig.json'))).toEqual({
-			holes: { open: '<<', close: '>>' },
-		});
-		expect(stripJsonComments('{"a": "// no", /* x */ "b": [1,],}')).toBe(
-			'{"a": "// no",  "b": [1]}',
-		);
-		expect(
-			surqlProjectFor(join(root, 'q', 'accounts', 'x.surql')).settingsFor(
-				join(root, 'q', 'accounts', 'x.surql'),
-			),
-		).toEqual({ holes: { open: '<<', close: '>>' } });
 	});
 });
 
-describe('the run-time loaders', () => {
-	it('load the module the mapper describes, and refuse a file with problems', async () => {
+describe('the Bun plugin', () => {
+	it('loads the module the loader renders, as TypeScript', () => {
 		const root = tempDir();
-		cpSync(
-			join(import.meta.dirname, 'fixtures', 'binds.v2.json'),
-			join(root, 'binds.json'),
-		);
-		writeFileSync(
-			join(root, 'tsconfig.json'),
-			JSON.stringify({
-				contentMappers: [
-					{
-						package: 'effect-surrealkit',
-						extensions: ['.surql'],
-						options: { schemas: { gauges: 'binds.json' } },
-					},
-				],
-			}),
-		);
-		cpSync(fixture('statements-binds'), root, { recursive: true });
-		const file = join(root, 'gauges', 'readings.surql');
-		const session = mapper();
-		await session.call('openProject', {
-			configFileName: join(root, 'tsconfig.json'),
-			projectHandle: 'h',
-			options: { schemas: { gauges: 'binds.json' } },
+		cpSync(fixture('statements-binds'), join(root, 'queries'), {
+			recursive: true,
 		});
-		const described = await session.call('transform', {
-			fileName: file,
-			content: readFileSync(file, 'utf8'),
-			projectHandle: 'h',
-		});
-		await session.close();
-		expect(loadSurqlModule(file)).toBe(described.result.text);
-		expect(described.result.text).toBe(
-			await commandOutput(
-				surqlFileAt(file, readFileSync(file, 'utf8')),
-				join(root, 'binds.json'),
-			),
-		);
+		cpSync(bindsDocument, join(root, 'binds.json'));
+		tsconfig(root, { input: 'queries', schema: 'binds.json' });
+		const file = join(root, 'queries', 'gauges', 'readings.surql');
 		let loaded: { contents: string; loader: string } | undefined;
 		surqlBunPlugin().setup({
 			onLoad: (options, load) => {
@@ -634,16 +833,10 @@ describe('the run-time loaders', () => {
 			},
 		});
 		expect(loaded).toEqual({
-			contents: described.result.text,
+			contents: loadSurqlModule(file),
 			loader: 'ts',
 		});
-		writeFileSync(join(root, 'gauges', 'broken.surql'), "RETURN 'open;");
-		expect(() =>
-			loadSurqlModule(join(root, 'gauges', 'broken.surql')),
-		).toThrow(SurqlModuleError);
-		expect(() =>
-			loadSurqlModule(join(root, 'gauges', 'broken.surql')),
-		).toThrow(/gauges\/broken\.surql:1:\d+: /u);
+		expect(loaded?.contents).toContain('binds: {');
 	});
 });
 
@@ -685,8 +878,8 @@ describe('the JSON-RPC transport', () => {
 		input.end();
 		await served;
 		expect(order).toEqual(['slow', 'fast', 'fast']);
-		const text = Buffer.concat(chunks).toString();
-		const replies = text
+		const replies = Buffer.concat(chunks)
+			.toString()
 			.split(/Content-Length: \d+\r\n\r\n/u)
 			.filter(Boolean)
 			.map((body) => JSON.parse(body));

@@ -5,7 +5,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
-
+import { surqlLayout } from './layout.js';
 import {
 	EMPTY_SURQL_MODULE,
 	renderSurqlModule,
@@ -24,8 +24,10 @@ export const surqlFileAt = (path: string, sql: string): SurqlFile => ({
 
 /**
  * The module of the `.surql` file at `path` with text `sql` in `project`.
- * A schema document the file's directory takes that cannot be read is a
- * problem of the file: the file is not rendered without its schema.
+ * A project refused as a whole, a file outside the layout the command reads,
+ * and a schema document that cannot be read are each a problem of the file,
+ * which then exports nothing: nothing is rendered that the command or the
+ * run time would not render the same way.
  */
 export const surqlModuleIn = (
 	project: SurqlProject,
@@ -33,22 +35,34 @@ export const surqlModuleIn = (
 	sql: string,
 ): SurqlModule => {
 	const file = surqlFileAt(path, sql);
-	const settings = project.settingsFor(path);
-	if (settings.schemaProblem !== undefined)
+	const refuse = (kind: 'config' | 'layout' | 'schema', message: string) => ({
+		text: EMPTY_SURQL_MODULE,
+		problems: [surqlDiagnostic(file, kind, message)],
+	});
+	if (project.refusal !== undefined) return refuse('config', project.refusal);
+	const layout = surqlLayout(project.inputs, path);
+	if ('problems' in layout)
 		return {
 			text: EMPTY_SURQL_MODULE,
-			problems: [
-				surqlDiagnostic(
-					file,
-					'schema',
-					`the schema document of this directory cannot be used: ${settings.schemaProblem}`,
-				),
-			],
+			problems: layout.problems.map((problem) =>
+				surqlDiagnostic(file, 'layout', problem),
+			),
 		};
-	return renderSurqlModule(file, {
-		...(settings.declared !== undefined && { declared: settings.declared }),
-		...(settings.holes !== undefined && { holes: settings.holes }),
-	});
+	const settings = project.settingsFor(path);
+	if (settings.schemaProblem !== undefined)
+		return refuse(
+			'schema',
+			`the schema document of this directory cannot be used: ${settings.schemaProblem}`,
+		);
+	return renderSurqlModule(
+		{ scope: layout.scope, name: layout.name, sql },
+		{
+			...(settings.declared !== undefined && {
+				declared: settings.declared,
+			}),
+			...(settings.holes !== undefined && { holes: settings.holes }),
+		},
+	);
 };
 
 /** A `.surql` file a loader cannot turn into a module. */

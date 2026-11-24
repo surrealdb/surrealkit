@@ -52,7 +52,6 @@
 		"@biomejs/biome": "2.4.2",
 		"@types/node": "^24.3.0",
 		"@types/picomatch": "^4.0.2",
-		"effect-surrealkit": "file:../effect-surrealkit",
 		"tsup": "^8.2.4",
 		"typescript": "^5.9.2",
 		"vite": "^8.3.0",
