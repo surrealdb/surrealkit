@@ -116,7 +116,31 @@ interface SurrealkitPluginOptions {
   logLevel?: LogLevel;
   /** Fail the Vite build if the run exits non-zero. Default: true. */
   failBuildOnError?: boolean;
+  /** Load `.surql` imports through effect-surrealkit (see below). Default: false. */
+  surql?: boolean | { tsconfig?: string };
 }
+```
+
+## `.surql` imports
+
+With `surql: true`, a `.surql` import is the module
+[effect-surrealkit's content mapper](../effect-surrealkit/README.md#importing-surql-files-the-content-mapper)
+gives TypeScript 7.1, byte for byte what `effect-surrealkit statements` writes
+for that file alone, in the dev server and in builds, whatever `mode` and
+`include` say. It needs `effect-surrealkit` installed (an optional peer). The
+mapper's options (schema documents, hole delimiters) are read from the
+`effect-surrealkit` entry of `contentMappers` in the nearest `tsconfig.json`
+above each file, or from `{ tsconfig: 'tsconfig.app.json' }` relative to the
+Vite root, and a schema document is watched in dev. A file the analyzer or the
+schema refuses fails the build with each problem at its line and column.
+
+```ts
+import { defineConfig } from 'vite';
+import surrealkit from 'vite-plugin-surrealkit';
+
+export default defineConfig({
+  plugins: [surrealkit({ surql: true })],
+});
 ```
 
 ## Vite Compatibility

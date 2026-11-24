@@ -7,13 +7,14 @@ on:
     push:
         branches:
             - main
-        paths:
+        paths: &vite_paths
             - "packages/vite-plugin-surrealkit/**"
+            # The `surql` option loads effect-surrealkit's mapper.
+            - "packages/effect-surrealkit/src/**"
+            - "packages/effect-surrealkit/package.json"
             - ".github/workflows/vite-plugin-ci.yml"
     pull_request:
-        paths:
-            - "packages/vite-plugin-surrealkit/**"
-            - ".github/workflows/vite-plugin-ci.yml"
+        paths: *vite_paths
     workflow_dispatch:
 
 permissions:
@@ -40,6 +41,14 @@ jobs:
               uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
               with:
                   node-version: ${{ matrix.node }}
+
+            # The `surql` option's tests load `effect-surrealkit/mapper` from
+            # the sibling package (a `file:` devDependency), so it is built first.
+            - name: Build effect-surrealkit
+              working-directory: packages/effect-surrealkit
+              run: |
+                  npm install
+                  npm run build
 
             # NOTE: the package commits a bun.lock but no package-lock.json, so
             # `npm ci` is impossible and installs here are unpinned. Matches what

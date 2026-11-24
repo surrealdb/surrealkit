@@ -80,6 +80,20 @@ export interface SurrealkitPluginOptions {
 	logLevel?: LogLevel;
 	/** Fail Vite build if the run exits non-zero. Default: true. */
 	failBuildOnError?: boolean;
+	/**
+	 * Load `.surql` imports as the modules effect-surrealkit's content mapper
+	 * gives TypeScript, in dev and in builds, whatever `mode` and `include`
+	 * say. Needs `effect-surrealkit` installed. `true` reads the mapper's
+	 * options from the nearest `tsconfig.json` above each file; `{ tsconfig }`
+	 * names one, relative to the Vite root. Default: false.
+	 */
+	surql?: boolean | SurqlOptions;
+}
+
+/** Where the `.surql` loader reads effect-surrealkit's mapper options. */
+export interface SurqlOptions {
+	/** A `tsconfig.json`, relative to the Vite root. */
+	tsconfig?: string;
 }
 
 interface ResolvedOptions {
@@ -101,6 +115,7 @@ interface ResolvedOptions {
 	debounceMs: number;
 	logLevel: LogLevel;
 	failBuildOnError: boolean;
+	surql: false | SurqlOptions;
 }
 
 function resolveOptions(options: SurrealkitPluginOptions): ResolvedOptions {
@@ -156,7 +171,28 @@ function resolveOptions(options: SurrealkitPluginOptions): ResolvedOptions {
 		debounceMs: options.debounceMs ?? 150,
 		logLevel: options.logLevel ?? 'info',
 		failBuildOnError: options.failBuildOnError ?? true,
+		surql:
+			options.surql === undefined || options.surql === false
+				? false
+				: options.surql === true
+					? {}
+					: options.surql,
 	};
+}
+
+type Mapper = typeof import('effect-surrealkit/mapper');
+
+let mapper: Promise<Mapper> | undefined;
+
+/** effect-surrealkit's loader, imported only when `surql` is on. */
+function loadMapper(): Promise<Mapper> {
+	mapper ??= import('effect-surrealkit/mapper').catch((cause: unknown) => {
+		mapper = undefined;
+		throw new Error(
+			`[vite-plugin-surrealkit] the surql option needs effect-surrealkit installed: ${cause instanceof Error ? cause.message : String(cause)}`,
+		);
+	});
+	return mapper;
 }
 
 /** The SurrealKit argv for one run. `generate` is never `sync`. */
@@ -579,10 +615,51 @@ export function surrealkitPlugin(
 				path.resolve(resolved.root, dir),
 			);
 
-			if (options.include.size === 0) {
+			if (options.include.size === 0 && options.surql === false) {
 				log.error(
 					'no include modes configured; plugin is effectively disabled',
 				);
+			}
+		},
+
+		async load(id) {
+			const surql = options.surql;
+			if (surql === false || id.startsWith('\0')) return null;
+			const file = id.split('?', 1)[0] ?? id;
+			if (!file.endsWith('.surql')) return null;
+			const {
+				loadSurqlModule,
+				SurqlModuleError,
+				surqlProjectFor,
+				surqlScript,
+			} = await loadMapper();
+			const tsconfig =
+				surql.tsconfig === undefined
+					? undefined
+					: path.resolve(
+							config?.root ?? process.cwd(),
+							surql.tsconfig,
+						);
+			// A schema document change renders the module again in dev.
+			for (const document of surqlProjectFor(file, tsconfig).documents) {
+				this.addWatchFile(document);
+			}
+			try {
+				// The mapper's module as JavaScript: Vite's dev server strips
+				// TypeScript only from ids that end in a TypeScript extension.
+				return {
+					code: surqlScript(
+						loadSurqlModule(
+							file,
+							tsconfig === undefined ? {} : { tsconfig },
+						),
+					),
+					moduleType: 'js',
+				};
+			} catch (error) {
+				if (error instanceof SurqlModuleError)
+					this.error(error.message);
+				throw error;
 			}
 		},
 
