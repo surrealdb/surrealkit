@@ -1551,19 +1551,27 @@ export const profile = sequence(bindOwner, readProfile).define({
 ```
 
 A `.surql` import yields exactly the `<scope>/statements.ts` that
-`renderStatementModules` renders for a scope holding only that file, byte for
-byte what the command writes for it. The scope is the file's parent directory,
-as with the command, so `queries/accounts/bindOwner.surql` exports one
-constant, `bindOwner`, with `name: "accounts.bindOwner"`, its doc comment and
-the one import it needs. There is no default export and no index module. A
-file the analyzer or the schema check refuses exports nothing.
+`renderStatementModules` renders for a scope holding only that file: the
+command's module for that scope, run on the same input, holds the same
+constant byte for byte. The mapper's `input` option is the command's
+`--input`, and a file must be `<input>/<scope>/<name>.surql`, so
+`queries/accounts/bindOwner.surql` exports one constant, `bindOwner`, with
+`name: "accounts.bindOwner"`, its doc comment and the one import it needs.
+There is no default export and no index module. Only the layouts the command
+accepts are accepted, and named as it names them. A file outside the input,
+nested deeper, under a dot directory, or in an input the command refuses
+(a file beside the scopes, a non-`.surql` file in a scope, an empty scope, a
+name that is not an identifier, two names that differ only in case, a scope
+name in two inputs when `input` lists several) is a problem of the file. A
+file with a problem, or that the analyzer or the schema check refuses,
+exports nothing.
 
 Requirements:
 
 | Where | What | Needs |
 | --- | --- | --- |
 | Type check | `tsc --noEmit --runExternalCode` with a `contentMappers` entry | TypeScript 7.1: `typescript@7.1.0-beta` is the version this package is tested on. `--runExternalCode` is accepted only on the command line. Editors run the mapper only in a trusted workspace with content mappers enabled. |
-| Node | `node --import effect-surrealkit/register app.ts` | Node 22.15 or 23.5 and later (`module.registerHooks` and `module.stripTypeScriptTypes`); earlier versions fail with that message |
+| Node | `node --import effect-surrealkit/register app.ts` | Node 22.15 or 23.5 and later (`module.registerHooks` and `module.stripTypeScriptTypes`); earlier versions fail with that message. Node prints `ExperimentalWarning: stripTypeScriptTypes is an experimental feature and might change at any time` once per process (measured on Node 26.7); `--disable-warning=ExperimentalWarning` hides it |
 | Bun | `bun --preload effect-surrealkit/register app.ts`, or `surqlBunPlugin()` from `effect-surrealkit/mapper` in `Bun.build` | Bun |
 | Vite | `surrealkitPlugin({ surql: true })` from `vite-plugin-surrealkit` | Vite 8 |
 
@@ -1582,6 +1590,7 @@ checked by `bun check` keeps the `statements` command.
 			"extensions": [".surql"],
 			// Optional; paths are relative to this tsconfig.json.
 			"options": {
+				"input": "queries", // as --input; or a list of directories
 				"schema": "schema/document.json", // every directory, as --schema
 				"schemas": { "queries/earth": "earth/schema.json" }, // one directory
 				"holes": { "open": "__", "close": "__" } // as --hole-open and --hole-close
@@ -1597,10 +1606,18 @@ A directory named in `schemas` takes that schema document v2, any other takes
 command without `--schema`. With a schema the mapper checks what `--schema`
 checks, and the parts carry the same `binds` and `rejectsNone`. A schema
 document that changes renders its files again (the mapper reports the
-documents to TypeScript as watched files). The loaders read the same entry
-from the nearest `tsconfig.json` above each file (from that file itself, not
-from one it `extends`); the Vite plugin and `surqlBunPlugin` take a
-`tsconfig` path to read another.
+documents to TypeScript as watched files).
+
+The type check and the loaders read one literal configuration, or refuse.
+The loaders read the entry from the nearest `tsconfig.json` above each file
+(the Vite plugin and `surqlBunPlugin` take a `tsconfig` path to read
+another), from that file itself, never from one it `extends`, and refuse a
+`tsconfig.json` that has `extends` and no entry of its own. The mapper
+compares the options TypeScript passes with the entry written in the checked
+`tsconfig.json`. An entry inherited through `extends`, options that differ
+from the written ones, or a project with no `tsconfig.json` refuse every
+file, each with that reason, rather than check with options the run time
+would not use. Write the entry in the `tsconfig.json` that is checked.
 
 The mapper runs the analyzer and the renderer only: no engine, no cache
 directory and no worker, so it needs neither `@surrealdb/node` nor a
@@ -1608,18 +1625,28 @@ database. A problem the command reports with a file, line and column is a
 type error at that line and column of the `.surql` file
 (`queries/broken/unterminated.surql(2,8): error effect-surrealkit1:
 unterminated string (unterminated)`), reported beside every other type error
-of the program, which it does not hide. The protocol has no warning, so the
+of the program, which it does not hide. The mapper reports each problem as
+an expect directive, a form TypeScript 7.1.0-beta honours but does not
+document. If a later TypeScript stops honouring it, the reason disappears and
+what remains is an importing file's TS2305 (`Module … has no exported
+member`), because a refused file exports nothing; the fixtures'
+`rejects/expected.txt` is what catches that in this package's CI. The protocol has no warning, so the
 analyzer's warnings, which the command prints without failing, are not
 reported. `--verify` has no mapper counterpart: keep the engine check where
 the build runs, with the command or `verifyStatements`. The run-time loaders
 throw a `SurqlModuleError` naming each problem, as the command refuses to
 write the file.
 
+Each host strips the module's types with its own TypeScript transform: Node
+with `module.stripTypeScriptTypes`, Bun with its `ts` loader, and the Vite
+plugin with Vite's `transformWithOxc`, in dev and in builds alike.
+
 `effect-surrealkit/mapper` exports what the hosts use: `renderSurqlModule`
 (the module of one file, pure), `loadSurqlModule` (read a file and its
-project's options), `surqlScript` (the module as JavaScript, for a host that
-does not strip types), `surqlBunPlugin`, and `openSurqlProject` and
-`surqlProjectFor` (the options and schema documents).
+project's options), `surqlLayout` (the command's layout rules),
+`surqlBunPlugin`, and `openSurqlProject`, `surqlProjectFor`, `mapperEntryIn`
+and `configurationDrift` (the options, the schema documents and the one
+configuration).
 
 #### Pinning built statements
 
@@ -3033,8 +3060,10 @@ pins `typescript@7.1.0-beta`, and `bun run test:mapper` (after `bun run
 build`, and `npm ci` in that directory) type-checks its `accepts` project with
 `tsc --runExternalCode`, checks that `rejects` reports exactly
 `rejects/expected.txt`, and runs `accepts/src/run.ts` under the Node hook and
-the Bun plugin against the texts the mapper gave the type check (`bun` must be
-on `PATH`). `test/mapper.test.ts`, in the ordinary suite, holds the byte
+the Bun plugin against the texts the mapper gave the type check. It then
+asks the mapper process for every authored fixture, with and without its
+schema, and loads each under the Node hook and the Bun plugin as the same
+module (`bun` must be on `PATH`). `test/mapper.test.ts`, in the ordinary suite, holds the byte
 equality with the command and the protocol.
 
 ```sh

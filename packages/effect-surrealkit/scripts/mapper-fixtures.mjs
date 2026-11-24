@@ -18,10 +18,12 @@
  *
  * Exits 1 on the first step that fails. `bun` must be on PATH.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import {
+	cpSync,
 	existsSync,
 	mkdirSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
 	writeFileSync,
@@ -135,24 +137,161 @@ if (written === 0)
 console.log(`[mapper] the mapper answered ${written} .surql files`);
 
 // The texts are scratch: removed however the hosts end.
-process.on('exit', () => rmSync(described, { recursive: true, force: true }));
-for (const [host, command, args] of [
-	[
-		'node',
+const all = join(fixtures, '.all');
+process.on('exit', () => {
+	rmSync(described, { recursive: true, force: true });
+	rmSync(all, { recursive: true, force: true });
+});
+
+/** `accepts/src/run.ts` under the Node hook and the Bun plugin. */
+const hosts = (root) => {
+	for (const [host, command, args] of [
+		[process.execPath, ['--import', 'effect-surrealkit/register']],
+		['bun', ['--preload', 'effect-surrealkit/register']],
+	].map(([command, flags]) => [
+		command === 'bun' ? 'bun' : 'node',
+		command,
+		[...flags, 'accepts/src/run.ts', ...(root === undefined ? [] : [root])],
+	])) {
+		const loaded = run(command, args);
+		if (loaded.error !== undefined)
+			fail(`${host}: ${loaded.error.message}`);
+		if (loaded.status !== 0)
+			fail(
+				`${host} (exit ${loaded.status}):\n${loaded.stdout}${loaded.stderr}`,
+			);
+		console.log(`[mapper] ${loaded.stdout.trim()}`);
+	}
+};
+hosts();
+
+/** Asks the mapper process TypeScript starts for each file's text. */
+const ask = async (config, options, files) => {
+	const child = spawn(
 		process.execPath,
-		['--import', 'effect-surrealkit/register', 'accepts/src/run.ts'],
-	],
+		[join(packageRoot, 'dist', 'mapper-server.js')],
+		{ stdio: ['pipe', 'pipe', 'inherit'] },
+	);
+	let buffer = Buffer.alloc(0);
+	const waiting = new Map();
+	child.stdout.on('data', (chunk) => {
+		buffer = Buffer.concat([buffer, chunk]);
+		for (;;) {
+			const end = buffer.indexOf('\r\n\r\n');
+			if (end === -1) return;
+			const length = Number(
+				/Content-Length: (\d+)/u.exec(
+					buffer.subarray(0, end).toString(),
+				)[1],
+			);
+			if (buffer.length < end + 4 + length) return;
+			const reply = JSON.parse(
+				buffer.subarray(end + 4, end + 4 + length).toString(),
+			);
+			buffer = buffer.subarray(end + 4 + length);
+			waiting.get(reply.id)(reply);
+		}
+	});
+	let next = 0;
+	const call = (method, params) =>
+		new Promise((done) => {
+			const id = `api${++next}`;
+			waiting.set(id, done);
+			const body = Buffer.from(
+				JSON.stringify({ jsonrpc: '2.0', id, method, params }),
+			);
+			child.stdin.write(`Content-Length: ${body.length}\r\n\r\n`);
+			child.stdin.write(body);
+		});
+	await call('initialize', { positionEncodings: ['utf-8', 'utf-16'] });
+	const opened = await call('openProject', {
+		configFileName: config,
+		projectHandle: 'all',
+		options,
+		compilerOptions: {},
+	});
+	if (opened.result.optionDiagnostics.length > 0)
+		fail(`${config}: ${JSON.stringify(opened.result.optionDiagnostics)}`);
+	const texts = new Map();
+	for (const file of files) {
+		const { result } = await call('transform', {
+			fileName: file,
+			content: readFileSync(file, 'utf8'),
+			projectHandle: 'all',
+		});
+		if (result.diagnosticDirectives !== undefined)
+			fail(`${file}: ${JSON.stringify(result.diagnosticDirectives)}`);
+		texts.set(file, result.text);
+	}
+	child.stdin.end();
+	return texts;
+};
+
+// Every authored fixture, with and without its schema: the mapper's text,
+// the Node hook's module and the Bun plugin's module are the same module.
+const authored = join(packageRoot, 'test', 'fixtures');
+const variants = [
+	['statements', undefined],
+	['statements-binds', undefined],
+	['statements-binds', join(authored, 'binds.v2.json')],
+	['statements-presence', undefined],
 	[
-		'bun',
-		'bun',
-		['--preload', 'effect-surrealkit/register', 'accepts/src/run.ts'],
+		'statements-presence',
+		join(
+			packageRoot,
+			'..',
+			'..',
+			'crates',
+			'surrealkit',
+			'tests',
+			'fixtures',
+			'typegen_corpus',
+			'compiled',
+			'field-presence.v2.json',
+		),
 	],
-]) {
-	const loaded = run(command, args);
-	if (loaded.error !== undefined) fail(`${host}: ${loaded.error.message}`);
-	if (loaded.status !== 0)
-		fail(
-			`${host} (exit ${loaded.status}):\n${loaded.stdout}${loaded.stderr}`,
+];
+let compared = 0;
+for (const [corpus, schema] of variants) {
+	const root = join(all, `${corpus}${schema === undefined ? '' : '-schema'}`);
+	cpSync(join(authored, corpus), join(root, 'queries'), { recursive: true });
+	const options = {
+		input: 'queries',
+		...(schema !== undefined && { schema }),
+	};
+	const config = join(root, 'tsconfig.json');
+	writeFileSync(
+		config,
+		JSON.stringify({
+			contentMappers: [
+				{
+					package: 'effect-surrealkit',
+					extensions: ['.surql'],
+					options,
+				},
+			],
+		}),
+	);
+	const files = readdirSync(join(root, 'queries'))
+		.sort()
+		.flatMap((scope) =>
+			readdirSync(join(root, 'queries', scope))
+				.sort()
+				.map((file) => join(root, 'queries', scope, file)),
 		);
-	console.log(`[mapper] ${loaded.stdout.trim()}`);
+	const texts = await ask(config, options, files);
+	for (const [file, text] of texts) {
+		const target = join(
+			root,
+			'.described',
+			relative(join(root, 'queries'), file).replace(/\.surql$/u, '.ts'),
+		);
+		mkdirSync(dirname(target), { recursive: true });
+		writeFileSync(target, text);
+	}
+	hosts(root);
+	compared += files.length;
 }
+console.log(
+	`[mapper] all fixtures: ${compared} files in ${variants.length} variants, the same module from the mapper, Node and Bun`,
+);

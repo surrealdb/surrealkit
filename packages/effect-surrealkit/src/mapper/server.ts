@@ -8,7 +8,11 @@
 import { dirname } from 'node:path';
 import { surqlModuleIn } from './load.js';
 import { EMPTY_SURQL_MODULE, type SurqlDiagnostic } from './module.js';
-import { openSurqlProject, type SurqlProject } from './project.js';
+import {
+	configurationDrift,
+	openSurqlProject,
+	type SurqlProject,
+} from './project.js';
 import type { RpcHandlers } from './rpc.js';
 
 /** What TypeScript reports a mapper diagnostic under (`effect-surrealkit<code>`). */
@@ -25,6 +29,8 @@ export const DIAGNOSTIC_CODES: Readonly<
 	schema: 5,
 	option: 6,
 	internal: 7,
+	config: 8,
+	layout: 9,
 };
 
 /**
@@ -106,38 +112,35 @@ export const mapperHandlers = (): RpcHandlers => {
 			const handle = String(p.projectHandle);
 			const config =
 				typeof p.configFileName === 'string' ? p.configFileName : '';
-			// An inferred project (no tsconfig.json) has no directory for the
-			// options' paths to be relative to, so it takes none.
-			const inferred = config === '';
-			const ignored =
-				inferred &&
-				typeof p.options === 'object' &&
-				p.options !== null &&
-				Object.keys(p.options).length > 0;
-			const project = openSurqlProject(
-				inferred ? process.cwd() : dirname(config),
-				inferred ? undefined : p.options,
-			);
+			// The type check and the loaders must read the same literal
+			// configuration: an entry inherited through `extends`, or options
+			// that differ from the entry in the file, refuse every file. These
+			// are per-file problems, never option diagnostics: tsc 7.1.0-beta
+			// crashes placing an option diagnostic of an inherited entry.
+			const refusal = configurationDrift(config, p.options);
+			const project =
+				refusal === undefined
+					? openSurqlProject(dirname(config), p.options, { config })
+					: openSurqlProject(
+							config === '' ? process.cwd() : dirname(config),
+							undefined,
+							{ ...(config !== '' && { config }), refusal },
+						);
 			projects.set(handle, project);
 			return {
 				configIdentity: project.identity,
-				watchedFiles: project.documents,
-				optionDiagnostics: [
-					...(ignored
-						? [
-								{
-									path: [],
-									message:
-										'the options need a tsconfig.json for their paths; an inferred project takes none',
-								},
-							]
-						: []),
-					...project.problems,
-				].map((problem) => ({
-					path: problem.path,
-					messageText: problem.message,
-					code: DIAGNOSTIC_CODES.option,
-				})),
+				watchedFiles:
+					project.config === undefined
+						? project.documents
+						: [project.config, ...project.documents],
+				optionDiagnostics:
+					refusal === undefined
+						? project.problems.map((problem) => ({
+								path: problem.path,
+								messageText: problem.message,
+								code: DIAGNOSTIC_CODES.option,
+							}))
+						: [],
 			};
 		},
 		transform: (params) => {
@@ -147,7 +150,10 @@ export const mapperHandlers = (): RpcHandlers => {
 			try {
 				const project =
 					projects.get(String(p.projectHandle)) ??
-					openSurqlProject(dirname(fileName), undefined);
+					openSurqlProject(dirname(fileName), undefined, {
+						refusal:
+							'the content mapper has no project for this file; restart the TypeScript server',
+					});
 				const module = surqlModuleIn(project, fileName, sql);
 				return {
 					extension: '.ts',

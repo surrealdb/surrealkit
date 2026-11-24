@@ -1,7 +1,8 @@
 /**
  * Run by `npm run test:mapper` under `node --import effect-surrealkit/register`
  * and `bun --preload effect-surrealkit/register`, after the type check has
- * written what the content mapper answered it to `../.described`. For each
+ * written what the content mapper answered it to `../.described` (or, for
+ * the all-fixtures loop, after the runner has asked the mapper process). For each
  * `.surql` file: the loader's text is the mapper's text, and the module the
  * hook loads holds the same values as the mapper's text run as TypeScript.
  */
@@ -12,7 +13,11 @@ import { isDeepStrictEqual } from 'node:util';
 
 import { loadSurqlModule } from 'effect-surrealkit/mapper';
 
-const root = join(dirname(fileURLToPath(import.meta.url)), '..');
+// The project: `accepts`, or the one named on the command line (the
+// all-fixtures loop of `npm run test:mapper`), each with `queries/` and
+// `.described/`.
+const root =
+	process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..');
 const queries = join(root, 'queries');
 const described = join(root, '.described');
 const runtime =

@@ -3,8 +3,12 @@
 		"target": "ES2022",
 		"module": "Preserve",
 		"moduleResolution": "Bundler",
-		"lib": ["ES2022"],
-		"types": ["node"],
+		"lib": [
+			"ES2022"
+		],
+		"types": [
+			"node"
+		],
 		"strict": true,
 		"exactOptionalPropertyTypes": true,
 		"noUncheckedIndexedAccess": true,
@@ -16,11 +20,19 @@
 	"contentMappers": [
 		{
 			"package": "effect-surrealkit",
-			"extensions": [".surql"],
+			"extensions": [
+				".surql"
+			],
 			"options": {
-				"schemas": { "queries/gauges": "../../fixtures/binds.v2.json" }
+				"input": "queries",
+				"schemas": {
+					"queries/gauges": "../../fixtures/binds.v2.json"
+				}
 			}
 		}
 	],
-	"include": ["src", "queries"]
+	"include": [
+		"src",
+		"queries"
+	]
 }

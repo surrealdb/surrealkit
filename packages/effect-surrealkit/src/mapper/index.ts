@@ -4,6 +4,7 @@
  * Vite. Each renders through `renderStatementModules`.
  */
 export { type SurqlBunPlugin, surqlBunPlugin } from './bun.js';
+export { type SurqlLayout, surqlLayout } from './layout.js';
 export {
 	type LoadSurqlOptions,
 	loadSurqlModule,
@@ -18,11 +19,13 @@ export {
 	type SurqlFile,
 	type SurqlModule,
 	type SurqlModuleOptions,
-	surqlScript,
 } from './module.js';
 export {
+	configurationDrift,
 	decodeSurqlOptions,
 	MAPPER_PACKAGE,
+	type MapperEntry,
+	mapperEntryIn,
 	openSurqlProject,
 	type SurqlMapperOptions,
 	type SurqlOptionProblem,

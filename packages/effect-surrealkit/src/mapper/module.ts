@@ -32,7 +32,7 @@ export interface SurqlModuleOptions {
 
 /** A problem with the file, at a 1-based line and column of its text. */
 export interface SurqlDiagnostic {
-	readonly kind: StatementProblem['kind'] | 'schema';
+	readonly kind: StatementProblem['kind'] | 'schema' | 'config' | 'layout';
 	readonly line: number;
 	readonly column: number;
 	/** The UTF-16 offset of `line` and `column` in the text. */
@@ -138,22 +138,4 @@ export const renderSurqlModule = (
 			),
 		};
 	}
-};
-
-const CONSTANT_END = '\n} as const);\n';
-
-/**
- * The module `text` as JavaScript, for a host that does not strip
- * TypeScript itself (Vite's dev server). The renderer writes one TypeScript
- * construct, the `as const` that closes each constant, and a one-file module
- * holds one constant, at its end: that `as const` is removed and nothing
- * else changes. A text in any other form is refused, never guessed at.
- */
-export const surqlScript = (text: string): string => {
-	if (text === EMPTY_SURQL_MODULE) return text;
-	if (!text.endsWith(CONSTANT_END))
-		throw new Error(
-			'effect-surrealkit: not a one-file .surql module; cannot write it as JavaScript',
-		);
-	return `${text.slice(0, -CONSTANT_END.length)}\n});\n`;
 };

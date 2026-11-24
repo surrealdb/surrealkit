@@ -30,15 +30,6 @@ jobs:
                   # The published package is built without restoring a cache.
                   package-manager-cache: false
 
-            # The `surql` option's typecheck and tests load
-            # `effect-surrealkit/mapper` from the sibling package (a `file:`
-            # devDependency, not a dependency of the published plugin).
-            - name: Build effect-surrealkit
-              working-directory: packages/effect-surrealkit
-              run: |
-                  npm install
-                  npm run build
-
             - name: Install dependencies
               run: npm install
 
