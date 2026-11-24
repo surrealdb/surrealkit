@@ -13,7 +13,12 @@ export interface VitestReport {
 export declare const laneOf: (
 	env: Readonly<Record<string, string | undefined>>,
 	binaryVersion?: () => string,
+	serverVersion?: () => string,
 ) => string;
+
+export declare const versionUrl: (rpc: string) => string;
+
+export declare const pinnedLanes: (root?: string) => ReadonlyArray<string>;
 
 export declare const skippedTests: (
 	report: VitestReport,

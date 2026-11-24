@@ -3082,15 +3082,21 @@ on the lane the same variables select and exits 1 when its skipped tests
 differ from `test/skips/<lane>.txt` in either direction, printing each name
 that was skipped and is not listed, or is listed and was not skipped. The
 lanes are `embedded`, `binary-<major>.<minor>` for `SURREAL_BIN` (by the
-version the binary reports) and `remote` for `SURREAL_URL`, with `-http`
-appended under `SURREAL_TRANSPORT=http`. `embedded` and `binary-3.3` are
-committed; a lane without a list is reported as unpinned and not compared.
+version the binary reports) and `remote-<major>.<minor>` for `SURREAL_URL` (by
+the version the server answers on `GET /version`), with `-http` appended
+under `SURREAL_TRANSPORT=http`. `embedded`, `binary-3.3`, `remote-3.3` and
+`remote-4.0` are committed, and every run prints the pinned lanes; a lane
+without a list is reported as unpinned and not compared. The `-http` lanes
+are not pinned: on 3.3.4 and 4.0.1, over HTTP, the FOR UPDATE tests of
+`test/block-engine.test.ts` fail (the client reports success where they
+expect a `StatementConflict`), and a list is written only from a passing run.
 After a change that is meant to skip or un-skip a test, rewrite the list from
 a passing run and commit it with the change:
 
 ```sh
 bun run test:skips                                                   # embedded
 SURREAL_BIN=/usr/local/bin/surreal bun run test:skips                # binary-3.3 with a 3.3 binary
+SURREAL_URL=ws://127.0.0.1:8000/rpc bun run test:skips               # remote-4.0 against a 4.0 server
 UPDATE_SKIPS=1 SURREAL_BIN=/usr/local/bin/surreal bun run test:skips # rewrites test/skips/binary-3.3.txt
 ```
 

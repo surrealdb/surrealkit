@@ -12,8 +12,10 @@ import {
 	compareSkips,
 	laneOf,
 	parseList,
+	pinnedLanes,
 	renderList,
 	skippedTests,
+	versionUrl,
 } from '../scripts/skips.mjs';
 
 const root = '/work/package';
@@ -33,15 +35,23 @@ describe('laneOf', () => {
 				() => '4.0.1 for linux on x86_64',
 			),
 		).toBe('binary-4.0-http');
-		expect(laneOf({ SURREAL_URL: 'ws://127.0.0.1:8000/rpc' })).toBe(
-			'remote',
-		);
 		expect(
-			laneOf({
-				SURREAL_URL: 'http://127.0.0.1:8000/rpc',
-				SURREAL_TRANSPORT: 'http',
-			}),
-		).toBe('remote-http');
+			laneOf(
+				{ SURREAL_URL: 'ws://127.0.0.1:8000/rpc' },
+				undefined,
+				() => 'surrealdb-3.3.4',
+			),
+		).toBe('remote-3.3');
+		expect(
+			laneOf(
+				{
+					SURREAL_URL: 'http://127.0.0.1:8000/rpc',
+					SURREAL_TRANSPORT: 'http',
+				},
+				undefined,
+				() => 'surrealdb-4.0.1',
+			),
+		).toBe('remote-4.0-http');
 		expect(laneOf({ SURREALKIT_EXEC_ENDPOINT: 'ws://x' })).toBe(
 			'embedded-exec',
 		);
@@ -50,6 +60,30 @@ describe('laneOf', () => {
 	it('refuses a binary whose version it cannot read', () => {
 		expect(() => laneOf({ SURREAL_BIN: '/bin/surreal' }, () => '')).toThrow(
 			/could not read the version/u,
+		);
+	});
+
+	it('refuses a server whose version it cannot read', () => {
+		expect(() =>
+			laneOf(
+				{ SURREAL_URL: 'ws://127.0.0.1:8000/rpc' },
+				undefined,
+				() => '',
+			),
+		).toThrow(/could not read the version of the server/u);
+	});
+});
+
+describe('versionUrl', () => {
+	it('asks the server of the RPC address for its version over HTTP', () => {
+		expect(versionUrl('ws://127.0.0.1:8000/rpc')).toBe(
+			'http://127.0.0.1:8000/version',
+		);
+		expect(versionUrl('wss://db.example:443/rpc?x=1')).toBe(
+			'https://db.example/version',
+		);
+		expect(versionUrl('http://127.0.0.1:8000/rpc')).toBe(
+			'http://127.0.0.1:8000/version',
 		);
 	});
 });
@@ -134,10 +168,13 @@ describe('the committed lists', () => {
 		]);
 	});
 
-	it.each([
-		'embedded',
-		'binary-3.3',
-	])('pins the %s lane, sorted and as written', (lane) => {
+	const lanes = ['binary-3.3', 'embedded', 'remote-3.3', 'remote-4.0'];
+
+	it('are the pinned lanes, and no other', () => {
+		expect(pinnedLanes(join(import.meta.dirname, 'skips'))).toEqual(lanes);
+	});
+
+	it.each(lanes)('pins the %s lane, sorted and as written', (lane) => {
 		const path = join(import.meta.dirname, 'skips', `${lane}.txt`);
 		expect(existsSync(path)).toBe(true);
 		const text = readFileSync(path, 'utf8');
