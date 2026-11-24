@@ -1,7 +1,7 @@
 //! Properties of `rollout plan`, `up --complete` and `rollback`, over generated
 //! pairs of schema versions, on the embedded engine (`mem://`).
 //!
-//! Each case is a bounded pair of schemas: up to three tables, each with up to
+//! Each case is a bounded pair of schemas: one to three tables, each with up to
 //! four fields over three kinds and up to two indexes, and the additions,
 //! removals and modifications (comments, assertions, index uniqueness) between
 //! the first version and the second, with a few rows written under the first.
@@ -23,8 +23,9 @@
 //! `plan` refuses any field added and removed on one table, whatever their
 //! definitions; this pair is the one worth drawing. A case holding that pair is a refused case: it expects `plan` to fail with
 //! the rename guard's error, to write nothing to the project, and to leave both
-//! databases as they were. About 15% of generated cases are refused (14,822 of
-//! 100,000 pairs drawn from the generator), so about two of the default 12.
+//! databases as they were. About 10% of generated cases are refused (10,191 of
+//! 100,000 pairs drawn from the generator with seed 1), so about one of the
+//! default 12.
 //! A fixed case below checks the refusal on every run. Added fields on a table
 //! that holds records are `option<…>`, since at compatibility level 4 `up`
 //! refuses a field the records do not fit. Tables are generated both
@@ -35,9 +36,15 @@
 //! SurrealKit's `__entity` schema catalog.
 //!
 //! `SURREALKIT_ROLLOUT_PROPTEST_CASES` sets the number of cases. The default, 12,
-//! took 16.4 to 20.8 s over three runs (2026-11-23, Apple silicon, debug build,
-//! the property test alone, on a shared machine), about 1.5 s a case; 200 cases
-//! took 310 s. Failures are shrunk. Commit a minimal failing case as an ordinary
+//! took 15.9 to 19.2 s over ten runs (2026-11-24, Apple silicon, debug build,
+//! the property test alone, on a shared machine), about 1.4 s a case.
+//!
+//! The seed is random unless `SURREALKIT_ROLLOUT_PROPTEST_SEED` sets it, and a
+//! failure prints the variables that draw the same cases again. Failures are
+//! shrunk for at most 20 s (`SURREALKIT_ROLLOUT_PROPTEST_SHRINK_SECS`), and a
+//! case has one to three tables, so the shrinker can drop the tables a failure
+//! does not need. A case whose outcome depends on timing can shrink to a
+//! different minimum on a replay. Commit a minimal failing case as an ordinary
 //! test in a `regressions` module, written from the `Case` text the failure
 //! prints, reduced further by hand where the shrinker stops early.
 
@@ -50,7 +57,7 @@ use std::path::PathBuf;
 
 use anyhow::{Context, Result, bail, ensure};
 use proptest::prelude::*;
-use proptest::test_runner::{Config, TestCaseError, TestRunner};
+use proptest::test_runner::{Config, RngSeed, TestCaseError, TestRunner};
 use serde_json::{Map, Value, json};
 use surrealdb::Surreal;
 use surrealdb::engine::any::{Any, connect};
@@ -199,8 +206,10 @@ fn raw_table() -> impl Strategy<Value = RawTable> {
 		})
 }
 
+/// One to `TABLES` tables, so the shrinker can drop the ones a failure does
+/// not need.
 fn raw_case() -> impl Strategy<Value = Vec<RawTable>> {
-	prop::collection::vec(raw_table(), TABLES)
+	prop::collection::vec(raw_table(), 1..=TABLES)
 }
 
 // ---------------------------------------------------------------------------
@@ -260,6 +269,17 @@ impl fmt::Display for Case {
 /// rule here is one the product documents; see the module comment.
 fn normalize(raw: &[RawTable]) -> Case {
 	let mut raw = raw.to_vec();
+
+	// With fewer tables drawn, no table in either version is common. Two
+	// versions that define nothing are no change to test, and property 4 then
+	// fails on the chain rather than on the rollout: with the empty rollout
+	// that property 2 plans beside it, `start` on an empty database can refuse
+	// the first as not next. Keep one table.
+	if raw.iter().all(|t| t.presence == Presence::Neither)
+		&& let Some(first) = raw.first_mut()
+	{
+		first.presence = Presence::Both;
+	}
 
 	// Adding one table and removing another is refused as a possible rename.
 	let adds = raw.iter().any(|t| t.presence == Presence::Second);
@@ -808,14 +828,42 @@ fn cases() -> u32 {
 		.unwrap_or(DEFAULT_CASES)
 }
 
+/// The run's seed: `SURREALKIT_ROLLOUT_PROPTEST_SEED`, or a random one. A
+/// failure prints it, so the same cases can be drawn again.
+fn seed() -> u64 {
+	match std::env::var("SURREALKIT_ROLLOUT_PROPTEST_SEED") {
+		Ok(raw) => raw.trim().parse().unwrap_or_else(|_| {
+			panic!("SURREALKIT_ROLLOUT_PROPTEST_SEED={raw:?} is not an unsigned 64-bit integer")
+		}),
+		Err(_) => {
+			use std::hash::{BuildHasher, RandomState};
+			RandomState::new().hash_one(std::time::SystemTime::now())
+		}
+	}
+}
+
+/// How long the shrinker may look for a smaller failing case. Each step runs a
+/// whole case, about 1.5 s, and unbounded it took about 50 s on the first
+/// finding. `SURREALKIT_ROLLOUT_PROPTEST_SHRINK_SECS` changes it.
+fn shrink_ms() -> u32 {
+	std::env::var("SURREALKIT_ROLLOUT_PROPTEST_SHRINK_SECS")
+		.ok()
+		.and_then(|raw| raw.parse::<u32>().ok())
+		.unwrap_or(20)
+		.saturating_mul(1000)
+}
+
 #[test]
 fn rollouts_hold_their_properties_over_generated_schema_pairs() {
 	let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+	let seed = seed();
 	let mut runner = TestRunner::new(Config {
 		cases: cases(),
 		// A failure is committed by hand as a regression below, not to a file
 		// the runner writes beside this one.
 		failure_persistence: None,
+		rng_seed: RngSeed::Fixed(seed),
+		max_shrink_time: shrink_ms(),
 		..Config::default()
 	});
 	let result = runner.run(&raw_case(), |raw| {
@@ -825,7 +873,11 @@ fn rollouts_hold_their_properties_over_generated_schema_pairs() {
 			.map_err(|err| TestCaseError::fail(format!("{err:#}\n{case}")))
 	});
 	if let Err(err) = result {
-		panic!("{err}");
+		panic!(
+			"{err}\nDraw these cases again with SURREALKIT_ROLLOUT_PROPTEST_SEED={seed} \
+			 SURREALKIT_ROLLOUT_PROPTEST_CASES={}",
+			cases()
+		);
 	}
 }
 
