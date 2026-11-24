@@ -75,6 +75,22 @@ describe.skipIf(!engineConfigured)(
 			).toEqual([{ table: 'person', field: 'nmae', line: 1 }]);
 		});
 
+		it('comes back missing from a statement in a block, as at the top level', async () => {
+			const texts = [
+				'IF true { SELECT name, nmae FROM ONLY person:1 };',
+				'{ LET $rows = SELECT name, nmae FROM ONLY person:1; RETURN $rows; };',
+				'LET $out = []; FOR $i IN [1] { LET $out = SELECT name, nmae FROM ONLY person:1; RETURN $out; }; IF false {} ELSE { SELECT name, nmae FROM ONLY person:1 };',
+			];
+			for (const sql of texts) {
+				const results = await within(engine.db.query(sql).collect());
+				expect(results.at(-1), sql).toEqual({ name: 'Ada' });
+				expect(
+					analyzeSync(sql).projected.map(({ field }) => field),
+					sql,
+				).toEqual(['name', 'nmae']);
+			}
+		});
+
 		it('is what the analyzer records for the schema check', () => {
 			expect(
 				analyzeSync('SELECT name, nmae FROM person;').projected,

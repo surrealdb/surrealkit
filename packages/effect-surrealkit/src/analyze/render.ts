@@ -435,6 +435,35 @@ const checkProjected = (
 			});
 
 /**
+ * The compared and assigned fields that a table of `detail` does not declare and does
+ * not accept, by the rule {@link checkProjected} applies: the same tables,
+ * nested fields and `id` resolve, and with `schemaChanges` nothing is
+ * checked.
+ */
+const checkFields = (
+	fields: Analysis['fields'],
+	detail: DeclaredDetail,
+	schemaChanges: boolean,
+): ReadonlyArray<{ readonly line: number; readonly message: string }> =>
+	schemaChanges
+		? []
+		: fields.flatMap(({ table, field, role, line }) => {
+				const declared = Object.hasOwn(detail.tables, table)
+					? detail.tables[table]
+					: undefined;
+				return declared === undefined ||
+					declared.acceptsUndeclared ||
+					declaresField(declared, field)
+					? []
+					: [
+							{
+								line,
+								message: `${role === 'assign' ? 'assigns' : 'compares'} ${quoted(field)} of ${quoted(table)}, which declares no such field`,
+							},
+						];
+			});
+
+/**
  * Whether a hole of `sql` starts a statement: at the start of the text, or
  * after `;` or `{`. A fill there can be a statement that defines a table or
  * a field, which the text alone does not show.
@@ -472,12 +501,22 @@ const changesSchema = (
 	);
 };
 
+/** The lines of `text`, at every line break SurrealQL and TypeScript read. */
+const linesOf = (text: string): ReadonlyArray<string> =>
+	text.split(/\r\n|[\n\r\u2028\u2029]/u);
+
+/** A line made safe inside a doc comment; see {@link docComment}. */
+const commentSafe = (line: string): string =>
+	line.replaceAll('*/', '*\\/').replace(/(^|\s)@/gu, '$1\\@');
+
 /**
  * The doc comment an editor shows on a generated constant: the comment that
  * opens the text, the text after it in a fenced block, then `title`. A `*\/`
  * is written `*\\/` so it cannot end the comment, an `@` after whitespace
  * `\@` so TypeScript does not read a tag (SurrealQL's `@@` and `@1@`), and
- * the fence is longer than any run of backticks in the text.
+ * the fence is longer than any run of backticks in the comment or the text.
+ * Lines inside the fence keep every character, trailing whitespace
+ * included (a string literal can hold it); the prose around it does not.
  */
 const docComment = (
 	analysis: Analysis,
@@ -488,28 +527,26 @@ const docComment = (
 	const body = analysis.sql.slice(first?.start ?? 0);
 	const longest = Math.max(
 		0,
-		...[...body.matchAll(/`+/gu)].map(([run]) => run.length),
+		...[...`${analysis.comment}\n${body}\n${title}`.matchAll(/`+/gu)].map(
+			([run]) => run.length,
+		),
 	);
 	const fence = '`'.repeat(Math.max(3, longest + 1));
+	const prose = (text: string) =>
+		linesOf(text).map((line) => commentSafe(line).trimEnd());
 	const lines = [
-		...(analysis.comment === '' ? [] : [analysis.comment, '']),
+		...(analysis.comment === '' ? [] : [...prose(analysis.comment), '']),
 		`${fence}surql`,
-		body,
+		...linesOf(body).map(commentSafe),
 		fence,
 		'',
-		title,
-	]
-		.join('\n')
-		.split(/\r\n|[\n\r\u2028\u2029]/u)
-		.map((line) =>
-			line
-				.replaceAll('*/', '*\\/')
-				.replace(/(^|\s)@/gu, '$1\\@')
-				.trimEnd(),
-		);
-	return ['/**', ...lines.map((line) => ` * ${line}`.trimEnd()), ' */'].join(
-		'\n',
-	);
+		...prose(title),
+	];
+	return [
+		'/**',
+		...lines.map((line) => (line === '' ? ' *' : ` * ${line}`)),
+		' */',
+	].join('\n');
 };
 
 const renderConstant = (
@@ -700,17 +737,26 @@ export const renderStatementModulesSync = (
 					: checkUses(analysis.uses, detail, schemaChanges);
 			binds = checked?.binds;
 			rejectsNone = checked?.rejectsNone;
+			// A fill at a hole that starts a statement can define a field.
+			const fieldsUnknown =
+				schemaChanges || holeStartsStatement(source.sql, input.holes);
 			for (const problem of [
 				...undeclared(source.sql, source.declared, input.holes),
 				...(checked?.problems ?? []),
 				...(detail === undefined
 					? []
-					: checkProjected(
-							analysis.projected,
-							detail,
-							schemaChanges ||
-								holeStartsStatement(source.sql, input.holes),
-						)),
+					: [
+							...checkProjected(
+								analysis.projected,
+								detail,
+								fieldsUnknown,
+							),
+							...checkFields(
+								analysis.fields,
+								detail,
+								fieldsUnknown,
+							),
+						]),
 			].sort((a, b) => a.line - b.line))
 				problems.push({
 					kind: 'undeclared',

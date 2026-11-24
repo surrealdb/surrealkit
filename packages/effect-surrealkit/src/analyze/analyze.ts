@@ -12,9 +12,10 @@ import {
 	lex,
 	type Token,
 } from './lexer.js';
+import { recordLocals } from './locals.js';
 import { analyzeProjections, type ProjectedField } from './projections.js';
 import { analyzeTargets } from './targets.js';
-import { analyzeUses, type BindingUses } from './uses.js';
+import { analyzeUses, type BindingUses, type FieldReference } from './uses.js';
 
 export interface Diagnostic {
 	readonly severity: 'error' | 'warning';
@@ -103,22 +104,40 @@ export interface Analysis {
 	 * the key of a `type::record`, or a comparison with (or, in `SET`, an
 	 * assignment to) a field of the one static table a query targets. Only
 	 * these patterns are recognised, and nothing is recorded where the lexer
-	 * is not certain; a binding with no such use is absent.
+	 * is not certain; a binding with no such use is absent. A comparison or
+	 * assignment in a statement in a block is not a use (the statement may
+	 * not run for every value), and its field name is in `fields`.
 	 */
 	readonly uses: BindingUses;
 	/**
 	 * The fields each `SELECT` projects from the one static table it reads
-	 * (a table name, a record id, or `type::record`, `type::thing` or
-	 * `type::table` with a literal table, after an optional `ONLY`, and
+	 * (a table name, a record id, `type::record`, `type::thing` or
+	 * `type::table` with a literal table, or a local the text fixes to one
+	 * table with `LET $x = type::record('t', …)`, after an optional `ONLY`, and
 	 * nothing after it but the query's clauses): each projected item that
 	 * is a bare field name, or `*`, sorted by line, table and field, without
 	 * duplicates. A
 	 * `SELECT VALUE`, an `OMIT`, two targets, an open target and any item
 	 * that is not a bare name or `*` (a call, a path, an expression, an
 	 * alias, a graph step, a subquery) record nothing; a parenthesised
-	 * subquery is a query of its own.
+	 * subquery is a query of its own, and a statement in a block (the body
+	 * of `IF`, `ELSE`, `FOR`, a function or a bare `{ … }`) is read like a
+	 * top-level one.
 	 */
 	readonly projected: ReadonlyArray<ProjectedField>;
+	/**
+	 * The field names each query compares in its `WHERE` (role `compare`)
+	 * or assigns in its `SET` (role `assign`), where that is not a binding
+	 * use in `uses`: a bare field of the one static table the query
+	 * targets, read as `uses` reads one, on either side of `=`, `==`, `!=`,
+	 * `<`, `<=`, `>` or `>=` whatever the other operand, or the target of
+	 * `field = <literal>` in `UPDATE`, `UPSERT` or `CREATE` when the
+	 * literal is never NONE; in top-level statements, statements in blocks
+	 * and parenthesised subqueries; a local the text fixes to one table is
+	 * a target of that table here. `UNSET` is not read. Sorted by line,
+	 * table, field and role, without duplicates.
+	 */
+	readonly fields: ReadonlyArray<FieldReference>;
 	/**
 	 * For each hole, what the text around it does with names (empty for a
 	 * text without holes): `bound`, the names visible at every occurrence of
@@ -646,6 +665,8 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 	}
 	diagnostics.sort((a, b) => a.offset - b.offset);
 	const targets = analyzeTargets(tokens);
+	const locals = recordLocals(tokens);
+	const { uses, fields } = analyzeUses(tokens, sorted(free), locals);
 	return {
 		kind,
 		sql: sql.slice(0, last.end),
@@ -663,8 +684,9 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 		tables: { read: targets.read, written: targets.written },
 		functions: targets.functions,
 		openTargets: targets.openTargets,
-		uses: analyzeUses(tokens, sorted(free)),
-		projected: analyzeProjections(tokens),
+		uses,
+		projected: analyzeProjections(tokens, locals),
+		fields,
 		holeScopes: holeScopesOf(holeSites, unboundReads, kind),
 		diagnostics,
 	};

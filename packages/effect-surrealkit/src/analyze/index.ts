@@ -53,4 +53,8 @@ export {
 	type TextHoleScopes,
 	text,
 } from './text.js';
-export type { BindingUse, BindingUses } from './uses.js';
+export type {
+	BindingUse,
+	BindingUses,
+	FieldReference,
+} from './uses.js';
