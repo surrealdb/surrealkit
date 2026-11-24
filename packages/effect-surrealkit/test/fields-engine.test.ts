@@ -206,3 +206,186 @@ describe.skipIf(!engineConfigured)('a lone bare word compared in WHERE', () => {
 		120_000,
 	);
 });
+
+const assigned = (sql: string) =>
+	analyzeSync(sql)
+		.fields.filter(({ role }) => role === 'assign')
+		.map(({ table, field }) => `${table}.${field}`);
+
+describe.skipIf(!engineConfigured)(
+	'an assigned field a SCHEMAFULL table does not declare',
+	() => {
+		let engine: Engine;
+
+		beforeAll(async () => {
+			engine = await startEngine();
+			await within(
+				engine.db
+					.query(
+						"DEFINE TABLE person SCHEMAFULL; DEFINE FIELD name ON person TYPE string; CREATE person:1 SET name = 'Ada'; DEFINE TABLE pet SCHEMAFULL; DEFINE FIELD owner ON pet TYPE string; CREATE pet:1 SET owner = 'Ada';",
+					)
+					.collect(),
+			);
+		});
+		afterAll(async () => {
+			await engine?.stop();
+		});
+
+		const run = (sql: string) => within(engine.db.query(sql).collect());
+
+		it.each([
+			"'x'",
+			'"x"',
+			"d'2020-01-01T00:00:00Z'",
+			'1',
+			'1.5',
+			'-1',
+			'1d',
+			'10dec',
+			'true',
+			'FALSE',
+			'NULL',
+			'[]',
+			"[1, 'a']",
+			'pet:1',
+			"pet:[1, 'a']",
+		])('fails on every record it writes when the value is %s, which is recorded', async (value) => {
+			for (const sql of [
+				`UPDATE person:1 SET nmae = ${value};`,
+				`UPSERT person:1 SET name = 'Ada', nmae = ${value};`,
+				`CREATE person:2 SET name = 'Bo', nmae = ${value};`,
+				`IF true { UPDATE person:1 SET nmae = ${value} };`,
+			]) {
+				await expect(run(sql), sql).rejects.toThrow(
+					/no such field exists for table 'person'/u,
+				);
+				expect(assigned(sql), sql).toContain('person.nmae');
+			}
+		});
+
+		it.each([
+			'NONE',
+			'none',
+			'$none',
+			'1 AND NONE',
+			'[1][5]',
+			"'a'.nope",
+		])('succeeds when the value %s is NONE, which is not recorded', async (value) => {
+			const sql = `LET $none = NONE; UPDATE person:1 SET nmae = ${value};`;
+			const results = await run(sql);
+			expect(results.at(-1), sql).toEqual([
+				{ id: expect.anything(), name: 'Ada' },
+			]);
+			expect(assigned(sql), sql).toEqual([]);
+		});
+
+		it('succeeds on UNSET of an undeclared field, which is not recorded', async () => {
+			const sql = 'UPDATE person:1 UNSET nmae;';
+			expect((await run(sql))[0]).toEqual([
+				{ id: expect.anything(), name: 'Ada' },
+			]);
+			expect(analyzeSync(sql).fields).toEqual([]);
+		});
+
+		it('clears a field a row kept from before its table became SCHEMAFULL, with NONE or UNSET', async () => {
+			for (const [table, clear] of [
+				['legacy_none', 'SET extra = NONE'],
+				['legacy_unset', 'UNSET extra'],
+			] as const) {
+				await run(
+					`DEFINE TABLE ${table} SCHEMALESS; DEFINE FIELD name ON ${table} TYPE string; CREATE ${table}:1 SET name = 'Ada', extra = 'old'; DEFINE TABLE OVERWRITE ${table} SCHEMAFULL;`,
+				);
+				const sql = `UPDATE ${table}:1 ${clear}; SELECT * FROM ${table}:1;`;
+				expect((await run(sql)).at(-1), sql).toEqual([
+					{ id: expect.anything(), name: 'Ada' },
+				]);
+				expect(analyzeSync(sql).fields, sql).toEqual([]);
+			}
+		});
+	},
+);
+
+describe.skipIf(!engineConfigured)('a lone bare word assigned in SET', () => {
+	let engine: Engine;
+	const words = [
+		...new Set([
+			...keywords,
+			...keywords.map((word) => word.toLowerCase()),
+			...['NaN', 'Infinity', 'True', 'False', 'None', 'Null'],
+		]),
+	];
+
+	beforeAll(async () => {
+		engine = await startEngine();
+		await within(engine.db.query('DEFINE TABLE w SCHEMALESS;').collect());
+	});
+	afterAll(async () => {
+		await engine?.stop();
+	});
+
+	it('is recorded only when the engine writes the field of that name', async () => {
+		let fields = 0;
+		const refused: string[] = [];
+		for (const [n, word] of words.entries()) {
+			const sql = `UPSERT w:${n} SET ${word} = 'stored' RETURN AFTER;`;
+			let rows: unknown;
+			try {
+				rows = (await within(engine.db.query(sql).collect()))[0];
+			} catch {
+				continue;
+			}
+			const row = Array.isArray(rows) ? rows[0] : undefined;
+			const writes =
+				typeof row === 'object' &&
+				row !== null &&
+				(row as Record<string, unknown>)[word] === 'stored' &&
+				Object.keys(row).length === 2;
+			const recorded = assigned(sql);
+			if (!writes) expect(recorded, sql).toEqual([]);
+			else if (recorded.length === 0) refused.push(word);
+			else expect(recorded, sql).toEqual([`w.${word}`]);
+			if (writes) fields++;
+		}
+		// Fields the analyzer does not read: words that end an assignment or
+		// start a clause, the words it reads as values elsewhere, and SELECT,
+		// which makes the target uncertain.
+		const kept = [
+			'AND',
+			'CONTENT',
+			'EXPLAIN',
+			'FETCH',
+			'GROUP',
+			'LIMIT',
+			'MERGE',
+			'OMIT',
+			'OR',
+			'ORDER',
+			'PARALLEL',
+			'PATCH',
+			'REPLACE',
+			'RETURN',
+			'SELECT',
+			'SET',
+			'SPLIT',
+			'START',
+			'TEMPFILES',
+			'TIMEOUT',
+			'UNSET',
+			'VERSION',
+			'WHERE',
+			'WITH',
+			'NONE',
+			'NULL',
+			'TRUE',
+			'FALSE',
+		];
+		expect(refused.sort()).toEqual(
+			[
+				...kept,
+				...kept.map((word) => word.toLowerCase()),
+				...['None', 'Null', 'True', 'False'],
+			].sort(),
+		);
+		expect(fields).toBeGreaterThan(600);
+	}, 120_000);
+});

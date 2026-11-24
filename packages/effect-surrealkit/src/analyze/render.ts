@@ -435,7 +435,7 @@ const checkProjected = (
 			});
 
 /**
- * The compared fields that a table of `detail` does not declare and does
+ * The compared and assigned fields that a table of `detail` does not declare and does
  * not accept, by the rule {@link checkProjected} applies: the same tables,
  * nested fields and `id` resolve, and with `schemaChanges` nothing is
  * checked.
@@ -447,7 +447,7 @@ const checkFields = (
 ): ReadonlyArray<{ readonly line: number; readonly message: string }> =>
 	schemaChanges
 		? []
-		: fields.flatMap(({ table, field, line }) => {
+		: fields.flatMap(({ table, field, role, line }) => {
 				const declared = Object.hasOwn(detail.tables, table)
 					? detail.tables[table]
 					: undefined;
@@ -458,7 +458,7 @@ const checkFields = (
 					: [
 							{
 								line,
-								message: `compares ${quoted(field)} of ${quoted(table)}, which declares no such field`,
+								message: `${role === 'assign' ? 'assigns' : 'compares'} ${quoted(field)} of ${quoted(table)}, which declares no such field`,
 							},
 						];
 			});

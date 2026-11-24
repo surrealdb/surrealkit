@@ -232,6 +232,101 @@ describe('analyze: compared fields', () => {
 	});
 });
 
+const assign = (table: string, field: string, line = 1) => ({
+	table,
+	field,
+	role: 'assign',
+	line,
+});
+
+describe('analyze: assigned fields', () => {
+	it('the target of SET in UPDATE, UPSERT and CREATE when the value is a literal that is never NONE', () => {
+		for (const verb of ['UPDATE', 'UPSERT', 'CREATE'])
+			expect(
+				fields(
+					`${verb} gauge SET station = 'a', reading = 1.5, note = d'2020-01-01T00:00:00Z', tags = [1, [2]], site = site:1;`,
+				),
+			).toEqual([
+				assign('gauge', 'note'),
+				assign('gauge', 'reading'),
+				assign('gauge', 'site'),
+				assign('gauge', 'station'),
+				assign('gauge', 'tags'),
+			]);
+		expect(
+			fields(
+				'UPDATE gauge SET a = -1, b = 1d, c = 10dec, d = true, e = FALSE, f = NULL, g = site:[1, \'a\'], h = site:⟨x⟩, i = "s";',
+			).map(({ field }) => field),
+		).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']);
+	});
+
+	it('in a block, on its own line, and before WHERE or RETURN', () => {
+		expect(
+			fields(
+				"IF $x {\n\tUPDATE gauge:1\n\t\tSET station = 'a',\n\t\t\tnote = 'b' WHERE reading = 1 RETURN NONE;\n};",
+			),
+		).toEqual([assign('gauge', 'station', 3), assign('gauge', 'note', 4)]);
+	});
+
+	describe('records nothing', () => {
+		it.each([
+			['NONE', 'UPDATE gauge SET station = NONE;'],
+			['none', 'UPDATE gauge SET station = none;'],
+			['a binding', 'UPDATE gauge SET station = $s;'],
+			['a local', "LET $s = 'a'; UPDATE gauge SET station = $s;"],
+			['a parameter path', 'UPDATE gauge SET station = $p.s;'],
+			['a call', "UPDATE gauge SET station = string::lowercase('A');"],
+			[
+				'a subquery',
+				'UPDATE gauge SET station = (SELECT VALUE label FROM site LIMIT 1);',
+			],
+			[
+				'a boolean that can be NONE',
+				'UPDATE gauge SET station = 1 AND NONE;',
+			],
+			['an index that can be NONE', 'UPDATE gauge SET station = [1][5];'],
+			['arithmetic', "UPDATE gauge SET station = 'a' + $x;"],
+			['a cast', 'UPDATE gauge SET station = <string> 1;'],
+			[
+				'an object or block',
+				'UPDATE gauge SET station = {}, note = { RETURN 1 };',
+			],
+			['a range', 'UPDATE gauge SET reading = 1..5;'],
+			['a path on a number', 'UPDATE gauge SET reading = 1.x;'],
+			[
+				'a compound assignment',
+				'UPDATE gauge SET reading += 1, note -= 1;',
+			],
+			['a path target', 'UPDATE gauge SET pos.x = 1;'],
+			['an index target', 'UPDATE gauge SET tags[0] = 1;'],
+			['UNSET', 'UPDATE gauge UNSET station, note;'],
+			[
+				'a comparison after AND in the value',
+				'UPDATE gauge SET station = true AND reading = 1;',
+			],
+			['RELATE', "RELATE site:1->gauge->site:2 SET station = 'a';"],
+			[
+				'INSERT … ON DUPLICATE KEY UPDATE',
+				"INSERT INTO gauge { id: 1 } ON DUPLICATE KEY UPDATE station = 'a';",
+			],
+			['an open target', "UPDATE $g SET station = 'a';"],
+			['two targets', "UPDATE gauge, site SET station = 'a';"],
+			[
+				'MERGE and CONTENT',
+				"UPDATE gauge MERGE { station: 'a' }; CREATE gauge CONTENT { note: 'b' };",
+			],
+			[
+				'a second clause',
+				"UPDATE gauge WHERE reading = $r SET station = 'a';",
+			],
+		])('for %s', (_, sql) => {
+			expect(fields(sql).filter(({ role }) => role === 'assign')).toEqual(
+				[],
+			);
+		});
+	});
+});
+
 const bindsDocument = join(import.meta.dirname, 'fixtures', 'binds.v2.json');
 const declared = async (): Promise<DeclaredNames> =>
 	declaredNames(
@@ -339,6 +434,24 @@ describe('statements with schema detail: compared fields', () => {
 				'shop/q.surql:1: reads table `shipment`, which the schema does not declare',
 			]);
 		});
+	});
+
+	it('fails generation on an assigned field a SCHEMAFULL table does not declare', async () => {
+		expect(
+			await problems("UPDATE gauge\n\tSET staton = 'a', note = 'b';"),
+		).toEqual([
+			'shop/q.surql:2: assigns `staton` of `gauge`, which declares no such field',
+		]);
+		expect(
+			await problems(
+				'IF $x { CREATE gauge SET reading = 1, staton = 2 RETURN NONE };',
+			),
+		).toEqual([
+			'shop/q.surql:1: assigns `staton` of `gauge`, which declares no such field',
+		]);
+		// NONE clears a field, which both versions accept: not checked.
+		expect(await problems('UPDATE gauge SET staton = NONE;')).toEqual([]);
+		expect(await problems('UPDATE gauge UNSET staton;')).toEqual([]);
 	});
 
 	it('changes nothing in the generated module', async () => {

@@ -1372,7 +1372,7 @@ run for some values of a binding and not others (`IF $x != NONE { UPDATE
 gauge SET station = $x }`): a `rejectsNone` entry there would refuse a codec
 that holds NONE although the text never assigns NONE. The field names it
 compares are checked all the same (see
-[Compared fields](#compared-fields)).
+[Compared and assigned fields](#compared-and-assigned-fields)).
 
 #### Projected fields
 
@@ -1454,7 +1454,7 @@ FIELDS`). Until then an `UPDATE` of such a row fails on both versions with
 binding uses, there is no way to exempt one text: a scope generated without
 schema detail is not checked at all.
 
-#### Compared fields
+#### Compared and assigned fields
 
 SurrealDB 3.3 and 4.0 both answer `SELECT * FROM person WHERE nmae =
 'Ada'` with no rows and no error: on a `SCHEMAFULL` table a field it does
@@ -1491,11 +1491,27 @@ or of a cast on the left, any other operator (`?=`, `@@`, `@1@`, `<|2|>`,
 `~`, `CONTAINS`, `IN`, …), and names in `ORDER BY`, `GROUP BY`, `SPLIT`,
 `OMIT` and `FETCH`.
 
-With `--schema` (or a scope's `declared` detail), a compared field that a
-`SCHEMAFULL` table does not declare fails generation with its file and
-line, by the rule the projected fields follow (the same names resolve, the
+An assignment is recorded as `role: 'assign'`: the target of `field =
+<value>` in the `SET` of an `UPDATE`, `UPSERT` or `CREATE` (after `SET` or a
+`,` of the clause), in the same queries, when the value is a literal
+SurrealDB never evaluates to NONE and the assignment ends after it (at `,`,
+`;`, a closing bracket or a clause): a string of any prefix, a number (`1`,
+`1.5`, `-1`, `1d`, `10dec`), `TRUE`, `FALSE`, `NULL`, an array literal, or
+a record id `table:key`. Every record such a statement writes then fails on
+both versions (``Found field 'nmae', but no such field exists for table
+'person'``). Any other value is not read, because both versions accept
+NONE for a field the table does not declare: `SET nmae = NONE`, `SET nmae =
+$v` with `$v` NONE, `SET nmae = 1 AND NONE` and `SET nmae = [1][5]` all
+succeed, and on a row kept from before its table became `SCHEMAFULL` they
+clear the old field. For the same reason `UNSET` is never read: `UPDATE
+loose UNSET extra` is how such a field is cleared. A binding assigned in
+`SET` is a binding use, as before, and is not repeated in `fields`.
+
+With `--schema` (or a scope's `declared` detail), a compared or assigned
+field that a `SCHEMAFULL` table does not declare fails generation with its
+file and line, by the rule the projected fields follow (the same names resolve, the
 same tables and texts are not checked): ``shop/q.surql:2: compares
-`staton` of `gauge`, which declares no such field``. The generated modules
+`staton` of `gauge`, which declares no such field`` (or `assigns`). The generated modules
 do not change: `fields` is not written into a part. The limit is the one
 the projected fields have: a row written while its table was schemaless
 still matches a comparison with its old field, and the check refuses such a

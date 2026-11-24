@@ -36,14 +36,16 @@ export type BindingUse =
 export type BindingUses = Readonly<Record<string, ReadonlyArray<BindingUse>>>;
 
 /**
- * A field name a query compares in its `WHERE`, at the 1-based line of the
- * name: a bare field of the one static table the query targets, on either
- * side of a comparison, whatever the other operand.
+ * A field name a query compares in its `WHERE` (`compare`) or assigns in
+ * its `SET` (`assign`), at the 1-based line of the name: a bare field of
+ * the one static table the query targets, on either side of a comparison
+ * whatever the other operand, or the target of `field = <literal>` where
+ * the literal is never NONE.
  */
 export interface FieldReference {
 	readonly table: string;
 	readonly field: string;
-	readonly role: 'compare';
+	readonly role: 'compare' | 'assign';
 	readonly line: number;
 }
 
@@ -52,7 +54,7 @@ export interface UsesAndFields {
 	readonly uses: BindingUses;
 	/**
 	 * Sorted by line, table, field and role, without duplicates; a
-	 * comparison recorded in `uses` is not repeated here.
+	 * comparison or assignment recorded in `uses` is not repeated here.
 	 */
 	readonly fields: ReadonlyArray<FieldReference>;
 }
@@ -426,6 +428,7 @@ export const analyzeUses = (
 				if (!inWhere && !inSet) continue;
 				if (!inBlock) bindingUse(i, table, inWhere);
 				if (inWhere) compared(i, table);
+				else assigned(i, table);
 			}
 		};
 		/** The use of a binding that a comparison or assignment at `i` is. */
@@ -483,15 +486,112 @@ export const analyzeUses = (
 			const left = startsAfter(i - 1) && operatorAt(i + 1) !== undefined;
 			const right = operatorBefore(i) !== undefined && endsAt(i + 1, end);
 			if (!left && !right) return;
-			const line = (tokens[i] as Token).line;
-			named.set(JSON.stringify([line, table, field, 'compare']), {
-				table,
-				field,
-				role: 'compare',
-				line,
-			});
+			name(i, table, field, 'compare');
+		};
+		/**
+		 * A bare field at `i` that is the target of one assignment of `SET`
+		 * (after `SET` or a `,` of the clause, then `=`), when the value is a
+		 * literal that is never NONE and nothing follows it in the
+		 * assignment: every record the statement writes then fails on a
+		 * field the table does not declare. A value that can be NONE is not
+		 * read, since assigning NONE to such a field is accepted (and clears
+		 * a field a row kept from before its table became SCHEMAFULL).
+		 */
+		const assigned = (i: number, table: string) => {
+			const after = upper(tokens[i - 1]);
+			if (after !== 'SET' && !isPunct(tokens[i - 1], ',')) return;
+			const field = bareField(i);
+			const op = operatorAt(i + 1);
+			if (field === undefined || op?.text !== '=') return;
+			const past = neverNone(op.next);
+			if (past === undefined || !assignmentEndsAt(past)) return;
+			name(i, table, field, 'assign');
+		};
+		/** Whether an assignment of `SET` has ended at `at`. */
+		const assignmentEndsAt = (at: number): boolean => {
+			const token = tokens[at];
+			return (
+				at >= end ||
+				token === undefined ||
+				isPunct(token, ';') ||
+				isPunct(token, ')') ||
+				isPunct(token, '}') ||
+				isPunct(token, ',') ||
+				(CLAUSE_ENDS.has(upper(token)) && !isPunct(tokens[at + 1], ':'))
+			);
 		};
 		scan(from, end, 0);
+	};
+
+	const name = (
+		i: number,
+		table: string,
+		field: string,
+		role: FieldReference['role'],
+	) => {
+		const line = (tokens[i] as Token).line;
+		named.set(JSON.stringify([line, table, field, role]), {
+			table,
+			field,
+			role,
+			line,
+		});
+	};
+
+	/** A word that is a number: digits first (`1`, `1d`, `10dec`, `0x1f`). */
+	const numberAt = (at: number): boolean =>
+		tokens[at]?.kind === 'word' && /^[0-9]/u.test(tokens[at]?.value ?? '');
+
+	/**
+	 * The index just past a literal at `at` that SurrealDB never evaluates
+	 * to NONE, or undefined: a string of any prefix, a number (with a
+	 * fraction or a minus sign written against it), `TRUE`, `FALSE` or
+	 * `NULL`, an array literal, or a record id `table:key` whose key is one
+	 * token or one `[…]`. Anything that follows it is the caller's to read.
+	 */
+	const neverNone = (at: number): number | undefined => {
+		const token = tokens[at];
+		if (token === undefined) return undefined;
+		if (token.kind === 'string') return at + 1;
+		if (isPunct(token, '[')) return closing(at) + 1;
+		let j = at;
+		if (isPunct(token, '-') && adjacent(token, tokens[at + 1])) j++;
+		if (numberAt(j)) {
+			if (
+				isPunct(tokens[j + 1], '.') &&
+				numberAt(j + 2) &&
+				adjacent(tokens[j], tokens[j + 1]) &&
+				adjacent(tokens[j + 1], tokens[j + 2])
+			)
+				return j + 3;
+			return j + 1;
+		}
+		if (j !== at || (token.kind !== 'word' && token.kind !== 'ident'))
+			return undefined;
+		const word = token.value.toUpperCase();
+		if (
+			token.kind === 'word' &&
+			(word === 'TRUE' || word === 'FALSE' || word === 'NULL') &&
+			!isPunct(tokens[at + 1], ':')
+		)
+			return at + 1;
+		// A record id: `table:key`, the key one token or one `[…]`.
+		if (
+			/^[A-Za-z_]/u.test(token.value) &&
+			isPunct(tokens[at + 1], ':') &&
+			!isPunct(tokens[at + 2], ':')
+		) {
+			const key = tokens[at + 2];
+			if (isPunct(key, '[')) return closing(at + 2) + 1;
+			if (
+				key !== undefined &&
+				(key.kind === 'word' ||
+					key.kind === 'ident' ||
+					key.kind === 'string')
+			)
+				return at + 3;
+		}
+		return undefined;
 	};
 
 	/**

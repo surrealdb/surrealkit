@@ -124,13 +124,15 @@ export interface Analysis {
 	 */
 	readonly projected: ReadonlyArray<ProjectedField>;
 	/**
-	 * The field names each query compares in its `WHERE` (role `compare`),
-	 * where the comparison is not a binding use in `uses`: a bare field of
-	 * the one static table the query targets, read as `uses` reads one, on
-	 * either side of `=`, `==`, `!=`, `<`, `<=`, `>` or `>=`, whatever the
-	 * other operand; in top-level statements, statements in blocks and
-	 * parenthesised subqueries. Sorted by line, table, field and role,
-	 * without duplicates.
+	 * The field names each query compares in its `WHERE` (role `compare`)
+	 * or assigns in its `SET` (role `assign`), where that is not a binding
+	 * use in `uses`: a bare field of the one static table the query
+	 * targets, read as `uses` reads one, on either side of `=`, `==`, `!=`,
+	 * `<`, `<=`, `>` or `>=` whatever the other operand, or the target of
+	 * `field = <literal>` in `UPDATE`, `UPSERT` or `CREATE` when the
+	 * literal is never NONE; in top-level statements, statements in blocks
+	 * and parenthesised subqueries. `UNSET` is not read. Sorted by line,
+	 * table, field and role, without duplicates.
 	 */
 	readonly fields: ReadonlyArray<FieldReference>;
 	/**
