@@ -741,6 +741,48 @@ another explicit id, and for a value its own assignments make a duplicate,
 so `.onDuplicate(…)` keeps the declaration. `RELATE` onto an existing edge
 id is a different error on each version and stays a `StatementRequestError`.
 
+#### Paging through a table
+
+Page by id range, not by `START`. Each page starts after the last id the
+one before returned, built from `idRange` and `limit`:
+
+```ts
+const rows = param('rows', SurrealSchema.Int);
+const firstPage = select(ReadingTable, idRange(ReadingTable, {}))
+  .limit(rows)
+  .build();
+// SELECT * FROM type::record(s"reading", ..) LIMIT $rows;
+const nextPage = select(ReadingTable, idRange(ReadingTable, {
+  after: [param('city', SurrealSchema.String), param('at', SurrealSchema.DateTime)],
+}))
+  .limit(rows)
+  .build();
+// SELECT * FROM type::record(s"reading", [$city, $at]>..) LIMIT $rows;
+```
+
+Pass the key parts of the last row's id as the bindings of the next page,
+and stop at a page that comes back empty. A range returns its records in
+the order of their ids (SurrealDB's `SELECT` documentation, "Record
+ranges", read 2026-11-23), so it needs no `ORDER BY`.
+
+`.orderBy((row) => row.id).start(skip)` gives the same rows on a table
+nobody writes to, at a cost and with a fault. The cost is that the engine
+reads past every skipped row: on SurrealDB 3.3.4 and 4.0.1 it plans as a
+`TableScan` with the offset pushed into it. A range reads by key: the
+builder's `type::record` range plans as `Values` then `Limit` on 4.0.1 and
+as `DynamicScan` on 3.3.4, and a literal range (`table:key..`) as
+`RecordIdScan` then `Limit` on both. On 100,000 records, a page of three
+rows after id 99,990 took 57 ms by `START` and 0.6 ms by range on the
+embedded 4.0.1 engine, and 6.1 ms and 1.9 ms on a 3.3.4 server. The fault
+is that a row removed from a page already read shifts every later offset,
+so the next `START` page skips a row. The range page starts after an
+id, so it does not.
+
+Do not add `ORDER BY id` to a range page: on 4.0.1 it sorts the whole rest
+of the range before `LIMIT`. The conformance suite
+(`test/conformance.test.ts`, "paging") pins the plans of these statements
+on both versions, the order of a range, the sort, and the skipped row.
+
 ### Grouping
 
 `.groupBy((row) => ({ role: row.role, city: row.address.city }))` groups

@@ -26,6 +26,8 @@ import {
 	conflictingIndex,
 	isRecordExists,
 } from '../src/client/internal/classify.js';
+import * as S from '../src/index.js';
+import { idRange, param, select } from '../src/statement/index.js';
 import {
 	type Engine,
 	engineConfigured,
@@ -34,6 +36,7 @@ import {
 	startEngine,
 	within,
 } from './engine.js';
+import { IdIntTable } from './golden/corpus/index.js';
 import { openRecordSession } from './record-session.js';
 
 if (!engineConfigured) {
@@ -398,6 +401,134 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 					['DynamicScan', 'SelectProject'],
 				]);
 			}
+		});
+	});
+
+	describe('paging: an id range after the last id read, not START', () => {
+		// The statements the README's "Paging through a table" builds.
+		const rows = param('rows', S.Int);
+		const firstPage = select(IdIntTable, idRange(IdIntTable, {}))
+			.limit(rows)
+			.build();
+		const nextPage = select(
+			IdIntTable,
+			idRange(IdIntTable, { after: param('last', S.Int) }),
+		)
+			.limit(rows)
+			.build();
+		const offsetPage = select(IdIntTable)
+			.orderBy((row) => row.id)
+			.limit(rows)
+			.start(param('skip', S.Int))
+			.build();
+		const explained = (sql: string) =>
+			`${sql.replace(/;\s*$/u, '')} EXPLAIN;`;
+		const operators = async (
+			sql: string,
+			bindings: Record<string, unknown>,
+		) => {
+			const [plan] = await query(sql, bindings);
+			return [
+				...JSON.stringify(plan).matchAll(/"operator":"([^"]+)"/gu),
+			].map((match) => match[1]);
+		};
+		const ids = async (sql: string, bindings: Record<string, unknown>) => {
+			const [found] = (await query(sql, bindings)) as [
+				{ id: RecordId }[],
+			];
+			return found.map((row) => row.id.id);
+		};
+
+		beforeAll(async () => {
+			// Created out of key order, so key order is not insertion order.
+			await query(`
+				DEFINE TABLE id_int SCHEMAFULL;
+				FOR $k IN [5, 1, 9, 3, 7, 2, 8, 4, 6, 10] { CREATE type::record("id_int", $k); };
+			`);
+		});
+
+		it('the builders render the range pages and the START page', () => {
+			expect([firstPage.sql, nextPage.sql, offsetPage.sql]).toStrictEqual(
+				[
+					'SELECT * FROM type::record(s"id_int", ..) LIMIT $rows;',
+					'SELECT * FROM type::record(s"id_int", $last>..) LIMIT $rows;',
+					'SELECT * FROM ⟨id_int⟩ ORDER BY id ASC LIMIT $rows START $skip;',
+				],
+			);
+		});
+
+		it('START plans as a table scan that reads the skipped rows; a range reads by key', async () => {
+			const bindings = { rows: 3, skip: 3 };
+			const [offset] = await query(explained(offsetPage.sql), bindings);
+			expect(
+				await operators(explained(offsetPage.sql), bindings),
+			).toStrictEqual(['TableScan', 'SelectProject']);
+			// The scan walks the table in key order and passes over `offset`
+			// rows before it returns `limit`.
+			expect(JSON.stringify(offset)).toMatch(
+				/\{"attributes":\{"direction":"Forward","limit":"\$rows","offset":"\$skip","table":"id_int"[^}]*\},"context":"Db","operator":"TableScan"\}/u,
+			);
+			const plans = [
+				await operators(explained(firstPage.sql), { rows: 3 }),
+				await operators(explained(nextPage.sql), { rows: 3, last: 3 }),
+				await operators(
+					'SELECT * FROM id_int:3.. LIMIT 3 EXPLAIN;',
+					{},
+				),
+			];
+			if (engine.majorVersion >= 4) {
+				expect(plans).toStrictEqual([
+					['Values', 'Limit', 'SelectProject'],
+					['Values', 'Limit', 'SelectProject'],
+					['RecordIdScan', 'Limit', 'SelectProject'],
+				]);
+			} else {
+				expect(plans).toStrictEqual([
+					['DynamicScan', 'SelectProject'],
+					['DynamicScan', 'SelectProject'],
+					['RecordIdScan', 'Limit', 'Project'],
+				]);
+			}
+		});
+
+		it('a range returns its rows in key order with no ORDER BY, so walking it visits every row once', async () => {
+			const seen: unknown[] = [];
+			let page = await ids(firstPage.sql, { rows: 3 });
+			while (page.length > 0) {
+				seen.push(...page);
+				page = await ids(nextPage.sql, { rows: 3, last: page.at(-1) });
+			}
+			expect(seen).toStrictEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+		});
+
+		it('ORDER BY id on an open range sorts the whole range before LIMIT on SurrealDB 4', async () => {
+			const plan = await operators(
+				explained(
+					'SELECT * FROM type::record(s"id_int", $last>..) ORDER BY id LIMIT $rows;',
+				),
+				{ rows: 3, last: 3 },
+			);
+			expect(plan).toStrictEqual(
+				engine.majorVersion >= 4
+					? ['Values', 'Sort', 'Limit', 'SelectProject']
+					: ['DynamicScan', 'SortByKey', 'SelectProject'],
+			);
+		});
+
+		it('after a row already read is deleted, START skips a row and the range does not', async () => {
+			await query(`
+				DEFINE TABLE pg_skip SCHEMAFULL;
+				FOR $k IN [1, 2, 3, 4, 5] { CREATE type::record("pg_skip", $k); };
+			`);
+			const table = (sql: string) => sql.replaceAll('id_int', 'pg_skip');
+			expect(
+				await ids(table(offsetPage.sql), { rows: 3, skip: 0 }),
+			).toStrictEqual([1, 2, 3]);
+			await query('DELETE pg_skip:2;');
+			expect([
+				await ids(table(offsetPage.sql), { rows: 3, skip: 3 }),
+				await ids(table(nextPage.sql), { rows: 3, last: 3 }),
+			]).toStrictEqual([[5], [4, 5]]);
 		});
 	});
 

@@ -695,7 +695,12 @@ export interface Select<
 		rows: L,
 	) => Select<T, P & OperandParams<L>, Row, Only>;
 
-	/** `START`: skip this many rows. */
+	/**
+	 * `START`: skip this many rows. The engine still reads every skipped
+	 * row, and a row removed from an earlier page makes the next one skip a
+	 * row; to page through a table, start each page after the last id read
+	 * with {@link idRange} (README, "Paging through a table").
+	 */
 	readonly start: <const L extends Count>(
 		rows: L,
 	) => Select<T, P & OperandParams<L>, Row, Only>;
