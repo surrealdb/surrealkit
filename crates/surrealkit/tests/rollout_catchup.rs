@@ -1056,6 +1056,65 @@ async fn a_rolled_back_rename_leaves_the_old_field_and_its_values() {
 	);
 }
 
+/// On a `SCHEMAFULL` table a record can still hold a value under the new name
+/// when the database is at compatibility level 3, where `REMOVE FIELD` leaves
+/// the values. The copy overwrites that value on each record whose old field
+/// holds one and leaves it on the rest, and a rollback leaves the copies, as it
+/// leaves any value written to an added field there. The README says so.
+#[tokio::test]
+async fn at_level_3_the_copy_overwrites_a_value_already_under_the_new_name() {
+	const OLD: &str = "DEFINE TABLE person SCHEMAFULL;\n\
+		DEFINE FIELD email ON person TYPE option<string>;\n";
+	const NEW: &str = "DEFINE TABLE person SCHEMAFULL;\n\
+		DEFINE FIELD mail ON person TYPE option<string>;\n";
+	let project = Project::new();
+	project.write("person.surql", OLD);
+	let db = mem_db().await;
+	db.query(
+		"ALTER DATABASE COMPATIBILITY 3; \
+		 DEFINE TABLE person SCHEMAFULL; \
+		 DEFINE FIELD email ON person TYPE option<string>; \
+		 DEFINE FIELD mail ON person TYPE option<string>; \
+		 CREATE person:ann SET email = 'ann@example.test', mail = 'ann@old.test'; \
+		 CREATE person:bob SET email = 'bob@example.test'; \
+		 CREATE person:cat SET mail = 'cat@old.test'; \
+		 REMOVE FIELD mail ON person;",
+	)
+	.await
+	.unwrap()
+	.check()
+	.unwrap();
+	project.sync(&db).await;
+	project.baseline(&db).await;
+	// Level 3 kept the values of the removed field.
+	assert_eq!(
+		serde_json::json!(people(&db, "mail").await),
+		serde_json::json!([["ann", "ann@old.test"], ["bob", null], ["cat", "cat@old.test"]])
+	);
+
+	project.write("person.surql", NEW);
+	let id = project.plan("rename_email").await;
+	confirm(&project, &id);
+	project.start(&db, &id).await.expect("start");
+	let copied = serde_json::json!([
+		["ann", "ann@example.test"],
+		["bob", "bob@example.test"],
+		["cat", "cat@old.test"]
+	]);
+	assert_eq!(serde_json::json!(people(&db, "mail").await), copied);
+
+	run_rollback(
+		&db,
+		&project.folder(),
+		RolloutExecutionOpts::new(Some(id.clone())),
+		&TemplateVars::default(),
+	)
+	.await
+	.expect("rollback");
+	assert_eq!(field_names(&db, "person").await, vec!["email"]);
+	assert_eq!(serde_json::json!(people(&db, "mail").await), copied);
+}
+
 /// A rename whose copy step was deleted is refused by `up` and `start` before
 /// anything runs, confirmed or not, so the old field keeps its values.
 #[tokio::test]

@@ -1380,6 +1380,43 @@ pub(crate) fn field_under_name(
 	Ok(None)
 }
 
+/// Whether `files` define `table` as `SCHEMAFULL`: at least one `DEFINE TABLE`
+/// for it, each with the `SCHEMAFULL` clause. `false` when no file defines the
+/// table, since SurrealDB then creates it schemaless.
+pub(crate) fn table_is_schemafull(files: &[SchemaFile], table: &str) -> Result<bool> {
+	let mut defined = false;
+	for file in files {
+		let src = file.sql.as_str();
+		let statements = crate::surql_scan::scan(src)
+			.map_err(|err| anyhow!("schema file '{}': {err}", file.path))?;
+		for stmt in &statements {
+			let Some(entity) = parse_define_entity(stmt, src) else {
+				continue;
+			};
+			if entity.kind != EntityKind::Table || entity.name != table {
+				continue;
+			}
+			let Some(head) = define_head(stmt, src) else {
+				continue;
+			};
+			let end = glued_end(stmt, src, head.name_index);
+			// Up to a view's `AS SELECT` or the `PERMISSIONS` expressions, where a
+			// word is not the table's own clause.
+			let schemafull = (end..stmt.tokens.len())
+				.filter(|&i| stmt.tokens[i].depth == stmt.tokens[0].depth)
+				.take_while(|&i| {
+					!stmt.is_word(src, i, "AS") && !stmt.is_word(src, i, "PERMISSIONS")
+				})
+				.any(|i| stmt.is_word(src, i, "SCHEMAFULL") || stmt.is_word(src, i, "SCHEMAFUL"));
+			if !schemafull {
+				return Ok(false);
+			}
+			defined = true;
+		}
+	}
+	Ok(defined)
+}
+
 /// The identifier starting at token `idx`: that token plus every token written
 /// directly against it, so `a.b[*]`, `fn::greet` and `ml::model<1.0.0>` come back
 /// whole. It stops at whitespace and at `( , ; { } )`, which is where the old

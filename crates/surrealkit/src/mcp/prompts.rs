@@ -86,7 +86,8 @@ impl SurrealKitMcp {
                    definition, which reverses the schema but not any data effect the
                    change had. It also refuses an add and a remove in the same scope,
                    which is the rename-a-field case, unless the two fields are defined the
-                   same apart from the name: then it proposes the rename, with a copy step
+                   same apart from the name on a SCHEMAFULL table whose definition the
+                   rollout leaves alone: then it proposes the rename, with a copy step
                    and a `[[renames]]` entry whose `confirmed = false` I have to check and
                    set to true. Otherwise, if that is what we have, hand-write the
                    manifest.

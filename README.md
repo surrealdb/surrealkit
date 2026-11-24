@@ -1042,8 +1042,9 @@ they remove.
 
 SurrealDB has no statement that renames a field or carries its values to a new
 name, so a rename is a new field, a copy, and the removal of the old field.
-When a plan removes one field and adds another on the same table, and the two
-are defined the same apart from the name, `rollout plan` proposes the rename:
+When a plan removes one field and adds another on the same `SCHEMAFULL` table,
+and the two are defined the same apart from the name, `rollout plan` proposes
+the rename:
 
 ```toml
 [[renames]]
@@ -1072,6 +1073,19 @@ If it is not a rename, do not edit the manifest. Run `surrealkit rollout
 discard <id>`, which deletes it and puts the snapshots back, and plan the
 addition and the removal in separate rollouts.
 
+- Only a `SCHEMAFULL` table gets a proposal, and only when the rollout leaves
+  its `DEFINE TABLE` as it was. On a schemaless table `plan` proposes nothing
+  and warns, naming the pair: a schemaless table can already hold values under
+  the new name, which the copy would overwrite, and removing a field there
+  does not clear its values, so a rollback would leave the copies behind.
+  Neither can be undone without guessing which values were there first, so
+  plan such a rename by hand.
+- At compatibility level 3 `REMOVE FIELD` leaves the values too, so a record
+  of a `SCHEMAFULL` table can still hold a value under the new name. The copy
+  replaces it on each record whose old field holds a value, and leaves it on a
+  record whose old field is empty. A rollback there removes the new field but
+  not its values, the copies included, as it leaves any value written to a
+  field a rollout added. Raise the database to level 4 first (see below).
 - Whitespace and comments do not count, and neither does a `MIGRATE EXISTING
   ROWS` clause on the new field, which level 4 needs when the table holds
   records and the field's `TYPE` does not accept `NONE`.
