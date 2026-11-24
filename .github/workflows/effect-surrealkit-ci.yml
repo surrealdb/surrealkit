@@ -110,8 +110,16 @@ jobs:
     # in test/mapper-fixtures/package.json and its lockfile. A required check
     # like the others.
     mapper:
-        name: .surql imports through the content mapper (TypeScript 7.1, Node and Bun)
+        name: .surql imports through the content mapper (TypeScript 7.1, Node ${{ matrix.node }} and Bun)
         runs-on: ubuntu-latest
+        strategy:
+            fail-fast: false
+            matrix:
+                # The floor declared in `engines`, plus current. 22.21.1 is the
+                # first release on which tsc 7.1 can start the mapper process
+                # (before it process.execve passes no environment) and a .ts
+                # entry point runs without --experimental-strip-types.
+                node: ["22.21.1", "24"]
         defaults:
             run:
                 working-directory: packages/effect-surrealkit
@@ -122,8 +130,7 @@ jobs:
             - name: Setup Node.js
               uses: actions/setup-node@53b83947a5a98c8d113130e565377fae1a50d02f
               with:
-                  # module.registerHooks, which effect-surrealkit/register needs.
-                  node-version: 24
+                  node-version: ${{ matrix.node }}
 
             - name: Setup Bun
               uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0

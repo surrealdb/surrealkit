@@ -12,6 +12,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	rmSync,
 	writeFileSync,
 } from 'node:fs';
@@ -212,6 +213,45 @@ describe.skipIf(!embedded)('verifyStatements', () => {
 			expect(requests).toBe(0);
 		} finally {
 			await new Promise((done) => server.close(done));
+		}
+	});
+
+	/** The messages of a schema file the engine refused. */
+	const schemaRefusal = async (sql: string) =>
+		(
+			await problemsOf({ scopes: [], schema: [{ name: 's.surql', sql }] })
+		).map((problem) => problem.message);
+
+	// The @surrealdb/node build has no script runtime, so this holds whatever
+	// the scripting capability says; the capability is denied as well.
+	it('denies embedded scripts: a script function is refused and still counts', async () => {
+		await passed(
+			scope({ script: 'RETURN function() { return 1; };\nRETURN 1;' }),
+		);
+		expect(await schemaRefusal('RETURN function() { return 1; };')).toEqual(
+			[
+				expect.stringMatching(
+					/^s\.surql: .*Embedded functions are not enabled/u,
+				),
+			],
+		);
+	});
+
+	it('refuses a file bucket: nothing is written to the folder, and it still counts', async () => {
+		const folder = mkdtempSync(join(tmpdir(), 'effect-surrealkit-bucket-'));
+		try {
+			const bucket = `DEFINE BUCKET files BACKEND "file:${folder}";`;
+			await passed(
+				scope({
+					bucket: `${bucket}\nRETURN f"files:/x.txt".put("hi");\nRETURN 1;`,
+				}),
+			);
+			expect(await schemaRefusal(bucket)).toEqual([
+				expect.stringMatching(/^s\.surql: .*File access denied/u),
+			]);
+			expect(readdirSync(folder)).toEqual([]);
+		} finally {
+			rmSync(folder, { recursive: true, force: true });
 		}
 	});
 
@@ -505,6 +545,58 @@ describe('statements --verify', () => {
 			expect(bad.code).toBe(1);
 			expect(bad.stderr).toMatch(/ {2}bad\.surql:1:13: Parse error: /u);
 			expect(existsSync(join(dir, 'out2'))).toBe(false);
+		},
+	);
+
+	it('lists --verify-timeout in the usage text, default 10', () => {
+		expect(STATEMENTS_USAGE).toMatch(
+			/--verify-timeout <seconds> +How long each text or schema file may run/u,
+		);
+		expect(STATEMENTS_USAGE).toContain('(default 10; needs --verify)');
+	});
+
+	it.each([
+		[['--verify-timeout', '5'], '--verify-timeout needs --verify'],
+		[
+			['--verify', '--verify-timeout', '0'],
+			'--verify-timeout must be a whole number of seconds, at least 1',
+		],
+		[
+			['--verify', '--verify-timeout', '1.5'],
+			'--verify-timeout must be a whole number of seconds, at least 1',
+		],
+		[
+			['--verify', '--verify-timeout', 'ten'],
+			'--verify-timeout must be a whole number of seconds, at least 1',
+		],
+	])('refuses %j', async (flags, message) => {
+		const dir = tempDir();
+		const result = await cli(
+			['--input', fixtures, '--out', join(dir, 'out'), ...flags],
+			dir,
+		);
+		expect(result.code).toBe(2);
+		expect(result.stderr).toContain(message);
+	});
+
+	it.skipIf(!embedded)(
+		'stops each text at --verify-timeout, and at 10 seconds without it',
+		async () => {
+			const dir = tempDir();
+			mkdirSync(join(dir, 'queries', 'slow'), { recursive: true });
+			writeFileSync(
+				join(dir, 'queries', 'slow', 'wait.surql'),
+				'sleep(3s);\n',
+			);
+			const args = ['--input', 'queries', '--out', 'out', '--verify'];
+			const short = await cli([...args, '--verify-timeout', '1'], dir);
+			expect(short.code).toBe(1);
+			expect(short.stderr).toContain(
+				'slow/wait.surql: the text did not finish within 1s',
+			);
+			expect(existsSync(join(dir, 'out'))).toBe(false);
+			const fallback = await cli(args, dir);
+			expect(fallback.code, fallback.stderr).toBe(0);
 		},
 	);
 });

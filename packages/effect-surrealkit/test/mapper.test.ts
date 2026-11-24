@@ -20,10 +20,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 
+import ts from 'typescript';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { run } from '../src/cli/run.js';
 import {
+	configurationDrift,
 	decodeSurqlOptions,
 	EMPTY_SURQL_MODULE,
 	loadSurqlModule,
@@ -456,6 +458,47 @@ describe('one literal configuration', () => {
 		expect(stripJsonComments('{"a": "// no", /* x */ "b": [1,],}')).toBe(
 			'{"a": "// no",  "b": [1]}',
 		);
+	});
+
+	it('reads a tsconfig.json as TypeScript reads it', () => {
+		const texts = [
+			'﻿{"contentMappers": []}',
+			'{"input": "a,]", "b": "c,}", "d": "\\",]"}',
+			'{"a": [1, 2, ], "b": {"c": 1 , }, }',
+			'{"a": [1, /* x */ ], // y\n"b": {"c": 1, // z\n}}',
+			'{"a": "/* not a comment */", "b": "// nor this", }',
+			'{"a": [1 ,\n\t]}',
+		];
+		for (const text of texts) {
+			const expected = ts.parseConfigFileTextToJson(
+				'tsconfig.json',
+				text,
+			);
+			expect(expected.error).toBeUndefined();
+			expect(JSON.parse(stripJsonComments(text))).toEqual(
+				expected.config,
+			);
+		}
+	});
+
+	it('reads the options TypeScript passes from a file with a BOM or a ",]" string', () => {
+		const root = tempDir();
+		const config = join(root, 'tsconfig.json');
+		const options = { input: 'a,]', holes: { open: '{,}', close: ',}' } };
+		writeFileSync(
+			config,
+			`﻿{
+	"contentMappers": [
+		{ "package": "effect-surrealkit", "extensions": [".surql"], "options": ${JSON.stringify(options)} },
+	],
+}`,
+		);
+		expect(mapperEntryIn(config)).toEqual({
+			found: true,
+			options,
+			extends: false,
+		});
+		expect(configurationDrift(config, options)).toBeUndefined();
 	});
 });
 

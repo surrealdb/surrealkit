@@ -1611,7 +1611,8 @@ nothing:
   expected FROM`);
 - a number of results other than the analyzer's `slots`;
 - a text that does not finish within the timeout (10 seconds, or
-  `timeoutSeconds`): `slow/wait.surql: the text did not finish within 10s on
+  `--verify-timeout <seconds>`, a whole number; `timeoutSeconds` of the
+  function): `slow/wait.surql: the text did not finish within 10s on
   an empty database with no bindings, so its result count was not verified`.
   This is the one outcome whichever way the engine reports the timeout (an
   error for each statement it did not finish, or a refusal of the whole
@@ -1636,10 +1637,14 @@ run one after another on the same database, so one text's writes are visible
 to the next. The engine is started with network targets, `http::` functions
 and embedded scripts denied: an `http::post` fails with `Function 'http::post'
 is not allowed to be executed` and sends nothing, still counting as one result.
-File buckets are refused by the engine's default (no folder is allowed). Each
-text and each schema file may run for 10 seconds; a `sleep` or a long loop
-ends there and is a timeout problem, as above. Nothing else a text can write
-in SurrealQL reaches outside the engine.
+A script function fails with `Embedded functions are not enabled` (the
+`@surrealdb/node` build has no script runtime, so this holds with or without
+the capability), and a file bucket with `File access denied`, by the engine's
+default (no folder is allowed); each still counts as one result and writes
+nothing. Each text and each schema file may run for 10 seconds, or for
+`--verify-timeout <seconds>`; a `sleep` or a long loop ends there and is a
+timeout problem, as above. Nothing else a text can write in SurrealQL reaches
+outside the engine.
 
 `verifyStatements` from `effect-surrealkit/testing` is the same check, for a
 build that renders in process; it takes the scopes as `renderStatementModules`
@@ -3184,15 +3189,21 @@ on the lane the same variables select and exits 1 when its skipped tests
 differ from `test/skips/<lane>.txt` in either direction, printing each name
 that was skipped and is not listed, or is listed and was not skipped. The
 lanes are `embedded`, `binary-<major>.<minor>` for `SURREAL_BIN` (by the
-version the binary reports) and `remote` for `SURREAL_URL`, with `-http`
-appended under `SURREAL_TRANSPORT=http`. `embedded` and `binary-3.3` are
-committed; a lane without a list is reported as unpinned and not compared.
+version the binary reports) and `remote-<major>.<minor>` for `SURREAL_URL` (by
+the version the server answers on `GET /version`), with `-http` appended
+under `SURREAL_TRANSPORT=http`. `embedded`, `binary-3.3`, `remote-3.3` and
+`remote-4.0` are committed, and every run prints the pinned lanes; a lane
+without a list is reported as unpinned and not compared. The `-http` lanes
+are not pinned: on 3.3.4 and 4.0.1, over HTTP, the FOR UPDATE tests of
+`test/block-engine.test.ts` fail (the client reports success where they
+expect a `StatementConflict`), and a list is written only from a passing run.
 After a change that is meant to skip or un-skip a test, rewrite the list from
 a passing run and commit it with the change:
 
 ```sh
 bun run test:skips                                                   # embedded
 SURREAL_BIN=/usr/local/bin/surreal bun run test:skips                # binary-3.3 with a 3.3 binary
+SURREAL_URL=ws://127.0.0.1:8000/rpc bun run test:skips               # remote-4.0 against a 4.0 server
 UPDATE_SKIPS=1 SURREAL_BIN=/usr/local/bin/surreal bun run test:skips # rewrites test/skips/binary-3.3.txt
 ```
 
