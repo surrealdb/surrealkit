@@ -134,6 +134,13 @@ const COMPARISONS: ReadonlySet<string> = new Set([
 	'>=',
 ]);
 
+/**
+ * Where a query stands: a top-level statement, or one parenthesised query
+ * that is the whole value of one (`statement`); a statement of a `{…}`
+ * block (`block`); or any other parenthesised query (`subquery`).
+ */
+type Place = 'statement' | 'block' | 'subquery';
+
 /** Characters an operator is spelt with. */
 const OPERATOR = '=!<>?~*@&|+-^%/';
 
@@ -414,12 +421,19 @@ export const analyzeUses = (
 	 * are exactly one static table, and, for a `SELECT`, no item of its
 	 * `FROM` is a subquery. Subqueries inside it are queries of their own;
 	 * any other bracket but `(` makes it uncertain which query a comparison
-	 * belongs to, so nothing inside one is recorded. A statement in a block
-	 * (`inBlock`) records field names only: it may run for some values of a
-	 * binding and not others (`IF $x != NONE { … }`), so a use there cannot
-	 * say what the binding must hold.
+	 * belongs to, so nothing inside one is recorded.
+	 *
+	 * Where the query stands (`place`) decides which binding uses it
+	 * records. A statement in a block records field names only: it may run
+	 * for some values of a binding and not others (`IF $x != NONE { … }`),
+	 * so a use there cannot say what the binding must hold. A subquery
+	 * records its comparisons, which accept NONE whether or not they run,
+	 * but no assignment: a condition around it can keep NONE from reaching
+	 * the field (`IF $x != NONE THEN (UPDATE …) END`, `$x != NONE AND
+	 * (UPDATE …)`, a subquery the outer `WHERE` reaches only for some rows),
+	 * and an assignment's use refuses a codec that can hold NONE.
 	 */
-	const query = (from: number, end: number, inBlock = false): void => {
+	const query = (from: number, end: number, place: Place): void => {
 		const word = upper(tokens[from]);
 		const slice = tokens.slice(from, end);
 		const targets = analyzeTargets(slice);
@@ -454,7 +468,8 @@ export const analyzeUses = (
 				const token = tokens[i] as Token;
 				if (isPunct(token, '(')) {
 					const close = closing(i);
-					if (QUERIES.has(upper(tokens[i + 1]))) query(i + 1, close);
+					if (QUERIES.has(upper(tokens[i + 1])))
+						query(i + 1, close, 'subquery');
 					else scan(i + 1, close, depth + 1);
 					i = close;
 					continue;
@@ -490,7 +505,11 @@ export const analyzeUses = (
 						word === 'UPSERT' ||
 						word === 'CREATE');
 				if (!inWhere && !inSet) continue;
-				if (certain && table !== undefined && !inBlock)
+				if (
+					certain &&
+					table !== undefined &&
+					(inWhere ? place !== 'block' : place === 'statement')
+				)
 					bindingUse(i, table, inWhere);
 				if (inWhere) compared(i, fieldTable);
 				else assigned(i, fieldTable);
@@ -668,7 +687,7 @@ export const analyzeUses = (
 			if (!isOpen(tokens[i])) continue;
 			const close = closing(i);
 			if (isPunct(tokens[i], '(') && QUERIES.has(upper(tokens[i + 1])))
-				query(i + 1, close);
+				query(i + 1, close, 'subquery');
 			else if (isPunct(tokens[i], '{')) statements(i + 1, close, true);
 			else nested(i + 1, close);
 			i = close;
@@ -678,13 +697,24 @@ export const analyzeUses = (
 	/**
 	 * The statements from `start` to `stop` at one level: a query when its
 	 * value starts with a query word (possibly after `LET $name =` or
-	 * `RETURN`); in any statement, the subqueries and blocks inside it.
+	 * `RETURN`); at the top level, also when it is one parenthesised query
+	 * and nothing else (`(UPDATE …);`, `LET $r = (UPDATE …);`, `RETURN
+	 * (UPDATE …);`), which runs whenever the statement does; in any other
+	 * statement, the subqueries and blocks inside it.
 	 */
 	const statements = (start: number, stop: number, inBlock: boolean) => {
 		for (const statement of statementsIn(tokens, start, stop)) {
+			const { first, end } = statement;
 			if (queryAt(tokens, statement, QUERIES))
-				query(statement.first, statement.end, inBlock);
-			else nested(statement.start, statement.end);
+				query(first, end, inBlock ? 'block' : 'statement');
+			else if (
+				!inBlock &&
+				isPunct(tokens[first], '(') &&
+				QUERIES.has(upper(tokens[first + 1])) &&
+				closing(first) === end - 1
+			)
+				query(first + 1, end - 1, 'statement');
+			else nested(statement.start, end);
 		}
 	};
 

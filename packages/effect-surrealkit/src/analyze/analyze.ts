@@ -106,9 +106,13 @@ export interface Analysis {
 	 * a `SELECT` with a subquery in its `FROM`, whose rows are the
 	 * subquery's results). Only these patterns are recognised, and nothing
 	 * is recorded where the lexer is not certain; a binding with no such use
-	 * is absent. A comparison or
-	 * assignment in a statement in a block is not a use (the statement may
-	 * not run for every value), and its field name is in `fields`.
+	 * is absent. A comparison or assignment in a statement in a block is not
+	 * a use (the statement may not run for every value), and its field name
+	 * is in `fields`. Nor is an assignment in a parenthesised query unless
+	 * that query is the whole value of a top-level statement (`(UPDATE …);`,
+	 * `LET $r = (UPDATE …);`, `RETURN (UPDATE …);`): a condition around it
+	 * (`IF … THEN`, `AND`, `OR`, an outer `WHERE`, a closure) can keep NONE
+	 * from reaching the field.
 	 */
 	readonly uses: BindingUses;
 	/**

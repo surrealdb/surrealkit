@@ -151,12 +151,41 @@ describe('analyze: field uses', () => {
 		});
 	});
 
+	it('a parenthesised query that is the whole value of a top-level statement', () => {
+		for (const sql of [
+			'(UPDATE gizmo SET a = $a);',
+			'LET $r = (UPDATE gizmo SET a = $a);',
+			'RETURN (UPDATE gizmo SET a = $a)',
+		])
+			expect(uses(sql), sql).toEqual({
+				a: [field('gizmo', 'a', 1, 'assign')],
+			});
+		expect(uses('RETURN (SELECT * FROM gizmo WHERE b = $b);')).toEqual({
+			b: [field('gizmo', 'b')],
+		});
+	});
+
 	it('a subquery is a query of its own table', () => {
 		expect(
 			uses(
 				'SELECT * FROM gizmo WHERE a IN (SELECT VALUE id FROM sprocket WHERE b = $b);',
 			),
 		).toEqual({ b: [field('sprocket', 'b')] });
+	});
+
+	it('a comparison in any subquery, but no assignment there', () => {
+		// A condition around the subquery can keep NONE from an assignment;
+		// a comparison accepts NONE, so a use there says the same either way.
+		for (const sql of [
+			'LET $r = IF $c THEN 1 ELSE (SELECT * FROM gizmo WHERE b = $b) END;',
+			'RETURN array::len((SELECT * FROM gizmo WHERE b = $b));',
+			'RETURN $c AND (SELECT * FROM gizmo WHERE b = $b);',
+			'IF $c { RETURN (SELECT * FROM gizmo WHERE b = $b) };',
+		])
+			expect(uses(sql), sql).toEqual({ b: [field('gizmo', 'b')] });
+		const both =
+			'RETURN IF $c THEN (DELETE gizmo WHERE b = $b) ELSE (UPDATE gizmo SET a = $a) END;';
+		expect(uses(both)).toEqual({ b: [field('gizmo', 'b')] });
 	});
 
 	it('sorted by line and without duplicates', () => {
@@ -208,6 +237,38 @@ describe('analyze: field uses', () => {
 		['inside a string', "SELECT * FROM gizmo WHERE a = '$a' OR b = $b.c;"],
 		['inside a comment', 'SELECT * FROM gizmo -- WHERE a = $a\nWHERE $a;'],
 		['a block', 'IF $c { UPDATE gizmo SET a = $a };'],
+		[
+			'a parenthesised query in a block',
+			'IF $c { (UPDATE gizmo SET a = $a) };',
+		],
+		[
+			'a LET of a parenthesised query in a block',
+			'IF $c { LET $r = (UPDATE gizmo SET a = $a); RETURN $r; };',
+		],
+		[
+			'a parenthesised query in ELSE',
+			'IF $c { 1 } ELSE { (UPDATE gizmo SET a = $a) };',
+		],
+		['IF … THEN … END', 'RETURN IF $c THEN (UPDATE gizmo SET a = $a) END;'],
+		[
+			'IF … ELSE … END',
+			'LET $r = IF $c THEN 1 ELSE (UPSERT gizmo SET a = $a) END;',
+		],
+		['an operand of AND', 'RETURN $c AND (UPDATE gizmo SET a = $a);'],
+		['an operand of ||', 'RETURN $c || (UPDATE gizmo SET a = $a);'],
+		[
+			'a projection subquery',
+			'SELECT (UPDATE gizmo SET a = $a) AS u FROM sprocket WHERE $c;',
+		],
+		['a closure body', 'RETURN $list.map(|$v| (UPDATE gizmo SET a = $a));'],
+		[
+			'a function argument',
+			'RETURN array::len((CREATE gizmo SET a = $a));',
+		],
+		[
+			'a parenthesised query with more after it',
+			'LET $r = (UPDATE gizmo SET a = $a)[0];',
+		],
 		['a non-query statement', 'IF a = $a THEN 1 END;'],
 		['a value word', 'SELECT * FROM gizmo WHERE NONE = $a;'],
 		[
@@ -557,6 +618,17 @@ describe('statements with schema detail', () => {
 				"DEFINE FIELD OVERWRITE station ON gauge TYPE string DEFAULT 'x';\nUPDATE gauge SET station = $s;",
 			),
 		).toBeUndefined();
+		// A condition can skip the assignment: NONE never reaches it.
+		for (const sql of [
+			'IF $x != NONE { (UPDATE gauge SET station = $x) };',
+			'RETURN IF $x != NONE THEN (UPDATE gauge SET station = $x) END;',
+			'RETURN $x != NONE AND (UPDATE gauge SET station = $x);',
+		])
+			expect(await rejects(sql), sql).toBeUndefined();
+		// Nothing can skip it.
+		expect(await rejects('LET $r = (UPDATE gauge SET station = $x);')).toBe(
+			'{ "x": { table: "gauge", field: "station", kind: "string" } }',
+		);
 		// The first such assignment, in the order of the uses.
 		expect(
 			await rejects(
