@@ -1291,10 +1291,14 @@ type BindingUse =
   string literal and exactly one parameter. `SELECT * FROM
   type::record('site', $siteKey);` uses `$siteKey` as the key of `site`.
 - `field`: inside one query (a top-level statement or a parenthesised
-  subquery) whose targets are exactly one static table and not open, a
-  comparison (`=`, `==`, `!=`, `<`, `<=`, `>`, `>=`) in its `WHERE` between a
-  bare field name and a parameter, or an assignment `field = $name` in the
-  `SET` of an `UPDATE`, `UPSERT` or `CREATE`. `SELECT * FROM gauge WHERE
+  subquery) whose targets are exactly one static table and not open, and,
+  for a `SELECT`, with no subquery in its `FROM` (the rows are then the
+  subquery's results, not rows of its table), a comparison (`=`, `==`,
+  `!=`, `<`, `<=`, `>`, `>=`) in its `WHERE` between a bare field name and a
+  parameter, or an assignment `field = $name` in the `SET` of an `UPDATE`,
+  `UPSERT` or `CREATE` that is a top-level statement or the whole value of
+  one (`(UPDATE …);`, `LET $r = (UPDATE …);`, `RETURN (UPDATE …);`) and
+  has no `WHERE` of its own. `SELECT * FROM gauge WHERE
   station = $station;` uses `$station` as `gauge.station`. The analyzer sets
   `role` to `compare` for the `WHERE` comparison and `assign` for the `SET`
   assignment, which messages say; a declared use may leave it out.
@@ -1365,13 +1369,32 @@ holds anything, is not taken to hold NONE.
 
 The limits are plain: only these three patterns are read, by a lexer, not
 a parser, and nothing is recorded where it is not certain (a parameter in a
-longer expression, a path, two tables or an open target, a comparison
-inside a block). A binding with no recorded use is never checked against
-the schema. A statement in a block records no binding use because it may
-run for some values of a binding and not others (`IF $x != NONE { UPDATE
-gauge SET station = $x }`): a `rejectsNone` entry there would refuse a codec
-that holds NONE although the text never assigns NONE. The field names it
-compares are checked all the same (see
+longer expression, a path, two tables or an open target, a subquery in
+`FROM`, a comparison inside a block). A binding with no recorded use is
+never checked against the schema. A statement in a block records no
+binding use because it may run for some values of a binding and not others
+(`IF $x != NONE { UPDATE gauge SET station = $x }`): a `rejectsNone` entry
+there would refuse a codec that holds NONE although the text never assigns
+NONE. For the same reason an assignment records no use anywhere a
+condition can skip it, which both versions show running without an error
+when the binding is NONE:
+
+- in a parenthesised query that is not the whole value of a top-level
+  statement: after `IF … THEN` or `ELSE` without braces, behind `AND`, `&&`
+  or `OR`, in a projection or `WHERE` of another query, in a closure (a
+  function argument or an array item skips nothing, but a lexer does not
+  tell it from these);
+- in a query with a `WHERE` of its own (`UPDATE gauge SET station = $x
+  WHERE $x != NONE`). No reading of the `WHERE` can rule out that it skips
+  every record when the binding is NONE: it can test a local `LET` from
+  it, call a function whose body reads the caller's bindings (both
+  versions), or, on 3.3, read a `COMPUTED` field whose expression does.
+
+A comparison in such a subquery is still a use: it accepts NONE whether or
+not it runs. `??` and `?:` evaluate their right side when the left is NONE,
+and a `RETURN` in a top-level `IF` block does not end the text, so these
+skip nothing, yet an assignment behind `??` or `?:` records nothing either.
+The field names these statements compare are checked all the same (see
 [Compared and assigned fields](#compared-and-assigned-fields)).
 
 #### Projected fields
@@ -1471,7 +1494,11 @@ to one table](#a-local-fixed-to-one-table)), as a top-level
 statement, a statement in a block or a parenthesised subquery (a bare word
 there is a field of the subquery's own row on both versions, never the
 outer one's), at the query's own level or inside parentheses, before a
-second `WHERE` or `SET` clause. The field is
+second `WHERE` or `SET` clause. A `SELECT` with a subquery in its `FROM`
+records nothing of its own: `SELECT * FROM (SELECT station AS s FROM
+gauge) WHERE s = 'a'` compares `s` of the subquery's results, which
+`gauge` need not declare, and the subquery is read against its own table.
+The field is
 recorded when it is a whole operand of `=`, `==`, `!=`, `<`, `<=`, `>` or
 `>=`:
 
@@ -1508,7 +1535,8 @@ $v` with `$v` NONE, `SET nmae = 1 AND NONE` and `SET nmae = [1][5]` all
 succeed, and on a row kept from before its table became `SCHEMAFULL` they
 clear the old field. For the same reason `UNSET` is never read: `UPDATE
 loose UNSET extra` is how such a field is cleared. A binding assigned in
-`SET` is a binding use, as before, and is not repeated in `fields`.
+`SET` where `uses` takes the assignment for a binding use is not repeated
+in `fields`; anywhere else `SET field = $name` records nothing.
 
 With `--schema` (or a scope's `declared` detail), a compared or assigned
 field that a `SCHEMAFULL` table does not declare fails generation with its
