@@ -250,6 +250,74 @@ describe('constraint errors', () => {
 		}
 	});
 
+	it('classifies the shapes SurrealDB 3.3.4 and 4.0.1 report as before', async () => {
+		// Both versions report the same kind, details and message
+		// (`test/conformance.test.ts`, "constraint errors").
+		const declared = await rejected(
+			failingWith(duplicate('person_email')).run(write, {
+				entry: marker,
+			}),
+		);
+		expect(declared).toBeInstanceOf(StatementIndexConflict);
+		expect(declared).toMatchObject({ index: 'person_email' });
+		const undeclared = await rejected(
+			failingWith(duplicate('person_name')).run(write, { entry: marker }),
+		);
+		expect(undeclared).toBeInstanceOf(StatementRequestError);
+		const existing = await rejected(
+			failingWith(
+				Object.assign(
+					new Error(
+						`Database record \`person:${marker}\` already exists`,
+					),
+					{
+						kind: 'AlreadyExists',
+						details: {
+							kind: 'Record',
+							details: { id: `person:${marker}` },
+						},
+					},
+				),
+			).run(write, { entry: marker }),
+		);
+		expect(existing).toBeInstanceOf(StatementRecordExists);
+	});
+
+	// surrealdb/surrealdb#7653 (open, unreleased) maps a unique-index conflict
+	// to `AlreadyExists` of kind `Record`, with the id of the record that holds
+	// the value, and keeps the message.
+	const asRecordExists = (index: string) =>
+		Object.assign(duplicate(index), {
+			kind: 'AlreadyExists',
+			details: { kind: 'Record', details: { id: `person:${marker}` } },
+		});
+
+	it('a duplicate reported as an existing record, as surrealdb/surrealdb#7653 would, is still an index conflict', async () => {
+		const error = await rejected(
+			failingWith(asRecordExists('person_email')).run(write, {
+				entry: marker,
+			}),
+		);
+		expect(error).toBeInstanceOf(StatementIndexConflict);
+		expect(error).toMatchObject({
+			statement: 'write',
+			index: 'person_email',
+		});
+		expectSafeDisplay(error);
+	});
+
+	it('the same shape on an undeclared index is a request error, never a record that exists', async () => {
+		const client = failingWith(asRecordExists('person_name'));
+		for (const error of [
+			await rejected(client.run(write, { entry: marker })),
+			// A statement that declares no unique index.
+			await rejected(client.run(read, { entry: marker })),
+		]) {
+			expect(error).toBeInstanceOf(StatementRequestError);
+			expectSafeDisplay(error);
+		}
+	});
+
 	it('a THROW of the same text is a thrown message, not a conflict', async () => {
 		const error = await rejected(
 			failingWith(

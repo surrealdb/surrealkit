@@ -134,6 +134,20 @@ const duplicateMessage =
 	/^Database index `[\s\S]+` already contains [\s\S]+, with record `[\s\S]+`$/u;
 
 /**
+ * Whether the engine error `error` reports a duplicate on a unique index:
+ * an error the server reported (it has a `kind`), other than a `THROW`, whose
+ * whole message has the pinned form. Its kind and details are not read
+ * further: surrealdb/surrealdb#7653 would report the same message as
+ * `AlreadyExists` of kind `Record`, carrying the id of the record that holds
+ * the value, so the message, not the kind, tells a duplicate from a record
+ * that exists.
+ */
+export const isIndexDuplicate = (error: Reported): boolean =>
+	typeof error.kind === 'string' &&
+	error.kind !== 'Thrown' &&
+	duplicateMessage.test(error.message);
+
+/**
  * The declared unique index that the engine error `error` reports a
  * duplicate value of, or `undefined`. The name is read as the message's
  * prefix, ``Database index `<name>` already contains ``, for each name in
@@ -145,9 +159,8 @@ export const conflictingIndex = (
 	error: Reported,
 	declared: Iterable<string>,
 ): string | undefined => {
-	if (error.kind !== 'Internal' || error.details !== undefined) return;
+	if (!isIndexDuplicate(error)) return;
 	const { message } = error;
-	if (!duplicateMessage.test(message)) return;
 	let found: string | undefined;
 	for (const index of declared) {
 		if (
@@ -162,9 +175,13 @@ export const conflictingIndex = (
 	return found;
 };
 
-/** Whether the engine error `error` is a record that already exists. */
+/**
+ * Whether the engine error `error` is a record that already exists: a
+ * structured `AlreadyExists` of kind `Record` that is not a duplicate on a
+ * unique index (`isIndexDuplicate`).
+ */
 export const isRecordExists = (error: Reported): boolean => {
-	if (error.kind !== 'AlreadyExists') return false;
+	if (error.kind !== 'AlreadyExists' || isIndexDuplicate(error)) return false;
 	const { details } = error as {
 		readonly details?: { readonly kind?: unknown };
 	};
@@ -241,18 +258,24 @@ export const classify = <Throws extends string, Unique extends string = never>(
 				cause,
 			});
 		}
+		// A duplicate on a unique index is read before a record that exists,
+		// whatever its kind: one on an index the statement does not declare
+		// is a request error, never `StatementRecordExists`.
+		if (isIndexDuplicate(error)) {
+			const index = conflictingIndex(error, declared);
+			if (index !== undefined) {
+				return new StatementIndexConflict<Unique>({
+					statement: indexDeclarer(statements, index),
+					index,
+					cause,
+				});
+			}
+			continue;
+		}
 		if (isRecordExists(error)) {
 			return new StatementRecordExists({
 				statement: name,
 				message: `\`${name}\` tried to create a record whose id already exists`,
-				cause,
-			});
-		}
-		const index = conflictingIndex(error, declared);
-		if (index !== undefined) {
-			return new StatementIndexConflict<Unique>({
-				statement: indexDeclarer(statements, index),
-				index,
 				cause,
 			});
 		}
