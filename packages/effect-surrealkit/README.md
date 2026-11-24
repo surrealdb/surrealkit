@@ -1613,6 +1613,51 @@ included; `--schema` applies it to every scope. Names behind an open target
 are not checked: a text with `openTargets` can use tables the check never
 sees.
 
+#### Checking texts against the schema without rendering
+
+`schemaProblems(texts, declared, options?)` from `effect-surrealkit/analyze`
+makes the same checks over named texts and renders nothing, so a name is any
+non-empty string (`billing.openInvoices`, `retrieval/graph/depth-1`) and the
+texts need not be `.surql` files of a scope directory: the pins of [built
+statements](#pinning-built-statements), say. It is the renderer's own check,
+not a copy: both call one function per text, and
+`test/schema-problems.test.ts` requires the same problems from both over
+every fixture.
+
+```ts
+import { Effect } from 'effect';
+import { schemaProblems } from 'effect-surrealkit/analyze';
+import { declaredNames, decodeDocument } from 'effect-surrealkit/emitter';
+
+const declared = declaredNames(await Effect.runPromise(decodeDocument(json)));
+const problems = schemaProblems(
+	[{ name: 'billing.openInvoices', sql: 'SELECT totl FROM invoice;' }],
+	declared,
+	// { holes: { open: '{{', close: '}}' } },
+);
+// [{ name: 'billing.openInvoices', line: 1, code: 'undeclaredField',
+//    message: 'selects `totl` of `invoice`, which declares no such field',
+//    text: 'billing.openInvoices:1: selects `totl` of `invoice`, which declares no such field (undeclaredField)' }]
+```
+
+Each problem has the text's `name`, a `line`, a `column` where the analyzer
+gives one, a `code` and a `message` holding schema names only:
+`undeclaredTable`, `undeclaredFunction`, `undeclaredField` (projected,
+compared or assigned, or a binding used as one) and `extraArgument` from the
+schema checks; the analyzer's own code, with line and column, for a text it
+refuses (it cannot be lexed, or is empty) and for an error it diagnoses
+(`LET $auth`); `unnamed` for an empty name. A refusal is a problem of its
+text, never thrown, so one bad text does not hide the others. Without
+`declared.detail` only tables and functions are checked. The result is
+sorted by name, line and column, without duplicates, and is the same for the
+texts in any order. Warnings are not problems and are not returned.
+
+A template is checked as written, as the renderer checks it: a hole is never
+filled or guessed. A target behind a hole is open and records nothing, and
+where a hole starts a statement (at the start, or after `;` or `{`) no field
+is checked, since a fill there can define one; tables and functions still
+are. To check what a fill makes, check the filled text (`fill`).
+
 #### Checking texts on an engine: `--verify`
 
 The analyzer is a lexer, so a text it can count but SurrealDB cannot parse

@@ -5,15 +5,16 @@
  */
 import { Data, Effect } from 'effect';
 
-import { type Analysis, analyzeSync } from './analyze.js';
-import {
-	AnalyzeError,
-	type HoleDelimiters,
-	holeDelimiters,
-	lex,
-} from './lexer.js';
-import { analyzeTargets } from './targets.js';
+import type { Analysis } from './analyze.js';
+import { checkText, type DeclaredNames, type RejectedNone } from './check.js';
+import { type HoleDelimiters, holeDelimiters, lex } from './lexer.js';
 import type { BindingUse, BindingUses } from './uses.js';
+
+export type {
+	DeclaredDetail,
+	DeclaredNames,
+	DeclaredTable,
+} from './check.js';
 
 /** First line of every module {@link renderStatementModules} renders. */
 export const STATEMENTS_MARK =
@@ -48,52 +49,6 @@ export interface StatementScope {
 	 * FUNCTION`, is a problem. Names behind an open target are not checked.
 	 */
 	readonly declared?: DeclaredNames;
-}
-
-/** The tables and custom functions (`fn::…`) a schema declares. */
-export interface DeclaredNames {
-	readonly tables: ReadonlyArray<string>;
-	readonly functions: ReadonlyArray<string>;
-	/**
-	 * What the schema says about each table and function, as
-	 * `declaredNames(document)` (`effect-surrealkit/emitter`) reads it. When
-	 * given, every use of a binding the analyzer finds must resolve (a field
-	 * the table declares or accepts, an argument the function takes), and
-	 * each part states, in `binds`, the simple kind of each binding whose
-	 * every use resolves to the same one (`option<K>` when every use accepts
-	 * NONE).
-	 */
-	readonly detail?: DeclaredDetail;
-}
-
-/** The schema detail of {@link DeclaredNames}: kinds as SurrealQL text. */
-export interface DeclaredDetail {
-	readonly tables: Readonly<Record<string, DeclaredTable>>;
-	/** The kind text of each argument of each function, in order. */
-	readonly functions: Readonly<Record<string, ReadonlyArray<string>>>;
-}
-
-export interface DeclaredTable {
-	/**
-	 * Each declared field (its path joined with `.`): its kind text, and
-	 * `rejectsNone` when the engine rejects NONE assigned to it in every
-	 * statement that can assign it (`CREATE`, `UPDATE` and `UPSERT`): a
-	 * top-level field whose kind excludes NONE, without `DEFAULT`, `VALUE`
-	 * or `COMPUTED`. Left out, nothing is refused for the field.
-	 */
-	readonly fields: Readonly<
-		Record<
-			string,
-			{ readonly kind?: string; readonly rejectsNone?: boolean }
-		>
-	>;
-	/**
-	 * The table accepts fields it does not declare: it is schemaless, or a
-	 * view, whose fields come from its SELECT.
-	 */
-	readonly acceptsUndeclared: boolean;
-	/** The kind text of the id key, when the schema declares one. */
-	readonly idKey?: string;
 }
 
 export interface RenderStatementModulesInput {
@@ -234,273 +189,6 @@ const bindsField = (binds: Readonly<Record<string, string>>): string =>
 		)
 		.join(', ')} }`;
 
-/** A simple kind's text: one a codec's stored type can be checked against. */
-const SIMPLE =
-	/^(?:string|bool|int|float|number|decimal|datetime|duration|uuid|record<[^<>|,\s]+>)$/u;
-
-/** The simple kind a kind text is, `option<K>` read as `K`; else undefined. */
-const simpleKind = (kind: string | undefined): string | undefined => {
-	if (kind === undefined) return undefined;
-	const inner = /^option<(.*)>$/u.exec(kind)?.[1] ?? kind;
-	return SIMPLE.test(inner) ? inner : undefined;
-};
-
-/**
- * Whether NONE is acceptable to a use whose kind text is `kind`: comparing
- * a field with NONE always is; assigning to a field, or passing an
- * argument, only when its kind is `option<…>`; a record key never.
- */
-const acceptsNone = (use: BindingUse, kind: string | undefined): boolean =>
-	use.kind === 'field' && use.role !== 'assign'
-		? true
-		: use.kind !== 'key' &&
-			kind !== undefined &&
-			/^option<.*>$/u.test(kind);
-
-/** Control characters, and the two line separators, as `\u{…}` in a message. */
-const UNPRINTABLE = new RegExp(
-	`[\\x00-\\x1f\\x7f${String.fromCharCode(0x2028, 0x2029)}]`,
-	'gu',
-);
-
-/**
- * A schema name in backticks for a message, as SurrealQL quotes it: a
- * backtick or backslash in it escaped with a backslash, and a line break or
- * other control character written as `\u{…}`, so the name cannot end the
- * quotes or the message's line.
- */
-const quoted = (name: string): string =>
-	`\`${name
-		.replace(/[\\`]/gu, '\\$&')
-		.replace(
-			UNPRINTABLE,
-			(char) => `\\u{${(char.codePointAt(0) as number).toString(16)}}`,
-		)}\``;
-
-/** How a problem names a use that does not resolve. */
-type Resolved =
-	| {
-			readonly kind: 'kind';
-			readonly text: string | undefined;
-			/** The use is a field that rejects NONE; see {@link DeclaredTable}. */
-			readonly rejectsNone?: boolean;
-	  }
-	| { readonly kind: 'problem'; readonly message: string }
-	| { readonly kind: 'unchecked' };
-
-/**
- * What one use resolves to in the schema: the kind text of what it is
- * used as (undefined when the schema gives none), a problem when it cannot
- * resolve, or `unchecked` for a table or function the schema does not
- * declare (reported elsewhere) or the text defines itself.
- */
-const resolve = (use: BindingUse, detail: DeclaredDetail): Resolved => {
-	if (use.kind === 'argument') {
-		const args = Object.hasOwn(detail.functions, use.function)
-			? detail.functions[use.function]
-			: undefined;
-		if (args === undefined) return { kind: 'unchecked' };
-		return use.index < args.length
-			? { kind: 'kind', text: args[use.index] }
-			: {
-					kind: 'problem',
-					message: `passes argument ${use.index + 1} to \`${use.function}\`, which takes ${args.length === 1 ? '1 argument' : `${args.length} arguments`}`,
-				};
-	}
-	const table = Object.hasOwn(detail.tables, use.table)
-		? detail.tables[use.table]
-		: undefined;
-	if (table === undefined) return { kind: 'unchecked' };
-	if (use.kind === 'key') return { kind: 'kind', text: table.idKey };
-	if (Object.hasOwn(table.fields, use.field)) {
-		const field = table.fields[use.field];
-		return {
-			kind: 'kind',
-			text: field?.kind,
-			rejectsNone: field?.rejectsNone === true,
-		};
-	}
-	if (use.field === 'id')
-		return { kind: 'kind', text: `record<${use.table}>` };
-	return table.acceptsUndeclared
-		? { kind: 'kind', text: undefined }
-		: {
-				kind: 'problem',
-				message: `${use.role === 'assign' ? 'assigns' : 'compares'} ${quoted(use.field)} of ${quoted(use.table)}, which declares no such field`,
-			};
-};
-
-/** The field a binding is assigned to that rejects NONE; see `Part`. */
-interface RejectedNone {
-	readonly table: string;
-	readonly field: string;
-	/** The field's kind text. */
-	readonly kind: string;
-}
-
-/**
- * The uses that do not resolve in `detail`, the simple kind of each
- * binding whose every use resolves to the same one, and, for each binding
- * assigned to a field that rejects NONE, the first such field. With
- * `schemaChanges`, the text defines, alters or removes a table or field
- * itself, so the schema may not hold when its assignments run and no
- * field is recorded.
- */
-const checkUses = (
-	uses: BindingUses,
-	detail: DeclaredDetail,
-	schemaChanges: boolean,
-): {
-	readonly problems: ReadonlyArray<{
-		readonly line: number;
-		readonly message: string;
-	}>;
-	readonly binds: Readonly<Record<string, string>>;
-	readonly rejectsNone: Readonly<Record<string, RejectedNone>>;
-} => {
-	const problems: Array<{ line: number; message: string }> = [];
-	const binds: Record<string, string> = {};
-	const rejectsNone: Record<string, RejectedNone> = {};
-	for (const [name, list] of Object.entries(uses)) {
-		const kinds = new Set<string | undefined>();
-		let none = true;
-		for (const use of list) {
-			const resolved = resolve(use, detail);
-			if (resolved.kind === 'problem') {
-				problems.push({ line: use.line, message: resolved.message });
-				kinds.add(undefined);
-			} else if (resolved.kind === 'unchecked') kinds.add(undefined);
-			else {
-				kinds.add(simpleKind(resolved.text));
-				if (!acceptsNone(use, resolved.text)) none = false;
-				if (
-					!schemaChanges &&
-					use.kind === 'field' &&
-					use.role === 'assign' &&
-					resolved.rejectsNone === true &&
-					resolved.text !== undefined &&
-					!Object.hasOwn(rejectsNone, name)
-				)
-					rejectsNone[name] = {
-						table: use.table,
-						field: use.field,
-						kind: resolved.text,
-					};
-			}
-		}
-		const [only] = kinds;
-		if (kinds.size === 1 && only !== undefined)
-			binds[name] = none ? `option<${only}>` : only;
-	}
-	return { problems, binds, rejectsNone };
-};
-
-/** Whether `table` declares `field`, or a field nested under it. */
-const declaresField = (table: DeclaredTable, field: string): boolean =>
-	field === '*' ||
-	field === 'id' ||
-	Object.hasOwn(table.fields, field) ||
-	Object.keys(table.fields).some(
-		(path) => path.startsWith(`${field}.`) || path.startsWith(`${field}[`),
-	);
-
-/**
- * The projected fields that a table of `detail` does not declare and does
- * not accept: a field of a `SCHEMAFULL` table. A table the schema does not
- * declare is reported by the names check; with `schemaChanges` the text
- * changes the schema itself, or a hole starts a statement that a fill can
- * make do so, and nothing is checked.
- */
-const checkProjected = (
-	projected: Analysis['projected'],
-	detail: DeclaredDetail,
-	schemaChanges: boolean,
-): ReadonlyArray<{ readonly line: number; readonly message: string }> =>
-	schemaChanges
-		? []
-		: projected.flatMap(({ table, field, line }) => {
-				const declared = Object.hasOwn(detail.tables, table)
-					? detail.tables[table]
-					: undefined;
-				return declared === undefined ||
-					declared.acceptsUndeclared ||
-					declaresField(declared, field)
-					? []
-					: [
-							{
-								line,
-								message: `selects ${quoted(field)} of ${quoted(table)}, which declares no such field`,
-							},
-						];
-			});
-
-/**
- * The compared and assigned fields that a table of `detail` does not declare and does
- * not accept, by the rule {@link checkProjected} applies: the same tables,
- * nested fields and `id` resolve, and with `schemaChanges` nothing is
- * checked.
- */
-const checkFields = (
-	fields: Analysis['fields'],
-	detail: DeclaredDetail,
-	schemaChanges: boolean,
-): ReadonlyArray<{ readonly line: number; readonly message: string }> =>
-	schemaChanges
-		? []
-		: fields.flatMap(({ table, field, role, line }) => {
-				const declared = Object.hasOwn(detail.tables, table)
-					? detail.tables[table]
-					: undefined;
-				return declared === undefined ||
-					declared.acceptsUndeclared ||
-					declaresField(declared, field)
-					? []
-					: [
-							{
-								line,
-								message: `${role === 'assign' ? 'assigns' : 'compares'} ${quoted(field)} of ${quoted(table)}, which declares no such field`,
-							},
-						];
-			});
-
-/**
- * Whether a hole of `sql` starts a statement: at the start of the text, or
- * after `;` or `{`. A fill there can be a statement that defines a table or
- * a field, which the text alone does not show.
- */
-const holeStartsStatement = (
-	sql: string,
-	holes: HoleDelimiters | undefined,
-): boolean => {
-	const tokens = lex(sql, holeDelimiters(holes)).tokens;
-	return tokens.some((token, i) => {
-		const before = tokens[i - 1];
-		return (
-			token.kind === 'hole' &&
-			(before === undefined ||
-				(before.kind === 'punct' &&
-					(before.value === ';' || before.value === '{')))
-		);
-	});
-};
-
-/** Whether `sql` defines, alters or removes a table or a field. */
-const changesSchema = (
-	sql: string,
-	holes: HoleDelimiters | undefined,
-): boolean => {
-	const tokens = lex(sql, holeDelimiters(holes)).tokens;
-	return tokens.some(
-		(token, i) =>
-			token.kind === 'word' &&
-			['DEFINE', 'ALTER', 'REMOVE'].includes(token.value.toUpperCase()) &&
-			tokens[i + 1]?.kind === 'word' &&
-			['TABLE', 'FIELD'].includes(
-				(tokens[i + 1]?.value ?? '').toUpperCase(),
-			),
-	);
-};
-
 /** The lines of `text`, at every line break SurrealQL and TypeScript read. */
 const linesOf = (text: string): ReadonlyArray<string> =>
 	text.split(/\r\n|[\n\r\u2028\u2029]/u);
@@ -606,40 +294,6 @@ const renderConstant = (
 };
 
 /**
- * The tables and functions `sql` names that `declared` does not include and
- * the text does not define itself, each at the line of its first use.
- */
-const undeclared = (
-	sql: string,
-	declared: DeclaredNames,
-	holes: HoleDelimiters | undefined,
-): ReadonlyArray<{ readonly line: number; readonly message: string }> => {
-	const targets = analyzeTargets(lex(sql, holeDelimiters(holes)).tokens);
-	const tables = new Set([...declared.tables, ...targets.definedTables]);
-	const functions = new Set([
-		...declared.functions,
-		...targets.definedFunctions,
-	]);
-	const found: Array<{ line: number; message: string }> = [];
-	const check = (
-		at: ReadonlyMap<string, number>,
-		known: ReadonlySet<string>,
-		what: string,
-	) => {
-		for (const [name, line] of at)
-			if (!known.has(name))
-				found.push({
-					line,
-					message: `${what} \`${name}\`, which the schema does not declare`,
-				});
-	};
-	check(targets.readAt, tables, 'reads table');
-	check(targets.writtenAt, tables, 'writes table');
-	check(targets.functionsAt, functions, 'calls function');
-	return found.sort((a, b) => a.line - b.line);
-};
-
-/**
  * {@link renderStatementModules}, throwing its
  * {@link StatementModulesError}.
  */
@@ -704,69 +358,31 @@ export const renderStatementModulesSync = (
 			});
 			continue;
 		}
-		let analysis: Analysis;
-		try {
-			analysis = analyzeSync(source.sql, {
-				...(input.holes !== undefined && { holes: input.holes }),
+		const checked = checkText(source.sql, source.declared, input.holes);
+		if (checked.kind === 'refused') {
+			const { error } = checked;
+			problems.push({
+				kind: 'analysis',
+				scope: source.scope,
+				file: source.name,
+				line: error.line,
+				column: error.column,
+				code: error.code,
+				message: error.message,
+				text: `${file}:${error.line}:${error.column}: ${error.message}`,
 			});
-		} catch (error) {
-			if (error instanceof AnalyzeError) {
-				problems.push({
-					kind: 'analysis',
-					scope: source.scope,
-					file: source.name,
-					line: error.line,
-					column: error.column,
-					code: error.code,
-					message: error.message,
-					text: `${file}:${error.line}:${error.column}: ${error.message}`,
-				});
-				continue;
-			}
-			throw error;
+			continue;
 		}
-		let binds: Readonly<Record<string, string>> | undefined;
-		let rejectsNone: Readonly<Record<string, RejectedNone>> | undefined;
-		if (source.declared !== undefined) {
-			const detail = source.declared.detail;
-			const schemaChanges =
-				detail !== undefined && changesSchema(source.sql, input.holes);
-			const checked =
-				detail === undefined
-					? undefined
-					: checkUses(analysis.uses, detail, schemaChanges);
-			binds = checked?.binds;
-			rejectsNone = checked?.rejectsNone;
-			// A fill at a hole that starts a statement can define a field.
-			const fieldsUnknown =
-				schemaChanges || holeStartsStatement(source.sql, input.holes);
-			for (const problem of [
-				...undeclared(source.sql, source.declared, input.holes),
-				...(checked?.problems ?? []),
-				...(detail === undefined
-					? []
-					: [
-							...checkProjected(
-								analysis.projected,
-								detail,
-								fieldsUnknown,
-							),
-							...checkFields(
-								analysis.fields,
-								detail,
-								fieldsUnknown,
-							),
-						]),
-			].sort((a, b) => a.line - b.line))
-				problems.push({
-					kind: 'undeclared',
-					scope: source.scope,
-					file: source.name,
-					line: problem.line,
-					message: problem.message,
-					text: `${file}:${problem.line}: ${problem.message}`,
-				});
-		}
+		const { analysis, binds, rejectsNone } = checked;
+		for (const problem of checked.problems)
+			problems.push({
+				kind: 'undeclared',
+				scope: source.scope,
+				file: source.name,
+				line: problem.line,
+				message: problem.message,
+				text: `${file}:${problem.line}: ${problem.message}`,
+			});
 		for (const diagnostic of analysis.diagnostics) {
 			const at = {
 				scope: source.scope,

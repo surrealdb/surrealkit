@@ -14,6 +14,12 @@ export {
 	type HoleScope,
 } from './analyze.js';
 export {
+	type SchemaProblem,
+	type SchemaProblemsOptions,
+	type SchemaText,
+	schemaProblems,
+} from './check.js';
+export {
 	AnalyzeError,
 	DEFAULT_HOLE_DELIMITERS,
 	type HoleDelimiters,
