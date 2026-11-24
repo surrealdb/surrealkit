@@ -359,6 +359,22 @@ SURREAL_BIN=/usr/local/bin/surreal bun run test          # starts `surreal start
 SURREAL_URL=ws://127.0.0.1:8000/rpc bun run test         # a throwaway container, root/root
 ```
 
+Which tests a lane skips is pinned. `bun run test:skips` runs the whole suite
+on the lane the same variables select and exits 1 when its skipped tests
+differ from `test/skips/<lane>.txt` in either direction, printing each name
+that was skipped and is not listed, or is listed and was not skipped. The
+lanes are `embedded`, `binary-<major>.<minor>` for `SURREAL_BIN` (by the
+version the binary reports) and `remote` for `SURREAL_URL`. `embedded` and
+`binary-3.3` are committed; a lane without a list is reported as unpinned and
+not compared. After a change that is meant to skip or un-skip a test, rewrite
+the list from a passing run and commit it with the change:
+
+```sh
+bun run test:skips                                                   # embedded
+SURREAL_BIN=/usr/local/bin/surreal bun run test:skips                # binary-3.3 with a 3.3 binary
+UPDATE_SKIPS=1 SURREAL_BIN=/usr/local/bin/surreal bun run test:skips # rewrites test/skips/binary-3.3.txt
+```
+
 `test/conformance.test.ts` pins engine and SDK behaviour the documentation
 does not state: what each statement contributes to a request's results, the
 stateless and interactive transactions, unbound and protected parameters,

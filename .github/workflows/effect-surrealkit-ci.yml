@@ -71,8 +71,10 @@ jobs:
             # engine, field-presence and conformance suites on the in-process
             # SurrealDB 4 engine of `@surrealdb/node`. The JSON round trips over
             # HTTP need a server and run in the `engine` job below.
+            # test:skips fails when the skipped tests differ from
+            # test/skips/embedded.txt.
             - name: Test
-              run: npm test
+              run: npm run test:skips
 
             - name: Build
               run: npm run build
@@ -225,11 +227,13 @@ jobs:
 
             # Codec round trips through the server (the JSON world over HTTP
             # included), every cell of the field-presence matrix against
-            # generated schemas, and the conformance suite.
+            # generated schemas, and the conformance suite. The remote lane has
+            # no committed skip list yet, so test:skips reports it as unpinned
+            # and fails only when the suite does.
             - name: Engine, field-presence and conformance suites
               env:
                   SURREAL_URL: ws://127.0.0.1:8000/rpc
-              run: npm test
+              run: npm run test:skips
 
             # create → select → merge → select, relate and call for the generated
             # corpus modules (Arbitrary.schema + Arbitrary.checkEffect, Passed), in a
