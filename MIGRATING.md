@@ -773,6 +773,32 @@ Rollout::new(spec, files).folder("database").start(&db).await?;
 - `surrealkit::compat` has `run_compat_status` and `run_compat_raise`, which back
   the CLI's `compat` command.
 
+### `RolloutRename` names its copy step and whether it is confirmed
+
+`RolloutSpec::renames` used to be reserved: `RolloutRename` had `kind`,
+`scope`, `from` and `to`, and execution ignored it. `rollout plan` now records
+each field rename it proposes there (see "Renaming a field" in the README),
+with two more fields:
+
+- `step: Option<String>`, the id of the start-phase `run_sql` step that copies
+  the values.
+- `confirmed: bool`, which `plan` writes as `false`. `rollout lint`,
+  `rollout start`, `rollout up` and `Rollout::start` refuse an entry that names
+  a step until it is `true`. They also refuse an entry whose step is missing or
+  is not a start-phase `run_sql` step, and a confirmed entry on a database
+  below compatibility level 4.
+
+An entry with no `step` and `confirmed` left `false` is a hint as earlier
+releases wrote it. It behaves as it did: it loads, execution ignores it (now
+with a warning that it is a legacy hint), and it serializes without either new
+field, so a manifest or a code-defined rollout that carries one keeps its
+checksum. An entry with `confirmed = true` and no `step` is not a legacy hint
+and is refused.
+
+A struct literal of `RolloutRename` needs the two fields. Build one with
+`RolloutRename::field(table, from, to)`, adding `.copied_by(step)` for a copy,
+or end the literal with `..Default::default()`.
+
 ### Applying a named module
 
 ```rust

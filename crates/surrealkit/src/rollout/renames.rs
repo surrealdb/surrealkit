@@ -19,6 +19,11 @@
 //! An author who reads the pair as no rename discards the rollout and plans the
 //! addition and the removal separately, as the refusal always advised.
 //!
+//! Before rename proposals, `renames` was a reserved field of four keys that
+//! execution ignored. An entry with no `step` that is not confirmed is such a
+//! hint: it is still ignored, with a warning, and serializes as it did, so a
+//! rollout that carries one keeps its checksum.
+//!
 //! Only a `SCHEMAFULL` table whose own definition this rollout leaves alone gets
 //! a proposal. A schemaless table can already hold values under the new name,
 //! which the copy would overwrite, and removing a field there does not clear its
@@ -58,14 +63,7 @@ impl FieldRename {
 	/// The manifest's record of the pair, copied by the step `step`, and not
 	/// yet confirmed.
 	pub(crate) fn record(&self, step: &str) -> RolloutRename {
-		RolloutRename {
-			kind: FIELD.to_string(),
-			scope: Some(self.table.clone()),
-			from: self.from.clone(),
-			to: self.to.clone(),
-			step: Some(step.to_string()),
-			confirmed: false,
-		}
+		RolloutRename::field(&self.table, &self.from, &self.to).copied_by(step)
 	}
 
 	/// The copy. It touches only records that hold a value, and running it
@@ -283,6 +281,10 @@ pub(crate) fn apply(spec: &mut RolloutSpec, renames: &[FieldRename]) {
 /// Refuse a rollout whose renames cannot run as recorded: an entry the author
 /// has not confirmed, or one whose copy step is gone. `lint` and every way of
 /// starting a rollout call this, as they refuse an empty `revert_migration`.
+///
+/// A legacy hint, an entry with no `step` that is not confirmed, is what
+/// releases before rename proposals carried and never ran. It is not refused:
+/// it is ignored, as it always was, with a warning.
 pub(crate) fn check_renames(spec: &RolloutSpec) -> Result<()> {
 	for rename in &spec.renames {
 		let what = match &rename.scope {
@@ -291,6 +293,15 @@ pub(crate) fn check_renames(spec: &RolloutSpec) -> Result<()> {
 			}
 			None => format!("the rename of `{}` to `{}`", rename.from, rename.to),
 		};
+		if rename.is_legacy_hint() {
+			log::warn!(
+				"rollout '{rollout}' records {what} as a legacy rename hint: a `[[renames]]` entry \
+				 with no `step`, as releases before rename proposals wrote it. Nothing runs it, as \
+				 before; the rollout copies no values for it",
+				rollout = spec.id
+			);
+			continue;
+		}
 		let copy = rename.step.as_deref().and_then(|id| spec.steps.iter().find(|s| s.id == id));
 		let copies = copy.is_some_and(|step| {
 			step.phase == RolloutPhase::Start && matches!(step.action, RolloutAction::RunSql { .. })
@@ -650,8 +661,27 @@ mod tests {
 			"{}",
 			refusal(&missing)
 		);
+		// A confirmed entry with no step is not a legacy hint: refused.
 		let mut unnamed = spec.clone();
 		unnamed.renames[0].step = None;
+		assert!(unnamed.renames[0].confirmed);
 		assert!(refusal(&unnamed).contains("names no copy step"), "{}", refusal(&unnamed));
+		// Without the step and unconfirmed, it is a hint as releases before
+		// rename proposals wrote it, which nothing ran: ignored, and serialized
+		// with neither field.
+		unnamed.renames[0].confirmed = false;
+		assert!(unnamed.renames[0].is_legacy_hint());
+		check_renames(&unnamed).unwrap();
+		assert_eq!(
+			toml::to_string(&unnamed.renames[0]).unwrap(),
+			"kind = \"field\"\nscope = \"person\"\nfrom = \"email\"\nto = \"mail\"\n"
+		);
+		// With a step, `confirmed` is written whatever its value, so the author
+		// sees what to change.
+		assert!(
+			toml::to_string(&rename.record("copy")).unwrap().ends_with("confirmed = false\n"),
+			"{}",
+			toml::to_string(&rename.record("copy")).unwrap()
+		);
 	}
 }
