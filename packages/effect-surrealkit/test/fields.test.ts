@@ -75,6 +75,20 @@ describe('analyze: compared fields', () => {
 		).toEqual([compare('site', 'label'), compare('site', 'station')]);
 	});
 
+	it('a subquery in FROM against its own table, never the outer query', () => {
+		// The outer row is the subquery's result, not a row of `gauge`.
+		expect(
+			fields(
+				"SELECT * FROM (SELECT station AS s FROM gauge WHERE note = 'n') WHERE s = 'a';",
+			),
+		).toEqual([compare('gauge', 'note')]);
+		expect(
+			fields(
+				"SELECT * FROM gauge, (SELECT VALUE site FROM gauge WHERE reading > 1) WHERE label = 'L';",
+			),
+		).toEqual([compare('gauge', 'reading')]);
+	});
+
 	it('a cast operand, a parenthesised comparison in a closure body, and an alias of the projection', () => {
 		expect(
 			fields("SELECT * FROM gauge WHERE 'a' = <string> note;"),
@@ -128,6 +142,34 @@ describe('analyze: compared fields', () => {
 	describe('records nothing', () => {
 		it.each([
 			['two targets', 'SELECT * FROM gauge, site WHERE station = 1;'],
+			[
+				'a subquery in FROM',
+				"SELECT * FROM (SELECT station AS s FROM gauge) WHERE s = 'a';",
+			],
+			[
+				'a VALUE subquery in FROM',
+				"SELECT * FROM (SELECT VALUE site FROM gauge) WHERE label = 'L';",
+			],
+			[
+				'a subquery in FROM after a table',
+				"SELECT * FROM gauge, (SELECT station AS s FROM gauge) WHERE s = 'a';",
+			],
+			[
+				'a subquery in FROM ONLY',
+				"SELECT * FROM ONLY (SELECT station AS s FROM ONLY gauge:1) WHERE s = 'a';",
+			],
+			[
+				'a subquery in FROM as a LET value',
+				"LET $r = SELECT * FROM (SELECT station AS s FROM gauge) WHERE s = 'a';",
+			],
+			[
+				'a subquery in FROM in IF and FOR',
+				"IF true { SELECT * FROM (SELECT station AS s FROM gauge) WHERE s = 'a' };\nFOR $i IN [1] { SELECT * FROM (SELECT VALUE site FROM gauge) WHERE label = 'L' };",
+			],
+			[
+				'a subquery in FROM of a parenthesised query',
+				"RETURN (SELECT * FROM (SELECT station AS s FROM gauge) WHERE s = 'a');",
+			],
 			[
 				'the outer query of a subquery of another table',
 				'SELECT * FROM gauge WHERE station = (SELECT VALUE label FROM site LIMIT 1);',
@@ -519,6 +561,30 @@ describe('statements with schema detail: compared fields', () => {
 			),
 		).toEqual([
 			'shop/q.surql:2: compares `staton` of `gauge`, which declares no such field',
+		]);
+	});
+
+	it('accepts a field of a subquery in FROM, compared with a literal or a binding, and still checks the subquery', async () => {
+		for (const sql of [
+			"SELECT * FROM (SELECT station AS s FROM gauge) WHERE s = 'a';",
+			'SELECT * FROM (SELECT station AS s FROM gauge) WHERE s = $x;',
+			'SELECT * FROM (SELECT station AS s FROM gauge) WHERE $x = s;',
+			"SELECT * FROM (SELECT VALUE site FROM gauge) WHERE label = 'L';",
+			"SELECT * FROM gauge, (SELECT station AS s FROM gauge) WHERE s = 'a';",
+			"SELECT * FROM ONLY (SELECT station AS s FROM ONLY gauge:1) WHERE s = 'a';",
+			"LET $r = SELECT * FROM (SELECT station AS s FROM gauge) WHERE s = 'a';",
+			"IF true { SELECT * FROM (SELECT station AS s FROM gauge) WHERE s = 'a' };",
+			'FOR $i IN [1] { SELECT * FROM (SELECT station AS s FROM gauge) WHERE s = $x };',
+			'SELECT s, label FROM (SELECT station AS s FROM gauge);',
+		])
+			expect(await problems(sql), sql).toEqual([]);
+		expect(
+			await problems(
+				"SELECT * FROM (SELECT staton AS s FROM gauge WHERE nte = 1) WHERE s = 'a';",
+			),
+		).toEqual([
+			'shop/q.surql:1: selects `staton` of `gauge`, which declares no such field',
+			'shop/q.surql:1: compares `nte` of `gauge`, which declares no such field',
 		]);
 	});
 

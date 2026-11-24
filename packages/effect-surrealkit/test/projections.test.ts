@@ -235,6 +235,31 @@ describe('analyze: projected fields', () => {
 			).toEqual([at('listing', 'title')]);
 		});
 
+		it('for a subquery in FROM, for the outer query', () => {
+			// The outer rows are the subquery's results; the subquery is a
+			// query of its own, of its own table.
+			expect(
+				projected(
+					'SELECT s, label FROM (SELECT name AS s FROM person);',
+				),
+			).toEqual([at('person', 'name')]);
+			expect(
+				projected(
+					'SELECT * FROM ONLY (SELECT VALUE team FROM ONLY person:1);',
+				),
+			).toEqual([at('person', 'team')]);
+			expect(
+				projected(
+					'SELECT name, s FROM person, (SELECT name AS s FROM person);',
+				),
+			).toEqual([at('person', 'name')]);
+			expect(
+				projected(
+					'LET $r = SELECT label FROM (SELECT name AS s FROM person);\nIF true { SELECT label FROM (SELECT * FROM team) };',
+				),
+			).toEqual([at('person', 'name'), at('team', '*', 2)]);
+		});
+
 		it('for two targets', () => {
 			expect(projected('SELECT name FROM person, team;')).toEqual([]);
 			expect(projected('SELECT name FROM person, person;')).toEqual([]);

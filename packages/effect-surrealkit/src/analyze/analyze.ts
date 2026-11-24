@@ -102,9 +102,11 @@ export interface Analysis {
 	 * What each free binding is used as, keyed by name without `$`, each
 	 * list sorted and without duplicates: an argument of a custom function,
 	 * the key of a `type::record`, or a comparison with (or, in `SET`, an
-	 * assignment to) a field of the one static table a query targets. Only
-	 * these patterns are recognised, and nothing is recorded where the lexer
-	 * is not certain; a binding with no such use is absent. A comparison or
+	 * assignment to) a field of the one static table a query targets (never
+	 * a `SELECT` with a subquery in its `FROM`, whose rows are the
+	 * subquery's results). Only these patterns are recognised, and nothing
+	 * is recorded where the lexer is not certain; a binding with no such use
+	 * is absent. A comparison or
 	 * assignment in a statement in a block is not a use (the statement may
 	 * not run for every value), and its field name is in `fields`.
 	 */
@@ -129,8 +131,10 @@ export interface Analysis {
 	 * The field names each query compares in its `WHERE` (role `compare`)
 	 * or assigns in its `SET` (role `assign`), where that is not a binding
 	 * use in `uses`: a bare field of the one static table the query
-	 * targets, read as `uses` reads one, on either side of `=`, `==`, `!=`,
-	 * `<`, `<=`, `>` or `>=` whatever the other operand, or the target of
+	 * targets (never in a `SELECT` with a subquery in its `FROM`, which is
+	 * read as a query of its own), read as `uses` reads one, on either side
+	 * of `=`, `==`, `!=`, `<`, `<=`, `>` or `>=` whatever the other operand,
+	 * or the target of
 	 * `field = <literal>` in `UPDATE`, `UPSERT` or `CREATE` when the
 	 * literal is never NONE; in top-level statements, statements in blocks
 	 * and parenthesised subqueries; a local the text fixes to one table is

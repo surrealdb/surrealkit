@@ -185,6 +185,18 @@ describe('analyze: field uses', () => {
 		['a graph step', 'SELECT * FROM gizmo WHERE ->a = $a;'],
 		['a call', 'SELECT * FROM gizmo WHERE a() = $a;'],
 		['two tables in FROM', 'SELECT * FROM gizmo, sprocket WHERE a = $a;'],
+		[
+			'a subquery in FROM',
+			'SELECT * FROM (SELECT a AS s FROM gizmo) WHERE s = $s AND $t < t;',
+		],
+		[
+			'a subquery in FROM after a table',
+			'SELECT * FROM gizmo, (SELECT a AS s FROM gizmo) WHERE s = $s;',
+		],
+		[
+			'a subquery in FROM ONLY',
+			'SELECT * FROM ONLY (SELECT VALUE b FROM ONLY gizmo:1) WHERE s = $s;',
+		],
 		['an open target', 'SELECT * FROM $where WHERE a = $a;'],
 		['SET on a parameter target', 'UPDATE $target SET a = $a;'],
 		['a compound assignment', 'UPDATE gizmo SET a += $a;'],

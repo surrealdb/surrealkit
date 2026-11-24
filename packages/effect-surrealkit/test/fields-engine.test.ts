@@ -82,6 +82,40 @@ describe.skipIf(!engineConfigured)(
 			expect(compared(sql)).toEqual(['pet.name', 'pet.owner']);
 		});
 
+		it('reads the subquery’s rows, never the table’s, where FROM has a subquery', async () => {
+			// `n` and `owner` are not fields of person: the outer rows are the
+			// subquery's results (records it returns are fetched).
+			for (const [sql, rows] of [
+				[
+					"SELECT VALUE n FROM (SELECT name AS n FROM person) WHERE n = 'Ada';",
+					['Ada'],
+				],
+				[
+					"SELECT VALUE owner FROM (SELECT VALUE id FROM pet) WHERE owner = 'Ada';",
+					['Ada'],
+				],
+				[
+					"SELECT VALUE n FROM person, (SELECT name AS n FROM person) WHERE n = 'Ada';",
+					['Ada'],
+				],
+				[
+					"SELECT VALUE n FROM ONLY (SELECT name AS n FROM ONLY person:1) WHERE n = 'Ada';",
+					'Ada',
+				],
+			] as const) {
+				expect(await first(sql), sql).toEqual(rows);
+				expect(compared(sql), sql).toEqual([]);
+			}
+			const bound =
+				'SELECT VALUE n FROM (SELECT name AS n FROM person) WHERE n = $x;';
+			expect(
+				(
+					await within(engine.db.query(bound, { x: 'Ada' }).collect())
+				)[0],
+			).toEqual(['Ada']);
+			expect(analyzeSync(bound).uses).toEqual({});
+		});
+
 		it('names the row’s field in a parenthesised closure body and in a cast', async () => {
 			for (const sql of [
 				'SELECT VALUE id FROM person WHERE array::any([36], |$v| (age = $v));',

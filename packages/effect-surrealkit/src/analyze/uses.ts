@@ -38,9 +38,10 @@ export type BindingUses = Readonly<Record<string, ReadonlyArray<BindingUse>>>;
 /**
  * A field name a query compares in its `WHERE` (`compare`) or assigns in
  * its `SET` (`assign`), at the 1-based line of the name: a bare field of
- * the one static table the query targets, on either side of a comparison
- * whatever the other operand, or the target of `field = <literal>` where
- * the literal is never NONE.
+ * the one static table the query targets (never in a `SELECT` with a
+ * subquery in its `FROM`), on either side of a comparison whatever the
+ * other operand, or the target of `field = <literal>` where the literal is
+ * never NONE.
  */
 export interface FieldReference {
 	readonly table: string;
@@ -367,14 +368,56 @@ export const analyzeUses = (
 	};
 
 	/**
+	 * Whether an item of the `FROM` list of the `SELECT` from `from` to `end`
+	 * is a parenthesised subquery (or any bracket group starting with `(`).
+	 * The outer rows are then the subquery's results, not rows of the
+	 * table the subquery reads, so nothing about the outer query's fields
+	 * is certain; the subquery is still a query of its own.
+	 */
+	const fromSubquery = (from: number, end: number): boolean => {
+		for (let j = from + 1; j < end; j++) {
+			if (isOpen(tokens[j])) {
+				j = closing(j);
+				continue;
+			}
+			if (
+				upper(tokens[j]) !== 'FROM' ||
+				isPunct(tokens[j - 1], '.') ||
+				isPunct(tokens[j - 1], ':')
+			)
+				continue;
+			let k = j + 1;
+			if (upper(tokens[k]) === 'ONLY') k++;
+			// Each item of the list, up to the first clause at its level.
+			for (;;) {
+				if (isPunct(tokens[k], '(')) return true;
+				while (
+					k < end &&
+					!isPunct(tokens[k], ',') &&
+					!isPunct(tokens[k], ';') &&
+					!(
+						CLAUSE_ENDS.has(upper(tokens[k])) &&
+						!isPunct(tokens[k + 1], ':')
+					)
+				)
+					k = isOpen(tokens[k]) ? closing(k) + 1 : k + 1;
+				if (!isPunct(tokens[k], ',')) break;
+				k++;
+			}
+		}
+		return false;
+	};
+
+	/**
 	 * One query from `from` (its first token) to `end` (exclusive): its
 	 * comparisons in `WHERE` and its assignments in `SET`, when its targets
-	 * are exactly one static table. Subqueries inside it are queries of
-	 * their own; any other bracket but `(` makes it uncertain which query a
-	 * comparison belongs to, so nothing inside one is recorded. A statement
-	 * in a block (`inBlock`) records field names only: it may run for some
-	 * values of a binding and not others (`IF $x != NONE { … }`), so a use
-	 * there cannot say what the binding must hold.
+	 * are exactly one static table, and, for a `SELECT`, no item of its
+	 * `FROM` is a subquery. Subqueries inside it are queries of their own;
+	 * any other bracket but `(` makes it uncertain which query a comparison
+	 * belongs to, so nothing inside one is recorded. A statement in a block
+	 * (`inBlock`) records field names only: it may run for some values of a
+	 * binding and not others (`IF $x != NONE { … }`), so a use there cannot
+	 * say what the binding must hold.
 	 */
 	const query = (from: number, end: number, inBlock = false): void => {
 		const word = upper(tokens[from]);
@@ -382,8 +425,12 @@ export const analyzeUses = (
 		const targets = analyzeTargets(slice);
 		const tables = new Set([...targets.read, ...targets.written]);
 		const table = tables.size === 1 ? [...tables][0] : undefined;
+		const opaque = word === 'SELECT' && fromSubquery(from, end);
 		const certain =
-			table !== undefined && !targets.openTargets && QUERIES.has(word);
+			table !== undefined &&
+			!targets.openTargets &&
+			QUERIES.has(word) &&
+			!opaque;
 		// With the locals the text fixes to one table read as that table:
 		// for field names only, never for a binding use (a binding assigned
 		// there may be guarded, as in a block).
@@ -393,7 +440,10 @@ export const analyzeUses = (
 				: analyzeTargets(slice, locals);
 		const fixedTables = new Set([...fixed.read, ...fixed.written]);
 		const fieldTable =
-			fixedTables.size === 1 && !fixed.openTargets && QUERIES.has(word)
+			fixedTables.size === 1 &&
+			!fixed.openTargets &&
+			QUERIES.has(word) &&
+			!opaque
 				? [...fixedTables][0]
 				: undefined;
 		/** The clause at the query's own level: `WHERE`, `SET` or another. */
