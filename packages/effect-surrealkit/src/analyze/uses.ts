@@ -257,6 +257,9 @@ export const analyzeUses = (
 				return undefined;
 			const word = token.value.toUpperCase();
 			if (VALUES.has(word) || AFTER.has(word)) return undefined;
+			// Read as numbers, spelt exactly so; see `projections.ts`.
+			if (token.value === 'NaN' || token.value === 'Infinity')
+				return undefined;
 		} else if (token.kind !== 'ident') return undefined;
 		const after = tokens[at + 1];
 		if (

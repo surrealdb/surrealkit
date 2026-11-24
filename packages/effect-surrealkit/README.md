@@ -1231,7 +1231,8 @@ the names that remain bindings.
 With `--schema` (or a scope's `declared` names from
 `declaredNames(document)`, whose `detail` holds each table's fields with
 their kind text and whether they reject NONE, whether it accepts
-undeclared fields, its id key's kind,
+undeclared fields (a schemaless table or a view, whose fields come from its
+`SELECT`), its id key's kind,
 and each function's argument kinds; a field or argument the document
 records as optional has the kind text `option<K>`), every use must resolve when the
 modules are generated: a field the table neither declares nor accepts
@@ -1301,11 +1302,12 @@ missing. `analyze(sql)` also reports `projected`: what each `SELECT`
 projects, as `{ table, field, line }` (`field` is `*` for `*`), sorted by
 line, table and field, without duplicates. A `SELECT` is read when it is a
 top-level statement (possibly after `LET $name =` or `RETURN`) or a
-parenthesised subquery, which is a query of its own, and when all of this
-holds on tokens outside strings and comments:
+parenthesised subquery, which is a query of its own (in a projection too,
+against its own table), and when all of this holds on tokens outside
+strings and comments:
 
 - it has exactly one `FROM` outside brackets;
-- it is not `SELECT VALUE` and has no `OMIT`;
+- it has no `OMIT`;
 - after `FROM` (and an optional `ONLY`) comes exactly one target: a table
   name, a record id `table:key` whose key is one token or one bracket
   group, or `type::record('table', …)`, `type::thing('table', …)` or
@@ -1314,24 +1316,49 @@ holds on tokens outside strings and comments:
   `START`, `FETCH`, `TIMEOUT`, `PARALLEL`, `EXPLAIN`, `WITH`, `VERSION`,
   `TEMPFILES`).
 
-Of such a `SELECT`, each projected item that is exactly one bare field name
-(a word or a quoted name) or exactly `*` is recorded, against that table.
+Of such a `SELECT`, each projected item of exactly one of these forms is
+recorded, against that table:
+
+- `*`;
+- one bare field name: a word or a quoted name, except the words SurrealQL
+  reads as values, `NONE`, `NULL`, `TRUE` and `FALSE` in any case and `NaN`
+  and `Infinity` spelt so (a pinned test tries every keyword of both
+  versions' parsers on both engines);
+- one bare field name, `AS`, and one name: the field is recorded, never the
+  alias;
+- `SELECT VALUE` followed by one bare field name and then `FROM`.
+
 Every other item records nothing: a function call, a path (`address.city`,
-`tags[0]`), an expression, anything with `AS` (a bare field included), a
-graph step and a subquery. Two targets, an open target (`$owner`,
-`type::table($t)`, a subquery, a range or a graph step after the table), a
-hole after the target and a statement in a block that is not parenthesised
-record nothing.
+`tags[0]`), an expression, an alias of anything but one bare field, a graph
+step and a subquery, and `VALUE` before anything but one bare field. Two
+targets, an open target (`$owner`, `type::table($t)`, a subquery, a range
+or a graph step after the table), a hole after the target and a statement
+in a block that is not parenthesised record nothing.
 
 With `--schema` (or a scope's `declared` detail), a recorded field that a
 `SCHEMAFULL` table does not declare fails generation with its file and line:
 ``shop/q.surql:2: selects `staton` of `gauge`, which declares no such
-field``. `*`, `id`, a declared field and a field with declared nested
-fields (`pos` when `pos.x` is declared) resolve. Nothing is checked on a
-schemaless table, on a table the schema does not declare (the names check
-reports it once), or in a text that defines, alters or removes a table or
-field itself. The generated modules do not change: `projected` is not
-written into a part.
+field``. A quoted name is written as SurrealQL quotes it (`` `lab\`el` ``).
+`*`, `id`, a declared field and a field with declared nested fields (`pos`
+when `pos.x` is declared) resolve. Nothing is checked on a schemaless table
+or a view (both accept any field), on a table the schema does not declare
+(the names check reports it once), in a text that defines, alters or
+removes a table or field itself, or in a template where a hole starts a
+statement (at the start of the text, after `;` or after `{`), because a
+fill there can define a field. The generated modules do not change:
+`projected` is not written into a part.
+
+One limit, the same the binding uses above have: a row written while its
+table was schemaless keeps the fields it had when the table became
+`SCHEMAFULL`, and on 3.3 and 4.0 alike `SELECT extra FROM loose` returns
+them although no definition declares `extra`. The check refuses such a
+text. Declare the field (`DEFINE FIELD extra ON loose TYPE option<…>`), or
+clear it from the old rows (`UPDATE loose UNSET extra`; on 4.0 also
+`ALTER TABLE loose MIGRATE EXISTING ROWS AS clear_loose REMOVE UNDECLARED
+FIELDS`). Until then an `UPDATE` of such a row fails on both versions with
+``Found field 'extra', but no such field exists``. As for the
+binding uses, there is no way to exempt one text: a scope generated without
+schema detail is not checked at all.
 
 #### Rendering in process
 

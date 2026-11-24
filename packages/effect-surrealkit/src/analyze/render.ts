@@ -87,7 +87,10 @@ export interface DeclaredTable {
 			{ readonly kind?: string; readonly rejectsNone?: boolean }
 		>
 	>;
-	/** The table accepts fields it does not declare (it is schemaless). */
+	/**
+	 * The table accepts fields it does not declare: it is schemaless, or a
+	 * view, whose fields come from its SELECT.
+	 */
 	readonly acceptsUndeclared: boolean;
 	/** The kind text of the id key, when the schema declares one. */
 	readonly idKey?: string;
@@ -254,6 +257,26 @@ const acceptsNone = (use: BindingUse, kind: string | undefined): boolean =>
 			kind !== undefined &&
 			/^option<.*>$/u.test(kind);
 
+/** Control characters, and the two line separators, as `\u{…}` in a message. */
+const UNPRINTABLE = new RegExp(
+	`[\\x00-\\x1f\\x7f${String.fromCharCode(0x2028, 0x2029)}]`,
+	'gu',
+);
+
+/**
+ * A schema name in backticks for a message, as SurrealQL quotes it: a
+ * backtick or backslash in it escaped with a backslash, and a line break or
+ * other control character written as `\u{…}`, so the name cannot end the
+ * quotes or the message's line.
+ */
+const quoted = (name: string): string =>
+	`\`${name
+		.replace(/[\\`]/gu, '\\$&')
+		.replace(
+			UNPRINTABLE,
+			(char) => `\\u{${(char.codePointAt(0) as number).toString(16)}}`,
+		)}\``;
+
 /** How a problem names a use that does not resolve. */
 type Resolved =
 	| {
@@ -303,7 +326,7 @@ const resolve = (use: BindingUse, detail: DeclaredDetail): Resolved => {
 		? { kind: 'kind', text: undefined }
 		: {
 				kind: 'problem',
-				message: `${use.role === 'assign' ? 'assigns' : 'compares'} \`${use.field}\` of \`${use.table}\`, which declares no such field`,
+				message: `${use.role === 'assign' ? 'assigns' : 'compares'} ${quoted(use.field)} of ${quoted(use.table)}, which declares no such field`,
 			};
 };
 
@@ -385,7 +408,8 @@ const declaresField = (table: DeclaredTable, field: string): boolean =>
  * The projected fields that a table of `detail` does not declare and does
  * not accept: a field of a `SCHEMAFULL` table. A table the schema does not
  * declare is reported by the names check; with `schemaChanges` the text
- * changes the schema itself, so nothing is checked.
+ * changes the schema itself, or a hole starts a statement that a fill can
+ * make do so, and nothing is checked.
  */
 const checkProjected = (
 	projected: Analysis['projected'],
@@ -405,10 +429,31 @@ const checkProjected = (
 					: [
 							{
 								line,
-								message: `selects \`${field}\` of \`${table}\`, which declares no such field`,
+								message: `selects ${quoted(field)} of ${quoted(table)}, which declares no such field`,
 							},
 						];
 			});
+
+/**
+ * Whether a hole of `sql` starts a statement: at the start of the text, or
+ * after `;` or `{`. A fill there can be a statement that defines a table or
+ * a field, which the text alone does not show.
+ */
+const holeStartsStatement = (
+	sql: string,
+	holes: HoleDelimiters | undefined,
+): boolean => {
+	const tokens = lex(sql, holeDelimiters(holes)).tokens;
+	return tokens.some((token, i) => {
+		const before = tokens[i - 1];
+		return (
+			token.kind === 'hole' &&
+			(before === undefined ||
+				(before.kind === 'punct' &&
+					(before.value === ';' || before.value === '{')))
+		);
+	});
+};
 
 /** Whether `sql` defines, alters or removes a table or a field. */
 const changesSchema = (
@@ -663,7 +708,8 @@ export const renderStatementModulesSync = (
 					: checkProjected(
 							analysis.projected,
 							detail,
-							schemaChanges,
+							schemaChanges ||
+								holeStartsStatement(source.sql, input.holes),
 						)),
 			].sort((a, b) => a.line - b.line))
 				problems.push({

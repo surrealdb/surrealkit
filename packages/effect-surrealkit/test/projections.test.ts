@@ -82,12 +82,35 @@ describe('analyze: projected fields', () => {
 			projected(
 				'UPDATE team SET lead = (SELECT VALUE id FROM person WHERE name = $n);\nLET $t = (SELECT title FROM listing);',
 			),
-		).toEqual([at('listing', 'title', 2)]);
+		).toEqual([at('person', 'id'), at('listing', 'title', 2)]);
 		expect(
 			projected(
 				'SELECT name FROM person WHERE id IN (SELECT title FROM listing);',
 			),
 		).toEqual([at('listing', 'title'), at('person', 'name')]);
+	});
+
+	it('reads `VALUE` with one bare field', () => {
+		expect(projected('SELECT VALUE name FROM person;')).toEqual([
+			at('person', 'name'),
+		]);
+		expect(
+			projected('SELECT VALUE `full name` FROM ONLY person:1;'),
+		).toEqual([at('person', 'full name')]);
+	});
+
+	it('reads a bare field with an alias as the field, never the alias', () => {
+		expect(projected('SELECT name AS label FROM person;')).toEqual([
+			at('person', 'name'),
+		]);
+		expect(
+			projected('SELECT name AS `the label`, age as years FROM person;'),
+		).toEqual([at('person', 'age'), at('person', 'name')]);
+		// A later item names a field, not an earlier alias.
+		expect(projected('SELECT name AS label, label FROM person;')).toEqual([
+			at('person', 'label'),
+			at('person', 'name'),
+		]);
 	});
 
 	it('reads nothing in strings and comments', () => {
@@ -121,15 +144,64 @@ describe('analyze: projected fields', () => {
 			expect(projected('SELECT true FROM person;')).toEqual([]);
 		});
 
-		it('for an aliased expression, a bare field included', () => {
+		it('for a bare word SurrealQL reads as a value', () => {
+			// Pinned against both engines by test/projections-engine.test.ts.
+			for (const word of [
+				'NONE',
+				'none',
+				'NULL',
+				'Null',
+				'TRUE',
+				'true',
+				'FALSE',
+				'False',
+				'NaN',
+				'Infinity',
+			])
+				expect(projected(`SELECT ${word} FROM person;`)).toEqual([]);
+			expect(projected('SELECT NaN, Infinity FROM person;')).toEqual([]);
+			// Spelt otherwise, they are field names.
+			expect(
+				projected(
+					'SELECT nan, NAN, infinity, INFINITY, inf FROM person;',
+				),
+			).toEqual([
+				at('person', 'INFINITY'),
+				at('person', 'NAN'),
+				at('person', 'inf'),
+				at('person', 'infinity'),
+				at('person', 'nan'),
+			]);
+		});
+
+		it('for an aliased expression', () => {
 			expect(projected('SELECT age + 1 AS next FROM person;')).toEqual(
 				[],
 			);
-			expect(projected('SELECT name AS label FROM person;')).toEqual([]);
+			expect(projected('SELECT name.first AS n FROM person;')).toEqual(
+				[],
+			);
+			expect(projected('SELECT count() AS n FROM person;')).toEqual([]);
+			expect(projected('SELECT $x AS n FROM person;')).toEqual([]);
+			expect(projected('SELECT NaN AS n FROM person;')).toEqual([]);
+			expect(projected('SELECT name AS FROM person;')).toEqual([]);
+			expect(projected('SELECT name AS a.b FROM person;')).toEqual([]);
+			expect(projected('SELECT name AS n AS m FROM person;')).toEqual([]);
 		});
 
-		it('for VALUE', () => {
-			expect(projected('SELECT VALUE name FROM person;')).toEqual([]);
+		it('for VALUE with anything but one bare field', () => {
+			expect(projected('SELECT VALUE name.first FROM person;')).toEqual(
+				[],
+			);
+			expect(projected('SELECT VALUE count() FROM person;')).toEqual([]);
+			expect(projected('SELECT VALUE age + 1 FROM person;')).toEqual([]);
+			expect(projected('SELECT VALUE name AS n FROM person;')).toEqual(
+				[],
+			);
+			expect(projected('SELECT VALUE * FROM person;')).toEqual([]);
+			expect(projected('SELECT VALUE NONE FROM person;')).toEqual([]);
+			expect(projected('SELECT VALUE FROM person;')).toEqual([]);
+			expect(projected('SELECT VALUE name FROM $owner;')).toEqual([]);
 		});
 
 		it('for OMIT', () => {
@@ -152,7 +224,7 @@ describe('analyze: projected fields', () => {
 		it('for a subquery in the projection, for the outer table', () => {
 			expect(
 				projected(
-					'SELECT (SELECT VALUE title FROM listing) AS titles FROM person;',
+					'SELECT (SELECT VALUE title.en FROM listing) AS titles FROM person;',
 				),
 			).toEqual([]);
 			// The subquery is a query of its own, of its own table.
@@ -212,6 +284,40 @@ const declared = async (): Promise<DeclaredNames> =>
 		await Effect.runPromise(decodeDocument(readJson(bindsDocument))),
 	);
 
+/** The binds document with a SCHEMAFULL view, which declares no fields. */
+const withView = async (): Promise<DeclaredNames> => {
+	const document = readJson(bindsDocument);
+	const tables = document.tables as ReadonlyArray<Record<string, unknown>>;
+	return declaredNames(
+		await Effect.runPromise(
+			decodeDocument({
+				...document,
+				tables: [
+					...tables,
+					{
+						name: 'tally',
+						type: { kind: 'normal' },
+						schemafull: true,
+						drop: false,
+						view: {
+							select: 'SELECT count() AS n FROM gauge GROUP ALL',
+						},
+						permissions: {
+							select: false,
+							create: false,
+							update: false,
+							delete: false,
+						},
+						fields: [],
+						indexes: [],
+						events: [],
+					},
+				],
+			}),
+		),
+	);
+};
+
 const problems = async (
 	sql: string,
 	names?: DeclaredNames,
@@ -246,11 +352,29 @@ describe('statements with schema detail: projected fields', () => {
 		).toEqual([
 			'shop/q.surql:1: selects `labl` of `site`, which declares no such field',
 		]);
+		// `VALUE` with one bare field, and a bare field with an alias.
+		expect(await problems('SELECT VALUE staton FROM gauge;')).toEqual([
+			'shop/q.surql:1: selects `staton` of `gauge`, which declares no such field',
+		]);
+		expect(await problems('SELECT staton AS station FROM gauge;')).toEqual([
+			'shop/q.surql:1: selects `staton` of `gauge`, which declares no such field',
+		]);
+		expect(await problems('SELECT station AS s FROM gauge;')).toEqual([]);
 		// In a template, as for the uses of its bindings.
 		expect(
 			await problems('SELECT nope FROM gauge WHERE __FILTER__;'),
 		).toEqual([
 			'shop/q.surql:1: selects `nope` of `gauge`, which declares no such field',
+		]);
+	});
+
+	it('escapes a quoted name in the message', async () => {
+		// The quoted names `lab\`el` and `a\\b`: `lab`el` and `a\b`.
+		expect(await problems('SELECT `lab\\`el` FROM site;')).toEqual([
+			'shop/q.surql:1: selects `lab\\`el` of `site`, which declares no such field',
+		]);
+		expect(await problems('SELECT `a\\\\b` FROM site;')).toEqual([
+			'shop/q.surql:1: selects `a\\\\b` of `site`, which declares no such field',
 		]);
 	});
 
@@ -288,8 +412,56 @@ describe('statements with schema detail: projected fields', () => {
 	});
 
 	describe('checks nothing', () => {
-		it('on a schemaless table', async () => {
+		it('on a schemaless table, whose fields the analyzer still records', async () => {
+			expect(projected('SELECT whatever FROM scratch;')).toEqual([
+				at('scratch', 'whatever'),
+			]);
 			expect(await problems('SELECT whatever FROM scratch;')).toEqual([]);
+		});
+
+		it('on a view, whose fields come from its SELECT', async () => {
+			const names = await withView();
+			expect(names.detail?.tables.tally?.acceptsUndeclared).toBe(true);
+			expect(await problems('SELECT n FROM tally;', names)).toEqual([]);
+			// The uses of a binding are not checked against it either.
+			expect(
+				await problems('SELECT * FROM tally WHERE n = $n;', names),
+			).toEqual([]);
+		});
+
+		it('for a bare word SurrealQL reads as a value, in a projection or a comparison', async () => {
+			expect(await problems('SELECT NaN, Infinity FROM gauge;')).toEqual(
+				[],
+			);
+			expect(
+				analyzeSync('SELECT * FROM gauge WHERE NaN = $x;').uses,
+			).toEqual({});
+			expect(
+				analyzeSync('SELECT * FROM gauge WHERE $x < Infinity;').uses,
+			).toEqual({});
+			expect(
+				await problems('SELECT * FROM gauge WHERE $x < Infinity;'),
+			).toEqual([]);
+		});
+
+		it('in a template where a hole starts a statement, which a fill can make define a field', async () => {
+			expect(
+				await problems('__SETUP__;\nSELECT nope FROM gauge;'),
+			).toEqual([]);
+			expect(
+				await problems(
+					'{ __SETUP__; RETURN (SELECT nope FROM gauge); };',
+				),
+			).toEqual([]);
+			expect(
+				projected('{ __SETUP__; RETURN (SELECT nope FROM gauge); };'),
+			).toEqual([at('gauge', 'nope')]);
+			// A hole elsewhere does not start a statement: still checked.
+			expect(
+				await problems('LET $x = __VALUE__;\nSELECT nope FROM gauge;'),
+			).toEqual([
+				'shop/q.surql:2: selects `nope` of `gauge`, which declares no such field',
+			]);
 		});
 
 		it('on a table the schema does not declare, reported once by the names check', async () => {
@@ -319,8 +491,12 @@ describe('statements with schema detail: projected fields', () => {
 		});
 
 		it('for what the analyzer does not record', async () => {
-			expect(await problems('SELECT VALUE nope FROM gauge;')).toEqual([]);
-			expect(await problems('SELECT nope AS x FROM gauge;')).toEqual([]);
+			expect(await problems('SELECT VALUE nope.x FROM gauge;')).toEqual(
+				[],
+			);
+			expect(await problems('SELECT nope + 1 AS x FROM gauge;')).toEqual(
+				[],
+			);
 			expect(await problems('SELECT nope.x FROM gauge;')).toEqual([]);
 		});
 	});
