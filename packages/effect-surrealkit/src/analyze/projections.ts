@@ -5,6 +5,7 @@
  */
 import type { Token } from './lexer.js';
 import { lockOf } from './lock.js';
+import { queryAt, statementsIn } from './statements.js';
 
 /** One projected field (`*` for all of them), at the 1-based line of its name. */
 export interface ProjectedField {
@@ -153,15 +154,33 @@ export const analyzeProjections = (
 		found.set(JSON.stringify([line, table, field]), { table, field, line });
 	};
 
-	/** Every parenthesised query in `start`..`stop`, each a query of its own. */
+	/**
+	 * Every parenthesised query in `start`..`stop`, each a query of its own,
+	 * and every statement of a `{…}` block there.
+	 */
 	const nested = (start: number, stop: number): void => {
 		for (let i = start; i < stop; i++) {
 			if (!isOpen(tokens[i])) continue;
 			const close = closing(i);
 			if (isPunct(tokens[i], '(') && upper(tokens[i + 1]) === 'SELECT')
 				select(i + 1, close);
+			else if (isPunct(tokens[i], '{')) statements(i + 1, close);
 			else nested(i + 1, close);
 			i = close;
+		}
+	};
+
+	/**
+	 * The statements from `start` to `stop` at one level: a query when its
+	 * value is a SELECT (possibly after `LET $name =` or `RETURN`); in any
+	 * statement, the parenthesised queries and blocks inside it.
+	 */
+	const SELECT: ReadonlySet<string> = new Set(['SELECT']);
+	const statements = (start: number, stop: number): void => {
+		for (const statement of statementsIn(tokens, start, stop)) {
+			if (queryAt(tokens, statement, SELECT))
+				select(statement.first, statement.end);
+			else nested(statement.start, statement.end);
 		}
 	};
 
@@ -238,31 +257,8 @@ export const analyzeProjections = (
 		for (const { field, line } of fields) record(table, field, line);
 	};
 
-	// Top-level statements: a query when it starts with SELECT, possibly
-	// after `LET $name =` or `RETURN`; elsewhere only parenthesised ones.
-	let start = 0;
-	for (let i = 0; i <= tokens.length; i++) {
-		const token = tokens[i];
-		if (token !== undefined && isOpen(token)) {
-			i = closing(i);
-			continue;
-		}
-		if (token !== undefined && !isPunct(token, ';')) continue;
-		let first = start;
-		if (
-			upper(tokens[first]) === 'LET' &&
-			tokens[first + 1]?.kind === 'param' &&
-			isPunct(tokens[first + 2], '=') &&
-			!isPunct(tokens[first + 3], '=')
-		)
-			first += 3;
-		else if (upper(tokens[first]) === 'RETURN') first += 1;
-		if (first < i) {
-			if (upper(tokens[first]) === 'SELECT') select(first, i);
-			else nested(start, i);
-		}
-		start = i + 1;
-	}
+	// Top-level statements, and in each block the statements of its body.
+	statements(0, tokens.length);
 
 	return [...found.values()].sort((a, b) =>
 		a.line !== b.line

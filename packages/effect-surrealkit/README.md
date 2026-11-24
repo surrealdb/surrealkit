@@ -1376,10 +1376,11 @@ FROM person` with `{}` and no error, so a misspelt field quietly comes back
 missing. `analyze(sql)` also reports `projected`: what each `SELECT`
 projects, as `{ table, field, line }` (`field` is `*` for `*`), sorted by
 line, table and field, without duplicates. A `SELECT` is read when it is a
-top-level statement (possibly after `LET $name =` or `RETURN`) or a
-parenthesised subquery, which is a query of its own (in a projection too,
-against its own table), and when all of this holds on tokens outside
-strings and comments:
+top-level statement (possibly after `LET $name =` or `RETURN`), a statement
+of a block (the body of `IF`, `ELSE`, `FOR`, a function or a bare `{ … }`,
+read like a top-level statement), or a parenthesised subquery, which is a
+query of its own (in a projection too, against its own table), and when all
+of this holds on tokens outside strings and comments:
 
 - it has exactly one `FROM` outside brackets;
 - it has no `OMIT`;
@@ -1419,8 +1420,9 @@ Every other item records nothing: a function call, a path (`address.city`,
 `tags[0]`), an expression, an alias of anything but one bare field, a graph
 step and a subquery, and `VALUE` before anything but one bare field. Two
 targets, an open target (`$owner`, `type::table($t)`, a subquery, a range
-or a graph step after the table), a hole after the target and a statement
-in a block that is not parenthesised record nothing.
+or a graph step after the table) and a hole after the target record
+nothing. A `{ … }` whose entries start with a key and `:` is an object
+literal, not a block, and has no statement.
 
 With `--schema` (or a scope's `declared` detail), a recorded field that a
 `SCHEMAFULL` table does not declare fails generation with its file and line:

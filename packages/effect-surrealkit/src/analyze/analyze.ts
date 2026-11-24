@@ -116,7 +116,9 @@ export interface Analysis {
 	 * `SELECT VALUE`, an `OMIT`, two targets, an open target and any item
 	 * that is not a bare name or `*` (a call, a path, an expression, an
 	 * alias, a graph step, a subquery) record nothing; a parenthesised
-	 * subquery is a query of its own.
+	 * subquery is a query of its own, and a statement in a block (the body
+	 * of `IF`, `ELSE`, `FOR`, a function or a bare `{ … }`) is read like a
+	 * top-level one.
 	 */
 	readonly projected: ReadonlyArray<ProjectedField>;
 	/**

@@ -270,11 +270,72 @@ describe('analyze: projected fields', () => {
 			expect(projected('SELECT name FROM __TABLE__;')).toEqual([]);
 		});
 
-		it('for a statement in a block, which is not a query the lexer can place', () => {
+		it('in a block for an object literal, a statement word as a key, or an open target', () => {
+			expect(projected('RETURN { select: name, from: person };')).toEqual(
+				[],
+			);
+			expect(projected('RETURN { SELECT: 1, a: 2 };')).toEqual([]);
+			// Block statements whose target is not one static table: two targets,
+			// a parameter, a FOR variable, a local bound to a parameter.
 			expect(
-				projected('IF $x { SELECT name FROM person } ELSE { [] };'),
+				projected(
+					'IF $x { SELECT name FROM person, team; SELECT name FROM $row; };',
+				),
 			).toEqual([]);
+			expect(
+				projected('FOR $row IN $rows { SELECT name FROM $row; };'),
+			).toEqual([]);
+			expect(
+				projected(
+					'LET $p = $owner; IF $x { SELECT name FROM ONLY $p; };',
+				),
+			).toEqual([]);
+			// Two items separated by a comma, as a set literal holds them:
+			// two targets, so nothing.
+			expect(projected('RETURN { SELECT name FROM person, 2 };')).toEqual(
+				[],
+			);
 		});
+	});
+});
+
+describe('analyze: projected fields of a statement in a block', () => {
+	it('reads the bodies of IF, ELSE IF and ELSE like top-level statements', () => {
+		expect(
+			projected(
+				'IF $x { SELECT name FROM person } ELSE IF $y { SELECT age FROM person; } ELSE { [] };',
+			),
+		).toEqual([at('person', 'age'), at('person', 'name')]);
+	});
+
+	it('reads a FOR body, a bare block and a block nested in another', () => {
+		expect(
+			projected(
+				'FOR $row IN $rows {\n\tLET $one = SELECT name FROM ONLY person:1;\n\tIF $one { RETURN SELECT VALUE title FROM listing };\n};',
+			),
+		).toEqual([at('person', 'name', 2), at('listing', 'title', 3)]);
+		expect(
+			projected('{ SELECT name FROM person; SELECT * FROM team }'),
+		).toEqual([at('person', 'name'), at('team', '*')]);
+	});
+
+	it('reads a block in a function body, which runs against the same tables', () => {
+		expect(
+			projected(
+				'DEFINE FUNCTION fn::names() { RETURN SELECT VALUE name FROM person; };',
+			),
+		).toEqual([at('person', 'name')]);
+	});
+
+	it('reads the clauses and FOR UPDATE of a block statement as at the top level', () => {
+		expect(
+			projected(
+				'BEGIN; IF $x { LET $row = SELECT name FROM ONLY person:1 FOR UPDATE; SELECT age FROM person WHERE age > 1 LIMIT 2 } ; COMMIT;',
+			),
+		).toEqual([at('person', 'age'), at('person', 'name')]);
+		expect(
+			projected('IF $x { SELECT name FROM person FOR UPDATE };'),
+		).toEqual([]);
 	});
 });
 
