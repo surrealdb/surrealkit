@@ -347,8 +347,12 @@ regenerating them.
 `test/types` compiles the golden modules with positive and `@ts-expect-error`
 fixtures under `strict` and `exactOptionalPropertyTypes`.
 
-The engine and field-presence suites run against a real, disposable server
-when one of these is set, and are skipped (with a notice) otherwise:
+The engine and field-presence suites need a real engine. A plain
+`bun run test` runs them on the in-process, in-memory engine of
+`@surrealdb/node` (SurrealDB 4.0.1; a dev dependency). Set one of these to run
+them against a server instead, which is also the only way to run the JSON
+round trips over HTTP `/sql`; the embedded engine has no HTTP endpoint, so
+those are skipped (with a notice) without a server:
 
 ```sh
 SURREAL_BIN=/usr/local/bin/surreal bun run test          # starts `surreal start … memory`

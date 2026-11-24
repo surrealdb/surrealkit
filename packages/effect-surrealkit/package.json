@@ -51,6 +51,8 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.4.2",
+		"@surrealdb/node": "3.2.0",
+		"@surrealdb/node-native": "4.0.1",
 		"@types/node": "^24.3.0",
 		"ajv": "8.17.1",
 		"effect": "4.0.6",
