@@ -16,7 +16,7 @@ import {
 	type Scope,
 	Stream,
 } from 'effect';
-import type { SurrealSession } from 'surrealdb';
+import type { Surreal, SurrealSession } from 'surrealdb';
 
 import type { ElementOf } from '../statement/expr.js';
 import type { LiveStatement } from '../statement/live.js';
@@ -74,6 +74,13 @@ import {
 	type PipelineResults,
 } from './pipeline.js';
 import { makeStream } from './stream.js';
+import {
+	makeWatchQuery,
+	type WatchQuery,
+	type WatchQueryError,
+	type WatchQueryOptions,
+	type WatchQueryState,
+} from './watch-query.js';
 
 /**
  * What a client needs from a connection or session. Interactive transactions
@@ -81,6 +88,11 @@ import { makeStream } from './stream.js';
  */
 export type Queryable = Pick<SurrealSession, 'query' | 'transaction'> &
 	Partial<Pick<SurrealSession, 'beginTransaction' | 'liveOf'>>;
+
+export interface ClientOptions {
+	/** The owning connection when observing queries on a child SDK session. */
+	readonly connection?: Surreal;
+}
 
 export interface RunOptions {
 	/**
@@ -301,6 +313,9 @@ export interface Client {
 		statement: LiveStatement<P, Row, Id>,
 		...input: InputOf<P, I>
 	) => Stream.Stream<LiveEvent<Row['Type'], Id['Type']>, LiveError>;
+
+	/** Watch the complete result of a read, refreshed by live sources and a timer. */
+	readonly watchQuery: WatchQuery;
 }
 
 /** The client statements run through, as a service. */
@@ -316,10 +331,11 @@ export class SurrealClient extends Context.Service<SurrealClient, Client>()(
  * await db.connect(url, { namespace, database, authentication });
  * const client = make(db);
  */
-export const make = (db: Queryable): Client => makeWith(sdkTransport(db));
+export const make = (db: Queryable, options?: ClientOptions): Client =>
+	makeWith(sdkTransport(db, options?.connection));
 
 const makeRun =
-	(transport: Transport): Client['run'] =>
+	(transport: Transport, sdkRetry?: false): Client['run'] =>
 	<
 		P extends Params,
 		R extends Codec,
@@ -351,6 +367,7 @@ const makeRun =
 							);
 							return {
 								mode: 'query',
+								...(sdkRetry === false && { sdkRetry }),
 								sql: statement.sql,
 								bindings,
 								parts: [
@@ -517,11 +534,15 @@ export const makeWith = (transport: Transport): Client => ({
 	bulk: makeBulk({ transport }),
 	stream: makeStream(transport),
 	...makeLive(transport),
+	watchQuery: makeWatchQuery(transport, makeRun(transport, false)),
 });
 
 /** Provides {@link SurrealClient} from an SDK connection or session. */
-export const layer = (db: Queryable): Layer.Layer<SurrealClient> =>
-	Layer.succeed(SurrealClient, make(db));
+export const layer = (
+	db: Queryable,
+	options?: ClientOptions,
+): Layer.Layer<SurrealClient> =>
+	Layer.succeed(SurrealClient, make(db, options));
 
 /** Runs a statement through the {@link SurrealClient} in context. */
 export const run = <
@@ -591,5 +612,27 @@ export const stream = <
 	Stream.unwrap(
 		Effect.map(Effect.service(SurrealClient), (client) =>
 			client.stream<P, Row, T, U, I>(statement, ...input),
+		),
+	);
+
+/** Observes a finite read through the {@link SurrealClient} in context. */
+export const watchQuery = <
+	P extends Params,
+	R extends Codec,
+	T extends string,
+	U extends string = never,
+	I = Input<P>,
+>(
+	statement: Statement<P, R, T, U>,
+	options: WatchQueryOptions,
+	...input: InputOf<P, I>
+): Stream.Stream<
+	WatchQueryState<R['Type']>,
+	WatchQueryError<T, U>,
+	SurrealClient
+> =>
+	Stream.unwrap(
+		Effect.map(Effect.service(SurrealClient), (client) =>
+			client.watchQuery<P, R, T, U, I>(statement, options, ...input),
 		),
 	);

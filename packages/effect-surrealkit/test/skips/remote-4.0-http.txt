@@ -38,3 +38,10 @@ test/roundtrip.test.ts > generated corpus modules against a prepared engine > re
 test/roundtrip.test.ts > generated corpus modules against a prepared engine > record ids: int64 extremes, bigint profile
 test/roundtrip.test.ts > generated corpus modules against a prepared engine > runs against the schema the modules were generated from
 test/roundtrip.test.ts > generated corpus modules against a prepared engine > team: open FLEXIBLE object, removable by NONE
+test/watch-query-engine.test.ts > watchQuery on a disposable engine > closes a scope while its WebSocket is still reconnecting
+test/watch-query-engine.test.ts > watchQuery on a disposable engine > discovers a closed child before delivering a queued snapshot
+test/watch-query-engine.test.ts > watchQuery on a disposable engine > marks a WebSocket stale and reacquires sources on reconnect
+test/watch-query-engine.test.ts > watchQuery on a disposable engine > publishes the authorized top result and refreshes when its winner exits
+test/watch-query-engine.test.ts > watchQuery on a disposable engine > reconciles permission loss and clears the old identity on invalidate
+test/watch-query-engine.test.ts > watchQuery on a disposable engine > refreshes for an edge-only change and releases every registration
+test/watch-query-engine.test.ts > watchQuery on a disposable engine > rejects a mismatched session owner before registering or reading

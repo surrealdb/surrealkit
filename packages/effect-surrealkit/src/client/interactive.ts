@@ -458,6 +458,7 @@ const contextClient = (tx: TransactionClient): Client => ({
 	stream: () => Stream.fail(scopeError('stream')),
 	live: () => Stream.fail(scopeError('live')),
 	liveScoped: () => Effect.fail(scopeError('liveScoped')),
+	watchQuery: () => Stream.fail(scopeError('watchQuery')),
 });
 
 export const withTransactionContext = <A, E, R>(

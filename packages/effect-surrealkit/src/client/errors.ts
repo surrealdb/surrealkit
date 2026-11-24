@@ -300,3 +300,15 @@ export class LiveQueryClosed extends Data.TaggedError('LiveQueryClosed')<{
 	readonly reason: 'killed' | 'disconnected';
 	readonly message: string;
 }> {}
+
+/** The observer's connection, authority or notification feed was lost. */
+export class WatchQueryClosed extends Data.TaggedError('WatchQueryClosed')<{
+	readonly statement: string;
+	readonly reason:
+		| 'disconnected'
+		| 'session-closed'
+		| 'identity-changed'
+		| 'authentication'
+		| 'source-overflow';
+	readonly message: string;
+}> {}

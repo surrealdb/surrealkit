@@ -226,5 +226,12 @@ export const recordUser = (
 					cause,
 				}),
 		});
-		return { session, client: make(session) };
+		const { connection } = database;
+		return {
+			session,
+			client: make(
+				session,
+				connection instanceof Surreal ? { connection } : undefined,
+			),
+		};
 	});

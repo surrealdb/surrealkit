@@ -27,7 +27,7 @@ import { checkValues, encode } from './internal/encode.js';
 import { requestPart } from './internal/join.js';
 import { withClientSpan } from './internal/span.js';
 import { recording } from './internal/trace.js';
-import type { LiveHandle, Transport } from './internal/transport.js';
+import type { LiveHandle, Signal, Transport } from './internal/transport.js';
 
 export interface LiveEvent<Row, Id> {
 	readonly action: 'CREATE' | 'UPDATE' | 'DELETE';
@@ -79,6 +79,46 @@ type Change = Message & {
 	readonly action: LiveEvent<unknown, unknown>['action'];
 };
 
+const liveIterator = <E>(handle: LiveHandle, onError: (cause: unknown) => E) =>
+	Effect.try({
+		try: () => handle.messages[Symbol.asyncIterator](),
+		catch: onError,
+	});
+
+const consumeFrames = <E>(
+	statement: string,
+	iterator: AsyncIterator<Message>,
+	consume: (frame: Change) => Effect.Effect<unknown>,
+	onError: (cause: unknown) => E,
+) =>
+	Effect.forever(
+		Effect.gen(function* () {
+			const frame = yield* Effect.tryPromise({
+				try: () => iterator.next(),
+				catch: onError,
+			});
+			if (frame.done)
+				return yield* Effect.fail(closed(statement, 'disconnected'));
+			const { action, id, value } = frame.value;
+			if (action === 'KILLED')
+				return yield* Effect.fail(closed(statement, 'killed'));
+			yield* consume({ action, id, value });
+		}),
+	);
+
+/** Start pulling the attached SDK channel immediately, independently of consumers. */
+export const consumeLive = <E>(
+	statement: string,
+	handle: LiveHandle,
+	consume: (frame: Change) => Effect.Effect<unknown>,
+	onError: (cause: unknown) => E,
+) =>
+	liveIterator(handle, onError).pipe(
+		Effect.flatMap((iterator) =>
+			consumeFrames(statement, iterator, consume, onError),
+		),
+	);
+
 const decodeField = <C extends Codec>(
 	statement: string,
 	field: 'id' | 'value',
@@ -104,27 +144,16 @@ const decodeField = <C extends Codec>(
 const changes = (statement: string, handle: LiveHandle) =>
 	Effect.gen(function* () {
 		const disconnected = () => closed(statement, 'disconnected');
-		const iterator = yield* Effect.try({
-			try: () => handle.messages[Symbol.asyncIterator](),
-			catch: disconnected,
-		});
+		const iterator = yield* liveIterator(handle, disconnected);
 		const queue = yield* Queue.unbounded<Change, LiveQueryClosed>();
 		yield* Effect.addFinalizer(() => Queue.shutdown(queue));
-		const poll = Effect.gen(function* () {
-			const frame = yield* Effect.tryPromise({
-				try: () => iterator.next(),
-				catch: disconnected,
-			});
-			if (frame.done) return yield* Effect.fail(disconnected());
-			const { action, id, value } = frame.value;
-			if (action === 'KILLED')
-				return yield* Effect.fail(closed(statement, 'killed'));
-			yield* Queue.offer(queue, { action, id, value });
-		});
 		yield* Effect.forkScoped(
-			Effect.forever(poll).pipe(
-				Effect.catch((error) => Queue.fail(queue, error)),
-			),
+			consumeFrames(
+				statement,
+				iterator,
+				(frame) => Queue.offer(queue, frame),
+				disconnected,
+			).pipe(Effect.catch((error) => Queue.fail(queue, error))),
 			{ startImmediately: true },
 		);
 		return Stream.fromQueue(queue);
@@ -134,6 +163,7 @@ const register = (
 	open: NonNullable<Transport['live']>,
 	descriptor: AnyStatement,
 	input: Readonly<Record<string, unknown>>,
+	connectionSignal?: Signal,
 ) => {
 	const { name, sql } = descriptor;
 	const operation = `live(${name})`;
@@ -164,12 +194,35 @@ const register = (
 								],
 							},
 							signal,
+							connectionSignal,
 						),
 					catch: (cause) => requestError(name, cause),
 				}),
 			);
 		}),
 	).pipe(withClientSpan(operation, { kind: 'client' }));
+};
+
+export const acquireLive = (
+	transport: Transport,
+	statement: LiveStatement,
+	input: Readonly<Record<string, unknown>>,
+	connectionSignal?: Signal,
+) => {
+	const open = transport.live;
+	const { name, sql, params } = statement;
+	if (open === undefined) return Effect.fail(unsupported(name));
+	const descriptor = make({
+		name,
+		sql,
+		params,
+		result: Schema.Unknown,
+		writes: false,
+	});
+	return Effect.acquireRelease(
+		register(open, descriptor, input, connectionSignal),
+		(subscribed) => kill(name, subscribed),
+	);
 };
 
 const kill = (name: string, handle: LiveHandle) => {
@@ -194,22 +247,9 @@ const scoped =
 		...args: InputOf<P, I>
 	) =>
 		Effect.gen(function* () {
-			const open = transport.live;
-			if (open === undefined)
-				return yield* Effect.fail(unsupported(statement.name));
-			const { name, sql, params } = statement;
-			const descriptor = make({
-				name,
-				sql,
-				params,
-				result: Schema.Unknown,
-				writes: false,
-			});
+			const { name } = statement;
 			const input = (args[0] ?? {}) as Readonly<Record<string, unknown>>;
-			const handle = yield* Effect.acquireRelease(
-				register(open, descriptor, input),
-				(subscribed) => kill(name, subscribed),
-			);
+			const handle = yield* acquireLive(transport, statement, input);
 			const messages = yield* changes(name, handle);
 			return messages.pipe(
 				Stream.mapEffect(({ action, id, value }) =>

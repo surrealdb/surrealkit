@@ -2229,6 +2229,7 @@ const client = make(db);
 | `TransactionOutcomeUnknown` | the commit of an interactive transaction, an atomic bulk write, or a multi-statement bulk chunk lacked an acknowledgement | unknown. Read back before replaying |
 | `BulkWriteError` | a non-atomic bulk chunk failed. Carries the failed chunk, confirmed preceding counts and the statement error | preceding chunks completed. The cause describes the failed chunk's outcome |
 | `LiveQueryClosed` | the engine killed the live query or the connection was lost | closing the subscription does not write data |
+| `WatchQueryClosed` | the observer lost its session, authorization or connection permanently, or the SDK reported a live-source overflow | the observer re-executes a read-only statement |
 
 Client error messages, default inspection, and JSON output omit raw server
 diagnostics, undeclared `THROW` text, keys from preflight binding values,
@@ -2729,6 +2730,69 @@ configuration.
 Live queries here start from a table. They provide change events without a
 baseline read. `DIFF`, `FETCH`, record-ID and range targets, ordering,
 limits, grouping, and `only` are outside this API.
+
+#### Watching a query result
+
+Use `client.watchQuery` when a consumer needs the current result of a read.
+For example, if the oldest adult leaves a group, the next oldest adult
+should become the first row. An event filter on the original group can
+miss that departure. Watch changes to the underlying table and let the
+original query compute each new result.
+
+```ts
+import { Stream } from 'effect';
+import { Int } from 'effect-surrealkit';
+import { bindLive, make } from 'effect-surrealkit/client';
+import { gt, live, param, select } from 'effect-surrealkit/statement';
+
+const oldest = select(PersonTable)
+  .where((row) => gt(row.age, param('minimum', Int)))
+  .orderBy((row) => row.age, 'DESC')
+  .limit(1)
+  .build('people.oldest', { writes: false });
+const changes = live(PersonTable)
+  .project((row) => ({ id: row.id }))
+  .build('people.changes');
+
+const states = make(db).watchQuery(oldest, {
+  sources: [bindLive(changes)],
+  reconcileEvery: '30 seconds',
+}, { minimum: 17 });
+
+const display = Stream.runForEach(states, (state) =>
+  state._tag === 'Current' ? renderRows(state.value) : clearRows(state._tag),
+);
+```
+
+Each run owns its registrations. Supply a read whose statement metadata declares
+`writes: false` and at least one live source. Include every table or relation
+whose changes affect membership, projected values or ordering. Bind each live
+source with its own parameters. The observer starts its listeners before the
+first read and reads again if a notification arrives during a refresh. Bursts
+can share one refresh, and a slow consumer can skip intermediate snapshots.
+The observer holds one pending refresh and the latest state. The SDK and
+transport have their own notification buffers.
+Registering a live source requires a supported transport such as WebSocket.
+
+The Stream exposes `Loading`, `Current` with the decoded result, and `Stale`.
+After a transient disconnect, it reacquires listeners on the restored session
+and reads the current result. Periodic reads (every 30 seconds by default)
+also pick up changes in visibility that produced no notification. Reads and
+registrations use the same session. For a child SDK session, pass its owning
+connection to `make(session, { connection: db })`. Changing the database or
+access token ends that observation. Start a new one after a token rotation,
+identity change or permanent disconnect. Interrupting
+the Stream releases the listeners.
+
+Use the current snapshot for display or cache refresh. For processing every
+committed change, keep a durable journal and checkpoint. On SDK 2.2.2, a
+notification can be lost between server registration and SDK attachment.
+The initial and periodic reads reconcile the view after such a gap. The
+published Node engine adapter 3.2.0 can silently discard early notifications
+at its dispatcher limit even with an SDK that reports overflow after attachment.
+When a source reports overflow, the observer fails with
+`WatchQueryClosed` (reason `source-overflow`). Start a fresh observation to
+acquire new registrations and read the current result.
 
 #### Transports
 

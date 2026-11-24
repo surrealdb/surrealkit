@@ -1,4 +1,10 @@
-import { ExpressionError } from 'surrealdb';
+import {
+	AuthenticationError,
+	ExpressionError,
+	InvalidSessionError,
+	NotAllowedError,
+	NotFoundError,
+} from 'surrealdb';
 
 import type { AnyStatement } from '../../statement/statement.js';
 import {
@@ -10,6 +16,40 @@ import {
 	StatementUnexpectedThrow,
 } from '../errors.js';
 import type { SlotAnswer } from './transport.js';
+
+export const causedBy = (
+	cause: unknown,
+	matches: (error: Error) => boolean,
+): boolean => {
+	const visited = new Set<Error>();
+	for (
+		let error = cause;
+		error instanceof Error && !visited.has(error);
+		error = error.cause
+	) {
+		if (matches(error)) return true;
+		visited.add(error);
+	}
+	return false;
+};
+
+export const isAuthenticationFailure = (cause: unknown): boolean =>
+	causedBy(
+		cause,
+		(error) =>
+			error instanceof AuthenticationError ||
+			(error instanceof NotAllowedError &&
+				error.details?.kind === 'Auth'),
+	);
+
+export const isClosedSession = (cause: unknown): boolean =>
+	causedBy(
+		cause,
+		(error) =>
+			error instanceof InvalidSessionError ||
+			(error instanceof NotFoundError &&
+				error.details?.kind === 'Session'),
+	);
 
 export type FailedSlot = Extract<SlotAnswer, { readonly ok: false }>;
 

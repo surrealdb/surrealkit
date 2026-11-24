@@ -14,6 +14,7 @@ export {
 	type BoundStatements,
 	bind,
 	type Client,
+	type ClientOptions,
 	type InputOf,
 	layer,
 	make,
@@ -28,6 +29,7 @@ export {
 	type ThrownByAny,
 	transaction,
 	type UniqueIndexesOfAny,
+	watchQuery,
 	withTransaction,
 } from './client.js';
 export {
@@ -47,6 +49,7 @@ export {
 	StatementUnsupported,
 	StatementWriteOutcomeError,
 	TransactionOutcomeUnknown,
+	WatchQueryClosed,
 } from './errors.js';
 export type {
 	TransactionClient,
@@ -57,3 +60,11 @@ export { metrics } from './internal/trace.js';
 export type { LiveError, LiveEvent } from './live.js';
 export type { PipelineOptions, PipelineResults } from './pipeline.js';
 export { type RequestTiming, type StatementTiming, timed } from './timing.js';
+export {
+	type BoundLive,
+	bindLive,
+	type WatchQuery,
+	type WatchQueryError,
+	type WatchQueryOptions,
+	type WatchQueryState,
+} from './watch-query.js';

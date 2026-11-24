@@ -2,13 +2,15 @@ import { Duration, Effect, type Schedule } from 'effect';
 import {
 	BoundQuery,
 	type QueryResponse,
+	Surreal,
 	type Duration as SurrealDuration,
+	SurrealSession,
 	Uuid,
 } from 'surrealdb';
 
 import type { AnyStatement } from '../../statement/statement.js';
 import type { Queryable, RunOptions } from '../client.js';
-import { LiveRegistrationError } from './classify.js';
+import { isAuthenticationFailure, LiveRegistrationError } from './classify.js';
 
 /** The abort signal a request takes, as the SDK names it. */
 export type Signal = NonNullable<
@@ -64,6 +66,14 @@ export interface LiveHandle {
 	readonly kill: () => PromiseLike<void>;
 }
 
+export type WatchConnectionEvent =
+	| 'connected'
+	| 'reconnecting'
+	| 'disconnected'
+	| 'session-closed'
+	| 'identity-changed'
+	| 'authentication';
+
 export type StreamFrame =
 	| {
 			readonly kind: 'row' | 'value';
@@ -102,7 +112,17 @@ export interface Transport {
 	readonly live?: (
 		request: Request,
 		signal: Signal,
+		/** Aborted only if the connection which could own the UUID is gone. */
+		connectionSignal?: Signal,
 	) => PromiseLike<LiveHandle>;
+	/** Subscribe to lifecycle events and synchronously report the current state. */
+	readonly watch?: (
+		notify: (event: WatchConnectionEvent) => void,
+	) => () => void;
+	/** Verify that a separately supplied event source actually owns this session. */
+	readonly verifyWatchOwner?: () => PromiseLike<boolean>;
+	/** SDK child disposal does not publish a lifecycle event. */
+	readonly isWatchSessionValid?: () => boolean;
 }
 
 const sdkDuration = (value: SurrealDuration): Duration.Duration => {
@@ -123,7 +143,73 @@ const responseSlots = (
 			: { ok: false, error: response.error, ...timing };
 	});
 
-export const sdkTransport = (db: Queryable): Transport => {
+const watchConnection =
+	(
+		session: SurrealSession,
+		connection: Surreal,
+	): NonNullable<Transport['watch']> =>
+	(notify) => {
+		const status = connection.status;
+		if (status !== 'connected' && status !== 'reconnecting') {
+			notify('disconnected');
+			return () => {};
+		}
+		if (!session.isValid) {
+			notify('session-closed');
+			return () => {};
+		}
+		const { namespace, database, accessToken } = session;
+		const unsubscribe = [
+			connection.subscribe('reconnecting', () => notify('reconnecting')),
+			connection.subscribe('disconnected', () => notify('disconnected')),
+			connection.subscribe('error', (error) => {
+				// A connected owner can report errors for other sessions. The
+				// scoped auth listener and requests handle this session's errors.
+				if (
+					connection.status === 'reconnecting' &&
+					isAuthenticationFailure(error)
+				)
+					notify('authentication');
+			}),
+			connection.subscribe('connected', () => {
+				if (!session.isValid) notify('session-closed');
+				else notify('connected');
+			}),
+			session.subscribe('using', (selected) => {
+				if (
+					selected.namespace !== namespace ||
+					selected.database !== database
+				)
+					notify('identity-changed');
+			}),
+			session.subscribe('auth', (tokens) => {
+				if (tokens === null) notify('authentication');
+				else if (tokens.access !== accessToken)
+					notify('identity-changed');
+			}),
+		];
+		notify(status);
+		return () => {
+			for (const stop of unsubscribe) stop();
+		};
+	};
+
+const waitForLiveCleanup = (
+	cleanup: Promise<void>,
+	connectionSignal: Signal | undefined,
+) => {
+	if (connectionSignal === undefined) return cleanup;
+	return new Promise<void>((resolve, reject) => {
+		const gone = () => resolve();
+		if (connectionSignal.aborted) gone();
+		else connectionSignal.addEventListener('abort', gone, { once: true });
+		void cleanup
+			.then(resolve, reject)
+			.finally(() => connectionSignal.removeEventListener('abort', gone));
+	});
+};
+
+export const sdkTransport = (db: Queryable, owner?: Surreal): Transport => {
 	// One request per transaction, encoded once and sent again as it is on a
 	// retry. Separate requests may reuse a bindings object with different SQL.
 	const requests = new WeakMap<Request, BoundQuery>();
@@ -144,7 +230,25 @@ export const sdkTransport = (db: Queryable): Transport => {
 	};
 	const beginTransaction = db.beginTransaction?.bind(db);
 	const liveOf = db.liveOf?.bind(db);
+	const connection = db instanceof Surreal ? db : owner;
 	return {
+		...(connection !== undefined &&
+			db instanceof SurrealSession && {
+				watch: watchConnection(db, connection),
+				isWatchSessionValid: () => db.isValid,
+				...(db !== connection && {
+					verifyWatchOwner: async () => {
+						const id = db.session;
+						return (
+							id !== undefined &&
+							(await connection.sessions()).some(
+								(session) =>
+									session.toString() === id.toString(),
+							)
+						);
+					},
+				}),
+			}),
 		collect: (request, signal) =>
 			request.mode === 'atomic'
 				? collectAtomic(request, signal)
@@ -181,28 +285,49 @@ export const sdkTransport = (db: Queryable): Transport => {
 					live: async (
 						request: Request,
 						signal: Signal,
+						connectionSignal?: Signal,
 					): Promise<LiveHandle> => {
 						signal.throwIfAborted();
 						// Wait for the query ID even if the scope ends during registration.
 						// The owner can then kill the exact query before releasing the connection.
-						const ids = await db
+						const pending = db
 							.query(request.sql, request.bindings)
-							.retry(false)
-							.collect();
+							.retry(false);
+						const ids = await (connectionSignal === undefined
+							? pending
+							: pending.signal(connectionSignal)
+						).collect();
 						const [id] = ids;
 						if (ids.length !== 1 || !(id instanceof Uuid))
 							throw new LiveRegistrationError('missing-id');
 						const killById = async () => {
-							await db
+							const pending = db
 								.query('KILL $id;', { id })
-								.retry(false)
-								.collect();
+								.retry(false);
+							await (connectionSignal === undefined
+								? pending
+								: pending.signal(connectionSignal)
+							).collect();
 						};
 						let attached:
 							| Awaited<ReturnType<typeof liveOf>>
 							| undefined;
+						const killAttached = (
+							subscription: NonNullable<typeof attached>,
+						) => {
+							if (connectionSignal?.aborted)
+								return Promise.resolve();
+							return waitForLiveCleanup(
+								subscription.kill().catch(killById),
+								connectionSignal,
+							);
+						};
 						try {
-							attached = await liveOf(id);
+							connectionSignal?.throwIfAborted();
+							attached = await (connectionSignal !== undefined &&
+							db instanceof SurrealSession
+								? db.withSignal(connectionSignal).liveOf(id)
+								: liveOf(id));
 							const subscription = attached;
 							// Register the iterator before the caller can issue its first write.
 							const iterator =
@@ -225,13 +350,14 @@ export const sdkTransport = (db: Queryable): Transport => {
 								})(),
 								// The SDK caches a rejected kill. A fresh request
 								// on the same session can still release this UUID.
-								kill: () => subscription.kill().catch(killById),
+								kill: () => killAttached(subscription),
 							};
 						} catch (error) {
+							if (connectionSignal?.aborted) throw error;
 							const cleanup =
 								attached === undefined
 									? killById()
-									: attached.kill().catch(killById);
+									: killAttached(attached);
 							await cleanup.catch(() => {
 								throw new LiveRegistrationError(
 									'cleanup-unconfirmed',
