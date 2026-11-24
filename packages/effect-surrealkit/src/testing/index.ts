@@ -55,5 +55,6 @@ export {
 	type VerifyFile,
 	type VerifyInput,
 	type VerifyProblem,
+	type VerifyProblemKind,
 	verifyStatements,
 } from './verify.js';

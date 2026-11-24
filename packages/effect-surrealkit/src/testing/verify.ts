@@ -1,9 +1,10 @@
 /**
  * Authored `.surql` texts checked on a discarded in-memory engine: each
  * complete text is sent once with no bindings, after the optional schema
- * files. A parse error, or a number of results other than the analyzer's
- * `slots`, is a problem; any other error a text meets without bindings is
- * not. Backs `effect-surrealkit statements --verify`.
+ * files. A parse error, a number of results other than the analyzer's
+ * `slots`, or a text that does not finish within the timeout is a problem;
+ * any other error a text meets without bindings is not. Backs
+ * `effect-surrealkit statements --verify`.
  */
 import { Data, Effect, type Scope } from 'effect';
 import { Surreal } from 'surrealdb';
@@ -39,8 +40,24 @@ export interface VerifyInput {
 	readonly timeoutSeconds?: number;
 }
 
+/**
+ * What a problem is: a parse error the engine reports (`parse`), another
+ * refusal of the whole text (`refused`), a result count other than `slots`
+ * (`count`), a text or schema file that did not finish within the timeout
+ * (`timeout`), a schema statement that failed (`schema`), or a text the
+ * analyzer refused (`analyzer`).
+ */
+export type VerifyProblemKind =
+	| 'parse'
+	| 'refused'
+	| 'count'
+	| 'timeout'
+	| 'schema'
+	| 'analyzer';
+
 /** One problem: where it is, when the engine says, and what it is. */
 export interface VerifyProblem {
+	readonly kind: VerifyProblemKind;
 	readonly file: string;
 	readonly line?: number;
 	readonly column?: number;
@@ -91,24 +108,70 @@ const messageOf = (cause: unknown): string =>
 	cause instanceof Error ? cause.message : String(cause);
 
 const problem = (
+	kind: VerifyProblemKind,
 	file: string,
 	text: string,
 	at?: { readonly line: number; readonly column: number },
 ): VerifyProblem => ({
+	kind,
 	file,
 	...(at !== undefined && at),
 	text,
 	message: `${file}${at === undefined ? '' : `:${at.line}:${at.column}`}: ${text}`,
 });
 
+/**
+ * Whether `error`, or an error in its `cause` chain, is the engine's query
+ * timeout: `kind: "Query"` with `details.kind: "TimedOut"`. The engine
+ * reports one timeout in two ways, as the error of each statement it did not
+ * finish or as the refusal of the whole text, with this same structure in
+ * both; it is read from the structure, never from the message.
+ */
+const isTimeout = (error: unknown): boolean => {
+	for (
+		let at: unknown = error, depth = 0;
+		typeof at === 'object' && at !== null && depth < 8;
+		at = (at as { readonly cause?: unknown }).cause, depth++
+	) {
+		const { kind, details } = at as {
+			readonly kind?: unknown;
+			readonly details?: { readonly kind?: unknown } | null;
+		};
+		if (
+			kind === 'Query' &&
+			typeof details === 'object' &&
+			details?.kind === 'TimedOut'
+		)
+			return true;
+	}
+	return false;
+};
+
+const timeoutProblem = (file: string, timeoutSeconds: number): VerifyProblem =>
+	problem(
+		'timeout',
+		file,
+		`the text did not finish within ${timeoutSeconds}s on an empty database with no bindings, so its result count was not verified`,
+	);
+
 /** A problem from the error the engine refused a whole text with. */
-const refusal = (file: string, cause: unknown): VerifyProblem => {
+const refusal = (
+	file: string,
+	cause: unknown,
+	timeoutSeconds: number,
+): VerifyProblem => {
+	if (isTimeout(cause)) return timeoutProblem(file, timeoutSeconds);
 	const message = messageOf(cause);
 	const first = message.split('\n', 1)[0]?.trim() ?? '';
 	if (!message.startsWith('Parse error'))
-		return problem(file, `the engine did not run the text: ${first}`);
+		return problem(
+			'refused',
+			file,
+			`the engine did not run the text: ${first}`,
+		);
 	const at = /-->\s*\[(\d+):(\d+)\]/u.exec(message);
 	return problem(
+		'parse',
 		file,
 		first,
 		at === null
@@ -117,16 +180,46 @@ const refusal = (file: string, cause: unknown): VerifyProblem => {
 	);
 };
 
+/** One statement's result, as the SDK returns it. */
+type Response =
+	| { readonly success: true }
+	| { readonly success: false; readonly error: { readonly message: string } };
+
+/** What the engine did with one text: its results, or the refusal. */
+export type Sent =
+	| { readonly responses: ReadonlyArray<Response> }
+	| { readonly refused: unknown };
+
+/**
+ * The problem of one complete text, if any, from what the engine did with
+ * it. A text that did not finish within the timeout has one outcome however
+ * the engine reports it, per statement or as a refusal of the whole text: a
+ * `timeout` problem, never a verified text and never a parse error.
+ *
+ * @internal
+ */
+export const judgeText = (
+	text: { readonly file: string; readonly slots: number },
+	sent: Sent,
+	timeoutSeconds: number,
+): VerifyProblem | undefined => {
+	if ('refused' in sent)
+		return refusal(text.file, sent.refused, timeoutSeconds);
+	const { responses } = sent;
+	if (responses.some((r) => !r.success && isTimeout(r.error)))
+		return timeoutProblem(text.file, timeoutSeconds);
+	if (responses.length !== text.slots)
+		return problem(
+			'count',
+			text.file,
+			`the engine returned ${responses.length} results, the analyzer derived ${text.slots}`,
+		);
+	return undefined;
+};
+
 interface Engine {
 	readonly version: string;
-	readonly send: (
-		sql: string,
-	) => Promise<
-		ReadonlyArray<
-			| { readonly success: true }
-			| { readonly success: false; readonly error: { message: string } }
-		>
-	>;
+	readonly send: (sql: string) => Promise<ReadonlyArray<Response>>;
 }
 
 const startEngine = (
@@ -200,43 +293,42 @@ export const verifyAnalysed = (
 	Scope.Scope
 > =>
 	Effect.gen(function* () {
-		const engine = yield* startEngine(
-			options.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS,
-		);
+		const timeoutSeconds =
+			options.timeoutSeconds ?? DEFAULT_TIMEOUT_SECONDS;
+		const engine = yield* startEngine(timeoutSeconds);
+		const send = async (sql: string): Promise<Sent> => {
+			try {
+				return { responses: await engine.send(sql) };
+			} catch (refused) {
+				return { refused };
+			}
+		};
 		const problems = yield* Effect.promise(async () => {
 			for (const { name, sql } of options.schema ?? []) {
-				let responses: Awaited<ReturnType<Engine['send']>>;
-				try {
-					responses = await engine.send(sql);
-				} catch (cause) {
-					return [refusal(name, cause)];
-				}
-				const failed = responses.findIndex((r) => !r.success);
-				const response = responses[failed];
+				const sent = await send(sql);
+				if ('refused' in sent)
+					return [refusal(name, sent.refused, timeoutSeconds)];
+				const failed = sent.responses.findIndex((r) => !r.success);
+				const response = sent.responses[failed];
 				if (response !== undefined && !response.success)
 					return [
-						problem(
-							name,
-							`statement ${failed + 1} failed: ${response.error.message.split('\n', 1)[0]}`,
-						),
+						isTimeout(response.error)
+							? timeoutProblem(name, timeoutSeconds)
+							: problem(
+									'schema',
+									name,
+									`statement ${failed + 1} failed: ${response.error.message.split('\n', 1)[0]}`,
+								),
 					];
 			}
 			const found: VerifyProblem[] = [];
-			for (const { file, sql, slots } of texts) {
-				let responses: Awaited<ReturnType<Engine['send']>>;
-				try {
-					responses = await engine.send(sql);
-				} catch (cause) {
-					found.push(refusal(file, cause));
-					continue;
-				}
-				if (responses.length !== slots)
-					found.push(
-						problem(
-							file,
-							`the engine returned ${responses.length} results, the analyzer derived ${slots}`,
-						),
-					);
+			for (const text of texts) {
+				const judged = judgeText(
+					text,
+					await send(text.sql),
+					timeoutSeconds,
+				);
+				if (judged !== undefined) found.push(judged);
 			}
 			return found;
 		});
@@ -248,9 +340,13 @@ export const verifyAnalysed = (
  * an optional peer, imported only here): loads `schema`, then sends each
  * complete text once with no bindings, in scope and file order, on one
  * database. Fails with {@link StatementVerificationError} on a parse error,
- * a result count other than the analyzer's `slots`, a text that does not
- * finish within `timeoutSeconds`, or a schema file that does not apply;
- * with `TestingError` when the engine is not installed or does not start.
+ * a result count other than the analyzer's `slots`, a schema file that does
+ * not apply, or a text that does not finish within `timeoutSeconds`. A text
+ * that does not finish is a problem of kind `timeout` however the engine
+ * reports it: it did not finish within the limit on an empty database with
+ * no bindings, so its result count was not verified. It is never reported as
+ * verified and never as a parse error. Fails with `TestingError` when the
+ * engine is not installed or does not start.
  *
  * The texts run: writes land in the discarded database, and the engine
  * denies `http::` functions, network targets and scripting, so nothing a
@@ -275,6 +371,7 @@ export const verifyStatements = (
 				} catch (cause) {
 					early.push(
 						problem(
+							'analyzer',
 							file,
 							`the analyzer refused the text: ${messageOf(cause)}`,
 						),

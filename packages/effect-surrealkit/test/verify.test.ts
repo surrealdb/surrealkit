@@ -1,7 +1,8 @@
 /**
  * `verifyStatements` and `statements --verify`: every complete text is sent
- * once, with no bindings, to a discarded in-memory engine, and a parse error
- * or a result count other than the analyzer's `slots` is a problem.
+ * once, with no bindings, to a discarded in-memory engine, and a parse error,
+ * a result count other than the analyzer's `slots` or a text that does not
+ * finish within the timeout is a problem.
  *
  * The check always uses the embedded engine of `@surrealdb/node`, whatever
  * engine lane the suite runs on.
@@ -214,15 +215,25 @@ describe.skipIf(!embedded)('verifyStatements', () => {
 		}
 	});
 
-	it('stops a slow text at the timeout and still counts its results', async () => {
-		const started = performance.now();
-		await passed({
-			...scope({ slow: 'RETURN 1;\nsleep(5s);\nRETURN 2;' }),
+	it('reports a text that does not finish within the timeout as a timeout problem', async () => {
+		const timeout = (file: string) => ({
+			kind: 'timeout',
+			file,
+			text: 'the text did not finish within 1s on an empty database with no bindings, so its result count was not verified',
+			message: `${file}: the text did not finish within 1s on an empty database with no bindings, so its result count was not verified`,
+		});
+		// The engine reports this text's timeout either per statement or as
+		// a refusal of the whole text; the outcome is the same either way.
+		const problems = await problemsOf({
+			...scope({
+				fine: 'RETURN 1;',
+				slow: 'RETURN 1;\nsleep(5s);\nRETURN 2;',
+			}),
 			timeoutSeconds: 1,
 		});
-		expect(performance.now() - started).toBeLessThan(4_000);
+		expect(problems).toEqual([timeout('people/slow.surql')]);
 		const { verifyAnalysed } = await import('../src/testing/verify.js');
-		const { problems } = await Effect.runPromise(
+		const { problems: miscounted } = await Effect.runPromise(
 			Effect.scoped(
 				verifyAnalysed(
 					[
@@ -236,9 +247,93 @@ describe.skipIf(!embedded)('verifyStatements', () => {
 				),
 			),
 		);
-		expect(problems.map((problem) => problem.message)).toEqual([
-			'people/slow.surql: the engine returned 1 results, the analyzer derived 2',
-		]);
+		expect(miscounted).toEqual([timeout('people/slow.surql')]);
+	});
+});
+
+describe('judgeText', () => {
+	/** The error the embedded engine reports for a query timeout. */
+	const timedOut = (code: number) =>
+		Object.assign(
+			new Error(
+				'The query was not executed because it exceeded the timeout: 1s',
+			),
+			{
+				name: 'QueryError',
+				kind: 'Query',
+				code,
+				details: { kind: 'TimedOut', details: { duration: '1s' } },
+			},
+		);
+	const text = { file: 'people/slow.surql', slots: 3 };
+	const expected = {
+		kind: 'timeout',
+		file: 'people/slow.surql',
+		message:
+			'people/slow.surql: the text did not finish within 1s on an empty database with no bindings, so its result count was not verified',
+	};
+
+	it('maps both ways the engine reports one timeout to one timeout problem', async () => {
+		const { judgeText } = await import('../src/testing/verify.js');
+		const perStatement = judgeText(
+			text,
+			{
+				responses: [
+					{ success: true },
+					{ success: false, error: timedOut(0) },
+					{ success: false, error: timedOut(0) },
+				],
+			},
+			1,
+		);
+		const wholeText = judgeText(text, { refused: timedOut(-32004) }, 1);
+		const wrapped = judgeText(
+			text,
+			{
+				refused: new Error('request failed', {
+					cause: timedOut(-32004),
+				}),
+			},
+			1,
+		);
+		expect(perStatement).toMatchObject(expected);
+		expect(wholeText).toEqual(perStatement);
+		expect(wrapped).toEqual(perStatement);
+	});
+
+	it('reports a timeout even when the count would not match', async () => {
+		const { judgeText } = await import('../src/testing/verify.js');
+		expect(
+			judgeText(
+				text,
+				{ responses: [{ success: false, error: timedOut(0) }] },
+				1,
+			),
+		).toMatchObject(expected);
+	});
+
+	it('reads the structure, not the message', async () => {
+		const { judgeText } = await import('../src/testing/verify.js');
+		const message = new Error(
+			'The query was not executed because it exceeded the timeout: 1s',
+		);
+		expect(judgeText(text, { refused: message }, 1)).toMatchObject({
+			kind: 'refused',
+		});
+		expect(
+			judgeText(
+				{ ...text, slots: 1 },
+				{ responses: [{ success: false, error: message }] },
+				1,
+			),
+		).toBeUndefined();
+		expect(
+			judgeText(
+				text,
+				{ refused: new Error('Parse error: x --> [1:2]') },
+				1,
+			),
+		).toMatchObject({ kind: 'parse', line: 1, column: 2 });
 	});
 });
 

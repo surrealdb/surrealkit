@@ -1471,14 +1471,21 @@ It needs the optional peer `@surrealdb/node` (`npm install --save-dev
 that install command. It starts an in-memory engine in the process, runs the
 `--verify-schema` files in the order given, then sends each complete text
 (a `part` with no holes) once, with no bindings, in scope and file order. A
-fragment or a template cannot be sent as it stands and is skipped. Two
-outcomes are problems, and either one stops generation with exit 1 and writes
+fragment or a template cannot be sent as it stands and is skipped. Three
+outcomes are problems, and any one stops generation with exit 1 and writes
 nothing:
 
 - a parse error, with the file, line and column the engine reports
   (`broken/typo.surql:1:10: Parse error: Unexpected token \`an identifier\`,
   expected FROM`);
-- a number of results other than the analyzer's `slots`.
+- a number of results other than the analyzer's `slots`;
+- a text that does not finish within the timeout (10 seconds, or
+  `timeoutSeconds`): `slow/wait.surql: the text did not finish within 10s on
+  an empty database with no bindings, so its result count was not verified`.
+  This is the one outcome whichever way the engine reports the timeout (an
+  error for each statement it did not finish, or a refusal of the whole
+  text). Such a text is never reported as verified and never as a parse
+  error.
 
 Any other error a text meets without bindings (a `NONE` record id, an unknown
 record, a `THROW`) is not a problem: the engine still returns one result per
@@ -1499,9 +1506,9 @@ to the next. The engine is started with network targets, `http::` functions
 and embedded scripts denied: an `http::post` fails with `Function 'http::post'
 is not allowed to be executed` and sends nothing, still counting as one result.
 File buckets are refused by the engine's default (no folder is allowed). Each
-text may run for 10 seconds; a `sleep` or a long loop ends there, still with
-one result per statement. Nothing else a text can write in SurrealQL reaches
-outside the engine.
+text and each schema file may run for 10 seconds; a `sleep` or a long loop
+ends there and is a timeout problem, as above. Nothing else a text can write
+in SurrealQL reaches outside the engine.
 
 `verifyStatements` from `effect-surrealkit/testing` is the same check, for a
 build that renders in process; it takes the scopes as `renderStatementModules`
@@ -1517,7 +1524,8 @@ const verified = verifyStatements({
 	// holes, timeoutSeconds (default 10)
 });
 // Succeeds with { engine: '4.0.1', sent: ['accounts/bindOwner.surql', …], notSent: [fragments and templates] };
-// fails with a StatementVerificationError whose `problems` hold { file, line?, column?, text, message },
+// fails with a StatementVerificationError whose `problems` hold { kind, file, line?, column?, text, message },
+// kind being 'parse', 'refused', 'count', 'timeout', 'schema' or 'analyzer',
 // or with a TestingError when @surrealdb/node is missing or the engine does not start.
 ```
 
@@ -2714,7 +2722,7 @@ const test = Effect.gen(function* () {
 | `checkConstraintErrors` | An effect over `SurrealClient` that defines the table `effect_surrealkit_constraint_check` with a unique index, writes a duplicate value and an id that exists, removes the table, and returns `{ indexConflict, recordExists, got }`: whether each failed as `StatementIndexConflict` and `StatementRecordExists`, and the tag each failed with. Run it against a disposable database on a new engine version before relying on the two errors. |
 | `indexConflict(index)`, `recordExists()` | A duplicate on the unique index `index`, and a record id that exists, as SurrealDB reports them: `StatementIndexConflict` for a statement that declares `index` (otherwise `StatementRequestError`), and `StatementRecordExists`. |
 | `events(list)`, `unsupported(feature)` | Script a live subscription's events or a feature refusal, such as `{ begin: unsupported('interactive transaction') }`. |
-| `verifyStatements({ scopes, schema?, holes?, timeoutSeconds? })` | Sends each complete authored text once, with no bindings, to a discarded in-memory engine after the schema files, and fails with a `StatementVerificationError` on a parse error or a result count other than the analyzer's `slots`; what `statements --verify` runs. See [Checking texts on an engine](#checking-texts-on-an-engine---verify). |
+| `verifyStatements({ scopes, schema?, holes?, timeoutSeconds? })` | Sends each complete authored text once, with no bindings, to a discarded in-memory engine after the schema files, and fails with a `StatementVerificationError` on a parse error, a result count other than the analyzer's `slots`, or a text that does not finish within the timeout; what `statements --verify` runs. See [Checking texts on an engine](#checking-texts-on-an-engine---verify). |
 | `conflictingSession(session, { marker, times })` | Wraps an SDK session, injecting a transaction conflict into the first `times` sent requests with matching text. Returns the wrapped `session` and the `matched.count` readback. |
 
 `expectIndex` runs the statement with `EXPLAIN` appended, which plans it
