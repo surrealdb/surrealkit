@@ -1713,6 +1713,47 @@ check`, which ignores `contentMappers` (every `.surql` import is TS2307) and
 refuses `--runExternalCode`, measured on Bun 1.4.4 and 1.4.5. A project
 checked by `bun check` keeps the `statements` command.
 
+Bun reads `bunfig.toml` only from its working directory, not from the
+entry point's directory or any directory above it (measured on Bun 1.4.5).
+With the preload declared there,
+
+```toml
+# bunfig.toml, beside package.json
+preload = ["effect-surrealkit/register"]
+```
+
+`bun app.ts` in that directory loads the plugin, but a process started in a
+subdirectory or anywhere else never does, and the `.surql` import is not
+handled: `SyntaxError: Export named 'readProfile' not found in module
+'…/queries/accounts/readProfile.surql'`. Neither `--config
+<path>/bunfig.toml` nor `--preload effect-surrealkit/register` helps from
+elsewhere, since the package name is resolved from the working directory
+(`error: preload not found "effect-surrealkit/register"`). Start Bun in the
+project, or pass the preload as a path:
+
+```sh
+bun --cwd /path/to/app app.ts
+bun --preload /path/to/app/node_modules/effect-surrealkit/dist/register.js /path/to/app/app.ts
+```
+
+A type-aware linter that does not run content mappers cannot resolve a
+`.surql` import, so every constant imported from one has an unresolved type.
+typescript-eslint 8.72.2 (type information from TypeScript 5.9.3, as for
+`tsc` 5.9, which reports TS2307) reports `no-unsafe-member-access` (`Unsafe
+member access .name on a type that cannot be resolved`) and
+`no-unsafe-assignment` at each use, where `tsc --runExternalCode` from
+TypeScript 7.1 reports nothing. Lint those files without the type-aware
+rules, or keep the `statements` command.
+
+The loaders keep no cache: each process renders every `.surql` file it
+imports, when it first imports it. Importing all 31 files of this package's
+fixtures (six projects, with and without schema documents) took about 95 ms
+on Node 26.7.0, 103 ms on Node 22.21.1 and 58 ms on Bun 1.4.5, about 3 ms a
+file on Node and 2 ms on Bun (median of five fresh processes on an Apple M2
+Ultra, including the first import of `effect`). A consuming project measured
+about 0.7 s for 190 files. Where start-up time matters, the `statements`
+command's modules are ordinary TypeScript and cost nothing to render.
+
 ```jsonc
 // tsconfig.json
 {
@@ -1752,6 +1793,18 @@ compares the options TypeScript passes with the entry written in the checked
 from the written ones, or a project with no `tsconfig.json` refuse every
 file, each with that reason, rather than check with options the run time
 would not use. Write the entry in the `tsconfig.json` that is checked.
+
+One file can lie under the input of two entries: `tsconfig.json` with
+`"input": "sub/queries"` and `sub/tsconfig.json` with `"input": "queries"`.
+`tsc -p .` then renders `sub/queries/<scope>/<name>.surql` with the outer
+entry while the loaders read the nearest `tsconfig.json`, the inner one. When
+the two entries would render the file differently (another schema document,
+say), the type check of either project and every loader refuse that file by
+name (`effect-surrealkit8: two contentMappers entries hold this file in their
+input and render it differently: …`), naming both `tsconfig.json` files.
+Entries that render it the same are accepted. The entries compared are those
+written in each `tsconfig.json` at or above the file's directory, besides the
+one in use.
 
 The mapper runs the analyzer and the renderer only: no engine, no cache
 directory and no worker, so it needs neither `@surrealdb/node` nor a
@@ -3191,28 +3244,39 @@ that was skipped and is not listed, or is listed and was not skipped. The
 lanes are `embedded`, `binary-<major>.<minor>` for `SURREAL_BIN` (by the
 version the binary reports) and `remote-<major>.<minor>` for `SURREAL_URL` (by
 the version the server answers on `GET /version`), with `-http` appended
-under `SURREAL_TRANSPORT=http`. `embedded`, `binary-3.3`, `remote-3.3` and
-`remote-4.0` are committed, and every run prints the pinned lanes; a lane
-without a list is reported as unpinned and not compared. The `-http` lanes
-are not pinned: on 3.3.4 and 4.0.1, over HTTP, the FOR UPDATE tests of
-`test/block-engine.test.ts` fail (the client reports success where they
-expect a `StatementConflict`), and a list is written only from a passing run.
-After a change that is meant to skip or un-skip a test, rewrite the list from
-a passing run and commit it with the change:
+under `SURREAL_TRANSPORT=http`. Seven lanes are pinned: `embedded`,
+`binary-3.3`, `binary-3.3-http`, `remote-3.3`, `remote-3.3-http`,
+`remote-4.0` and `remote-4.0-http`. Every run prints the pinned lanes; a
+lane without a list (`binary-4.0`, say) is reported as unpinned and not
+compared, and a list is written only from a passing run. After a change that
+is meant to skip or un-skip a test, rewrite the list from a passing run and
+commit it with the change:
 
 ```sh
 bun run test:skips                                                   # embedded
 SURREAL_BIN=/usr/local/bin/surreal bun run test:skips                # binary-3.3 with a 3.3 binary
+SURREAL_BIN=/usr/local/bin/surreal SURREAL_TRANSPORT=http bun run test:skips # binary-3.3-http
 SURREAL_URL=ws://127.0.0.1:8000/rpc bun run test:skips               # remote-4.0 against a 4.0 server
+SURREAL_URL=http://127.0.0.1:8000/rpc SURREAL_TRANSPORT=http bun run test:skips # remote-4.0-http
 UPDATE_SKIPS=1 SURREAL_BIN=/usr/local/bin/surreal bun run test:skips # rewrites test/skips/binary-3.3.txt
 ```
+
+A test that races a write against a statement sends the write with
+`Engine.aside` (`test/engine.ts`), on a connection of its own, and fails when
+the write lands after the statement has ended. Over HTTP the SDK sends
+through `fetch`, and on Node 26.7.0 (undici 8.9.0) a request to an origin can
+wait until another request to it has been answered, so a write sent through
+the client under test may not be concurrent at all; Node 22 and 24 send it at
+once.
 
 The content mapper has a suite of its own, because it needs TypeScript 7.1
 and the package's type check stays on TypeScript 5.9. `test/mapper-fixtures`
 pins `typescript@7.1.0-beta`, and `bun run test:mapper` (after `bun run
 build`, and `npm ci` in that directory) type-checks its `accepts` project with
 `tsc --runExternalCode`, checks that `rejects` reports exactly
-`rejects/expected.txt`, and runs `accepts/src/run.ts` under the Node hook and
+`rejects/expected.txt`, that `nested` and `nested/sub` (one file under two
+entries that render it differently) each report `nested/expected.txt` and
+that both loaders refuse that file, and runs `accepts/src/run.ts` under the Node hook and
 the Bun plugin against the texts the mapper gave the type check. It then
 asks the mapper process for every authored fixture, with and without its
 schema, and loads each under the Node hook and the Bun plugin as the same

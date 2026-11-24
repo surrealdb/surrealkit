@@ -168,7 +168,15 @@ describe('the committed lists', () => {
 		]);
 	});
 
-	const lanes = ['binary-3.3', 'embedded', 'remote-3.3', 'remote-4.0'];
+	const lanes = [
+		'binary-3.3',
+		'binary-3.3-http',
+		'embedded',
+		'remote-3.3',
+		'remote-3.3-http',
+		'remote-4.0',
+		'remote-4.0-http',
+	];
 
 	it('are the pinned lanes, and no other', () => {
 		expect(pinnedLanes(join(import.meta.dirname, 'skips'))).toEqual(lanes);

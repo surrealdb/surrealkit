@@ -308,14 +308,25 @@ describe.skipIf(!engineConfigured)('blocks on a disposable engine', () => {
 		/**
 		 * Starts `effect`, whose block reads the wallet and then pauses,
 		 * adds one to the wallet's balance during the pause, and answers how
-		 * the effect ended.
+		 * the effect ended. The write goes aside, on a connection of its
+		 * own: over HTTP, one sent by the client's own connection may wait
+		 * for the block to be answered (see `Engine.aside`). Fails when the
+		 * write did not land while the block was still running, since
+		 * nothing was then raced.
 		 */
 		const raced = async <A, E>(effect: Effect.Effect<A, E>) => {
-			const running = Effect.runPromise(Effect.result(effect));
+			let ended = false;
+			const running = Effect.runPromise(Effect.result(effect)).finally(
+				() => {
+					ended = true;
+				},
+			);
 			await new Promise((resolve) => setTimeout(resolve, 120));
-			await engine.db.query('UPDATE $id SET balance += 1;', {
-				id: held,
-			});
+			await engine.aside('UPDATE wallet:held SET balance += 1;');
+			expect(
+				ended,
+				'the write landed after the block ended: nothing was raced',
+			).toBe(false);
 			return within(running, 20_000);
 		};
 

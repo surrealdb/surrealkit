@@ -15,6 +15,8 @@
  * when they are skipped.
  */
 import { type ChildProcess, spawn } from 'node:child_process';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { createServer } from 'node:net';
 
 import { type ConnectOptions, Surreal } from 'surrealdb';
@@ -134,6 +136,15 @@ export interface Engine {
 	 * namespace and database, and returns the last statement's JSON result.
 	 */
 	readonly http: (sql: string) => Promise<unknown>;
+	/**
+	 * Runs SurrealQL in the same namespace and database while requests of
+	 * `db` are still running, and answers when the engine has run it: a
+	 * test's concurrent write. A server engine gets it over a TCP connection
+	 * of its own, through `node:http`; `db` over HTTP sends through `fetch`,
+	 * and Node 26's `fetch` (undici 8.9.0) can hold a request to an origin
+	 * until another request to it has been answered.
+	 */
+	readonly aside: (sql: string) => Promise<void>;
 	readonly stop: () => Promise<void>;
 }
 
@@ -162,6 +173,50 @@ const httpSql =
 		}
 		return last.result;
 	};
+
+/** `POST /sql` on a fresh connection (`agent: false`), shared with nothing. */
+const asideSql =
+	(rpc: string, namespace: string) =>
+	(sql: string): Promise<void> =>
+		new Promise((resolve, reject) => {
+			const url = withTransport(rpc, 'http');
+			url.pathname = '/sql';
+			const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
+			const request = send(
+				url,
+				{
+					method: 'POST',
+					agent: false,
+					headers: {
+						Accept: 'application/json',
+						Authorization: `Basic ${btoa('root:root')}`,
+						'surreal-ns': namespace,
+						'surreal-db': namespace,
+					},
+				},
+				(response) => {
+					let body = '';
+					response.setEncoding('utf8');
+					response.on('data', (chunk: string) => {
+						body += chunk;
+					});
+					response.on('end', () => {
+						const statements = JSON.parse(body) as ReadonlyArray<{
+							readonly status: string;
+						}>;
+						if (
+							Array.isArray(statements) &&
+							statements.every(({ status }) => status === 'OK')
+						)
+							resolve();
+						else reject(new Error(`HTTP /sql failed: ${body}`));
+					});
+					response.on('error', reject);
+				},
+			);
+			request.on('error', reject);
+			request.end(sql);
+		});
 
 type EngineOptions = Pick<ConnectOptions, 'retry'>;
 
@@ -212,6 +267,10 @@ const startEmbedded = async (
 			...(await engineVersion(db)),
 			http: async () => {
 				throw new Error(httpSkipReason);
+			},
+			// In process, a query runs while another is still running.
+			aside: async (sql) => {
+				await db.query(sql);
 			},
 			stop: async () => {
 				await db.close();
@@ -279,6 +338,7 @@ export const startEngine = async (
 		namespace,
 		...(await engineVersion(connected)),
 		http: httpSql(url, namespace),
+		aside: asideSql(url, namespace),
 		stop: async () => {
 			await connected
 				.query(`REMOVE NAMESPACE IF EXISTS ${namespace}`)

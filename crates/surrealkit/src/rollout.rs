@@ -470,7 +470,9 @@ pub struct RolloutSpec {
 	/// The renames `rollout plan` inferred. Each names the `run_sql` step that
 	/// copies its values, and holds whether the author has confirmed it: `lint`,
 	/// `start` and `up` refuse a rollout with an unconfirmed entry, or with one
-	/// whose copy step is gone.
+	/// whose copy step is gone. An entry with no `step` that is not confirmed
+	/// is a legacy hint, which they ignore with a warning, as execution always
+	/// ignored this field before rename proposals.
 	///
 	/// Deliberately serialized even when empty, as `renames = []`: every manifest
 	/// and code-defined rollout written so far carries it, and their checksums
@@ -538,7 +540,12 @@ impl RolloutSpec {
 /// together: a rollout whose entry names no start-phase `run_sql` step is
 /// refused, so deleting the step does not turn the rename into a removal of the
 /// old field and its values.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+///
+/// An entry with neither `step` nor `confirmed = true` is a rename hint as
+/// releases before rename proposals carried it, when this type was reserved and
+/// execution ignored it. It is still ignored, with a warning, and serializes
+/// without `confirmed`, so a rollout that carries one keeps its checksum.
+#[derive(Debug, Clone, Default, Deserialize, PartialEq, Eq)]
 pub struct RolloutRename {
 	/// The entity kind, as [`EntityKind`] spells it.
 	pub kind: String,
@@ -549,12 +556,70 @@ pub struct RolloutRename {
 	/// The name it has now, as written there.
 	pub to: String,
 	/// The id of the start-phase `run_sql` step that copies the values.
-	#[serde(default, skip_serializing_if = "Option::is_none")]
+	/// `None` on a legacy hint.
+	#[serde(default)]
 	pub step: Option<String>,
 	/// Whether the author has checked the copy step. `rollout plan` writes
-	/// `false`.
+	/// `false`. Serialized only with a `step`, or when `true`.
 	#[serde(default)]
 	pub confirmed: bool,
+}
+
+impl RolloutRename {
+	/// The rename of field `from` to `to` on `table`, with no copy step and
+	/// unconfirmed. Name the copy with [`RolloutRename::copied_by`].
+	pub fn field(table: impl Into<String>, from: impl Into<String>, to: impl Into<String>) -> Self {
+		Self {
+			kind: renames::FIELD.to_string(),
+			scope: Some(table.into()),
+			from: from.into(),
+			to: to.into(),
+			step: None,
+			confirmed: false,
+		}
+	}
+
+	/// This rename, copied by the start-phase `run_sql` step `step`.
+	pub fn copied_by(mut self, step: impl Into<String>) -> Self {
+		self.step = Some(step.into());
+		self
+	}
+
+	/// Whether this is a hint as releases before rename proposals carried it:
+	/// no copy step and not confirmed. Execution ignores it.
+	pub fn is_legacy_hint(&self) -> bool {
+		self.step.is_none() && !self.confirmed
+	}
+}
+
+/// By hand rather than derived, so that a legacy hint serializes exactly as it
+/// did when the type had only its first four fields: `confirmed` is written
+/// only on an entry that is not one. A code-defined rollout's checksum is a
+/// hash of this serialization.
+impl Serialize for RolloutRename {
+	fn serialize<S: serde::Serializer>(
+		&self,
+		serializer: S,
+	) -> std::result::Result<S::Ok, S::Error> {
+		use serde::ser::SerializeStruct;
+		let legacy = self.is_legacy_hint();
+		let len = 4 + usize::from(self.step.is_some()) + usize::from(!legacy);
+		let mut state = serializer.serialize_struct("RolloutRename", len)?;
+		state.serialize_field("kind", &self.kind)?;
+		state.serialize_field("scope", &self.scope)?;
+		state.serialize_field("from", &self.from)?;
+		state.serialize_field("to", &self.to)?;
+		match &self.step {
+			Some(step) => state.serialize_field("step", step)?,
+			None => state.skip_field("step")?,
+		}
+		if legacy {
+			state.skip_field("confirmed")?;
+		} else {
+			state.serialize_field("confirmed", &self.confirmed)?;
+		}
+		state.end()
+	}
 }
 
 /// What `rollout plan` planned, for a caller that reports it.
@@ -1282,6 +1347,7 @@ fn lint_one(folder: &str, selector: &str) -> Result<()> {
 			&legacy_prefixes,
 		)?;
 	}
+	renames::check_tables(&rollout, || collect_schema_files(folder))?;
 	log::info!("Rollout {} is valid (checksum {}).", rollout.spec.id, rollout.checksum);
 	Ok(())
 }
@@ -1308,6 +1374,7 @@ fn lint_all(folder: &str) -> Result<()> {
 		} else if rollout.spec.file_refs().next().is_some() {
 			legacy.push(rollout.spec.id.as_str());
 		}
+		renames::check_tables(rollout, || collect_schema_files(folder))?;
 	}
 	if !legacy.is_empty() {
 		log::warn!(
@@ -1627,7 +1694,7 @@ pub async fn run_start(
 	let mut source_catalog = live_catalog(db, &rollout.spec.module()?, Some(folder)).await?;
 	repair_live_catalog(&mut source_catalog, folder)?;
 	let ctx = StepContext::new(vars, Some(folder), opts.query_timeout);
-	start_inner(db, &rollout, &source_catalog, &target, &ctx).await
+	start_inner(db, &rollout, &source_catalog, &target, || collect_schema_files(folder), &ctx).await
 }
 
 /// Rename entries an older release recorded under cut-short quoted names to the
@@ -1721,18 +1788,21 @@ pub(crate) async fn run_start_with_spec(
 	};
 	let source_catalog = live_catalog(db, &spec.module()?, folder).await?;
 	let ctx = StepContext::new(vars, folder, None);
-	start_inner(db, &rollout, &source_catalog, &target, &ctx).await
+	let files = || Ok(embedded_to_schema_files(target_files));
+	start_inner(db, &rollout, &source_catalog, &target, files, &ctx).await
 }
 
+/// `files` is the schema a rename's table is looked up in where the rollout's
+/// frozen files do not cover it: the schema folder, or a library caller's target
+/// files.
 async fn start_inner(
 	db: &Surreal<Any>,
 	rollout: &LoadedRolloutSpec,
 	source_catalog: &CatalogSnapshot,
 	target: &TargetCatalog,
+	files: impl FnOnce() -> Result<Vec<SchemaFile>>,
 	ctx: &StepContext<'_>,
 ) -> Result<()> {
-	renames::check_renames(&rollout.spec)?;
-	renames::check_database_level(db, &rollout.spec).await?;
 	let lock = acquire_lock(db, &rollout.spec.module()?, "global").await?;
 	let keep_alive = LockKeepAlive::spawn(db, &lock);
 	let result = async {
@@ -1780,6 +1850,14 @@ async fn start_inner(
 			}
 			_ => {}
 		}
+		// The rollout's state is judged first: the rename checks guard the copy,
+		// which runs in the start phase, so a rollout already past it is not held
+		// to them. A rollout ready to complete has run its copy, and refusing it
+		// for the level now would only strand it. They run before anything is
+		// recorded, so a refusal leaves no record behind.
+		renames::check_renames(&rollout.spec)?;
+		renames::check_tables(rollout, files)?;
+		renames::check_database(db, &rollout.spec).await?;
 		// Capture what a rollback would restore *before* anything else, including
 		// before the record exists. The previous definition of a modified entity
 		// lives nowhere on disk (the catalog snapshot keeps only a hash), so the
@@ -5723,7 +5801,15 @@ mod tests {
 			entities: Vec::new(),
 			operations: Vec::new(),
 		};
-		start_inner(db, loaded, &empty, &TargetCatalog::Full(empty.clone()), &ctx).await
+		start_inner(
+			db,
+			loaded,
+			&empty,
+			&TargetCatalog::Full(empty.clone()),
+			|| Ok(Vec::new()),
+			&ctx,
+		)
+		.await
 	}
 
 	async fn status_and_updated_at(db: &Surreal<Any>) -> (String, String) {
@@ -6461,6 +6547,75 @@ sql = "UPDATE person SET x = 1;"
 			r#"{"id":"backfill","phase":"start","kind":"run_sql","sql":"UPDATE person SET x = 1;"}"#
 		);
 		renames::check_renames(&spec).unwrap();
+	}
+
+	/// Byte for byte what `upstream/main` (6d543e8, before rename proposals)
+	/// wrote for `golden_spec` with two of its reserved rename hints, one with a
+	/// scope and one without. Taken by running that revision's
+	/// `toml::to_string_pretty`, step `serde_json::to_string` and
+	/// `make_loaded_spec`, not written by hand.
+	const LEGACY_RENAME_GOLDEN: &str = r#"id = "20260101000000__golden"
+name = "golden"
+source_schema_hash = "aaa"
+target_schema_hash = "bbb"
+compatibility = "phased"
+
+[[renames]]
+kind = "field"
+scope = "person"
+from = "email"
+to = "mail"
+
+[[renames]]
+kind = "table"
+from = "people"
+to = "person"
+
+[[steps]]
+id = "apply_expand_schema"
+phase = "start"
+kind = "apply_files"
+files = [
+    "schema/a.surql",
+    "schema/b.surql",
+]
+
+[[steps]]
+id = "backfill"
+phase = "start"
+kind = "run_sql"
+sql = "UPDATE person SET x = 1;"
+"#;
+
+	/// The checksum that revision gave the same spec defined in code.
+	const LEGACY_RENAME_CHECKSUM: &str =
+		"9a568edf9bee7046ce9b40fdd8c19b4fb9235a13b535c55bb15a17cb1b0a4686";
+
+	/// A rename hint from before rename proposals, an entry with no `step`,
+	/// loads, serializes and hashes exactly as it did, and nothing refuses it:
+	/// execution ignores it, as it always did.
+	#[test]
+	fn a_legacy_rename_hint_serializes_hashes_and_runs_as_before() {
+		let spec: RolloutSpec = toml::from_str(LEGACY_RENAME_GOLDEN).unwrap();
+		assert_eq!(spec.renames.len(), 2);
+		assert!(spec.renames.iter().all(|rename| rename.step.is_none() && !rename.confirmed));
+		assert_eq!(toml::to_string_pretty(&spec).unwrap(), LEGACY_RENAME_GOLDEN);
+		assert_eq!(make_loaded_spec(&spec, None).checksum, LEGACY_RENAME_CHECKSUM);
+		assert_eq!(sha256_hex(LEGACY_RENAME_GOLDEN.as_bytes()), LEGACY_RENAME_CHECKSUM);
+		assert_eq!(
+			serde_json::to_string(&spec.steps[0]).unwrap(),
+			r#"{"id":"apply_expand_schema","phase":"start","kind":"apply_files","files":["schema/a.surql","schema/b.surql"]}"#
+		);
+		assert_eq!(
+			serde_json::to_string(&spec.steps[1]).unwrap(),
+			r#"{"id":"backfill","phase":"start","kind":"run_sql","sql":"UPDATE person SET x = 1;"}"#
+		);
+		assert_eq!(
+			serde_json::to_string(&spec.renames).unwrap(),
+			r#"[{"kind":"field","scope":"person","from":"email","to":"mail"},{"kind":"table","scope":null,"from":"people","to":"person"}]"#
+		);
+		renames::check_renames(&spec).unwrap();
+		renames::check_level(&spec, 3).unwrap();
 	}
 
 	/// What `rollout plan` writes for a rename: the pair under `renames`,

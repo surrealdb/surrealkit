@@ -527,6 +527,41 @@ fn lint_refuses_a_rename_whose_copy_step_was_deleted() {
 	}
 }
 
+/// A `[[renames]]` entry with no `step`, as releases before rename proposals
+/// wrote one, is a hint nothing runs. Lint accepts the manifest, as it did
+/// then, and says the hint is ignored.
+#[test]
+fn lint_accepts_a_legacy_rename_hint_and_says_it_is_ignored() {
+	let temp = TempDir::new().expect("tempdir");
+	let root = temp.path();
+	write_project(root, "");
+	write_person(root, PERSON_EMAIL);
+	let (id, manifest) = plan_named(root, "people").expect("first plan");
+	assert!(manifest.contains("renames = []\n"), "{manifest}");
+	let path = root.join("database/rollouts").join(format!("{id}.toml"));
+	fs::write(
+		&path,
+		format!(
+			"{}\n[[renames]]\nkind = \"field\"\nscope = \"person\"\nfrom = \"email\"\nto = \
+			 \"mail\"\n",
+			manifest.replace("renames = []\n", "")
+		),
+	)
+	.unwrap();
+	for args in [&["rollout", "lint", id.as_str()][..], &["rollout", "lint"][..]] {
+		let output = run(root, args);
+		let text = combined(&output);
+		assert!(output.status.success(), "{args:?} refused a legacy hint: {text}");
+		assert!(
+			text.contains(&format!(
+				"rollout '{id}' records the rename of `person.email` to `person.mail` as a legacy \
+				 rename hint"
+			)),
+			"{args:?}: {text}"
+		);
+	}
+}
+
 /// Definitions that differ in more than the name are not a rename, and are
 /// still refused as an add and a remove that could be one.
 #[test]
@@ -676,6 +711,51 @@ fn a_manifest_id_cannot_reach_outside_rollouts() {
 		assert!(
 			root.join("database/rollouts/crafted.toml").exists(),
 			"{args:?} deleted the manifest"
+		);
+	}
+}
+
+/// `plan` proposes a rename only on a `SCHEMAFULL` table, and `lint` holds a
+/// hand-written one to the same rule: confirmed and with its copy, it is
+/// refused on a schemaless table.
+#[test]
+fn lint_refuses_a_hand_written_rename_on_a_schemaless_table() {
+	let temp = TempDir::new().expect("tempdir");
+	let root = temp.path();
+	write_project(root, "");
+	write_person(
+		root,
+		"DEFINE TABLE person SCHEMALESS;\nDEFINE FIELD email ON person TYPE string;\n",
+	);
+	plan_named(root, "people").expect("first plan");
+	write_person(
+		root,
+		"DEFINE TABLE person SCHEMALESS;\nDEFINE FIELD email ON person TYPE string;\n\
+		 DEFINE FIELD mail ON person TYPE option<string>;\n",
+	);
+	let (id, manifest) = plan_named(root, "add_mail").expect("an addition");
+	let path = root.join("database/rollouts").join(format!("{id}.toml"));
+	fs::write(
+		&path,
+		format!(
+			"{}\n[[renames]]\nkind = \"field\"\nscope = \"person\"\nfrom = \"email\"\nto = \
+			 \"mail\"\nstep = \"copy_person_email_to_mail\"\nconfirmed = true\n\n[[steps]]\nid = \
+			 \"copy_person_email_to_mail\"\nphase = \"start\"\nkind = \"run_sql\"\nsql = \"UPDATE \
+			 person SET mail = email WHERE email != NONE;\"\n",
+			manifest.replace("renames = []\n", "")
+		),
+	)
+	.unwrap();
+	for args in [&["rollout", "lint", id.as_str()][..], &["rollout", "lint"][..]] {
+		let output = run(root, args);
+		let text = combined(&output);
+		assert!(!output.status.success(), "{args:?} accepted a rename on a schemaless table");
+		assert!(
+			text.contains(
+				"records the rename of `person.email` to `person.mail`, but `person` is not \
+				 SCHEMAFULL in the schema it applies"
+			),
+			"{args:?}: {text}"
 		);
 	}
 }
