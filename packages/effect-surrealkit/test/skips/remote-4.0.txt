@@ -22,4 +22,3 @@ test/roundtrip.test.ts > generated corpus modules against a prepared engine > re
 test/roundtrip.test.ts > generated corpus modules against a prepared engine > record ids: int64 extremes, bigint profile
 test/roundtrip.test.ts > generated corpus modules against a prepared engine > runs against the schema the modules were generated from
 test/roundtrip.test.ts > generated corpus modules against a prepared engine > team: open FLEXIBLE object, removable by NONE
-test/transport-matrix.test.ts > disposable engine transport matrix > records observed execution capabilities against the transport golden

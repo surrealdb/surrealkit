@@ -277,9 +277,10 @@ jobs:
 
             # Codec round trips through the server (the JSON world over HTTP
             # included), every cell of the field-presence matrix against generated
-            # schemas, and the statement and conformance suites. The remote lanes
-            # have no committed skip list yet, so test:skips reports them as
-            # unpinned and fails only when the suite does.
+            # schemas, and the statement and conformance suites. test:skips fails
+            # when the suite does, or when the skipped tests differ from the
+            # committed lists test/skips/remote-4.0.txt and remote-4.0-http.txt,
+            # which are pinned against the server version above (v4.0.0).
             - name: Engine, field-presence, statement and conformance suites
               env:
                   SURREAL_URL: ws://127.0.0.1:8000/rpc

@@ -3319,7 +3319,15 @@ version the binary reports) and `remote-<major>.<minor>` for `SURREAL_URL` (by
 the version the server answers on `GET /version`), with `-http` appended
 under `SURREAL_TRANSPORT=http`. Seven lanes are pinned: `embedded`,
 `binary-3.3`, `binary-3.3-http`, `remote-3.3`, `remote-3.3-http`,
-`remote-4.0` and `remote-4.0-http`. Every run prints the pinned lanes; a
+`remote-4.0` and `remote-4.0-http`. A lane is named by major and minor
+version, but its list is pinned against one exact release: `embedded` against
+the `@surrealdb/node` engine (4.0.1), the `binary-3.3` and `remote-3.3` lists
+against SurrealDB 3.3.4, and the `remote-4.0` lists against 4.0.0, the server
+the CI workflow starts. The transport matrix test compares with a golden named
+by the exact version (`test/golden/transports/<version>-<transport>.json`) and
+skips where there is none, so on another patch release of the same minor
+(a 4.0.1 server, say) it is skipped and `test:skips` reports it as skipped
+and not listed. Every run prints the pinned lanes; a
 lane without a list (`binary-4.0`, say) is reported as unpinned and not
 compared, and a list is written only from a passing run. After a change that
 is meant to skip or un-skip a test, rewrite the list from a passing run and
