@@ -101,6 +101,37 @@ describe.skipIf(!engineConfigured)(
 			}
 		});
 
+		it('runs without an error behind a WHERE that can skip every record, which no reading of the WHERE rules out', async () => {
+			// A function body reads the caller's bindings on both versions,
+			// and on 3.3 so does a COMPUTED field: a WHERE that names
+			// neither `$x` nor a local can still depend on it.
+			await within(
+				engine.db
+					.query(
+						"DEFINE FUNCTION fn::ok() { RETURN $x != NONE }; DEFINE TABLE meter SCHEMAFULL; DEFINE FIELD station ON meter TYPE string; DEFINE FIELD okc ON meter COMPUTED $x != NONE; CREATE meter:1 SET station = 'a';",
+					)
+					.collect(),
+			);
+			const [seen] = await within(
+				engine.db
+					.query('SELECT VALUE okc FROM meter;', { x: 'v' })
+					.collect(),
+			);
+			expect(seen).toEqual([engine.majorVersion === 3]);
+			for (const sql of [
+				'UPDATE gauge SET station = $x WHERE $x != NONE;',
+				'UPSERT gauge:1 SET station = $x WHERE $x != NONE;',
+				'LET $ok = $x != NONE; UPDATE gauge SET station = $x WHERE $ok;',
+				'UPDATE gauge SET station = $x WHERE fn::ok();',
+				'LET $r = (UPDATE gauge SET station = $x WHERE $x != NONE);',
+				'UPDATE meter SET station = $x WHERE okc;',
+			]) {
+				expect(await withNone(sql), sql).toBeUndefined();
+				expect(await station(), sql).toEqual(['a']);
+				expect(assigned(sql), sql).toEqual([]);
+			}
+		});
+
 		it('is refused in operands that do not skip it, which the analyzer cannot tell apart', async () => {
 			// `??` and `?:` evaluate their right side when the left is NONE,
 			// and an early RETURN in a top-level IF block does not end the

@@ -431,10 +431,24 @@ export const analyzeUses = (
 	 * but no assignment: a condition around it can keep NONE from reaching
 	 * the field (`IF $x != NONE THEN (UPDATE …) END`, `$x != NONE AND
 	 * (UPDATE …)`, a subquery the outer `WHERE` reaches only for some rows),
-	 * and an assignment's use refuses a codec that can hold NONE.
+	 * and an assignment's use refuses a codec that can hold NONE. For the
+	 * same reason no assignment is a use in a query with a `WHERE` of its
+	 * own: the `WHERE` can skip every record when the binding is NONE, and
+	 * no reading of it rules that out (a function body, and on 3.3 a
+	 * `COMPUTED` field, read the caller's bindings).
 	 */
 	const query = (from: number, end: number, place: Place): void => {
 		const word = upper(tokens[from]);
+		let filtered = false;
+		for (let j = from + 1; j < end && !filtered; j++) {
+			if (isOpen(tokens[j])) j = closing(j);
+			else
+				filtered =
+					upper(tokens[j]) === 'WHERE' &&
+					!isPunct(tokens[j - 1], '.') &&
+					!isPunct(tokens[j - 1], ':') &&
+					!isPunct(tokens[j + 1], ':');
+		}
 		const slice = tokens.slice(from, end);
 		const targets = analyzeTargets(slice);
 		const tables = new Set([...targets.read, ...targets.written]);
@@ -508,7 +522,9 @@ export const analyzeUses = (
 				if (
 					certain &&
 					table !== undefined &&
-					(inWhere ? place !== 'block' : place === 'statement')
+					(inWhere
+						? place !== 'block'
+						: place === 'statement' && !filtered)
 				)
 					bindingUse(i, table, inWhere);
 				if (inWhere) compared(i, fieldTable);

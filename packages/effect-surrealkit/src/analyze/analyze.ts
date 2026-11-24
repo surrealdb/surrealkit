@@ -112,7 +112,8 @@ export interface Analysis {
 	 * that query is the whole value of a top-level statement (`(UPDATE …);`,
 	 * `LET $r = (UPDATE …);`, `RETURN (UPDATE …);`): a condition around it
 	 * (`IF … THEN`, `AND`, `OR`, an outer `WHERE`, a closure) can keep NONE
-	 * from reaching the field.
+	 * from reaching the field; nor in a query with a `WHERE` of its own,
+	 * which can skip every record (`UPDATE t SET f = $x WHERE $x != NONE`).
 	 */
 	readonly uses: BindingUses;
 	/**

@@ -139,6 +139,17 @@ describe('analyze: field uses', () => {
 			});
 	});
 
+	it('an assignment in a query whose only WHERE is inside a subquery', () => {
+		for (const sql of [
+			'UPDATE gizmo SET a = $a, b = (SELECT VALUE c FROM gizmo WHERE d = 1);',
+			'UPDATE gizmo SET a = $a RETURN (SELECT * FROM gizmo WHERE d = 1);',
+			'CREATE gizmo SET a = $a, b = { where: 1 };',
+		])
+			expect(uses(sql).a, sql).toEqual([
+				field('gizmo', 'a', 1, 'assign'),
+			]);
+	});
+
 	it('tells a SET assignment from a WHERE comparison', () => {
 		expect(
 			uses(
@@ -268,6 +279,18 @@ describe('analyze: field uses', () => {
 		[
 			'a parenthesised query with more after it',
 			'LET $r = (UPDATE gizmo SET a = $a)[0];',
+		],
+		[
+			'an assignment in a query with a WHERE on the binding',
+			'UPDATE gizmo SET a = $a WHERE $a != NONE;',
+		],
+		[
+			'an assignment in a query with any WHERE',
+			'UPSERT gizmo SET a = $a WHERE b = 1;',
+		],
+		[
+			'an assignment in a whole-value query with a WHERE',
+			'LET $r = (UPDATE gizmo SET a = $a WHERE $ok);',
 		],
 		['a non-query statement', 'IF a = $a THEN 1 END;'],
 		['a value word', 'SELECT * FROM gizmo WHERE NONE = $a;'],
@@ -623,6 +646,12 @@ describe('statements with schema detail', () => {
 			'IF $x != NONE { (UPDATE gauge SET station = $x) };',
 			'RETURN IF $x != NONE THEN (UPDATE gauge SET station = $x) END;',
 			'RETURN $x != NONE AND (UPDATE gauge SET station = $x);',
+		])
+			expect(await rejects(sql), sql).toBeUndefined();
+		// A WHERE can skip every record: none is written with NONE.
+		for (const sql of [
+			'UPDATE gauge SET station = $x WHERE $x != NONE;',
+			'LET $ok = $x != NONE; UPDATE gauge SET station = $x WHERE $ok;',
 		])
 			expect(await rejects(sql), sql).toBeUndefined();
 		// Nothing can skip it.
