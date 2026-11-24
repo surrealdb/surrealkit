@@ -81,19 +81,26 @@ export interface MemoryOptions {
 	readonly database?: string;
 }
 
-interface NodeEngines {
-	readonly createNodeEngines: () => unknown;
+/** @internal */
+export interface NodeEngines {
+	readonly createNodeEngines: (options?: object) => unknown;
 }
+
+/** The command that installs the optional engine. */
+export const INSTALL_ENGINE =
+	'npm install --save-dev @surrealdb/node @surrealdb/node-native';
 
 /**
  * `@surrealdb/node`, imported when a memory database starts, so nothing else
  * in the package needs it installed or reachable.
+ *
+ * @internal
  */
-const nodeEngines = Effect.tryPromise({
+export const nodeEngines = Effect.tryPromise({
 	try: () => import('@surrealdb/node') as Promise<NodeEngines>,
 	catch: (cause) =>
 		new TestingError({
-			message: `a memory database needs \`@surrealdb/node\` and \`@surrealdb/node-native\` installed: ${messageOf(cause)}`,
+			message: `a memory database needs \`@surrealdb/node\` and \`@surrealdb/node-native\` installed (\`${INSTALL_ENGINE}\`): ${messageOf(cause)}`,
 			cause,
 		}),
 });

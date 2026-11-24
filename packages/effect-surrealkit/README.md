@@ -1188,7 +1188,9 @@ document v2 (the JSON the emitter reads) and fails generation, with the file
 and the line of the first use, on any table or `fn::` function a file names
 that the document does not declare (edge tables included) and that the same
 file does not create with `DEFINE TABLE` or `DEFINE FUNCTION`. Any error stops
-generation with its file, line and column; warnings are printed.
+generation with its file, line and column; warnings are printed. `--verify`
+also sends each complete text to an in-memory engine before writing (see
+[Checking texts on an engine](#checking-texts-on-an-engine---verify)).
 
 #### What bindings are used as
 
@@ -1397,6 +1399,73 @@ those names from a decoded schema document (`decodeDocument`), edge tables
 included; `--schema` applies it to every scope. Names behind an open target
 are not checked: a text with `openTargets` can use tables the check never
 sees.
+
+#### Checking texts on an engine: `--verify`
+
+The analyzer is a lexer, so a text it can count but SurrealDB cannot parse
+(`SELECT * FORM person;`) generates a module and fails when it first runs.
+`--verify` sends each complete text to SurrealDB's own parser before
+anything is written:
+
+```sh
+effect-surrealkit statements --input queries --out src/generated/statements \
+  --verify --verify-schema schema/tables.surql --verify-schema schema/functions.surql
+```
+
+It needs the optional peer `@surrealdb/node` (`npm install --save-dev
+@surrealdb/node @surrealdb/node-native`); without it the command fails with
+that install command. It starts an in-memory engine in the process, runs the
+`--verify-schema` files in the order given, then sends each complete text
+(a `part` with no holes) once, with no bindings, in scope and file order. A
+fragment or a template cannot be sent as it stands and is skipped. Two
+outcomes are problems, and either one stops generation with exit 1 and writes
+nothing:
+
+- a parse error, with the file, line and column the engine reports
+  (`broken/typo.surql:1:10: Parse error: Unexpected token \`an identifier\`,
+  expected FROM`);
+- a number of results other than the analyzer's `slots`.
+
+Any other error a text meets without bindings (a `NONE` record id, an unknown
+record, a `THROW`) is not a problem: the engine still returns one result per
+top-level statement, and that is what the check counts. The schema is
+optional: the parse and the count do not depend on it, so a schema changes
+which errors the texts meet, never what the check reports. Loading it also
+proves the schema files apply, and a schema file that fails to parse or apply
+is a problem with its name. On success the command prints the texts verified
+and the engine version, which is the installed `@surrealdb/node`. A text that
+only another SurrealDB version refuses is checked against this one. With
+`--check` the command verifies, then compares, and writes nothing in either
+case; with `--watch` every regeneration is verified.
+
+A verified text is executed. It runs on a database that is discarded when
+the check ends, so its writes, `DEFINE`s and `REMOVE`s go nowhere, but texts
+run one after another on the same database, so one text's writes are visible
+to the next. The engine is started with network targets, `http::` functions
+and embedded scripts denied: an `http::post` fails with `Function 'http::post'
+is not allowed to be executed` and sends nothing, still counting as one result.
+File buckets are refused by the engine's default (no folder is allowed). Each
+text may run for 10 seconds; a `sleep` or a long loop ends there, still with
+one result per statement. Nothing else a text can write in SurrealQL reaches
+outside the engine.
+
+`verifyStatements` from `effect-surrealkit/testing` is the same check, for a
+build that renders in process; it takes the scopes as `renderStatementModules`
+does. `effect-surrealkit/analyze` does not import it or the engine, and stays
+host-neutral.
+
+```ts
+import { verifyStatements } from 'effect-surrealkit/testing';
+
+const verified = verifyStatements({
+	scopes, // as given to renderStatementModules
+	schema: [{ name: 'schema/tables.surql', sql: tablesText }], // optional, in order
+	// holes, timeoutSeconds (default 10)
+});
+// Succeeds with { engine: '4.0.1', sent: ['accounts/bindOwner.surql', …], notSent: [fragments and templates] };
+// fails with a StatementVerificationError whose `problems` hold { file, line?, column?, text, message },
+// or with a TestingError when @surrealdb/node is missing or the engine does not start.
+```
 
 #### Pinning built statements
 
@@ -2591,6 +2660,7 @@ const test = Effect.gen(function* () {
 | `checkConstraintErrors` | An effect over `SurrealClient` that defines the table `effect_surrealkit_constraint_check` with a unique index, writes a duplicate value and an id that exists, removes the table, and returns `{ indexConflict, recordExists, got }`: whether each failed as `StatementIndexConflict` and `StatementRecordExists`, and the tag each failed with. Run it against a disposable database on a new engine version before relying on the two errors. |
 | `indexConflict(index)`, `recordExists()` | A duplicate on the unique index `index`, and a record id that exists, as SurrealDB reports them: `StatementIndexConflict` for a statement that declares `index` (otherwise `StatementRequestError`), and `StatementRecordExists`. |
 | `events(list)`, `unsupported(feature)` | Script a live subscription's events or a feature refusal, such as `{ begin: unsupported('interactive transaction') }`. |
+| `verifyStatements({ scopes, schema?, holes?, timeoutSeconds? })` | Sends each complete authored text once, with no bindings, to a discarded in-memory engine after the schema files, and fails with a `StatementVerificationError` on a parse error or a result count other than the analyzer's `slots`; what `statements --verify` runs. See [Checking texts on an engine](#checking-texts-on-an-engine---verify). |
 | `conflictingSession(session, { marker, times })` | Wraps an SDK session, injecting a transaction conflict into the first `times` sent requests with matching text. Returns the wrapped `session` and the `matched.count` readback. |
 
 `expectIndex` runs the statement with `EXPLAIN` appended, which plans it

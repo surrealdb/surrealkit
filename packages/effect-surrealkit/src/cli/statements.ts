@@ -21,6 +21,12 @@ import {
 	StatementModulesError,
 } from '../analyze/render.js';
 import { declaredNames, decodeDocument } from '../emitter/document.js';
+import { TestingError } from '../testing/errors.js';
+import {
+	StatementVerificationError,
+	type VerifyFile,
+	verifyStatements,
+} from '../testing/verify.js';
 import { apply, compareWith, type OutputFile, problemsOf } from './files.js';
 import { type CliIo, UsageError } from './io.js';
 
@@ -44,6 +50,14 @@ Options:
   --schema <file>            A SurrealKit schema document v2 (JSON): every table
                              and fn:: function a file names must be declared
                              in it or defined by the same file
+  --verify                   Before writing, send each complete text once,
+                             with no bindings, to a discarded in-memory
+                             engine (needs @surrealdb/node): a parse error or
+                             a result count other than the derived one fails
+                             generation. The texts run; network, http:: and
+                             scripting are denied
+  --verify-schema <file>     SurrealQL loaded before the texts are sent, in
+                             the order given (repeatable; needs --verify)
   --help                     Show this help
 
 Exit codes: 0 success, 1 generation failed or output out of date, 2 bad arguments.
@@ -199,6 +213,68 @@ const inside = (parent: string, child: string): boolean => {
 	return path === '' || (!path.startsWith('..') && !path.startsWith(sep));
 };
 
+/**
+ * `--verify`: sends the sources to a discarded in-memory engine through
+ * {@link verifyStatements} and reports the outcome; false when generation
+ * must stop.
+ */
+const verify = async (
+	sources: ReadonlyArray<Source>,
+	schemaPaths: ReadonlyArray<string>,
+	io: CliIo,
+	holes: HoleDelimiters | undefined,
+): Promise<boolean> => {
+	const report = (lines: string) =>
+		io.stderr(
+			`effect-surrealkit: statements not verified:\n${lines
+				.split('\n')
+				.map((line) => `  ${line}`)
+				.join('\n')}\n`,
+		);
+	const schema: VerifyFile[] = [];
+	for (const path of schemaPaths) {
+		try {
+			schema.push({
+				name: path,
+				sql: await readFile(resolve(io.cwd, path), 'utf8'),
+			});
+		} catch (error) {
+			report(
+				`cannot read --verify-schema ${path}: ${(error as Error).message}`,
+			);
+			return false;
+		}
+	}
+	const scopes = new Map<string, Array<{ name: string; sql: string }>>();
+	for (const { scope, name, sql } of sources) {
+		const files = scopes.get(scope) ?? [];
+		files.push({ name, sql });
+		scopes.set(scope, files);
+	}
+	const result = await Effect.runPromise(
+		Effect.result(
+			verifyStatements({
+				scopes: [...scopes].map(([name, files]) => ({ name, files })),
+				schema,
+				...(holes !== undefined && { holes }),
+			}),
+		),
+	);
+	if (result._tag === 'Failure') {
+		const error = result.failure;
+		if (error instanceof StatementVerificationError)
+			report(`on SurrealDB ${error.engine}:\n${error.message}`);
+		else if (error instanceof TestingError) report(error.message);
+		else throw error;
+		return false;
+	}
+	const { engine, sent, notSent } = result.success;
+	io.stderr(
+		`effect-surrealkit: verified ${sent.length} texts on SurrealDB ${engine} (${notSent.length} fragments and templates not sent)\n`,
+	);
+	return true;
+};
+
 /** Runs `statements`; resolves to the exit code. */
 export const statements = async (
 	argv: ReadonlyArray<string>,
@@ -215,6 +291,8 @@ export const statements = async (
 			'hole-open': { type: 'string' },
 			'hole-close': { type: 'string' },
 			schema: { type: 'string' },
+			verify: { type: 'boolean' },
+			'verify-schema': { type: 'string', multiple: true },
 			help: { type: 'boolean' },
 		},
 		strict: true,
@@ -230,6 +308,9 @@ export const statements = async (
 		throw new UsageError('--out <dir> is required');
 	if (values.check && values.watch)
 		throw new UsageError('--check and --watch cannot be combined');
+	const verifySchema = values['verify-schema'] ?? [];
+	if (verifySchema.length > 0 && !values.verify)
+		throw new UsageError('--verify-schema needs --verify');
 	const importExtension = values['import-extension'] ?? '.js';
 	if (importExtension !== '.js' && importExtension !== '.ts')
 		throw new UsageError('--import-extension must be .js or .ts');
@@ -280,8 +361,10 @@ export const statements = async (
 
 	const once = async (): Promise<number> => {
 		let rendered: ReturnType<typeof renderStatements>;
+		let sources: ReadonlyArray<Source>;
 		try {
-			rendered = renderStatements(await readSources(input), options);
+			sources = await readSources(input);
+			rendered = renderStatements(sources, options);
 		} catch (error) {
 			if (error instanceof StatementsError) {
 				io.stderr(
@@ -297,6 +380,10 @@ export const statements = async (
 		const { files, warnings } = rendered;
 		for (const warning of warnings)
 			io.stderr(`effect-surrealkit: warning: ${warning}\n`);
+		if (values.verify) {
+			const verified = await verify(sources, verifySchema, io, holes);
+			if (!verified) return 1;
+		}
 		const drift = await compareWith(out, files, owned, 1);
 		if (values.check) {
 			const problems = problemsOf(drift);

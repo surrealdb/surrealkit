@@ -49,3 +49,11 @@ export {
 	unsupported,
 } from './fake.js';
 export { conflictingSession } from './session.js';
+export {
+	StatementVerificationError,
+	type Verification,
+	type VerifyFile,
+	type VerifyInput,
+	type VerifyProblem,
+	verifyStatements,
+} from './verify.js';
