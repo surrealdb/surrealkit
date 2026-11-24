@@ -58,6 +58,9 @@ Options:
                              scripting are denied
   --verify-schema <file>     SurrealQL loaded before the texts are sent, in
                              the order given (repeatable; needs --verify)
+  --verify-timeout <seconds> How long each text or schema file may run, a
+                             whole number of seconds; a text that does not
+                             finish fails generation (default 10; needs --verify)
   --help                     Show this help
 
 Exit codes: 0 success, 1 generation failed or output out of date, 2 bad arguments.
@@ -223,6 +226,7 @@ const verify = async (
 	schemaPaths: ReadonlyArray<string>,
 	io: CliIo,
 	holes: HoleDelimiters | undefined,
+	timeoutSeconds: number | undefined,
 ): Promise<boolean> => {
 	const report = (lines: string) =>
 		io.stderr(
@@ -257,6 +261,7 @@ const verify = async (
 				scopes: [...scopes].map(([name, files]) => ({ name, files })),
 				schema,
 				...(holes !== undefined && { holes }),
+				...(timeoutSeconds !== undefined && { timeoutSeconds }),
 			}),
 		),
 	);
@@ -293,6 +298,7 @@ export const statements = async (
 			schema: { type: 'string' },
 			verify: { type: 'boolean' },
 			'verify-schema': { type: 'string', multiple: true },
+			'verify-timeout': { type: 'string' },
 			help: { type: 'boolean' },
 		},
 		strict: true,
@@ -311,6 +317,15 @@ export const statements = async (
 	const verifySchema = values['verify-schema'] ?? [];
 	if (verifySchema.length > 0 && !values.verify)
 		throw new UsageError('--verify-schema needs --verify');
+	const verifyTimeout = values['verify-timeout'];
+	if (verifyTimeout !== undefined && !values.verify)
+		throw new UsageError('--verify-timeout needs --verify');
+	if (verifyTimeout !== undefined && !/^[1-9]\d*$/u.test(verifyTimeout))
+		throw new UsageError(
+			'--verify-timeout must be a whole number of seconds, at least 1',
+		);
+	const timeoutSeconds =
+		verifyTimeout === undefined ? undefined : Number(verifyTimeout);
 	const importExtension = values['import-extension'] ?? '.js';
 	if (importExtension !== '.js' && importExtension !== '.ts')
 		throw new UsageError('--import-extension must be .js or .ts');
@@ -381,7 +396,13 @@ export const statements = async (
 		for (const warning of warnings)
 			io.stderr(`effect-surrealkit: warning: ${warning}\n`);
 		if (values.verify) {
-			const verified = await verify(sources, verifySchema, io, holes);
+			const verified = await verify(
+				sources,
+				verifySchema,
+				io,
+				holes,
+				timeoutSeconds,
+			);
 			if (!verified) return 1;
 		}
 		const drift = await compareWith(out, files, owned, 1);

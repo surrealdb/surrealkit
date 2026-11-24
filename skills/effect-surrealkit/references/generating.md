@@ -15,6 +15,7 @@ Every statement here cites the package README (`packages/effect-surrealkit/READM
 | `--schema <file>` | A SurrealKit schema document v2: turns on the checks below. |
 | `--verify` | Sends each complete text to a discarded in-memory engine before writing. |
 | `--verify-schema <file>` | SurrealQL loaded before the texts, in the order given; needs `--verify`. |
+| `--verify-timeout <seconds>` | How long each text or schema file may run, a whole number (default 10); needs `--verify`. |
 
 (README, "Statements from .surql files"; "Checking texts on an engine: --verify")
 

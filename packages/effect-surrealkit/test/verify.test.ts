@@ -547,6 +547,58 @@ describe('statements --verify', () => {
 			expect(existsSync(join(dir, 'out2'))).toBe(false);
 		},
 	);
+
+	it('lists --verify-timeout in the usage text, default 10', () => {
+		expect(STATEMENTS_USAGE).toMatch(
+			/--verify-timeout <seconds> +How long each text or schema file may run/u,
+		);
+		expect(STATEMENTS_USAGE).toContain('(default 10; needs --verify)');
+	});
+
+	it.each([
+		[['--verify-timeout', '5'], '--verify-timeout needs --verify'],
+		[
+			['--verify', '--verify-timeout', '0'],
+			'--verify-timeout must be a whole number of seconds, at least 1',
+		],
+		[
+			['--verify', '--verify-timeout', '1.5'],
+			'--verify-timeout must be a whole number of seconds, at least 1',
+		],
+		[
+			['--verify', '--verify-timeout', 'ten'],
+			'--verify-timeout must be a whole number of seconds, at least 1',
+		],
+	])('refuses %j', async (flags, message) => {
+		const dir = tempDir();
+		const result = await cli(
+			['--input', fixtures, '--out', join(dir, 'out'), ...flags],
+			dir,
+		);
+		expect(result.code).toBe(2);
+		expect(result.stderr).toContain(message);
+	});
+
+	it.skipIf(!embedded)(
+		'stops each text at --verify-timeout, and at 10 seconds without it',
+		async () => {
+			const dir = tempDir();
+			mkdirSync(join(dir, 'queries', 'slow'), { recursive: true });
+			writeFileSync(
+				join(dir, 'queries', 'slow', 'wait.surql'),
+				'sleep(3s);\n',
+			);
+			const args = ['--input', 'queries', '--out', 'out', '--verify'];
+			const short = await cli([...args, '--verify-timeout', '1'], dir);
+			expect(short.code).toBe(1);
+			expect(short.stderr).toContain(
+				'slow/wait.surql: the text did not finish within 1s',
+			);
+			expect(existsSync(join(dir, 'out'))).toBe(false);
+			const fallback = await cli(args, dir);
+			expect(fallback.code, fallback.stderr).toBe(0);
+		},
+	);
 });
 
 describe('the analyze entry stays host-neutral', () => {

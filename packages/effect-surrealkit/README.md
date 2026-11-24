@@ -1509,7 +1509,8 @@ nothing:
   expected FROM`);
 - a number of results other than the analyzer's `slots`;
 - a text that does not finish within the timeout (10 seconds, or
-  `timeoutSeconds`): `slow/wait.surql: the text did not finish within 10s on
+  `--verify-timeout <seconds>`, a whole number; `timeoutSeconds` of the
+  function): `slow/wait.surql: the text did not finish within 10s on
   an empty database with no bindings, so its result count was not verified`.
   This is the one outcome whichever way the engine reports the timeout (an
   error for each statement it did not finish, or a refusal of the whole
@@ -1538,10 +1539,10 @@ A script function fails with `Embedded functions are not enabled` (the
 `@surrealdb/node` build has no script runtime, so this holds with or without
 the capability), and a file bucket with `File access denied`, by the engine's
 default (no folder is allowed); each still counts as one result and writes
-nothing. Each
-text and each schema file may run for 10 seconds; a `sleep` or a long loop
-ends there and is a timeout problem, as above. Nothing else a text can write
-in SurrealQL reaches outside the engine.
+nothing. Each text and each schema file may run for 10 seconds, or for
+`--verify-timeout <seconds>`; a `sleep` or a long loop ends there and is a
+timeout problem, as above. Nothing else a text can write in SurrealQL reaches
+outside the engine.
 
 `verifyStatements` from `effect-surrealkit/testing` is the same check, for a
 build that renders in process; it takes the scopes as `renderStatementModules`
