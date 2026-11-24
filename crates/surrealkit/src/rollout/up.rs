@@ -128,6 +128,8 @@ async fn up_locked(
 		Vec::with_capacity(plan.pending.len());
 	for (idx, m) in plan.pending.iter().enumerate() {
 		let mut loaded = (*m).clone();
+		super::renames::check_renames(&loaded.spec)?;
+		super::renames::check_database_level(db, &loaded.spec).await?;
 		let target = if loaded.spec.is_frozen() {
 			preflight_frozen(&loaded)?;
 			TargetCatalog::frozen(&loaded)?
