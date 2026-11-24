@@ -16,7 +16,7 @@ export const BagFields = {
 export const Bag = Schema.StructWithRest(Schema.Struct({
 	id: BagId,
 	label: Schema.optionalKey(BagFields.label),
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type Bag = typeof Bag.Type;
 export type BagEncoded = typeof Bag.Encoded;
 
@@ -28,21 +28,21 @@ export type BagRowEncoded = typeof BagRow.Encoded;
 /** Input for `CREATE bag CONTENT` / `INSERT`. The record id is an operation argument. */
 export const BagCreate = Schema.StructWithRest(Schema.Struct({
 	label: Schema.optionalKey(BagFields.label),
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type BagCreate = typeof BagCreate.Type;
 export type BagCreateEncoded = typeof BagCreate.Encoded;
 
 /** Input for `UPDATE bag MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
 export const BagMerge = Schema.StructWithRest(Schema.Struct({
 	label: Schema.optional(BagFields.label),
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealMergeValue)]);
 export type BagMerge = typeof BagMerge.Type;
 export type BagMergeEncoded = typeof BagMerge.Encoded;
 
 /** Input for `UPDATE bag CONTENT`: a full replacement of the writable fields. */
 export const BagContent = Schema.StructWithRest(Schema.Struct({
 	label: Schema.optionalKey(BagFields.label),
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type BagContent = typeof BagContent.Type;
 export type BagContentEncoded = typeof BagContent.Encoded;
 
@@ -75,5 +75,5 @@ export const BagJsonFields = {
 export const BagFromJson = Schema.StructWithRest(Schema.Struct({
 	id: SurrealSchema.RecordIdFromJsonAs(BagId),
 	label: Schema.optionalKey(BagJsonFields.label),
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealJsonValue)]);
 export type BagJsonEncoded = typeof BagFromJson.Encoded;

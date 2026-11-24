@@ -14,6 +14,21 @@ const print = (schema: Schema.Top) =>
 	);
 
 describe('toCode metadata', () => {
+	it('prints the native Float codec and number type', () => {
+		expect(print(S.Float).codes[0]).toMatchObject({
+			runtime: expect.stringMatching(/^SurrealSchema\.Float\b/),
+			Type: 'number',
+		});
+	});
+
+	it('prints EmptyObject through its isEmptyObject check', () => {
+		const [code] = print(Schema.Struct({ nothing: S.EmptyObject })).codes;
+		expect(code?.runtime).toBe(
+			'Schema.Struct({ "nothing": Schema.Struct({  }).check(SurrealSchema.isEmptyObject().annotate({ "expected": "an empty object" })) })',
+		);
+		expect(code?.Type).toBe('{ readonly "nothing": {  } }');
+	});
+
 	it('every codec prints itself by name through toCodeDocument', () => {
 		const row = Schema.Struct({
 			id: S.RecordIdFor('person'),

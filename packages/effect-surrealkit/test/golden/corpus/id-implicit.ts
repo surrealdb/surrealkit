@@ -13,7 +13,7 @@ export const IdImplicitFields = {} as const;
 /** A stored `id_implicit` row as a privileged reader selects it (all fields). */
 export const IdImplicit = Schema.StructWithRest(Schema.Struct({
 	id: IdImplicitId,
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type IdImplicit = typeof IdImplicit.Type;
 export type IdImplicitEncoded = typeof IdImplicit.Encoded;
 
@@ -23,17 +23,17 @@ export type IdImplicitRow = typeof IdImplicitRow.Type;
 export type IdImplicitRowEncoded = typeof IdImplicitRow.Encoded;
 
 /** Input for `CREATE id_implicit CONTENT` / `INSERT`. The record id is an operation argument. */
-export const IdImplicitCreate = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, Schema.Unknown)]);
+export const IdImplicitCreate = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type IdImplicitCreate = typeof IdImplicitCreate.Type;
 export type IdImplicitCreateEncoded = typeof IdImplicitCreate.Encoded;
 
 /** Input for `UPDATE id_implicit MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
-export const IdImplicitMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, Schema.Unknown)]);
+export const IdImplicitMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealMergeValue)]);
 export type IdImplicitMerge = typeof IdImplicitMerge.Type;
 export type IdImplicitMergeEncoded = typeof IdImplicitMerge.Encoded;
 
 /** Input for `UPDATE id_implicit CONTENT`: a full replacement of the writable fields. */
-export const IdImplicitContent = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, Schema.Unknown)]);
+export const IdImplicitContent = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type IdImplicitContent = typeof IdImplicitContent.Type;
 export type IdImplicitContentEncoded = typeof IdImplicitContent.Encoded;
 
@@ -63,5 +63,5 @@ export const IdImplicitJsonFields = {
 /** A selected `id_implicit` row from SurrealDB JSON. Not the default: rows the SDK returned decode with `IdImplicitRow`. */
 export const IdImplicitFromJson = Schema.StructWithRest(Schema.Struct({
 	id: SurrealSchema.RecordIdFromJsonAs(IdImplicitId),
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealJsonValue)]);
 export type IdImplicitJsonEncoded = typeof IdImplicitFromJson.Encoded;

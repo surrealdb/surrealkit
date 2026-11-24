@@ -20,6 +20,7 @@ export {
 	decimalFromString,
 	SurrealNumber,
 } from './decimal.js';
+export { EmptyObject, isEmptyObject } from './empty.js';
 export {
 	Geometry,
 	GeometryCollection,
@@ -79,6 +80,7 @@ export {
 export { NoneAsAbsent, stripNone } from './row.js';
 export {
 	Bytes,
+	Float,
 	SurrealString as String,
 	toWellFormed,
 	Unsupported,
@@ -121,3 +123,4 @@ export {
 	dateTimeFromString,
 	dateTimeToString,
 } from './temporal.js';
+export { SurrealJsonValue, SurrealMergeValue, SurrealValue } from './value.js';

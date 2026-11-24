@@ -23,17 +23,17 @@ export type IdStringRow = typeof IdStringRow.Type;
 export type IdStringRowEncoded = typeof IdStringRow.Encoded;
 
 /** Input for `CREATE id_string CONTENT` / `INSERT`. The record id is an operation argument. */
-export const IdStringCreate = Schema.Struct({});
+export const IdStringCreate = SurrealSchema.EmptyObject;
 export type IdStringCreate = typeof IdStringCreate.Type;
 export type IdStringCreateEncoded = typeof IdStringCreate.Encoded;
 
 /** Input for `UPDATE id_string MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
-export const IdStringMerge = Schema.Struct({});
+export const IdStringMerge = SurrealSchema.EmptyObject;
 export type IdStringMerge = typeof IdStringMerge.Type;
 export type IdStringMergeEncoded = typeof IdStringMerge.Encoded;
 
 /** Input for `UPDATE id_string CONTENT`: a full replacement of the writable fields. */
-export const IdStringContent = Schema.Struct({});
+export const IdStringContent = SurrealSchema.EmptyObject;
 export type IdStringContent = typeof IdStringContent.Type;
 export type IdStringContentEncoded = typeof IdStringContent.Encoded;
 

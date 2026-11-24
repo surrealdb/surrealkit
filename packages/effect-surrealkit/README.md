@@ -127,6 +127,37 @@ literal membership narrows the type, int and float ranges become
 code-point and array length checks. `string::is_email`, decimal and duration
 ranges stay server-side.
 
+### What changes for existing users of the emitter
+
+Regenerating with this version changes the schemas of some fields and
+tightens one schema. Every existing export keeps its name.
+
+The schemas change for schemas that use these kinds (see
+[Interpretation notes](#interpretation-notes) and the kinds table under
+[Two codec worlds](#two-codec-worlds)):
+
+- `any` is `Schema.UndefinedOr(SurrealSchema.SurrealValue)`, and
+  `SurrealSchema.SurrealJsonValue` in the JSON world, instead of
+  `Schema.Unknown`. An open `object`, the extra keys of a `FLEXIBLE` or
+  SCHEMALESS row and the items of an `array<any>` or `set<any>` use
+  `SurrealValue` and `SurrealJsonValue` the same way, and the extra keys of
+  an open row's Merge schema use `SurrealMergeValue`. Their types are those
+  values instead of `unknown`.
+- `float` is `SurrealSchema.Float` instead of `Schema.Number`, and
+  `Schema.Finite` in the JSON world.
+- A field whose `VALUE` ignores its input is excluded from Create, Merge and
+  Content, where it was optional, and its presence entry says so.
+- `ids.ts` declares a record ID after the IDs its key refers to, so the
+  order of its declarations can change.
+
+One schema is stricter at run time, with the same type: a closed object with
+no fields (the Create, Merge and Content of a SCHEMAFULL table whose only
+field is its id, or a `{}` literal kind) is now `SurrealSchema.EmptyObject`
+instead of `Schema.Struct({})`, so a value other than `{}` fails to decode or
+encode instead of reaching SurrealDB (see
+[Interpretation notes](#interpretation-notes)). The generated modules need
+an `effect-surrealkit` that exports `EmptyObject`.
+
 ### Refinements
 
 `PersonFields` holds the field schemas that are identical in every operation;
@@ -156,14 +187,29 @@ its reason in the comment above `PersonFields`. An object that is the same
 wherever it is used (a `READONLY` one, which Merge and Content exclude) is
 listed and refines like any other field.
 
+In an open struct's Merge schema, the rest record accepts `SurrealMergeValue`:
+a member can be `undefined` (NONE), including inside an object patch. This lets
+a declared removable child such as `address.zip` pass both its own codec and
+the rest-record codec. Array and set elements still use the stored-value codec.
+
 ### Interpretation notes
 
 - A field with no `TYPE` (and no declared children), or `TYPE any`, can hold
   NONE, so it is optional in every operation that includes it.
 - Array and set elements are written whole, so the children of an element
-  object follow the Create rules in Create, Merge and Content.
+  object follow the Create rules in Create, Merge and Content. Collections
+  whose item kind is `any` use the kind declared on the `*` field when
+  present. Otherwise their items use `SurrealValue` or `SurrealJsonValue`,
+  which exclude NONE.
 - Views get an id and a descriptor; their row shape is not derived.
   Lightweight relations get a select row and an edge, no write schemas.
+- A `VALUE` that ignores its input is selected, and excluded from Create,
+  Merge and Content. The engine accepts a value supplied for such a field and
+  discards it, storing what the `VALUE` produces, so a schema that allowed it
+  would let a caller's value be thrown away without an error.
+- The emitter reserves `id` for the table's record ID and `in` and `out` for
+  relation endpoints. The record ID declarations in `ids.ts` put dependencies
+  before the keys that reference them.
 - A `VALUE` that reads its input but has a fallback gets the conservative
   (required) contract; override it per field (`fields`) if the fallback is
   intended.
@@ -177,7 +223,24 @@ listed and refines like any other field.
   can hold only `{}` and is printed `Schema.Record(Schema.String, Schema.Never)`.
   A `FLEXIBLE` parent does not open a declared child object. A `FLEXIBLE`
   object, an `array<object> FLEXIBLE` element, and an object on a SCHEMALESS
-  table keep their keys and are open records.
+  table keep their keys and are open records. Open records, flexible structs
+  and schemaless rows use `SurrealValue` for extra keys in native schemas and
+  `SurrealJsonValue` in JSON schemas.
+- A closed object with no fields to print is `SurrealSchema.EmptyObject`,
+  never `Schema.Struct({})`: the Create, Merge and Content inputs of a
+  SCHEMAFULL table with no writable fields, a declared object whose children
+  are all excluded from an operation, and the `{}` literal kind. Effect 4's
+  `Schema.Struct({})` checks only that a value is not `null` or `undefined`,
+  so it would pass `{ stray: 1 }`, a string or an array through unchanged
+  (even with `onExcessProperty: "error"`), and an encoded binding would carry
+  the stray keys to SurrealDB, which refuses them (`Found field 'stray', but
+  no such field exists`; ``Expected `{  }` ``). `EmptyObject` is
+  `Schema.Struct({}).check(isEmptyObject())`: it accepts exactly `{}` in both
+  directions, its JSON Schema requires `{ "type": "object",
+  "additionalProperties": false }`, and it stays a `Schema.Struct` whose type is `{}`, so a caller
+  that passes `{}` and `refine` work as before. An open row keeps
+  `Schema.Struct({})` as the base of its `Schema.StructWithRest`, where the
+  record rest holds the keys.
 - `regex` and `function` kinds become `Unsupported(kind)` (with a warning):
   the values have no SDK representation.
 
@@ -213,10 +276,11 @@ types) and are never the default.
 
 Every generated table also gets the JSON world of its selected row:
 `<Table>JsonFields`, `<Table>FromJson` and `<Table>JsonEncoded`. They decode
-the JSON SurrealDB 3.2 and 3.3 render to the same types as the native
-exports (brands and checks included), so projections are derived the same
-way: `Schema.Struct(Struct.pick(PersonJsonFields, ['name', 'born']))`. What
-JSON loses, and what these codecs then do:
+the JSON SurrealDB 3.2 and 3.3 render. Declared kinds recover their native
+representations where the JSON retains enough information. Open values stay
+in their JSON representation. Derive projections with
+`Schema.Struct(Struct.pick(PersonJsonFields, ['name', 'born']))`. The table
+below describes how the codecs handle JSON conversions.
 
 | Value | SurrealDB JSON | JSON world |
 | --- | --- | --- |
@@ -259,9 +323,11 @@ const people = rows.map(Schema.decodeUnknownSync(Person));
 | SurrealQL | Schema | Decoded type |
 | --- | --- | --- |
 | `int` | `Int` (`int: "safe-number"`, default) / `Int64` (`int: "bigint"`) | `number` / branded `bigint` |
-| `float` | `Schema.Number` | `number` |
+| `float` | `Float` (native IEEE-754, including NaN, infinities and signed zero) / `Schema.Finite` (JSON) | `number` |
 | `decimal` | `Decimal` | SDK `Decimal` |
-| `number` | `SurrealNumber` | `number \| bigint \| Decimal` |
+| `number` | `SurrealNumber` / `SurrealNumberFromJson` (finite JSON numbers or decimal strings) | `number \| bigint \| Decimal` |
+| `any` | `Schema.UndefinedOr(SurrealValue)` / `SurrealJsonValue` (JSON) | `SurrealValue \| undefined` / `SurrealJsonValue` |
+| open `object` | `Schema.Record(Schema.String, SurrealValue)` / `Schema.Record(Schema.String, SurrealJsonValue)` (JSON) | string-keyed record of open values |
 | `string` | `String` | `string` (well-formed Unicode) |
 | `datetime` | `DateTime` (`datetime: "sdk"`, default) / `DateTimeEffect` | SDK `DateTime` / Effect `DateTime.Utc` |
 | `duration` | `Duration` | SDK `Duration` |

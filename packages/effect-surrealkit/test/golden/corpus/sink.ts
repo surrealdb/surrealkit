@@ -23,17 +23,17 @@ export type SinkRow = typeof SinkRow.Type;
 export type SinkRowEncoded = typeof SinkRow.Encoded;
 
 /** Input for `CREATE sink CONTENT` / `INSERT`. The record id is an operation argument. */
-export const SinkCreate = Schema.Struct({});
+export const SinkCreate = SurrealSchema.EmptyObject;
 export type SinkCreate = typeof SinkCreate.Type;
 export type SinkCreateEncoded = typeof SinkCreate.Encoded;
 
 /** Input for `UPDATE sink MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
-export const SinkMerge = Schema.Struct({});
+export const SinkMerge = SurrealSchema.EmptyObject;
 export type SinkMerge = typeof SinkMerge.Type;
 export type SinkMergeEncoded = typeof SinkMerge.Encoded;
 
 /** Input for `UPDATE sink CONTENT`: a full replacement of the writable fields. */
-export const SinkContent = Schema.Struct({});
+export const SinkContent = SurrealSchema.EmptyObject;
 export type SinkContent = typeof SinkContent.Type;
 export type SinkContentEncoded = typeof SinkContent.Encoded;
 

@@ -23,17 +23,17 @@ export type IdUnionRow = typeof IdUnionRow.Type;
 export type IdUnionRowEncoded = typeof IdUnionRow.Encoded;
 
 /** Input for `CREATE id_union CONTENT` / `INSERT`. The record id is an operation argument. */
-export const IdUnionCreate = Schema.Struct({});
+export const IdUnionCreate = SurrealSchema.EmptyObject;
 export type IdUnionCreate = typeof IdUnionCreate.Type;
 export type IdUnionCreateEncoded = typeof IdUnionCreate.Encoded;
 
 /** Input for `UPDATE id_union MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
-export const IdUnionMerge = Schema.Struct({});
+export const IdUnionMerge = SurrealSchema.EmptyObject;
 export type IdUnionMerge = typeof IdUnionMerge.Type;
 export type IdUnionMergeEncoded = typeof IdUnionMerge.Encoded;
 
 /** Input for `UPDATE id_union CONTENT`: a full replacement of the writable fields. */
-export const IdUnionContent = Schema.Struct({});
+export const IdUnionContent = SurrealSchema.EmptyObject;
 export type IdUnionContent = typeof IdUnionContent.Type;
 export type IdUnionContentEncoded = typeof IdUnionContent.Encoded;
 

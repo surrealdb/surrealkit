@@ -13,7 +13,7 @@ export const AnythingFields = {} as const;
 /** A stored `anything` row as a privileged reader selects it (all fields). */
 export const Anything = Schema.StructWithRest(Schema.Struct({
 	id: AnythingId,
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type Anything = typeof Anything.Type;
 export type AnythingEncoded = typeof Anything.Encoded;
 
@@ -23,17 +23,17 @@ export type AnythingRow = typeof AnythingRow.Type;
 export type AnythingRowEncoded = typeof AnythingRow.Encoded;
 
 /** Input for `CREATE anything CONTENT` / `INSERT`. The record id is an operation argument. */
-export const AnythingCreate = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, Schema.Unknown)]);
+export const AnythingCreate = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type AnythingCreate = typeof AnythingCreate.Type;
 export type AnythingCreateEncoded = typeof AnythingCreate.Encoded;
 
 /** Input for `UPDATE anything MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
-export const AnythingMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, Schema.Unknown)]);
+export const AnythingMerge = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealMergeValue)]);
 export type AnythingMerge = typeof AnythingMerge.Type;
 export type AnythingMergeEncoded = typeof AnythingMerge.Encoded;
 
 /** Input for `UPDATE anything CONTENT`: a full replacement of the writable fields. */
-export const AnythingContent = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, Schema.Unknown)]);
+export const AnythingContent = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type AnythingContent = typeof AnythingContent.Type;
 export type AnythingContentEncoded = typeof AnythingContent.Encoded;
 
@@ -63,5 +63,5 @@ export const AnythingJsonFields = {
 /** A selected `anything` row from SurrealDB JSON. Not the default: rows the SDK returned decode with `AnythingRow`. */
 export const AnythingFromJson = Schema.StructWithRest(Schema.Struct({
 	id: SurrealSchema.RecordIdFromJsonAs(AnythingId),
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealJsonValue)]);
 export type AnythingJsonEncoded = typeof AnythingFromJson.Encoded;

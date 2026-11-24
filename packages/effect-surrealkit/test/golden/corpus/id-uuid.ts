@@ -23,17 +23,17 @@ export type IdUuidRow = typeof IdUuidRow.Type;
 export type IdUuidRowEncoded = typeof IdUuidRow.Encoded;
 
 /** Input for `CREATE id_uuid CONTENT` / `INSERT`. The record id is an operation argument. */
-export const IdUuidCreate = Schema.Struct({});
+export const IdUuidCreate = SurrealSchema.EmptyObject;
 export type IdUuidCreate = typeof IdUuidCreate.Type;
 export type IdUuidCreateEncoded = typeof IdUuidCreate.Encoded;
 
 /** Input for `UPDATE id_uuid MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
-export const IdUuidMerge = Schema.Struct({});
+export const IdUuidMerge = SurrealSchema.EmptyObject;
 export type IdUuidMerge = typeof IdUuidMerge.Type;
 export type IdUuidMergeEncoded = typeof IdUuidMerge.Encoded;
 
 /** Input for `UPDATE id_uuid CONTENT`: a full replacement of the writable fields. */
-export const IdUuidContent = Schema.Struct({});
+export const IdUuidContent = SurrealSchema.EmptyObject;
 export type IdUuidContent = typeof IdUuidContent.Type;
 export type IdUuidContentEncoded = typeof IdUuidContent.Encoded;
 
