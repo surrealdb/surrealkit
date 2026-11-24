@@ -173,3 +173,16 @@ export const hnswDimension: 4 = (null as unknown as typeof Corpus.DocTable)
 export const ssnSelect: '$auth.admin = true' = (
 	null as unknown as typeof Corpus.PersonTable
 ).fieldPermissions.ssn.select;
+// The store resolves a table, a relation's endpoints and a function by name.
+export const storePerson: typeof Corpus.PersonTable = (
+	null as unknown as typeof Corpus.store
+).tables.person;
+export const storeEdge: typeof Corpus.MemberOfEdge = (
+	null as unknown as typeof Corpus.store
+).edges.member_of;
+export const storeFunction: typeof Corpus.fn_greet = (
+	null as unknown as typeof Corpus.store
+).functions['fn::greet'];
+export const storeView: typeof Corpus.TeamSizeTable = (
+	null as unknown as typeof Corpus.store
+).views.team_size;

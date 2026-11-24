@@ -100,8 +100,22 @@ member-of.ts    … plus MemberOfEdge (relation endpoints)
 team-size.ts    TeamSizeTable (a view: id and query only)
 functions.ts    fn_greet = { name, args: Schema.Tuple([...]), returns }
 manifest.ts     store, semanticDigest, emitter version, codec profile, peer versions, source
+_store.ts       store = { name, tables, views, edges, functions }, each by its SurrealDB name
 index.ts        re-exports everything
 ```
+
+`store` registers every table, view, relation endpoint and function of the
+store under its SurrealDB name (`store.tables.person`,
+`store.edges.member_of`, `store.functions["fn::greet"]`), so a record link
+(`RecordId<"person">`) or a graph step resolves to the descriptor of its
+target. Its file name has a leading underscore because table modules are
+kebab-case words, so no table can be written there. The module also exports
+the registry's type, `Store`, whose entries are `typeof PersonTable` and the
+like: a declaration file then names the descriptors, where an inferred type
+would copy every one of them and fail with TS7056 on a large schema. A group
+with no entries is typed `SurrealSchema.NoEntries`, a named empty type, so
+the module does not write `{}` where lint rules report it. `Store` is not
+re-exported from `index.ts`, where a table named `store` owns that name.
 
 Each table gets one schema per operation, derived from the field-presence
 matrix of the contract (section 7):
@@ -165,7 +179,11 @@ The output gains:
 - every table descriptor gains `fieldPermissions`, `indexes` and `visible`,
   and every table module a `<Table>Visible` export (with its `Type` and
   `Encoded` types), so a table whose PascalCase name is another table's
-  plus `Visible` (`person` and `person_visible`) now needs a `names` entry.
+  plus `Visible` (`person` and `person_visible`) now needs a `names` entry;
+- a new module, `_store.ts`, exports `store` and its type `Store`, and
+  `index.ts` re-exports `store`.
+  A SurrealKit-run emitter records the new file in `.surrealkit-emit.json`
+  as it does every generated file.
 
 Code that spells out a descriptor's full type, or compares one with
 `toEqual`, sees the new keys. They are optional in `TableDescriptor`, so

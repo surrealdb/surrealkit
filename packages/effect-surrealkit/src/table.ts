@@ -175,6 +175,32 @@ export const edge = <const E extends EdgeDescriptor>(descriptor: E): E =>
 export const fn = <const F extends FunctionDescriptor>(descriptor: F): F =>
 	descriptor;
 
+/**
+ * Every table, view, relation endpoint and function of one store, by its
+ * SurrealDB name, so a record link (`RecordId<"person">`) or a graph step
+ * (`->member_of->`) resolves to the descriptor of its target.
+ */
+export interface StoreDescriptor {
+	/** The logical store name (the emitter's `store` option). */
+	readonly name: string;
+	readonly tables: { readonly [name: string]: TableDescriptor };
+	readonly views: { readonly [name: string]: ViewDescriptor };
+	/** The endpoints of every relation table, by the relation's name. */
+	readonly edges: { readonly [name: string]: EdgeDescriptor };
+	readonly functions: { readonly [name: string]: FunctionDescriptor };
+}
+
+/**
+ * A group of a store registry with no entries. A generated registry names
+ * this type instead of writing the empty object type, which lint rules against
+ * that type report in the generated module.
+ */
+export type NoEntries = Record<never, never>;
+
+/** Declares a generated store registry (identity at runtime). */
+export const store = <const S extends StoreDescriptor>(descriptor: S): S =>
+	descriptor;
+
 /** Applies a presence to a field schema, as the generated variants do. */
 export const withPresence = (schema: Schema.Top, presence: Presence) => {
 	switch (presence) {

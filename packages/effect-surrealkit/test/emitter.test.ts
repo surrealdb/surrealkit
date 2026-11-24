@@ -709,6 +709,86 @@ describe('generation rules', () => {
 		expect(modules).toMatch(/DateTimeEffect/);
 	});
 
+	it('writes the store registry where no table module can be, so a table named `store` keeps its name', async () => {
+		const document = example();
+		const tables = document.tables as Array<Record<string, unknown>>;
+		const team = tables.find((table) => table.name === 'team');
+		tables.push({ ...team, name: 'store' });
+		const result = await run(
+			generate(withDigest(document), { store: 'shop' }),
+		);
+		const paths = result.files.map((f) => f.path);
+		expect(paths).toContain('store.ts');
+		expect(paths).toContain('_store.ts');
+		const registry =
+			result.files.find((f) => f.path === '_store.ts')?.content ?? '';
+		expect(registry).toContain('\t\tstore: StoreTable,');
+		expect(registry).toContain('import { StoreTable } from "./store.js";');
+		expect(registry).toContain('\tname: "shop",');
+		const index =
+			result.files.find((f) => f.path === 'index.ts')?.content ?? '';
+		expect(index).toContain('export { store } from "./_store.js";');
+	});
+
+	it('types the store registry by naming its descriptors, so a large store emits declarations', async () => {
+		// Left to inference, the declaration of `store` copies the type of
+		// every descriptor and fails with TS7056 on a store this size.
+		const document = example();
+		const person = document.tables.find((table) => table.name === 'person');
+		for (let n = 0; n < 240; n += 1)
+			document.tables.push({
+				...person,
+				name: `person_${String(n).padStart(3, '0')}`,
+			});
+		const result = await run(
+			generate(withDigest(document), { store: 'wide' }),
+		);
+		const dir = mkdtempSync(join(import.meta.dirname, 'tmp-wide-'));
+		try {
+			for (const file of result.files)
+				writeFileSync(join(dir, file.path), file.content);
+			writeFileSync(
+				join(dir, 'tsconfig.json'),
+				JSON.stringify({
+					extends: '../types/tsconfig.json',
+					compilerOptions: {
+						noEmit: false,
+						declaration: true,
+						emitDeclarationOnly: true,
+						outDir: './out',
+					},
+					include: ['./*.ts'],
+				}),
+			);
+			const tsc = join(
+				import.meta.dirname,
+				'..',
+				'node_modules',
+				'typescript',
+				'bin',
+				'tsc',
+			);
+			const compiled = spawnSync(process.execPath, [tsc, '-p', dir], {
+				encoding: 'utf8',
+			});
+			expect(`${compiled.stdout}${compiled.stderr}`).toBe('');
+			expect(compiled.status).toBe(0);
+		} finally {
+			rmSync(dir, { recursive: true, force: true });
+		}
+		const registry =
+			result.files.find((f) => f.path === '_store.ts')?.content ?? '';
+		expect(registry).toContain('export interface Store {');
+		expect(registry).toContain('\treadonly name: "wide";');
+		expect(registry).toContain('\t\treadonly person: typeof PersonTable;');
+		expect(registry).toContain(
+			'\t\treadonly member_of: typeof MemberOfEdge;',
+		);
+		expect(registry).toContain(
+			'export const store: Store = SurrealSchema.store({',
+		);
+	}, 120_000);
+
 	it('generates a module set that type-checks for a schema without tables', async () => {
 		const document = example();
 		document.tables = [];

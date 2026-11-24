@@ -5,3 +5,4 @@ export * from "./id-int.js";
 export * from "./id-union.js";
 export * from "./functions.js";
 export { manifest } from "./manifest.js";
+export { store } from "./_store.js";

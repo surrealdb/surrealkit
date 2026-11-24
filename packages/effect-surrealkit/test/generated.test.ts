@@ -9,8 +9,11 @@ import {
 	AnythingFromJson,
 	AnythingRow,
 	DocTable as CorpusDocTable,
+	MemberOfEdge as CorpusMemberOfEdge,
 	PersonMerge as CorpusPersonMerge,
 	PersonTable as CorpusPersonTable,
+	TeamSizeTable as CorpusTeamSizeTable,
+	store as corpusStore,
 	KindsFields,
 	KindsJsonFields,
 	SinkContent,
@@ -275,6 +278,23 @@ describe('generated table modules', () => {
 		expect(decodes(Refined.visible, seen)).toBe(true);
 		expect(decodes(Refined.visible, { ...seen, email: 'a' })).toBe(false);
 		expect(decodes(Refined.visible, { ...seen, email: 'a@b' })).toBe(true);
+	});
+
+	it('register every table, view, relation endpoint and function of the store by name', () => {
+		expect(corpusStore.name).toBe('corpus');
+		expect(corpusStore.tables.person).toBe(CorpusPersonTable);
+		expect(corpusStore.views.team_size).toBe(CorpusTeamSizeTable);
+		expect(corpusStore.edges.member_of).toBe(CorpusMemberOfEdge);
+		expect(corpusStore.functions['fn::greet'].name).toBe('fn::greet');
+		for (const [name, table] of Object.entries(corpusStore.tables)) {
+			expect(table.name).toBe(name);
+		}
+		for (const [name, edge] of Object.entries(corpusStore.edges)) {
+			expect(edge.table).toBe(name);
+			expect(corpusStore.tables[name as 'member_of']?.type).toBe(
+				'relation',
+			);
+		}
 	});
 });
 

@@ -5,3 +5,4 @@ export * from "./member.js";
 export * from "./viewer.js";
 export * from "./functions.js";
 export { manifest } from "./manifest.js";
+export { store } from "./_store.js";

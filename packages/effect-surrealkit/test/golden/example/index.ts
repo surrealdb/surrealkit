@@ -8,3 +8,4 @@ export * from "./person.js";
 export * from "./team.js";
 export * from "./functions.js";
 export { manifest } from "./manifest.js";
+export { store } from "./_store.js";

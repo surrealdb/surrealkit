@@ -9,3 +9,4 @@ export * from "./p.js";
 export * from "./up.js";
 export * from "./functions.js";
 export { manifest } from "./manifest.js";
+export { store } from "./_store.js";
