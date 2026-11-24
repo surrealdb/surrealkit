@@ -1347,6 +1347,7 @@ fn lint_one(folder: &str, selector: &str) -> Result<()> {
 			&legacy_prefixes,
 		)?;
 	}
+	renames::check_tables(&rollout, || collect_schema_files(folder))?;
 	log::info!("Rollout {} is valid (checksum {}).", rollout.spec.id, rollout.checksum);
 	Ok(())
 }
@@ -1373,6 +1374,7 @@ fn lint_all(folder: &str) -> Result<()> {
 		} else if rollout.spec.file_refs().next().is_some() {
 			legacy.push(rollout.spec.id.as_str());
 		}
+		renames::check_tables(rollout, || collect_schema_files(folder))?;
 	}
 	if !legacy.is_empty() {
 		log::warn!(
@@ -1692,7 +1694,7 @@ pub async fn run_start(
 	let mut source_catalog = live_catalog(db, &rollout.spec.module()?, Some(folder)).await?;
 	repair_live_catalog(&mut source_catalog, folder)?;
 	let ctx = StepContext::new(vars, Some(folder), opts.query_timeout);
-	start_inner(db, &rollout, &source_catalog, &target, &ctx).await
+	start_inner(db, &rollout, &source_catalog, &target, || collect_schema_files(folder), &ctx).await
 }
 
 /// Rename entries an older release recorded under cut-short quoted names to the
@@ -1786,18 +1788,24 @@ pub(crate) async fn run_start_with_spec(
 	};
 	let source_catalog = live_catalog(db, &spec.module()?, folder).await?;
 	let ctx = StepContext::new(vars, folder, None);
-	start_inner(db, &rollout, &source_catalog, &target, &ctx).await
+	let files = || Ok(embedded_to_schema_files(target_files));
+	start_inner(db, &rollout, &source_catalog, &target, files, &ctx).await
 }
 
+/// `files` is the schema a rename's table is looked up in where the rollout's
+/// frozen files do not cover it: the schema folder, or a library caller's target
+/// files.
 async fn start_inner(
 	db: &Surreal<Any>,
 	rollout: &LoadedRolloutSpec,
 	source_catalog: &CatalogSnapshot,
 	target: &TargetCatalog,
+	files: impl FnOnce() -> Result<Vec<SchemaFile>>,
 	ctx: &StepContext<'_>,
 ) -> Result<()> {
 	renames::check_renames(&rollout.spec)?;
-	renames::check_database_level(db, &rollout.spec).await?;
+	renames::check_tables(rollout, files)?;
+	renames::check_database(db, &rollout.spec).await?;
 	let lock = acquire_lock(db, &rollout.spec.module()?, "global").await?;
 	let keep_alive = LockKeepAlive::spawn(db, &lock);
 	let result = async {
@@ -5788,7 +5796,15 @@ mod tests {
 			entities: Vec::new(),
 			operations: Vec::new(),
 		};
-		start_inner(db, loaded, &empty, &TargetCatalog::Full(empty.clone()), &ctx).await
+		start_inner(
+			db,
+			loaded,
+			&empty,
+			&TargetCatalog::Full(empty.clone()),
+			|| Ok(Vec::new()),
+			&ctx,
+		)
+		.await
 	}
 
 	async fn status_and_updated_at(db: &Surreal<Any>) -> (String, String) {

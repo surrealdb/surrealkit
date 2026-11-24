@@ -714,3 +714,48 @@ fn a_manifest_id_cannot_reach_outside_rollouts() {
 		);
 	}
 }
+
+/// `plan` proposes a rename only on a `SCHEMAFULL` table, and `lint` holds a
+/// hand-written one to the same rule: confirmed and with its copy, it is
+/// refused on a schemaless table.
+#[test]
+fn lint_refuses_a_hand_written_rename_on_a_schemaless_table() {
+	let temp = TempDir::new().expect("tempdir");
+	let root = temp.path();
+	write_project(root, "");
+	write_person(
+		root,
+		"DEFINE TABLE person SCHEMALESS;\nDEFINE FIELD email ON person TYPE string;\n",
+	);
+	plan_named(root, "people").expect("first plan");
+	write_person(
+		root,
+		"DEFINE TABLE person SCHEMALESS;\nDEFINE FIELD email ON person TYPE string;\n\
+		 DEFINE FIELD mail ON person TYPE option<string>;\n",
+	);
+	let (id, manifest) = plan_named(root, "add_mail").expect("an addition");
+	let path = root.join("database/rollouts").join(format!("{id}.toml"));
+	fs::write(
+		&path,
+		format!(
+			"{}\n[[renames]]\nkind = \"field\"\nscope = \"person\"\nfrom = \"email\"\nto = \
+			 \"mail\"\nstep = \"copy_person_email_to_mail\"\nconfirmed = true\n\n[[steps]]\nid = \
+			 \"copy_person_email_to_mail\"\nphase = \"start\"\nkind = \"run_sql\"\nsql = \"UPDATE \
+			 person SET mail = email WHERE email != NONE;\"\n",
+			manifest.replace("renames = []\n", "")
+		),
+	)
+	.unwrap();
+	for args in [&["rollout", "lint", id.as_str()][..], &["rollout", "lint"][..]] {
+		let output = run(root, args);
+		let text = combined(&output);
+		assert!(!output.status.success(), "{args:?} accepted a rename on a schemaless table");
+		assert!(
+			text.contains(
+				"records the rename of `person.email` to `person.mail`, but `person` is not \
+				 SCHEMAFULL in the schema it applies"
+			),
+			"{args:?}: {text}"
+		);
+	}
+}

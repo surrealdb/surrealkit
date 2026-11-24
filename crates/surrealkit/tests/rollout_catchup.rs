@@ -1162,3 +1162,137 @@ async fn a_rename_without_its_copy_step_does_not_start() {
 		serde_json::json!([["ann", "ann@example.test"], ["bob", "bob@example.test"]])
 	);
 }
+
+/// A rename entry an author writes by hand, confirmed, with its copy step:
+/// `person.email` to `person.mail`.
+const HAND_RENAME: &str = "[[renames]]\nkind = \"field\"\nscope = \"person\"\nfrom = \"email\"\n\
+	to = \"mail\"\nstep = \"copy_person_email_to_mail\"\nconfirmed = true\n\n[[steps]]\n\
+	id = \"copy_person_email_to_mail\"\nphase = \"start\"\nkind = \"run_sql\"\n\
+	sql = \"UPDATE person SET mail = email WHERE email != NONE;\"\n";
+
+/// Add `HAND_RENAME` to a planned manifest.
+fn add_hand_rename(project: &Project, id: &str) {
+	let path = project.manifest(id);
+	let raw = fs::read_to_string(&path).unwrap();
+	assert!(raw.contains("renames = []\n"), "{raw}");
+	fs::write(&path, format!("{}\n{HAND_RENAME}", raw.replace("renames = []\n", ""))).unwrap();
+}
+
+/// `plan` proposes a rename only on a `SCHEMAFULL` table. One written by hand
+/// on a schemaless table, confirmed and with its copy, is refused the same way
+/// by `lint`, `start`, `up` and `Rollout::start`, before anything runs.
+#[tokio::test]
+async fn a_hand_written_rename_on_a_schemaless_table_is_refused() {
+	const OLD: &str = "DEFINE TABLE person SCHEMALESS;\n\
+		DEFINE FIELD email ON person TYPE option<string>;\n";
+	const NEW: &str = "DEFINE TABLE person SCHEMALESS;\n\
+		DEFINE FIELD email ON person TYPE option<string>;\n\
+		DEFINE FIELD mail ON person TYPE option<string>;\n";
+	let project = Project::new();
+	project.write("person.surql", OLD);
+	let db = mem_db().await;
+	project.sync(&db).await;
+	project.baseline(&db).await;
+	db.query("CREATE person:ann SET email = 'ann@example.test', mail = 'ann@old.test';")
+		.await
+		.unwrap()
+		.check()
+		.unwrap();
+	project.write("person.surql", NEW);
+	let id = project.plan("add_mail").await;
+	add_hand_rename(&project, &id);
+
+	let refusal = "is not SCHEMAFULL in the schema it applies";
+	for err in [
+		run_lint(&project.folder(), RolloutExecutionOpts::new(Some(id.clone())))
+			.await
+			.expect_err("lint <id>")
+			.to_string(),
+		run_lint(&project.folder(), RolloutExecutionOpts::new(None))
+			.await
+			.expect_err("lint")
+			.to_string(),
+		project.start(&db, &id).await.expect_err("start").to_string(),
+		project.up(&db, true).await.expect_err("up").to_string(),
+	] {
+		assert!(
+			err.contains(&format!(
+				"rollout '{id}' records the rename of `person.email` to `person.mail`, but \
+				 `person` {refusal}"
+			)),
+			"{err}"
+		);
+	}
+	assert_eq!(status(&db, &id).await, None);
+	assert_eq!(
+		serde_json::json!(people(&db, "mail").await),
+		serde_json::json!([["ann", "ann@old.test"]])
+	);
+
+	// The same entry in a rollout defined in code.
+	static TARGET: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "schema/person.surql",
+		sql: NEW,
+	}];
+	let code_db = mem_db().await;
+	let mut spec = RolloutSpec::builder("20260101000000__code_rename")
+		.step(RolloutStep::apply_schema("define", RolloutPhase::Start, NEW))
+		.step(RolloutStep::run_sql(
+			"copy",
+			RolloutPhase::Start,
+			"UPDATE person SET mail = email WHERE email != NONE;",
+		))
+		.build();
+	let mut rename = RolloutRename::field("person", "email", "mail").copied_by("copy");
+	rename.confirmed = true;
+	spec.renames.push(rename);
+	let err = Rollout::new(spec, TARGET).start(&code_db).await.expect_err("Rollout::start");
+	assert!(err.to_string().contains(refusal), "{err}");
+	assert_eq!(status(&code_db, "20260101000000__code_rename").await, None);
+}
+
+/// The schema files can say `SCHEMAFULL` while the database still has the
+/// table schemaless, when the rollout itself changes the table: `plan`
+/// proposes nothing then, since it cannot see the database. `start` and `up`
+/// can, and refuse a hand-written rename there before anything runs.
+#[tokio::test]
+async fn a_hand_written_rename_on_a_table_the_database_has_schemaless_does_not_start() {
+	const OLD: &str = "DEFINE TABLE person SCHEMALESS;\n\
+		DEFINE FIELD email ON person TYPE option<string>;\n";
+	const NEW: &str = "DEFINE TABLE person SCHEMAFULL;\n\
+		DEFINE FIELD email ON person TYPE option<string>;\n\
+		DEFINE FIELD mail ON person TYPE option<string>;\n";
+	let project = Project::new();
+	project.write("person.surql", OLD);
+	let db = mem_db().await;
+	project.sync(&db).await;
+	project.baseline(&db).await;
+	db.query("CREATE person:ann SET email = 'ann@example.test', mail = 'ann@old.test';")
+		.await
+		.unwrap()
+		.check()
+		.unwrap();
+	project.write("person.surql", NEW);
+	let id = project.try_plan("schemafull", true).await.expect("plan");
+	add_hand_rename(&project, &id);
+
+	// Lint reads only the files, which define the table SCHEMAFULL.
+	run_lint(&project.folder(), RolloutExecutionOpts::new(Some(id.clone()))).await.expect("lint");
+	for err in [
+		project.start(&db, &id).await.expect_err("start").to_string(),
+		project.up(&db, true).await.expect_err("up").to_string(),
+	] {
+		assert!(
+			err.contains(&format!(
+				"rollout '{id}' records the rename of `person.email` to `person.mail`, but this \
+				 database does not define `person` as SCHEMAFULL"
+			)),
+			"{err}"
+		);
+	}
+	assert_eq!(status(&db, &id).await, None);
+	assert_eq!(
+		serde_json::json!(people(&db, "mail").await),
+		serde_json::json!([["ann", "ann@old.test"]])
+	);
+}
