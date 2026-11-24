@@ -9,8 +9,8 @@ typed statements built from those modules.
 npm i effect-surrealkit effect@4.1.5 surrealdb@2.2.2
 ```
 
-The peers are `effect` 4.1.5 or later and `surrealdb` 2.1.1 or later, and the
-package needs Node 22.15 or later where it runs on Node.
+The peers are `effect` 4.1.5 or later and `surrealdb` 2.2.2 or later, and the
+package needs Node 22.21.1 or later where it runs on Node.
 
 Every runtime export imports only `effect` and `surrealdb` value classes, so it
 runs in browsers, Workers, Bun and Node. The emitter (`effect-surrealkit/emitter`)
@@ -173,10 +173,16 @@ ranges stay server-side.
 - The `effect` peer range is `^4.1.5`, raised from `^4.0.6`. A project on
   `effect` 4.0.6 to 4.1.4 sees a peer warning, or a refused install under
   strict peer checks, until it moves to 4.1.5 or later.
-- `engines.node` is `>=22.15.0`, raised from `^20.19.0 || >=22.12.0`, and the
-  same holds for `vite-plugin-surrealkit`. Node 20 and Node 22.12 to 22.14 are
-  no longer supported or tested; CI tests Node 22.15 and 24.
-- The `surrealdb` peer stays `^2.1.1`.
+- `engines.node` is `>=22.21.1`, raised from `^20.19.0 || >=22.12.0`, and the
+  same holds for `vite-plugin-surrealkit`. Node 20 and Node 22 before 22.21.1
+  are no longer supported or tested; CI tests Node 22.21.1 and 24. 22.21.1 is
+  the first Node 22 release on which the `.surql` imports work without a flag
+  (see [the content mapper](#importing-surql-files-the-content-mapper)).
+- The `surrealdb` peer range is `^2.2.2`, raised from `^2.1.1`. The client
+  relies on what SDK 2.2.2 does: on the embedded engine SDK 2.1.1 fails 10 of
+  the package's tests (no `cbor.2` negotiation, no `Float16Array` codec,
+  negative zero sent as positive zero), 2.2.0 fails 3 and 2.2.1 fails 1. A
+  project on SDK 2.1.x or 2.2.0 to 2.2.1 moves to 2.2.2 or later.
 
 ### What changes for existing users of the emitter
 
@@ -1589,7 +1595,7 @@ Requirements:
 | Where | What | Needs |
 | --- | --- | --- |
 | Type check | `tsc --noEmit --runExternalCode` with a `contentMappers` entry | TypeScript 7.1: `typescript@7.1.0-beta` is the version this package is tested on. `--runExternalCode` is accepted only on the command line. Editors run the mapper only in a trusted workspace with content mappers enabled. |
-| Node | `node --import effect-surrealkit/register app.ts` | Node 22.15 or later, the package's floor (`module.registerHooks` and `module.stripTypeScriptTypes`). Node 23.0 to 23.4 is within the floor but lacks both, and fails with that message; 23.5 and later work. On Node 22.15 a `.ts` entry point also needs `--experimental-strip-types`, as above. Node prints `ExperimentalWarning: stripTypeScriptTypes is an experimental feature and might change at any time` once per process (measured on Node 26.7); `--disable-warning=ExperimentalWarning` hides it |
+| Node | `node --import effect-surrealkit/register app.ts` | Node 22.21.1 or later, the package's floor: `module.registerHooks` and `module.stripTypeScriptTypes` exist, a `.ts` entry point needs no `--experimental-strip-types`, and `tsc --runExternalCode` starts the mapper. Node 23.0 to 23.4 is within `engines` but lacks both functions, and the hook refuses it with that message; 23.5 and later work. Measured on 22.15.0 to 22.18.0: before 22.18.0 a `.ts` entry point needs `--experimental-strip-types`, and before 22.21.1 `tsc` cannot start the mapper, because `process.execve` there passes no environment ([nodejs/node#60029](https://github.com/nodejs/node/pull/60029)). Node prints `ExperimentalWarning: stripTypeScriptTypes is an experimental feature and might change at any time` once per process (measured on Node 26.7); `--disable-warning=ExperimentalWarning` hides it |
 | Bun | `bun --preload effect-surrealkit/register app.ts`, or `surqlBunPlugin()` from `effect-surrealkit/mapper` in `Bun.build` | Bun |
 | Vite | `surrealkitPlugin({ surql: true })` from `vite-plugin-surrealkit` | Vite 8 |
 
@@ -2514,8 +2520,8 @@ the client reports for these requests.
 SDK 2.2.2 encodes JavaScript `-0` as a CBOR float and preserved it on all
 five transports when sent with `unsafeSkipValueCheck`. With value checking
 enabled, a bound `-0` still raises `StatementEncodeError` before dispatch
-and names the binding path. This protects callers on supported older SDK
-versions such as 2.1.1, which encode it as positive zero.
+and names the binding path. This protects callers on older SDK versions such
+as 2.1.1, below the supported floor, which encode it as positive zero.
 
 #### Measured costs
 

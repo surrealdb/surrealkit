@@ -603,8 +603,8 @@ and accepts, plus runtime codecs for every SurrealDB value.
 `effect-surrealkit` is not published to npm yet. Build it from this repository
 (`packages/effect-surrealkit`: `npm install && npm run build`) and depend on that
 directory, or on the package from a Git checkout (its `prepare` script builds it),
-with `effect` 4 (4.1.5 or later) and `surrealdb` 2 (2.1.1 or later) as peers,
-on Node 22.15 or later.
+with `effect` 4 (4.1.5 or later) and `surrealdb` 2 (2.2.2 or later) as peers,
+on Node 22.21.1 or later.
 
 ```toml
 # surrealkit.toml

@@ -35,7 +35,7 @@ It needs the optional peer `@surrealdb/node` (`npm install --save-dev @surrealdb
 The command and the mapper are two supported ways to the same modules. A `.surql` import yields the constant the command writes for that file, byte for byte. (README, "Importing .surql files: the content mapper"; `test/mapper.test.ts`)
 
 - Type check: `tsc --noEmit --runExternalCode` from TypeScript 7.1 (`typescript@7.1.0-beta` is the tested version); TypeScript accepts that flag only on the command line. Bun's `bun check` ignores `contentMappers`: a project checked by it keeps the command.
-- Run time: `node --import effect-surrealkit/register` (Node 22.15 or 23.5 and later), `bun --preload effect-surrealkit/register` or `surqlBunPlugin()` from `effect-surrealkit/mapper`, and `surrealkitPlugin({ surql: true })` from `vite-plugin-surrealkit`.
+- Run time: `node --import effect-surrealkit/register` (Node 22.21.1 or later; refused on 23.0 to 23.4), `bun --preload effect-surrealkit/register` or `surqlBunPlugin()` from `effect-surrealkit/mapper`, and `surrealkitPlugin({ surql: true })` from `vite-plugin-surrealkit`.
 - One configuration: write the `contentMappers` entry (`package`, `extensions: [".surql"]`, `options`) in the `tsconfig.json` that is checked, never through `extends`. Its `input` option is the command's `--input`, and a file must be `<input>/<scope>/<name>.surql`. `schema` and `schemas` are the command's `--schema`. The type check and the loaders refuse every file when the configuration differs or is inherited.
 - No engine runs in the mapper, so keep `--verify` or `verifyStatements` where the build runs.
 - A new `.surql` file added under an input is not picked up by an incremental `tsc` run until the next full run.

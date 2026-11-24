@@ -11,10 +11,10 @@ import { compile, packageRoot, typesRoot } from './compiler.js';
 import { executionBudgetFixture } from './execution-budget-fixture.js';
 
 const count = 30;
-// TypeScript 5.9.3 and Effect 4.0.6 measured 116,748 instantiations
-// and 29,028 types for 30 eight-member pipelines, and 23,343
+// TypeScript 5.9.3 and Effect 4.1.5 measured 118,430 instantiations
+// and 29,028 types for 30 eight-member pipelines, and 23,465
 // instantiations and 5,505 types for 30 bulk calls. Each limit leaves
-// approximately 25% headroom.
+// approximately 23% headroom.
 const workloads = [
 	{ kind: 'pipeline', limits: { instantiations: 146_000, types: 36_300 } },
 	{ kind: 'bulk', limits: { instantiations: 29_200, types: 6_900 } },

@@ -20,15 +20,15 @@ import { familyBudgetFixture } from './family-budget-fixture.js';
 const statements = 300;
 
 /**
- * Measured with TypeScript 5.9.3 and effect 4.0.6: 300 statements cost
- * 211,180 instantiations (704 each) and 46,921 types (156 each). The limits
- * leave about 30% headroom.
+ * Measured with TypeScript 5.9.3 and effect 4.1.5: 300 statements cost
+ * 221,107 instantiations (737 each) and 49,261 types (164 each). The limits
+ * leave about 24% headroom.
  */
 const limits = { instantiations: 275_000, types: 61_000 };
 
 /**
  * Measured the same way: 30 blocks shaped like the `pay` script cost
- * 184,138 instantiations (6,138 each) and 26,090 types (870 each), about
+ * 184,366 instantiations (6,146 each) and 26,148 types (872 each), about
  * what nine statements cost. The limits leave about 30% headroom.
  */
 const blocks = 30;
@@ -37,8 +37,8 @@ const blockLimits = { instantiations: 240_000, types: 34_000 };
 /**
  * Measured the same way: 30 families shaped like `listings` (thirteen
  * texts, three axes, eight variants), each selected by a literal key and by
- * a key known only at run time and run, cost 240,063 instantiations (8,002
- * each) and 22,280 types (743 each), about what one block costs. The cost
+ * a key known only at run time and run, cost 240,485 instantiations (8,016
+ * each) and 22,278 types (743 each), about what one block costs. The cost
  * does not grow with the number of variants: no type enumerates them. The
  * limits leave about 25% headroom.
  */

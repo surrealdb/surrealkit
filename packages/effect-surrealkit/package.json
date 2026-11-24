@@ -65,7 +65,7 @@
 	],
 	"sideEffects": false,
 	"engines": {
-		"node": ">=22.15.0"
+		"node": ">=22.21.1"
 	},
 	"scripts": {
 		"build": "rm -rf dist && tsup",
@@ -90,7 +90,7 @@
 	"peerDependencies": {
 		"@surrealdb/node": "^3.2.0",
 		"effect": "^4.1.5",
-		"surrealdb": "^2.1.1"
+		"surrealdb": "^2.2.2"
 	},
 	"peerDependenciesMeta": {
 		"@surrealdb/node": {

@@ -86,4 +86,4 @@ const test = Effect.gen(function* () {
 
 ## Supported versions
 
-- Node 22.15 or later and `effect` 4.1.5 or later, by the owner's ruling of 2026-11-23: the install line names `effect@4.1.5`, and the `.surql` loaders need Node 22.15 for `module.registerHooks` and `module.stripTypeScriptTypes`. SurrealDB 3.3 and 4.0, pinned on 3.3.4 and 4.0.1. (README, "effect-surrealkit"; "Importing .surql files: the content mapper"; "Running statements")
+- Node 22.21.1 or later, `effect` 4.1.5 or later and `surrealdb` 2.2.2 or later, by the owner's ruling of 2026-11-23: the install line names `effect@4.1.5`, and the `.surql` imports work unmodified from Node 22.21.1. SurrealDB 3.3 and 4.0, pinned on 3.3.4 and 4.0.1. (README, "effect-surrealkit"; "Importing .surql files: the content mapper"; "Running statements")
