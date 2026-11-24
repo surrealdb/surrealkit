@@ -45,8 +45,13 @@ const AFTER_TARGET: ReadonlySet<string> = new Set([
 	'TEMPFILES',
 ]);
 
-/** Words that are values, not field names. */
+/**
+ * Bare words SurrealDB 3.3 and 4.0 read as values, not as field names: four
+ * keywords in any case, and `NaN` and `Infinity` spelt exactly so
+ * (`test/projections-engine.test.ts` tries every keyword of both parsers).
+ */
 const VALUES: ReadonlySet<string> = new Set(['NONE', 'NULL', 'TRUE', 'FALSE']);
+const EXACT_VALUES: ReadonlySet<string> = new Set(['NaN', 'Infinity']);
 
 export const analyzeProjections = (
 	tokens: ReadonlyArray<Token>,
@@ -72,7 +77,10 @@ export const analyzeProjections = (
 		if (token?.kind === 'ident') return token.value;
 		if (token?.kind !== 'word') return undefined;
 		if (!/^[A-Za-z_][A-Za-z0-9_]*$/u.test(token.value)) return undefined;
-		return VALUES.has(token.value.toUpperCase()) ? undefined : token.value;
+		return VALUES.has(token.value.toUpperCase()) ||
+			EXACT_VALUES.has(token.value)
+			? undefined
+			: token.value;
 	};
 
 	/**
@@ -123,6 +131,10 @@ export const analyzeProjections = (
 			: undefined;
 	};
 
+	const record = (table: string, field: string, line: number): void => {
+		found.set(JSON.stringify([line, table, field]), { table, field, line });
+	};
+
 	/** Every parenthesised query in `start`..`stop`, each a query of its own. */
 	const nested = (start: number, stop: number): void => {
 		for (let i = start; i < stop; i++) {
@@ -154,10 +166,16 @@ export const analyzeProjections = (
 		// No FROM, or a field named `from`: not certain where the list ends.
 		if (froms.length !== 1) return;
 		const at = froms[0] as number;
-		if (upper(tokens[from + 1]) === 'VALUE') return;
 		const table = targetTable(at + 1, end);
 		if (table === undefined) return;
 		const fields: Array<{ field: string; line: number }> = [];
+		if (upper(tokens[from + 1]) === 'VALUE') {
+			// `SELECT VALUE <one bare field> FROM`, and nothing else.
+			const name = at === from + 3 ? bareName(from + 2) : undefined;
+			if (name !== undefined)
+				record(table, name, (tokens[from + 2] as Token).line);
+			return;
+		}
 		let start = from + 1;
 		for (let k = from + 1; k <= at; k++) {
 			if (k < at && isOpen(tokens[k])) {
@@ -167,17 +185,23 @@ export const analyzeProjections = (
 			if (k < at && upper(tokens[k]) === 'OMIT') return;
 			if (k !== at && !isPunct(tokens[k], ',')) continue;
 			const item = tokens[start] as Token;
-			if (k - start === 1) {
-				const name = isPunct(item, '*') ? '*' : bareName(start);
-				if (name !== undefined)
-					fields.push({ field: name, line: item.line });
-			}
+			// `*`, one bare field, or one bare field `AS` one name: the
+			// field, never the alias.
+			const name =
+				k - start === 1
+					? isPunct(item, '*')
+						? '*'
+						: bareName(start)
+					: k - start === 3 &&
+							upper(tokens[start + 1]) === 'AS' &&
+							bareName(start + 2) !== undefined
+						? bareName(start)
+						: undefined;
+			if (name !== undefined)
+				fields.push({ field: name, line: item.line });
 			start = k + 1;
 		}
-		for (const { field, line } of fields) {
-			const entry = { table, field, line };
-			found.set(JSON.stringify([line, table, field]), entry);
-		}
+		for (const { field, line } of fields) record(table, field, line);
 	};
 
 	// Top-level statements: a query when it starts with SELECT, possibly

@@ -642,7 +642,8 @@ const rejectsNone = (table: Table, field: Field): boolean => {
  * with `.`) with each field's kind text (`option<K>` for a field the
  * document records as optional) and whether the engine rejects
  * NONE assigned to it (see `DeclaredTable`), whether it accepts undeclared
- * fields (it is not schemafull) and the kind text of its id key; and for
+ * fields (it is not schemafull, or it is a view) and the kind text of its
+ * id key; and for
  * each function the kind texts of its arguments, in order (`option<K>`
  * for an optional one). An id key has no optional flag. A field or key
  * the document gives no kind has none.
@@ -675,7 +676,10 @@ export const declaredNames = (document: SchemaDocument): DeclaredNames => ({
 								},
 							]),
 						),
-						acceptsUndeclared: !table.schemafull,
+						// A view's fields come from its SELECT, not from
+						// declarations, so it accepts any name, SCHEMAFULL or not.
+						acceptsUndeclared:
+							!table.schemafull || table.view !== undefined,
 						...(table.idKey !== undefined && {
 							idKey: kindText(table.idKey),
 						}),
