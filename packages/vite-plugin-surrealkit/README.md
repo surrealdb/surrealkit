@@ -145,7 +145,7 @@ export default defineConfig({
 
 ## Vite Compatibility
 
-Requires Vite `^8.0.0` and Node `^20.19.0 || >=22.12.0`, matching Vite's own
+Requires Vite `^8.0.0` and Node `>=22.15.0`, which is within Vite's own
 `engines`. Both the dev-server and build paths are exercised against Vite 8 in
 CI.
 

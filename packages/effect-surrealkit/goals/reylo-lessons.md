@@ -60,6 +60,7 @@ Verified on 2026-11-23 against this branch at `88d37cc`. Verify each row again b
 | The root README says a field rename needs a hand-written `UPDATE` in a `run_sql` step. | Root `README.md:1013` |
 | Rollouts have 61 example tests in three files and, since lane L12, a property test over generated schema pairs with `proptest` as a dev-dependency. | `crates/surrealkit/tests/rollout_cli.rs`, `rollout_catchup.rs`, `migrate_rows.rs`, `rollout_properties.rs`; `crates/surrealkit/Cargo.toml`, `[dev-dependencies]` |
 | The repository has no agent skill, `AGENTS.md` or `llms.txt`. The package README is 2,619 lines. | `find` from the repository root |
+| The `effect` peer is `^4.1.5` and `engines.node` is `>=22.15.0` in `effect-surrealkit` and `vite-plugin-surrealkit`; both CI matrices test Node 22.15 and 24 (resolved decision 10). The `surrealdb` peer stays `^2.1.1`. | `package.json`; `packages/vite-plugin-surrealkit/package.json`; `.github/workflows/effect-surrealkit-ci.yml`, `vite-plugin-ci.yml` |
 
 Everything marked measured above ran on the embedded 4.0.1 engine only. A lane that relies on one of those rows measures it on SurrealDB 3.3 first.
 
@@ -82,6 +83,7 @@ Carried from the package's existing rules, which each lane keeps:
 Ruled by Ben Snyder on 2026-11-23, after the lanes began:
 
 9. `typescript@7.1.0-beta` (<https://www.npmjs.com/package/typescript/v/7.1.0-beta>) is approved for use and as a dependency. Lane L07 pins exactly that version wherever the mapper needs TypeScript 7.1, never a `7.1.0-dev` nightly, and closes on it once it is built and reviewed; moving the pin to the stable 7.1 is a follow-up, not a blocker. The mapper fixtures' CI job is a required part of the package's checks. The package's own type check stays on its current TypeScript.
+10. "We should require effect 4.1.5 or newer; Node v22 or higher", and then "yes 22.15 or higher please". The `effect` peer of `effect-surrealkit` is `^4.1.5`, and `engines.node` of `effect-surrealkit` and `vite-plugin-surrealkit` is `>=22.15.0`; the CI floor entry of both packages' matrices is Node 22.15. The `surrealdb` peers do not change. Code kept for older `effect` or Node versions is listed, not removed.
 
 ## Admission gate
 

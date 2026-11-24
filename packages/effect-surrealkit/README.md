@@ -9,6 +9,9 @@ typed statements built from those modules.
 npm i effect-surrealkit effect@4.1.5 surrealdb@2.2.2
 ```
 
+The peers are `effect` 4.1.5 or later and `surrealdb` 2.1.1 or later, and the
+package needs Node 22.15 or later where it runs on Node.
+
 Every runtime export imports only `effect` and `surrealdb` value classes, so it
 runs in browsers, Workers, Bun and Node. The emitter (`effect-surrealkit/emitter`)
 is host-neutral too; only the `effect-surrealkit` bin and the `.surql` loaders
@@ -159,6 +162,16 @@ literal membership narrows the type, int and float ranges become
 `isGreaterThan…`/`isLessThan…`, and `string::len` / `array::len` become
 code-point and array length checks. `string::is_email`, decimal and duration
 ranges stay server-side.
+
+### What changes for existing users' requirements
+
+- The `effect` peer range is `^4.1.5`, raised from `^4.0.6`. A project on
+  `effect` 4.0.6 to 4.1.4 sees a peer warning, or a refused install under
+  strict peer checks, until it moves to 4.1.5 or later.
+- `engines.node` is `>=22.15.0`, raised from `^20.19.0 || >=22.12.0`, and the
+  same holds for `vite-plugin-surrealkit`. Node 20 and Node 22.12 to 22.14 are
+  no longer supported or tested; CI tests Node 22.15 and 24.
+- The `surrealdb` peer stays `^2.1.1`.
 
 ### What changes for existing users of the emitter
 
@@ -1563,7 +1576,7 @@ Requirements:
 | Where | What | Needs |
 | --- | --- | --- |
 | Type check | `tsc --noEmit --runExternalCode` with a `contentMappers` entry | TypeScript 7.1: `typescript@7.1.0-beta` is the version this package is tested on. `--runExternalCode` is accepted only on the command line. Editors run the mapper only in a trusted workspace with content mappers enabled. |
-| Node | `node --import effect-surrealkit/register app.ts` | Node 22.15 or 23.5 and later (`module.registerHooks` and `module.stripTypeScriptTypes`); earlier versions fail with that message |
+| Node | `node --import effect-surrealkit/register app.ts` | Node 22.15 or later, the package's floor (`module.registerHooks` and `module.stripTypeScriptTypes`). Node 23.0 to 23.4 is within the floor but lacks both, and fails with that message; 23.5 and later work. On Node 22.15 a `.ts` entry point also needs `--experimental-strip-types`, as above |
 | Bun | `bun --preload effect-surrealkit/register app.ts`, or `surqlBunPlugin()` from `effect-surrealkit/mapper` in `Bun.build` | Bun |
 | Vite | `surrealkitPlugin({ surql: true })` from `vite-plugin-surrealkit` | Vite 8 |
 

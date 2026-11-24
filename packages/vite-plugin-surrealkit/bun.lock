@@ -269,7 +269,7 @@
 
     "effect": ["effect@4.1.5", "", {}, "sha512-xyR20KhQI0vg2gD8ILUSQRTTESEYJ0JKdP+QD8J37xbwPTqXRxFM/l0+vUVD9fuSvoYruoTqyt33C4FZv1s4TQ=="],
 
-    "effect-surrealkit": ["effect-surrealkit@file:../effect-surrealkit", { "devDependencies": { "@biomejs/biome": "2.4.2", "@surrealdb/node": "3.2.0", "@surrealdb/node-native": "4.0.1", "@types/node": "^24.3.0", "ajv": "8.17.1", "effect": "4.1.5", "surrealdb": "2.2.2", "tsup": "^8.2.4", "typescript": "^5.9.2", "vitest": "^3.2.4" }, "peerDependencies": { "@surrealdb/node": "^3.2.0", "effect": "^4.0.6", "surrealdb": "^2.1.1" }, "optionalPeers": ["@surrealdb/node"], "hasInstallScript": true, "bin": { "effect-surrealkit": "dist/cli.js" } }],
+    "effect-surrealkit": ["effect-surrealkit@file:../effect-surrealkit", { "devDependencies": { "@biomejs/biome": "2.4.2", "@surrealdb/node": "3.2.0", "@surrealdb/node-native": "4.0.1", "@types/node": "^24.3.0", "ajv": "8.17.1", "effect": "4.1.5", "surrealdb": "2.2.2", "tsup": "^8.2.4", "typescript": "^5.9.2", "vitest": "^3.2.4" }, "peerDependencies": { "@surrealdb/node": "^3.2.0", "effect": "^4.1.5", "surrealdb": "^2.1.1" }, "optionalPeers": ["@surrealdb/node"], "hasInstallScript": true, "bin": { "effect-surrealkit": "dist/cli.js" } }],
 
     "es-module-lexer": ["es-module-lexer@1.7.0", "", {}, "sha512-jEQoCwk8hyb2AZziIOLhDqpm5+2ww5uIE6lkO/6jcOCusfk6LhMHpXXfBLXTZ7Ydyt0j4VoUQv6uGNYbdW+kBA=="],
 
