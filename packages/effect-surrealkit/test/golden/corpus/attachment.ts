@@ -29,6 +29,11 @@ export const AttachmentRow = SurrealSchema.NoneAsAbsent(Attachment);
 export type AttachmentRow = typeof AttachmentRow.Type;
 export type AttachmentRowEncoded = typeof AttachmentRow.Encoded;
 
+/** `Attachment` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Attachment`. */
+export const AttachmentVisible = Attachment;
+export type AttachmentVisible = typeof AttachmentVisible.Type;
+export type AttachmentVisibleEncoded = typeof AttachmentVisible.Encoded;
+
 /** Input for `CREATE attachment CONTENT` / `INSERT`. The record id is an operation argument. */
 export const AttachmentCreate = Schema.Struct({
 	any_file: Schema.optionalKey(AttachmentFields.any_file),
@@ -64,6 +69,7 @@ export const AttachmentTable = SurrealSchema.table({
 	drop: false,
 	id: AttachmentId,
 	select: Attachment,
+	visible: AttachmentVisible,
 	create: AttachmentCreate,
 	merge: AttachmentMerge,
 	content: AttachmentContent,
@@ -76,6 +82,14 @@ export const AttachmentTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		any_file: { select: true, create: true, update: true },
+		avatar: { select: true, create: true, update: true },
+		files: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true },
+		} },
+	},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `attachment` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

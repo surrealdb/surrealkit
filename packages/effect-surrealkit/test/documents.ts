@@ -49,6 +49,17 @@ export const compiledPath = (name: 'corpus' | 'field-presence') =>
 export const sha256 = (text: string): string =>
 	createHash('sha256').update(text, 'utf8').digest('hex');
 
+/**
+ * The `members` fixture (`test/fixtures/members`): field permissions and
+ * unique indexes, compiled by `surrealkit compile` from its `.surql`.
+ */
+export const membersPath = join(
+	import.meta.dirname,
+	'fixtures',
+	'members',
+	'members.v2.json',
+);
+
 /** The compiled document for the presence-evidence tables (`e`, `ip`, `m`, `oa`, `p`, `up`). */
 export const presenceDocument = (): Record<string, unknown> =>
 	readJson(compiledPath('field-presence'));
@@ -141,6 +152,11 @@ export const goldens = [
 		name: 'presence',
 		document: presenceDocument,
 		options: { store: 'presence' },
+	},
+	{
+		name: 'members',
+		document: () => readJson(membersPath),
+		options: { store: 'members' },
 	},
 ] as const;
 

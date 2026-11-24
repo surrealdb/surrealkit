@@ -22,6 +22,11 @@ export const IdIntRow = SurrealSchema.NoneAsAbsent(IdInt);
 export type IdIntRow = typeof IdIntRow.Type;
 export type IdIntRowEncoded = typeof IdIntRow.Encoded;
 
+/** `IdInt` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `IdInt`. */
+export const IdIntVisible = IdInt;
+export type IdIntVisible = typeof IdIntVisible.Type;
+export type IdIntVisibleEncoded = typeof IdIntVisible.Encoded;
+
 /** Input for `CREATE id_int CONTENT` / `INSERT`. The record id is an operation argument. */
 export const IdIntCreate = SurrealSchema.EmptyObject;
 export type IdIntCreate = typeof IdIntCreate.Type;
@@ -45,6 +50,7 @@ export const IdIntTable = SurrealSchema.table({
 	drop: false,
 	id: IdIntId,
 	select: IdInt,
+	visible: IdIntVisible,
 	create: IdIntCreate,
 	merge: IdIntMerge,
 	content: IdIntContent,
@@ -54,6 +60,8 @@ export const IdIntTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `id_int` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

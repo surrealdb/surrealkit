@@ -27,6 +27,11 @@ export const RatesRow = SurrealSchema.NoneAsAbsent(Rates);
 export type RatesRow = typeof RatesRow.Type;
 export type RatesRowEncoded = typeof RatesRow.Encoded;
 
+/** `Rates` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Rates`. */
+export const RatesVisible = Rates;
+export type RatesVisible = typeof RatesVisible.Type;
+export type RatesVisibleEncoded = typeof RatesVisible.Encoded;
+
 /** Input for `CREATE rates CONTENT` / `INSERT`. The record id is an operation argument. */
 export const RatesCreate = Schema.Struct({
 	weight: Schema.optionalKey(RatesFields.weight),
@@ -65,6 +70,7 @@ export const RatesTable = SurrealSchema.table({
 	drop: false,
 	id: RatesId,
 	select: Rates,
+	visible: RatesVisible,
 	create: RatesCreate,
 	merge: RatesMerge,
 	content: RatesContent,
@@ -77,6 +83,10 @@ export const RatesTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		weight: { select: true, create: true, update: true },
+	},
+	indexes: {},
 	edge: RatesEdge,
 });
 

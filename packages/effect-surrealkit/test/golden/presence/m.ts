@@ -58,6 +58,11 @@ export const MRow = SurrealSchema.NoneAsAbsent(M);
 export type MRow = typeof MRow.Type;
 export type MRowEncoded = typeof MRow.Encoded;
 
+/** `M` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `M`. */
+export const MVisible = M;
+export type MVisible = typeof MVisible.Type;
+export type MVisibleEncoded = typeof MVisible.Encoded;
+
 /** Input for `CREATE m CONTENT` / `INSERT`. The record id is an operation argument. */
 export const MCreate = Schema.Struct({
 	dalw: Schema.optionalKey(MFields.dalw),
@@ -128,6 +133,7 @@ export const MTable = SurrealSchema.table({
 	drop: false,
 	id: MId,
 	select: M,
+	visible: MVisible,
 	create: MCreate,
 	merge: MMerge,
 	content: MContent,
@@ -151,6 +157,27 @@ export const MTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		comp: { select: true, create: true, update: true },
+		dalw: { select: true, create: true, update: true },
+		dflt: { select: true, create: true, update: true },
+		flex: { select: true, create: true, update: true, fields: {
+			a: { select: true, create: true, update: true },
+		} },
+		nul: { select: true, create: true, update: true },
+		obj: { select: true, create: true, update: true, fields: {
+			a: { select: true, create: true, update: true },
+		} },
+		opt: { select: true, create: true, update: true },
+		optd: { select: true, create: true, update: true },
+		req: { select: true, create: true, update: true },
+		ro: { select: true, create: true, update: true },
+		roopt: { select: true, create: true, update: true },
+		vfall: { select: true, create: true, update: true },
+		vin: { select: true, create: true, update: true },
+		vout: { select: true, create: true, update: true },
+	},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `m` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

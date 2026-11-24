@@ -24,6 +24,11 @@ export const FollowsRow = SurrealSchema.NoneAsAbsent(Follows);
 export type FollowsRow = typeof FollowsRow.Type;
 export type FollowsRowEncoded = typeof FollowsRow.Encoded;
 
+/** `Follows` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Follows`. */
+export const FollowsVisible = Follows;
+export type FollowsVisible = typeof FollowsVisible.Type;
+export type FollowsVisibleEncoded = typeof FollowsVisible.Encoded;
+
 /** Input for `CREATE follows CONTENT` / `INSERT`. The record id is an operation argument. */
 export const FollowsCreate = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type FollowsCreate = typeof FollowsCreate.Type;
@@ -56,6 +61,7 @@ export const FollowsTable = SurrealSchema.table({
 	drop: false,
 	id: FollowsId,
 	select: Follows,
+	visible: FollowsVisible,
 	create: FollowsCreate,
 	merge: FollowsMerge,
 	content: FollowsContent,
@@ -67,6 +73,8 @@ export const FollowsTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {},
+	indexes: {},
 	edge: FollowsEdge,
 });
 

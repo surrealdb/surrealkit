@@ -22,6 +22,11 @@ export const IdUnionRow = SurrealSchema.NoneAsAbsent(IdUnion);
 export type IdUnionRow = typeof IdUnionRow.Type;
 export type IdUnionRowEncoded = typeof IdUnionRow.Encoded;
 
+/** `IdUnion` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `IdUnion`. */
+export const IdUnionVisible = IdUnion;
+export type IdUnionVisible = typeof IdUnionVisible.Type;
+export type IdUnionVisibleEncoded = typeof IdUnionVisible.Encoded;
+
 /** Input for `CREATE id_union CONTENT` / `INSERT`. The record id is an operation argument. */
 export const IdUnionCreate = SurrealSchema.EmptyObject;
 export type IdUnionCreate = typeof IdUnionCreate.Type;
@@ -45,6 +50,7 @@ export const IdUnionTable = SurrealSchema.table({
 	drop: false,
 	id: IdUnionId,
 	select: IdUnion,
+	visible: IdUnionVisible,
 	create: IdUnionCreate,
 	merge: IdUnionMerge,
 	content: IdUnionContent,
@@ -54,6 +60,8 @@ export const IdUnionTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `id_union` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

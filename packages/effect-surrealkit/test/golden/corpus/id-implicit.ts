@@ -22,6 +22,11 @@ export const IdImplicitRow = SurrealSchema.NoneAsAbsent(IdImplicit);
 export type IdImplicitRow = typeof IdImplicitRow.Type;
 export type IdImplicitRowEncoded = typeof IdImplicitRow.Encoded;
 
+/** `IdImplicit` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `IdImplicit`. */
+export const IdImplicitVisible = IdImplicit;
+export type IdImplicitVisible = typeof IdImplicitVisible.Type;
+export type IdImplicitVisibleEncoded = typeof IdImplicitVisible.Encoded;
+
 /** Input for `CREATE id_implicit CONTENT` / `INSERT`. The record id is an operation argument. */
 export const IdImplicitCreate = Schema.StructWithRest(Schema.Struct({}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type IdImplicitCreate = typeof IdImplicitCreate.Type;
@@ -45,6 +50,7 @@ export const IdImplicitTable = SurrealSchema.table({
 	drop: false,
 	id: IdImplicitId,
 	select: IdImplicit,
+	visible: IdImplicitVisible,
 	create: IdImplicitCreate,
 	merge: IdImplicitMerge,
 	content: IdImplicitContent,
@@ -54,6 +60,8 @@ export const IdImplicitTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `id_implicit` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

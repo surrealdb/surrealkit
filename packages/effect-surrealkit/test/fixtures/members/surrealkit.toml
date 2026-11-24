@@ -1,0 +1,7 @@
+# The `members` fixture: `surrealkit compile` (run here) writes members.v2.json,
+# the schema document the `members` golden is generated from.
+
+[typegen]
+schema_version = 2
+json = "members.v2.json"
+generated_at = false

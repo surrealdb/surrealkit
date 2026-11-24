@@ -160,3 +160,16 @@ export const tupleKey: (typeof Corpus.IdArrayId.Type)['id'] = [
 ];
 export const unconstrained: SurrealSchema.EdgeIn<typeof Corpus.LikesEdge> =
 	teamId;
+
+// Indexes keep their names, kinds and column paths as literal types.
+export const ownerStatus: readonly [readonly ['owner'], readonly ['status']] = (
+	null as unknown as typeof Corpus.DocTable
+).indexes.idx_owner_status.columns;
+export const uniqueCode: 'unique' = (null as unknown as typeof Corpus.DocTable)
+	.indexes.uniq_code.type;
+export const hnswDimension: 4 = (null as unknown as typeof Corpus.DocTable)
+	.indexes.hnsw_embedding.vector.dimension;
+// Field permissions keep their expressions.
+export const ssnSelect: '$auth.admin = true' = (
+	null as unknown as typeof Corpus.PersonTable
+).fieldPermissions.ssn.select;

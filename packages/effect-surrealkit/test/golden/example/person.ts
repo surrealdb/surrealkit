@@ -69,6 +69,11 @@ export const PersonRow = SurrealSchema.NoneAsAbsent(Person);
 export type PersonRow = typeof PersonRow.Type;
 export type PersonRowEncoded = typeof PersonRow.Encoded;
 
+/** `Person` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Person`. */
+export const PersonVisible = Person;
+export type PersonVisible = typeof PersonVisible.Type;
+export type PersonVisibleEncoded = typeof PersonVisible.Encoded;
+
 /** Input for `CREATE person CONTENT` / `INSERT`. The record id is an operation argument. */
 export const PersonCreate = Schema.Struct({
 	address: Schema.StructWithRest(Schema.Struct({
@@ -150,6 +155,7 @@ export const PersonTable = SurrealSchema.table({
 	drop: false,
 	id: PersonId,
 	select: Person,
+	visible: PersonVisible,
 	create: PersonCreate,
 	merge: PersonMerge,
 	content: PersonContent,
@@ -178,6 +184,38 @@ export const PersonTable = SurrealSchema.table({
 	},
 	relations: { in: ["member_of"], out: [] },
 	permissions: { select: true, create: "$auth.id = id", update: "$auth.id = id", delete: false },
+	fieldPermissions: {
+		address: { select: true, create: true, update: true, fields: {
+			city: { select: true, create: true, update: true },
+		} },
+		age: { select: true, create: true, update: true },
+		bio: { select: true, create: true, update: true },
+		created_at: { select: true, create: true, update: true },
+		display: { select: true, create: true, update: true },
+		email: { select: true, create: true, update: true },
+		manager: { select: true, create: true, update: true },
+		mentor: { select: true, create: true, update: true },
+		name: { select: true, create: true, update: true },
+		nickname: { select: true, create: true, update: true },
+		"odd.name": { select: true, create: true, update: true },
+		pattern: { select: true, create: true, update: true },
+		phones: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true, fields: {
+				kind: { select: true, create: true, update: true },
+			} },
+		} },
+		role: { select: true, create: true, update: true },
+		score: { select: true, create: true, update: true },
+		ssn: { select: "$auth.admin = true", create: true, update: false },
+		tags: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true },
+		} },
+		touched_at: { select: true, create: true, update: true },
+		updated_at: { select: true, create: true, update: true },
+	},
+	indexes: {
+		uniq_email: { type: "unique", columns: [["email"]] },
+	},
 });
 
 /** JSON world: the field schemas of a selected `person` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

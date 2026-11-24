@@ -8,7 +8,9 @@ import * as SurrealSchema from '../src/index.js';
 import {
 	AnythingFromJson,
 	AnythingRow,
+	DocTable as CorpusDocTable,
 	PersonMerge as CorpusPersonMerge,
+	PersonTable as CorpusPersonTable,
 	KindsFields,
 	KindsJsonFields,
 	SinkContent,
@@ -32,6 +34,7 @@ import {
 	TeamId,
 } from './golden/example/index.js';
 import * as Big from './golden/example-bigint/index.js';
+import { Member, MemberTable, MemberVisible } from './golden/members/index.js';
 
 const strict = { onExcessProperty: 'error' } as const;
 const decodes = (schema: Schema.Top, value: unknown) =>
@@ -221,6 +224,57 @@ describe('generated table modules', () => {
 			content: 'optional',
 		});
 		expect(PersonTable.relations).toEqual({ in: ['member_of'], out: [] });
+	});
+
+	it('expose each index and each field permission in the descriptor', () => {
+		expect(PersonTable.indexes).toEqual({
+			uniq_email: { type: 'unique', columns: [['email']] },
+		});
+		expect(CorpusDocTable.indexes.idx_owner_status).toEqual({
+			type: 'standard',
+			columns: [['owner'], ['status']],
+		});
+		expect(CorpusDocTable.indexes.ft_body).toEqual({
+			type: 'fulltext',
+			columns: [['body']],
+			fulltext: { analyzer: 'simple', highlights: true },
+		});
+		expect(CorpusDocTable.indexes.cnt_open).toEqual({
+			type: 'count',
+			columns: [],
+			where: "status = 'open'",
+		});
+		expect(PersonTable.fieldPermissions.ssn).toEqual({
+			select: '$auth.admin = true',
+			create: true,
+			update: false,
+		});
+		expect(Object.keys(PersonTable.fieldPermissions)).toEqual(
+			Object.keys(PersonTable.presence).filter((key) => key !== 'id'),
+		);
+		expect(CorpusPersonTable.fieldPermissions.address.fields?.city).toEqual(
+			{ select: true, create: true, update: true },
+		);
+	});
+
+	it('read a row without the fields a permission can hide through the visible row, refinements included', () => {
+		const seen = {
+			id: new RecordId('member', 'ann'),
+			handle: 'ann',
+			region: 'north',
+			number: 1,
+			profile: { bio: 'b' },
+		};
+		expect(decodes(Member, seen)).toBe(false);
+		expect(decodes(MemberVisible, seen)).toBe(true);
+		expect(MemberTable.visible).toBe(MemberVisible);
+		expect(PersonTable.visible).toBe(PersonTable.select);
+		const Refined = SurrealSchema.refine(MemberTable, {
+			email: (s) => s.check(Schema.isMinLength(3)),
+		});
+		expect(decodes(Refined.visible, seen)).toBe(true);
+		expect(decodes(Refined.visible, { ...seen, email: 'a' })).toBe(false);
+		expect(decodes(Refined.visible, { ...seen, email: 'a@b' })).toBe(true);
 	});
 });
 

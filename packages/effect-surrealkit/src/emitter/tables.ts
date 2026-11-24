@@ -236,11 +236,25 @@ class TablePrinter {
 		readonly scope: ModuleScope,
 		readonly options: EmitterOptions,
 		readonly world: 'native' | 'json' = 'native',
+		/**
+		 * Print the selected row as a session reads it when field permissions
+		 * may hide fields: a field whose `select` permission is not FULL is
+		 * optional, because SurrealDB returns it as NONE without an error.
+		 */
+		readonly visible = false,
 	) {
 		this.root = buildTree(table.fields);
 		this.isRelation = table.type.kind === 'relation';
 		this.lightweight =
 			table.type.kind === 'relation' && table.type.lightweight;
+	}
+
+	/** Some session may be refused this field when it selects it. */
+	mayBeHidden(fieldNode: FieldNode): boolean {
+		return (
+			fieldNode.field !== undefined &&
+			fieldNode.field.permissions.select !== true
+		);
 	}
 
 	location(path: ReadonlyArray<string>): string {
@@ -264,12 +278,19 @@ class TablePrinter {
 	): Presence {
 		const override =
 			this.options.fields?.[this.location(fieldNode.path)]?.[operation];
-		if (override !== undefined) return override;
 		// Elements are written whole, never merged: their children follow Create.
 		const effective =
 			element && operation !== 'select' ? 'create' : operation;
 		const writeExcluded = this.lightweight || this.table.view !== undefined;
-		return derivePresence(infoOf(fieldNode), effective, writeExcluded);
+		const presence =
+			override ??
+			derivePresence(infoOf(fieldNode), effective, writeExcluded);
+		return this.visible &&
+			operation === 'select' &&
+			presence === 'required' &&
+			this.mayBeHidden(fieldNode)
+			? 'optional'
+			: presence;
 	}
 
 	/** The schema of one field in one operation, before its own presence. */
@@ -367,6 +388,51 @@ const jsonList = (values: ReadonlyArray<string>): string =>
 const printPermissions = (permissions: TablePermissions): string =>
 	`{ select: ${json(permissions.select)}, create: ${json(permissions.create)}, update: ${json(permissions.update)}, delete: ${json(permissions.delete)} }`;
 
+/** One field's permissions, and those of its declared children, nested. */
+const printFieldPermissions = (
+	fieldNode: FieldNode,
+	indent: number,
+): string => {
+	const own = fieldNode.field?.permissions ?? {
+		select: true,
+		create: true,
+		update: true,
+	};
+	const head = `select: ${json(own.select)}, create: ${json(own.create)}, update: ${json(own.update)}`;
+	const children = sortedChildren(fieldNode);
+	if (children.length === 0) return `{ ${head} }`;
+	return [
+		`{ ${head}, fields: {`,
+		...children.map(
+			(child) =>
+				`${tabs(indent + 1)}${propertyKey(child.key)}: ${printFieldPermissions(child, indent + 1)},`,
+		),
+		`${tabs(indent)}} }`,
+	].join('\n');
+};
+
+type Index = Table['indexes'][number];
+
+/** One index: its kind, its columns as literal paths, and its details. */
+const printIndex = (index: Index): string => {
+	const parts = [
+		`type: ${json(index.type)}`,
+		`columns: [${index.columns.map((path) => jsonList(path)).join(', ')}]`,
+	];
+	if (index.fulltext !== undefined) {
+		parts.push(
+			`fulltext: { analyzer: ${json(index.fulltext.analyzer)}, highlights: ${index.fulltext.highlights} }`,
+		);
+	}
+	if (index.vector !== undefined) {
+		parts.push(
+			`vector: { dimension: ${index.vector.dimension}, distance: ${json(index.vector.distance)}, elementType: ${json(index.vector.elementType)} }`,
+		);
+	}
+	if (index.where !== undefined) parts.push(`where: ${json(index.where)}`);
+	return `{ ${parts.join(', ')} }`;
+};
+
 const presenceLiteral = (presence: FieldPresence): string =>
 	`{ select: ${json(presence.select)}, create: ${json(presence.create)}, merge: ${json(presence.merge)}, content: ${json(presence.content)} }`;
 
@@ -418,6 +484,56 @@ const SUFFIX: Readonly<Record<Operation, string>> = {
 	create: 'Create',
 	merge: 'Merge',
 	content: 'Content',
+};
+
+/**
+ * `<Table>Visible`: the selected row with every field some session may be
+ * refused optional (its `select` permission is not FULL), at any depth.
+ * SurrealDB returns such a field as NONE without an error, so the plain
+ * select schema, which describes a privileged reader, would refuse the row.
+ * When no permission can hide a field it is the select schema itself.
+ */
+const printVisible = (
+	name: string,
+	selectEntries: ReadonlyArray<readonly [string, string]>,
+	fields: ReadonlyArray<FieldNode>,
+	printer: TablePrinter,
+	reference: (field: FieldNode) => string,
+	selectCode: (field: FieldNode) => string | undefined,
+	open: boolean,
+): string[] => {
+	const byKey = new Map(fields.map((field) => [field.key, field]));
+	let changed = false;
+	const entries = selectEntries.map(([key, value]) => {
+		const field = byKey.get(key);
+		if (field === undefined) return [key, value] as const;
+		const code = printer.field(field, 'select', 1, false);
+		const printed = wrap(
+			code === selectCode(field) ? reference(field) : code,
+			printer.presence(field, 'select', false),
+		);
+		if (printed !== value) changed = true;
+		return [key, printed] as const;
+	});
+	const visible = `${name}Visible`;
+	const types = [
+		`export type ${visible} = typeof ${visible}.Type;`,
+		`export type ${visible}Encoded = typeof ${visible}.Encoded;`,
+	];
+	if (!changed) {
+		return [
+			`/** \`${name}\` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is \`${name}\`. */`,
+			`export const ${visible} = ${name};`,
+			...types,
+			'',
+		];
+	}
+	return [
+		`/** \`${name}\` as a session reads it when field permissions may hide fields: each field whose select permission is not FULL may be NONE (absent). */`,
+		`export const ${visible} = ${struct(entries, 0, open)};`,
+		...types,
+		'',
+	];
 };
 
 /** Prints the module of one table, view or relation. */
@@ -566,6 +682,20 @@ export const printTable = (input: TableInput): string => {
 			);
 			exportType(`${name}Row`);
 			lines.push('');
+			lines.push(
+				...printVisible(
+					name,
+					entries,
+					fields,
+					new TablePrinter(table, scope, options, 'native', true),
+					(field) =>
+						sharedKeys.has(field.key)
+							? `${fieldsName}${propertyAccess(field.key)}`
+							: (codes.get(field.key)?.get('select') as string),
+					(field) => codes.get(field.key)?.get('select'),
+					open,
+				),
+			);
 		}
 	}
 
@@ -665,8 +795,10 @@ export const printTable = (input: TableInput): string => {
 		`\tschemafull: ${table.schemafull},`,
 		`\tdrop: ${table.drop},`,
 		`\tid: ${idName},`,
-		...operations.map(
-			(operation) => `\t${operation}: ${pascal}${SUFFIX[operation]},`,
+		...operations.flatMap((operation) =>
+			operation === 'select'
+				? [`\tselect: ${pascal},`, `\tvisible: ${pascal}Visible,`]
+				: [`\t${operation}: ${pascal}${SUFFIX[operation]},`],
 		),
 		`\tfields: ${fieldsName},`,
 		'\tpresence: {',
@@ -676,6 +808,26 @@ export const printTable = (input: TableInput): string => {
 		'\t},',
 		`\trelations: { in: ${jsonList(input.relations.in)}, out: ${jsonList(input.relations.out)} },`,
 		`\tpermissions: ${printPermissions(table.permissions)},`,
+		...(fields.length === 0
+			? ['\tfieldPermissions: {},']
+			: [
+					'\tfieldPermissions: {',
+					...fields.map(
+						(field) =>
+							`\t\t${propertyKey(field.key)}: ${printFieldPermissions(field, 2)},`,
+					),
+					'\t},',
+				]),
+		...(table.indexes.length === 0
+			? ['\tindexes: {},']
+			: [
+					'\tindexes: {',
+					...table.indexes.map(
+						(index) =>
+							`\t\t${propertyKey(index.name)}: ${printIndex(index)},`,
+					),
+					'\t},',
+				]),
 		...(relationType === undefined ? [] : [`\tedge: ${pascal}Edge,`]),
 		'});',
 	);

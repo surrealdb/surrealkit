@@ -1,0 +1,324 @@
+{
+  "version": 2,
+  "semanticDigest": "sha256:171fb0bc214e87597acbbc2cf37c56e957723e106bd7613614c8627866993701",
+  "provenance": {
+    "generator": {
+      "name": "surrealkit",
+      "version": "1.0.0-rc.1"
+    },
+    "engine": {
+      "version": "4.0.0",
+      "build": "surrealdb-4.0.0",
+      "mode": "embedded"
+    },
+    "adapter": "structure-4.0",
+    "source": {
+      "kind": "compile",
+      "modules": [
+        "default"
+      ],
+      "files": [
+        {
+          "path": "schema/members.surql",
+          "sha256": "22f4df06bf8b9750608aecce233c96724c797f54eb43b25d05fa9e43f1145ce6"
+        }
+      ]
+    },
+    "capabilities": {
+      "experimental": [],
+      "network": false
+    }
+  },
+  "tables": [
+    {
+      "name": "member",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": true,
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "email"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": "$auth.id = id",
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD email ON member TYPE string PERMISSIONS FOR select WHERE $auth.id = id, FOR create, update FULL"
+        },
+        {
+          "path": [
+            "handle"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD handle ON member TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "nickname"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": true,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": "$auth.id = id",
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD nickname ON member TYPE none | string PERMISSIONS FOR select WHERE $auth.id = id, FOR create, update FULL"
+        },
+        {
+          "path": [
+            "number"
+          ],
+          "kind": {
+            "kind": "int"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD number ON member TYPE int PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "profile"
+          ],
+          "kind": {
+            "kind": "object"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD profile ON member TYPE object PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "profile",
+            "bio"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD profile.bio ON member TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "profile",
+            "phone"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": "$auth.id = id",
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD profile.phone ON member TYPE string PERMISSIONS FOR select WHERE $auth.id = id, FOR create, update FULL"
+        },
+        {
+          "path": [
+            "region"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD region ON member TYPE string PERMISSIONS FULL"
+        },
+        {
+          "path": [
+            "salary"
+          ],
+          "kind": {
+            "kind": "int"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": false,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD salary ON member TYPE int PERMISSIONS FOR select NONE, FOR create, update FULL"
+        }
+      ],
+      "indexes": [
+        {
+          "name": "member_bio",
+          "columns": [
+            [
+              "profile",
+              "bio"
+            ]
+          ],
+          "type": "unique",
+          "clause": "UNIQUE"
+        },
+        {
+          "name": "member_handle",
+          "columns": [
+            [
+              "handle"
+            ]
+          ],
+          "type": "unique",
+          "clause": "UNIQUE"
+        },
+        {
+          "name": "member_region",
+          "columns": [
+            [
+              "region"
+            ]
+          ],
+          "type": "standard",
+          "clause": ""
+        },
+        {
+          "name": "member_region_number",
+          "columns": [
+            [
+              "region"
+            ],
+            [
+              "number"
+            ]
+          ],
+          "type": "unique",
+          "clause": "UNIQUE"
+        }
+      ],
+      "events": [],
+      "define": "DEFINE TABLE member TYPE NORMAL SCHEMAFULL PERMISSIONS FOR select FULL, FOR create, update, delete NONE"
+    },
+    {
+      "name": "viewer",
+      "type": {
+        "kind": "normal"
+      },
+      "schemafull": true,
+      "drop": false,
+      "permissions": {
+        "select": "id = $auth.id",
+        "create": false,
+        "update": false,
+        "delete": false
+      },
+      "fields": [
+        {
+          "path": [
+            "name"
+          ],
+          "kind": {
+            "kind": "string"
+          },
+          "optional": false,
+          "flexible": false,
+          "readonly": false,
+          "inline": false,
+          "permissions": {
+            "select": true,
+            "create": true,
+            "update": true
+          },
+          "define": "DEFINE FIELD name ON viewer TYPE string PERMISSIONS FULL"
+        }
+      ],
+      "indexes": [],
+      "events": [],
+      "define": "DEFINE TABLE viewer TYPE NORMAL SCHEMAFULL PERMISSIONS FOR select WHERE id = $auth.id, FOR create, update, delete NONE"
+    }
+  ],
+  "functions": [],
+  "params": [],
+  "accesses": [
+    {
+      "name": "viewer",
+      "method": "record",
+      "signup": "CREATE viewer SET name = $name",
+      "signin": "SELECT * FROM viewer WHERE name = $name",
+      "refresh": false,
+      "verify": {
+        "alg": "HS512"
+      },
+      "durations": {
+        "token": "1h"
+      }
+    }
+  ],
+  "analyzers": [],
+  "sequences": [],
+  "buckets": [],
+  "apis": [],
+  "modules": [],
+  "configs": [],
+  "users": [],
+  "diagnostics": []
+}

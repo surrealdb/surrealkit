@@ -22,6 +22,11 @@ export const IdArrayRow = SurrealSchema.NoneAsAbsent(IdArray);
 export type IdArrayRow = typeof IdArrayRow.Type;
 export type IdArrayRowEncoded = typeof IdArrayRow.Encoded;
 
+/** `IdArray` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `IdArray`. */
+export const IdArrayVisible = IdArray;
+export type IdArrayVisible = typeof IdArrayVisible.Type;
+export type IdArrayVisibleEncoded = typeof IdArrayVisible.Encoded;
+
 /** Input for `CREATE id_array CONTENT` / `INSERT`. The record id is an operation argument. */
 export const IdArrayCreate = SurrealSchema.EmptyObject;
 export type IdArrayCreate = typeof IdArrayCreate.Type;
@@ -45,6 +50,7 @@ export const IdArrayTable = SurrealSchema.table({
 	drop: false,
 	id: IdArrayId,
 	select: IdArray,
+	visible: IdArrayVisible,
 	create: IdArrayCreate,
 	merge: IdArrayMerge,
 	content: IdArrayContent,
@@ -54,6 +60,8 @@ export const IdArrayTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `id_array` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

@@ -110,11 +110,21 @@ matrix of the contract (section 7):
 | --- | --- |
 | `Person` | A stored row as a privileged reader selects it: the plain struct, which `refine` works on. |
 | `PersonRow` | `NoneAsAbsent(Person)`: decode rows the SDK returned with this one, so NONE (an `undefined` property) is an absent optional field. |
+| `PersonVisible` | The row as a session reads it when field permissions may hide fields: every field (at any depth) whose `select` permission is not FULL is optional. `Person` itself when no permission can hide a field. |
 | `PersonCreate` | `CREATE … CONTENT` / `INSERT`; the id is an operation argument. |
 | `PersonMerge` | `UPDATE … MERGE`: omission keeps a value, `undefined` (NONE) removes an `option<T>` field and re-applies a `DEFAULT ALWAYS` one (an `option<T>` included). |
 | `PersonContent` | `UPDATE … CONTENT`: a full replacement. |
-| `PersonTable` | The descriptor: `{ name, type, id, select, create, merge, content, fields, presence, relations, permissions, edge? }`. |
+| `PersonTable` | The descriptor: `{ name, type, id, select, visible, create, merge, content, fields, presence, relations, permissions, fieldPermissions, indexes, edge? }`. |
 | `PersonFromJson` | The same selected row as SurrealDB's HTTP `/sql` renders it, decoding to the same types as `Person`; `PersonJsonFields` holds its field schemas for `Struct.pick` and field maps, and `PersonJsonEncoded` its JSON shape. Never the default; see [Two codec worlds](#two-codec-worlds). |
+
+A descriptor's `indexes` holds every `DEFINE INDEX` of the table by name,
+with its kind and the field paths it covers kept as literal types
+(`indexes.idx_owner_status` is `{ type: "standard", columns: [["owner"],
+["status"]] }`), plus the analyzer of a `FULLTEXT` index, the vector shape
+of an `HNSW` or `DISKANN` one and the condition of a `COUNT … WHERE` one.
+`fieldPermissions` holds each top-level field's `select`, `create` and
+`update` permission (`true` for FULL, `false` for NONE, or the `WHERE`
+expression), with those of its declared children under `fields`.
 
 `Merge` is never `Partial<Create>`: READONLY, COMPUTED, `id` and relation
 endpoints are excluded, and NONE is only accepted where the matrix allows it.
@@ -129,8 +139,8 @@ ranges stay server-side.
 
 ### What changes for existing users of the emitter
 
-Regenerating with this version changes the schemas of some fields and
-tightens one schema. Every existing export keeps its name.
+Regenerating with this version changes the schemas of some fields, adds to
+the output and tightens one schema. Every existing export keeps its name.
 
 The schemas change for schemas that use these kinds (see
 [Interpretation notes](#interpretation-notes) and the kinds table under
@@ -149,6 +159,17 @@ The schemas change for schemas that use these kinds (see
   Content, where it was optional, and its presence entry says so.
 - `ids.ts` declares a record ID after the IDs its key refers to, so the
   order of its declarations can change.
+
+The output gains:
+
+- every table descriptor gains `fieldPermissions`, `indexes` and `visible`,
+  and every table module a `<Table>Visible` export (with its `Type` and
+  `Encoded` types), so a table whose PascalCase name is another table's
+  plus `Visible` (`person` and `person_visible`) now needs a `names` entry.
+
+Code that spells out a descriptor's full type, or compares one with
+`toEqual`, sees the new keys. They are optional in `TableDescriptor`, so
+hand-written descriptors without them keep working.
 
 One schema is stricter at run time, with the same type: a closed object with
 no fields (the Create, Merge and Content of a SCHEMAFULL table whose only
@@ -403,7 +424,9 @@ process (`Arbitrary.schema` + `Arbitrary.checkEffect`). Golden output lives in
 `example.v2.json`, the same with the `bigint`/`effect-datetime`/`patch`
 options, the whole corpus, the integer-keyed corpus tables in the `bigint` profile (the
 whole corpus in that profile is checked line by line against the `corpus`
-golden instead of being pinned twice) and the field-presence evidence tables. The corpus
+golden instead of being pinned twice), the field-presence evidence tables and
+the `members` fixture (`test/fixtures/members`: field permissions and unique
+indexes, compiled with `surrealkit compile` in that directory). The corpus
 inputs are real `surrealkit compile` output, pinned byte for byte by
 SurrealKit's own test suite under `typegen_corpus/compiled/`, and every input
 document is validated against the published JSON Schema. The golden

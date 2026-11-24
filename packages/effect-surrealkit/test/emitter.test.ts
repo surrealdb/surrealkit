@@ -30,6 +30,7 @@ import {
 	goldenDir,
 	goldens,
 	jsonSchemaPath,
+	membersPath,
 	readJson,
 	sha256,
 	withoutToolVersions,
@@ -53,6 +54,7 @@ describe('input documents', () => {
 		['example.v2.json', examplePath],
 		['compiled corpus', compiledPath('corpus')],
 		['compiled field-presence tables', compiledPath('field-presence')],
+		['compiled members fixture', membersPath],
 	] as const) {
 		it(`${name} validates against the published JSON Schema`, () => {
 			const valid = validate(readJson(path));
