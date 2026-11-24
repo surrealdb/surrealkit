@@ -158,6 +158,7 @@ const localNames = (tokens: ReadonlyArray<Token>): ReadonlySet<string> => {
 export const analyzeUses = (
 	tokens: ReadonlyArray<Token>,
 	free: ReadonlyArray<string>,
+	locals: ReadonlyMap<Token, string> = new Map(),
 ): UsesAndFields => {
 	const local = localNames(tokens);
 	const bindable = new Set(free.filter((name) => !local.has(name)));
@@ -377,11 +378,24 @@ export const analyzeUses = (
 	 */
 	const query = (from: number, end: number, inBlock = false): void => {
 		const word = upper(tokens[from]);
-		const targets = analyzeTargets(tokens.slice(from, end));
+		const slice = tokens.slice(from, end);
+		const targets = analyzeTargets(slice);
 		const tables = new Set([...targets.read, ...targets.written]);
 		const table = tables.size === 1 ? [...tables][0] : undefined;
 		const certain =
 			table !== undefined && !targets.openTargets && QUERIES.has(word);
+		// With the locals the text fixes to one table read as that table:
+		// for field names only, never for a binding use (a binding assigned
+		// there may be guarded, as in a block).
+		const fixed =
+			certain || locals.size === 0
+				? targets
+				: analyzeTargets(slice, locals);
+		const fixedTables = new Set([...fixed.read, ...fixed.written]);
+		const fieldTable =
+			fixedTables.size === 1 && !fixed.openTargets && QUERIES.has(word)
+				? [...fixedTables][0]
+				: undefined;
 		/** The clause at the query's own level: `WHERE`, `SET` or another. */
 		let clause = '';
 		let clauses = 0;
@@ -417,7 +431,7 @@ export const analyzeUses = (
 					clause = 'FOR';
 					continue;
 				}
-				if (!certain || table === undefined || clauses > 1) continue;
+				if (fieldTable === undefined || clauses > 1) continue;
 				const inWhere = clause === 'WHERE';
 				const inSet =
 					clause === 'SET' &&
@@ -426,9 +440,10 @@ export const analyzeUses = (
 						word === 'UPSERT' ||
 						word === 'CREATE');
 				if (!inWhere && !inSet) continue;
-				if (!inBlock) bindingUse(i, table, inWhere);
-				if (inWhere) compared(i, table);
-				else assigned(i, table);
+				if (certain && table !== undefined && !inBlock)
+					bindingUse(i, table, inWhere);
+				if (inWhere) compared(i, fieldTable);
+				else assigned(i, fieldTable);
 			}
 		};
 		/** The use of a binding that a comparison or assignment at `i` is. */

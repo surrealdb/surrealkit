@@ -12,6 +12,7 @@ import {
 	lex,
 	type Token,
 } from './lexer.js';
+import { recordLocals } from './locals.js';
 import { analyzeProjections, type ProjectedField } from './projections.js';
 import { analyzeTargets } from './targets.js';
 import { analyzeUses, type BindingUses, type FieldReference } from './uses.js';
@@ -110,8 +111,9 @@ export interface Analysis {
 	readonly uses: BindingUses;
 	/**
 	 * The fields each `SELECT` projects from the one static table it reads
-	 * (a table name, a record id, or `type::record`, `type::thing` or
-	 * `type::table` with a literal table, after an optional `ONLY`, and
+	 * (a table name, a record id, `type::record`, `type::thing` or
+	 * `type::table` with a literal table, or a local the text fixes to one
+	 * table with `LET $x = type::record('t', …)`, after an optional `ONLY`, and
 	 * nothing after it but the query's clauses): each projected item that
 	 * is a bare field name, or `*`, sorted by line, table and field, without
 	 * duplicates. A
@@ -131,7 +133,8 @@ export interface Analysis {
 	 * `<`, `<=`, `>` or `>=` whatever the other operand, or the target of
 	 * `field = <literal>` in `UPDATE`, `UPSERT` or `CREATE` when the
 	 * literal is never NONE; in top-level statements, statements in blocks
-	 * and parenthesised subqueries. `UNSET` is not read. Sorted by line,
+	 * and parenthesised subqueries; a local the text fixes to one table is
+	 * a target of that table here. `UNSET` is not read. Sorted by line,
 	 * table, field and role, without duplicates.
 	 */
 	readonly fields: ReadonlyArray<FieldReference>;
@@ -662,7 +665,8 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 	}
 	diagnostics.sort((a, b) => a.offset - b.offset);
 	const targets = analyzeTargets(tokens);
-	const { uses, fields } = analyzeUses(tokens, sorted(free));
+	const locals = recordLocals(tokens);
+	const { uses, fields } = analyzeUses(tokens, sorted(free), locals);
 	return {
 		kind,
 		sql: sql.slice(0, last.end),
@@ -681,7 +685,7 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 		functions: targets.functions,
 		openTargets: targets.openTargets,
 		uses,
-		projected: analyzeProjections(tokens),
+		projected: analyzeProjections(tokens, locals),
 		fields,
 		holeScopes: holeScopesOf(holeSites, unboundReads, kind),
 		diagnostics,

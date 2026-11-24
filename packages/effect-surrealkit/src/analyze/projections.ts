@@ -62,6 +62,7 @@ const EXACT_VALUES: ReadonlySet<string> = new Set(['NaN', 'Infinity']);
 
 export const analyzeProjections = (
 	tokens: ReadonlyArray<Token>,
+	locals: ReadonlyMap<Token, string> = new Map(),
 ): ReadonlyArray<ProjectedField> => {
 	const found = new Map<string, ProjectedField>();
 
@@ -109,7 +110,12 @@ export const analyzeProjections = (
 		const token = tokens[j];
 		let table: string | undefined;
 		let record = false;
-		if (
+		const local = token === undefined ? undefined : locals.get(token);
+		if (local !== undefined) {
+			table = local;
+			record = true;
+			j++;
+		} else if (
 			token?.kind === 'word' &&
 			token.value.toLowerCase() === 'type' &&
 			isPunct(tokens[j + 1], ':')

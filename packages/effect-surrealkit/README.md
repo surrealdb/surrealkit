@@ -1391,8 +1391,10 @@ of this holds on tokens outside strings and comments:
 - it has no `OMIT`;
 - after `FROM` (and an optional `ONLY`) comes exactly one target: a table
   name, a record id `table:key` whose key is one token or one bracket
-  group, or `type::record('table', …)`, `type::thing('table', …)` or
-  `type::table('table')` with a plain string literal; then the end of the
+  group, `type::record('table', …)`, `type::thing('table', …)` or
+  `type::table('table')` with a plain string literal, or a local the text
+  fixes to one table (see [A local fixed to one
+  table](#a-local-fixed-to-one-table)); then the end of the
   query or one of its clauses (`WHERE`, `SPLIT`, `GROUP`, `ORDER`, `LIMIT`,
   `START`, `FETCH`, `TIMEOUT`, `EXPLAIN`, `WITH`, `VERSION`, `TEMPFILES`);
 - it has no `PARALLEL` after `FROM`, a parse error on both versions;
@@ -1424,9 +1426,9 @@ recorded, against that table:
 Every other item records nothing: a function call, a path (`address.city`,
 `tags[0]`), an expression, an alias of anything but one bare field, a graph
 step and a subquery, and `VALUE` before anything but one bare field. Two
-targets, an open target (`$owner`, `type::table($t)`, a subquery, a range
-or a graph step after the table) and a hole after the target record
-nothing. A `{ … }` whose entries start with a key and `:` is an object
+targets, an open target (`$owner` unless the text fixes it to one table,
+`type::table($t)`, a subquery, a range or a graph step after the table) and
+a hole after the target record nothing. A `{ … }` whose entries start with a key and `:` is an object
 literal, not a block, and has no statement.
 
 With `--schema` (or a scope's `declared` detail), a recorded field that a
@@ -1464,7 +1466,8 @@ line }` for each bare field a query compares in its `WHERE`, whatever the
 other operand, sorted by line, table, field and role, without duplicates. A
 comparison already recorded as a binding use (`station = $station`) is not
 repeated there. A comparison is read where `uses` reads one: in a query
-whose targets are exactly one static table and not open, as a top-level
+whose targets are exactly one static table and not open (or a local [fixed
+to one table](#a-local-fixed-to-one-table)), as a top-level
 statement, a statement in a block or a parenthesised subquery (a bare word
 there is a field of the subquery's own row on both versions, never the
 outer one's), at the query's own level or inside parentheses, before a
@@ -1516,6 +1519,33 @@ do not change: `fields` is not written into a part. The limit is the one
 the projected fields have: a row written while its table was schemaless
 still matches a comparison with its old field, and the check refuses such a
 text.
+
+#### A local fixed to one table
+
+`LET $x = type::record('t', …);` makes `$x` a record id of `t` whatever the
+key, on both versions, so a later `FROM $x`, `FROM ONLY $x`, `UPDATE $x`,
+`UPSERT $x` or `DELETE $x` targets `t`, and its projected, compared and
+assigned fields are read against `t` as for a static target. A local
+counts only when nothing can make it hold anything else:
+
+- its one `LET` in the whole text is a top-level statement exactly `LET $x
+  = type::record('t', …);` (or `type::thing`) with a plain string literal
+  for the table, and no `FOR` of the same name exists: a `LET` in a block
+  is the block's own, and a second `LET` replaces the first;
+- the read comes after that statement;
+- it is not a name SurrealDB sets (`$this`, `$parent`, `$value`, `$before`,
+  `$after`, `$auth`, …);
+- the text has no hole (a fill could `LET` it), no closure (whose
+  parameters can shadow it) and no `DEFINE` (a function body sees the
+  caller's `LET`s on 3.3 and not on 4.0).
+
+A binding compared with or assigned to a field of such a target is not a
+binding use: `IF $revision = NONE { DELETE $marker } ELSE { UPSERT $marker
+SET revision = $revision }` assigns `$revision` only when it is not NONE,
+and a `rejectsNone` entry would refuse its codec. The tables a text
+reports (`tables`, `openTargets`) do not change: such a target is still
+open there. A local whose table comes from a parameter, a codec or a
+subquery is not read.
 
 #### Rendering in process
 

@@ -327,6 +327,154 @@ describe('analyze: assigned fields', () => {
 	});
 });
 
+const projected = (sql: string) =>
+	analyzeSync(sql).projected.map(({ table, field }) => `${table}.${field}`);
+const named = (sql: string) =>
+	analyzeSync(sql).fields.map(
+		({ table, field, role }) => `${role} ${table}.${field}`,
+	);
+
+describe('analyze: a local the text fixes to one table', () => {
+	const fix = "LET $x = type::record('gauge', $key);\n";
+
+	it('reads a SELECT from it, FROM ONLY and FOR UPDATE included', () => {
+		expect(projected(`${fix}SELECT station, note FROM ONLY $x;`)).toEqual([
+			'gauge.note',
+			'gauge.station',
+		]);
+		expect(projected(`${fix}SELECT VALUE note FROM $x;`)).toEqual([
+			'gauge.note',
+		]);
+		expect(
+			projected(
+				`${fix}LET $row = (SELECT note FROM ONLY $x FOR UPDATE);`,
+			),
+		).toEqual(['gauge.note']);
+		expect(
+			projected(
+				"LET $x = type::thing('gauge', 1);\nSELECT note FROM ONLY $x;",
+			),
+		).toEqual(['gauge.note']);
+	});
+
+	it('reads comparisons and literal assignments of UPDATE, UPSERT and DELETE on it, in a block too', () => {
+		expect(
+			named(
+				`${fix}UPDATE $x SET note = 'a' WHERE reading = 1;\nIF $c { UPSERT ONLY $x SET station = 'b' RETURN NONE } ELSE { DELETE $x WHERE station = $s };`,
+			),
+		).toEqual([
+			'assign gauge.note',
+			'assign gauge.station',
+			'compare gauge.station',
+		]);
+	});
+
+	it('never takes a binding on it for a use, so no binds or rejectsNone follow', () => {
+		const sql = `${fix}UPSERT $x SET station = $s, reading = $r WHERE note = $n;`;
+		expect(analyzeSync(sql).uses).toEqual({
+			key: [{ kind: 'key', table: 'gauge', line: 1 }],
+		});
+		// The values can be NONE: not read as assignments either.
+		expect(named(sql)).toEqual([]);
+	});
+
+	it('keeps the tables and open targets the text reports', () => {
+		const sql = `${fix}SELECT note FROM ONLY $x;`;
+		const analysis = analyzeSync(sql);
+		expect(analysis.tables).toEqual({ read: ['gauge'], written: [] });
+		expect(analysis.openTargets).toBe(true);
+	});
+
+	describe('records nothing', () => {
+		it.each([
+			[
+				'a local LET twice',
+				"LET $x = type::record('gauge', 1);\nLET $x = type::record('site', 1);\nSELECT note FROM $x;",
+			],
+			[
+				'a LET in a block, read in it',
+				"IF $c { LET $x = type::record('gauge', 1); SELECT note FROM $x; };",
+			],
+			[
+				'a LET in a block, read after it',
+				"IF $c { LET $x = type::record('gauge', 1) };\nSELECT note FROM $x;",
+			],
+			[
+				'a LET shadowed in a block',
+				"LET $x = type::record('gauge', 1);\nIF $c { LET $x = type::record('site', 1); SELECT label FROM $x; };",
+			],
+			[
+				'a FOR variable of the same name',
+				"LET $x = type::record('gauge', 1);\nFOR $x IN $xs { SELECT note FROM $x; };",
+			],
+			[
+				'a read before the LET, of the parameter of that name',
+				"SELECT note FROM $x;\nLET $x = type::record('gauge', 1);",
+			],
+			[
+				'a table that is not a literal',
+				'LET $x = type::record($t, 1);\nSELECT note FROM $x;',
+			],
+			[
+				'a prefixed string',
+				"LET $x = type::record(r'gauge', 1);\nSELECT note FROM $x;",
+			],
+			[
+				'one argument',
+				"LET $x = type::record('gauge:1');\nSELECT note FROM $x;",
+			],
+			[
+				'a path after the call',
+				"LET $x = type::record('gauge', 1).id;\nSELECT note FROM $x;",
+			],
+			[
+				'an operator after the call',
+				"LET $x = type::record('gauge', 1) ?? $y;\nSELECT note FROM $x;",
+			],
+			[
+				'type::table',
+				"LET $x = type::table('gauge');\nSELECT note FROM $x;",
+			],
+			['a parameter', 'LET $x = $y;\nSELECT note FROM $x;'],
+			[
+				'a subquery',
+				'LET $x = (SELECT VALUE next FROM ONLY $y);\nSELECT note FROM $x;',
+			],
+			[
+				'a closure in the text',
+				"LET $x = type::record('gauge', 1);\nRETURN array::map([1], |$v| (SELECT note FROM ONLY $x));",
+			],
+			[
+				'a function body in the text',
+				"LET $x = type::record('gauge', 1);\nDEFINE FUNCTION fn::f() { RETURN SELECT note FROM ONLY $x; };",
+			],
+			[
+				'a hole in the text',
+				"LET $x = type::record('gauge', 1);\nSELECT note FROM $x WHERE __W__;",
+			],
+			[
+				'a name the engine sets',
+				"LET $parent = type::record('gauge', 1);\nSELECT note FROM $parent;",
+			],
+			[
+				'a typed LET',
+				"LET $x: record<gauge> = type::record('gauge', 1);\nSELECT note FROM $x;",
+			],
+			[
+				'two targets',
+				"LET $x = type::record('gauge', 1);\nSELECT note FROM $x, gauge;",
+			],
+			[
+				'a path on the target',
+				"LET $x = type::record('gauge', 1);\nSELECT note FROM $x.next;",
+			],
+		])('for %s', (_, sql) => {
+			expect(analyzeSync(sql).projected, sql).toEqual([]);
+			expect(analyzeSync(sql).fields, sql).toEqual([]);
+		});
+	});
+});
+
 const bindsDocument = join(import.meta.dirname, 'fixtures', 'binds.v2.json');
 const declared = async (): Promise<DeclaredNames> =>
 	declaredNames(
@@ -452,6 +600,25 @@ describe('statements with schema detail: compared fields', () => {
 		// NONE clears a field, which both versions accept: not checked.
 		expect(await problems('UPDATE gauge SET staton = NONE;')).toEqual([]);
 		expect(await problems('UPDATE gauge UNSET staton;')).toEqual([]);
+	});
+
+	it('fails generation on a field of a local the text fixes to one table', async () => {
+		expect(
+			await problems(
+				"LET $x = type::record('gauge', $k);\nSELECT staton FROM ONLY $x;\nUPDATE $x SET nte = 'a';\nDELETE $x WHERE readng = 1;",
+			),
+		).toEqual([
+			'shop/q.surql:2: selects `staton` of `gauge`, which declares no such field',
+			'shop/q.surql:3: assigns `nte` of `gauge`, which declares no such field',
+			'shop/q.surql:4: compares `readng` of `gauge`, which declares no such field',
+		]);
+		// A binding assigned to it writes no rejectsNone entry.
+		const { content, problems: none } = await render(
+			"LET $x = type::record('gauge', $k);\nUPSERT $x SET station = $s;",
+		);
+		expect(none).toEqual([]);
+		expect(content).not.toContain('rejectsNone');
+		expect(content).not.toContain('binds: { s');
 	});
 
 	it('changes nothing in the generated module', async () => {

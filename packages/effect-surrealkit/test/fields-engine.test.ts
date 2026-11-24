@@ -389,3 +389,115 @@ describe.skipIf(!engineConfigured)('a lone bare word assigned in SET', () => {
 		expect(fields).toBeGreaterThan(600);
 	}, 120_000);
 });
+
+describe.skipIf(!engineConfigured)(
+	'a local the text fixes to one table with type::record',
+	() => {
+		let engine: Engine;
+
+		beforeAll(async () => {
+			engine = await startEngine();
+			await within(
+				engine.db
+					.query(
+						"DEFINE TABLE person SCHEMAFULL; DEFINE FIELD name ON person TYPE string; CREATE person:1 SET name = 'Ada'; DEFINE TABLE pet SCHEMAFULL; DEFINE FIELD owner ON pet TYPE string; CREATE pet:1 SET owner = 'Ada';",
+					)
+					.collect(),
+			);
+		});
+		afterAll(async () => {
+			await engine?.stop();
+		});
+
+		const run = (sql: string) => within(engine.db.query(sql).collect());
+		const last = async (sql: string) => (await run(sql)).at(-1);
+		const fix = "LET $x = type::record('person', 1);\n";
+
+		it('is read, written and deleted from as that table, an undeclared field as elsewhere', async () => {
+			let sql = `${fix}SELECT name, nmae FROM ONLY $x;`;
+			expect(await last(sql)).toEqual({ name: 'Ada' });
+			expect(projected(sql)).toEqual(['person.name', 'person.nmae']);
+			sql = `${fix}SELECT name FROM ONLY $x FOR UPDATE;`;
+			expect(await last(sql)).toEqual({ name: 'Ada' });
+			expect(projected(sql)).toEqual(['person.name']);
+			sql = `${fix}UPDATE $x SET nmae = 'a';`;
+			await expect(run(sql)).rejects.toThrow(
+				/no such field exists for table 'person'/u,
+			);
+			expect(assigned(sql)).toEqual(['person.nmae']);
+			sql = `${fix}DELETE $x WHERE nmae = 'Ada' RETURN BEFORE;`;
+			expect(await last(sql)).toEqual([]);
+			expect(compared(sql)).toEqual(['person.nmae']);
+		});
+
+		it('is a record of that table whatever the key', async () => {
+			for (const key of [
+				'pet:1',
+				"[1, 'a']",
+				"'pet:1'",
+				'NONE',
+				'{ a: 1 }',
+			])
+				expect(
+					await last(
+						`RETURN record::tb(type::record('person', ${key}));`,
+					),
+					key,
+				).toBe('person');
+		});
+
+		it('holds what its one top-level LET gives it, and nothing else can set it', async () => {
+			// A LET in a block is the block's own.
+			expect(
+				await last(
+					`${fix}IF true { LET $x = type::record('pet', 1); }; RETURN record::tb($x);`,
+				),
+			).toBe('person');
+			expect(
+				await last(
+					"IF true { LET $y = type::record('pet', 1); }; RETURN $y;",
+				),
+			).toBeUndefined();
+			// A second LET replaces it, which is why one LET is required.
+			expect(
+				await last(
+					`${fix}LET $x = type::record('pet', 1); RETURN record::tb($x);`,
+				),
+			).toBe('pet');
+			// There is no assignment without LET.
+			await expect(
+				run(`${fix}$x = type::record('pet', 1);`),
+			).rejects.toThrow(/Parse error/u);
+			// A closure reads it.
+			expect(
+				await last(
+					`${fix}RETURN array::map([1], |$v| record::tb($x));`,
+				),
+			).toEqual(['person']);
+		});
+
+		it('is not read in a function body, which the versions resolve differently', async () => {
+			const { version } = await engine.db.version();
+			const seen = await last(
+				`${fix}DEFINE FUNCTION fn::seen() { RETURN $x; }; RETURN fn::seen();`,
+			);
+			// 3.3 gives a function the caller's LETs; 4.0 does not.
+			if (version.includes('-3.')) expect(String(seen)).toBe('person:1');
+			else expect(seen).toBeUndefined();
+			expect(
+				projected(
+					`${fix}DEFINE FUNCTION fn::f() { RETURN SELECT nmae FROM ONLY $x; };`,
+				),
+			).toEqual([]);
+		});
+
+		it('type::thing is not a function on either version', async () => {
+			await expect(
+				run("RETURN type::thing('person', 1);"),
+			).rejects.toThrow(/Parse error/u);
+		});
+	},
+);
+
+const projected = (sql: string) =>
+	analyzeSync(sql).projected.map(({ table, field }) => `${table}.${field}`);

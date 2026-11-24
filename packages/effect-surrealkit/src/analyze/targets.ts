@@ -108,7 +108,16 @@ const isPlainString = (token: Token | undefined): token is Token =>
 const adjacent = (a: Token | undefined, b: Token | undefined): boolean =>
 	a !== undefined && b !== undefined && a.end === b.start;
 
-export const analyzeTargets = (tokens: ReadonlyArray<Token>): Targets => {
+/**
+ * `locals`: reads of locals the text fixes to one table
+ * (`recordLocals`), each read as a record id of that table where it stands
+ * as a target. Without it a parameter target is open, as it is for the
+ * tables a text reports.
+ */
+export const analyzeTargets = (
+	tokens: ReadonlyArray<Token>,
+	locals?: ReadonlyMap<Token, string>,
+): Targets => {
 	const readAt = new Map<string, number>();
 	const writtenAt = new Map<string, number>();
 	const functionsAt = new Map<string, number>();
@@ -234,6 +243,9 @@ export const analyzeTargets = (tokens: ReadonlyArray<Token>): Targets => {
 	 */
 	const target = (at: number, subqueries: boolean): Target => {
 		const token = tokens[at];
+		const local = token === undefined ? undefined : locals?.get(token);
+		if (local !== undefined)
+			return { kind: 'table', name: local, next: at + 1, record: true };
 		const typed = typeTarget(at, ['record', 'thing']);
 		if (typed !== undefined) return typed;
 		// `type::table('t')`: a read wherever it stands, so a table of a
