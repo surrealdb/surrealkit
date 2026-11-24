@@ -402,6 +402,43 @@ Admission note, 2026-11-23, at `4a80459`:
 - `test/skill.test.ts` asserts that every export the skill names is exported by the package, and that every command flag it names is in the CLI's usage text.
 - The README links the skill, and its Development section says that a user-visible change updates the skill in the same change.
 
+Admission note, 2026-11-23, at `b2912da`:
+
+1. **What is worse today?** Yes. The repository has no agent file: `find` from the root, leaving out `target`, `node_modules` and `.git`, finds no `AGENTS.md`, `CLAUDE.md`, `SKILL.md`, `llms.txt`, `.cursorrules`, `.claude/` or `.agents/`. The package README is the only guidance. It is 3,099 lines, 174,851 bytes (about 44,000 tokens) and 46 headings. The rules a statement author needs are spread over 16 of its sections, from line 314 to the end, so an agent reads parts of it and misses the rest. Each of these mistakes is one an agent makes by following SurrealQL habits without those sections, and each was measured on this branch:
+   - paging with `START`: 57 ms against 0.6 ms for an id range, after id 99,990 on 4.0.1, and a skipped row after a delete (L10);
+   - a binding inside a record-id literal (`person:$k`), a parse error on 3.3 and 4.0 (`test/conformance.test.ts`, "record ids and ranges from bound key parts");
+   - generating without `--schema`, so a misspelt projected field comes back as `{}` with no error (L04);
+   - `catchTag('StatementIndexConflict')` on an engine version the classification is not pinned on, which catches nothing (L03, review finding 2);
+   - a typed duplicate error used where SurrealDB's `UPSERT`, `INSERT IGNORE` or `ON DUPLICATE KEY UPDATE` handles the value without an error (L03).
+
+   The failing test: `test/skill.test.ts` fails while `skills/effect-surrealkit/SKILL.md` does not exist. With the skill written and a made-up export and flag added to it (`retryForever(statement)`, `--retry-all`), two of its tests failed and named exactly those two (and `contentMappers`, a configuration key, which the test then admits by name with the source file that reads it).
+2. **Is this the better way?** Yes. Alternatives considered:
+   - The README alone, as above.
+   - An `AGENTS.md` at the repository root. It governs contributors to this repository, most of which is the Rust crates, and an agent loads it only inside this checkout, not in a project that uses the package.
+   - `llms.txt`. It is an index, and it points back into the same 3,099 lines.
+   - A skill inside the npm package. The package publishes `dist`, `README.md` and `LICENSE`, and changing what is published is outside this goal.
+   - Rules copied into each consumer. benBrain's adoption row A9 links this skill instead, because rules live in the repository they govern.
+
+   A skill of 89 lines that is loaded whole, with references read on demand and a test that holds every export, flag and citation it names to the code, is the one of these that stays short and stays true.
+3. **With SurrealDB or against it?** With it. Every rule ends with its sources: a README section (each of which rests on a conformance test or a SurrealDB page), a test file and the name of the test it cites, or a SurrealDB documentation page with the day it was read. Where SurrealDB has a native way, the rule leads with it: `UPSERT`, `INSERT IGNORE` and `ON DUPLICATE KEY UPDATE` before the typed errors, record-id reads and id ranges before `WHERE` and `START`, and `readAs` for what SurrealDB returns to a restricted session. The two pages cited are <https://surrealdb.com/docs/surrealql/statements/insert> and <https://surrealdb.com/docs/surrealql/statements/select>. Lanes L03 and L10 read them on 2026-11-23 and quote them in their notes. They were not read again for this lane. `test/skill.test.ts` checks that every README section cited exists and that every test file cited contains the name cited.
+
+**State: closed, implemented.** Built:
+
+- `skills/effect-surrealkit/SKILL.md` (89 lines). It has front matter with `name` and a `description` of when to use it, and one end-to-end example: the emitter and the `statements` command with `--schema` and `--verify`, a unique-index lookup and a `create` from the corpus `person` descriptor named `people.byEmail` and `people.register`, `StatementIndexConflict` narrowed to `'uniq_email'`, and the same code under `memoryLayer` with `expectIndex`. The example was type-checked against the golden corpus modules, and its SQL was printed from the builders, before it was written down. The rules come in four groups:
+  - writing: descriptors, `<slice>.<operation>` names, no input value in the text, a record id for one record, `WITH INDEX` lookups, id-range paging, `readAs`, native duplicate handling first and then the typed errors on the pinned versions with `checkConstraintErrors`, `writes: false` only for known reads, and scripts as `part` and `sequence`;
+  - generating: the command, `--schema` for the names, projected-field and binding checks, `--check`, `--verify`, and the content mapper;
+  - running: `layer`, `run`, `transaction`, `pipeline`, writes that may have applied, and `retry`;
+  - testing: `memoryLayer`, `expectIndex`, `recordUser`, `checkConstraintErrors` and `fake`.
+
+  It also states the supported floors, Node 22.15 or later and `effect` 4.1.5 or later, by the owner's ruling.
+- `references/generating.md` (43 lines): the command's flags, what `--schema` checks, `--verify`, and the content mapper's requirements and its one configuration. `references/errors.md` (47 lines): the error table with what was written, duplicates, and `writes`. `references/testing.md` (23 lines): the testing exports.
+- `test/skill.test.ts` (6 tests). The skill is at most 120 lines with its front matter. Every reference file is linked, and every link exists. Every name imported in its code is exported by that entry point. Every export it names in prose is exported by the package: 44 exports in all, plus four names checked against the file that holds them (`surrealkitPlugin` in the Vite plugin, and `uniqueIndexes`, `rejectsNone` and `contentMappers`). Every flag it gives the command is in the usage text: 11 flags. Every rule ends with a citation, and every README section, test file and test name it cites exists.
+- README: a link to the skill under the table of contents, and a paragraph in Development saying that a user-visible change updates the skill in the same change. The content-mapper section now says that a new `.surql` file added under an input is not picked up by an incremental `tsc` run until the next full run.
+
+Left out, because no README section, test or SurrealDB page states it: L04's measurement that `WHERE id = $id` with the id bound as a string plans as a `TableScan` and matches no row. The skill says only what the conformance suite pins, that a record id is read by key.
+
+Gate at this change: `bun run lint`, `bun run typecheck` and `bun run build` pass. `npm run test:skips` passes on the embedded lane (2,078 passed, 51 skipped, as listed) and with `SURREAL_BIN` 3.3.4 (2,107 passed, 22 skipped, as listed).
+
 ### L07. `.surql` imports through a content mapper
 
 Included by resolved decision 3, and pinned by resolved decision 9: the fixtures pin exactly `typescript@7.1.0-beta`, and the lane closes on it once built and reviewed; moving the pin to the stable 7.1 is a follow-up. The protocol below was first read from reylo's source at `ba71851c` (`package.json:33-42`, `src/rpc.ts`, `src/mapper-server.ts`, `src/mapper-diagnostics.ts`, `src/register.ts`), then from TypeScript's own documentation and measured against 7.1.0-beta; where they differ is under "Protocol" below.

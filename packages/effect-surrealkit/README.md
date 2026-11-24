@@ -25,6 +25,11 @@ and only [`effect-surrealkit/testing`](#testing) can load `@surrealdb/node`.
 - [Two codec worlds](#two-codec-worlds) and the [value schemas](#values)
 - [What the codecs refuse](#what-the-codecs-refuse-and-why)
 
+Coding agents: the [effect-surrealkit skill](../../skills/effect-surrealkit/SKILL.md)
+holds the rules for writing, generating, running and testing statements, each
+citing the section of this README, the conformance test or the SurrealDB
+documentation it comes from.
+
 ## Generating modules
 
 `effect` and `surrealdb` are peer dependencies: the project that holds the
@@ -1606,7 +1611,8 @@ A directory named in `schemas` takes that schema document v2, any other takes
 command without `--schema`. With a schema the mapper checks what `--schema`
 checks, and the parts carry the same `binds` and `rejectsNone`. A schema
 document that changes renders its files again (the mapper reports the
-documents to TypeScript as watched files).
+documents to TypeScript as watched files). A new `.surql` file added under an
+input is not picked up by an incremental `tsc` run until the next full run.
 
 The type check and the loaders read one literal configuration, or refuse.
 The loaders read the entry from the nearest `tsconfig.json` above each file
@@ -2999,6 +3005,12 @@ bun run lint
 bun run typecheck
 bun run test
 ```
+
+A user-visible change updates the agent skill
+([`skills/effect-surrealkit`](../../skills/effect-surrealkit/SKILL.md) at the
+repository root) in the same change. `test/skill.test.ts` fails when the skill
+names an export the package does not have, a flag the command does not list,
+or a README section, test or file that does not exist.
 
 The property suites round-trip every codec through the SDK's CBOR codec in
 process (`Arbitrary.schema` + `Arbitrary.checkEffect`). Golden output lives in
