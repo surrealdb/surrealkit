@@ -550,6 +550,33 @@ fn plan_proposes_no_rename_when_the_definitions_differ() {
 	assert_eq!(manifest_count(root), 1, "a refused plan writes no manifest");
 }
 
+/// A schemaless table can already hold values under the new name, which the
+/// copy would overwrite, and removing a field there does not clear its values,
+/// so a rollback would leave the copies. `plan` proposes no rename there, says
+/// why, and refuses the add and the remove as it did before it proposed renames.
+#[test]
+fn plan_proposes_no_rename_on_a_schemaless_table() {
+	for table in ["DEFINE TABLE person SCHEMALESS;", "DEFINE TABLE person;"] {
+		let temp = TempDir::new().expect("tempdir");
+		let root = temp.path();
+		write_project(root, "");
+		write_person(root, &format!("{table}\nDEFINE FIELD email ON person TYPE string;\n"));
+		plan_named(root, "people").expect("first plan");
+
+		write_person(root, &format!("{table}\nDEFINE FIELD mail ON person TYPE string;\n"));
+		let text = plan_named(root, "rename_email").expect_err("no rename on a schemaless table");
+		assert!(
+			text.contains("`person.email` and `person.mail`")
+				&& text.contains("proposes no rename on `person`: it is not SCHEMAFULL")
+				&& text.contains("Plan the rename by hand"),
+			"{table}: {text}"
+		);
+		assert!(!text.contains("UPDATE person"), "{table}: {text}");
+		assert!(text.contains("cannot tell apart from a rename"), "{table}: {text}");
+		assert_eq!(manifest_count(root), 1, "{table}: a refused plan writes no manifest");
+	}
+}
+
 /// A copy re-runs a `VALUE` clause and cannot write a `READONLY` field, and a
 /// `COMPUTED` field stores nothing, so the same definitions under a new name
 /// get no proposal, and the warning says why.

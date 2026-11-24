@@ -217,7 +217,7 @@ impl SurrealKitMcp {
 		               a new timestamped manifest and updates the snapshots, so calling it \
 		               twice leaves the second manifest empty. Use dry_run to see the plan \
 		               without writing. A removed and an added field defined the same apart \
-		               from the name are proposed as a rename, listed in `renames`, with a \
+		               from the name, on a SCHEMAFULL table, are proposed as a rename, listed in `renames`, with a \
 		               copy step that must be confirmed before the rollout can start.",
 		annotations(
 			title = "Plan a rollout",
