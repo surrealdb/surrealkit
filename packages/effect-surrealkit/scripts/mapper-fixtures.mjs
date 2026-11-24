@@ -211,15 +211,20 @@ process.on('exit', () => {
 	rmSync(all, { recursive: true, force: true });
 });
 
-/** `accepts/src/run.ts` under the Node hook and the Bun plugin. */
+/**
+ * The project's `src/run.ts` (a copy of `accepts/src/run.ts`, which checks
+ * the project it sits in) under the Node hook and the Bun plugin.
+ */
+const runner = join(fixtures, 'accepts', 'src', 'run.ts');
 const hosts = (root) => {
+	const script = join(root, 'src', 'run.ts');
 	for (const [host, command, args] of [
 		[process.execPath, ['--import', 'effect-surrealkit/register']],
 		['bun', ['--preload', 'effect-surrealkit/register']],
 	].map(([command, flags]) => [
 		command === 'bun' ? 'bun' : 'node',
 		command,
-		[...flags, 'accepts/src/run.ts', ...(root === undefined ? [] : [root])],
+		[...flags, script],
 	])) {
 		const loaded = run(command, args);
 		if (loaded.error !== undefined)
@@ -231,7 +236,7 @@ const hosts = (root) => {
 		console.log(`[mapper] ${loaded.stdout.trim()}`);
 	}
 };
-hosts();
+hosts(join(fixtures, 'accepts'));
 
 /** Asks the mapper process TypeScript starts for each file's text. */
 const ask = async (config, options, files) => {
@@ -323,6 +328,7 @@ let compared = 0;
 for (const [corpus, schema] of variants) {
 	const root = join(all, `${corpus}${schema === undefined ? '' : '-schema'}`);
 	cpSync(join(authored, corpus), join(root, 'queries'), { recursive: true });
+	cpSync(runner, join(root, 'src', 'run.ts'));
 	const options = {
 		input: 'queries',
 		...(schema !== undefined && { schema }),

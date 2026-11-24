@@ -13,11 +13,10 @@ import { isDeepStrictEqual } from 'node:util';
 
 import { loadSurqlModule } from 'effect-surrealkit/mapper';
 
-// The project: `accepts`, or the one named on the command line (the
-// all-fixtures loop of `npm run test:mapper`), each with `queries/` and
-// `.described/`.
-const root =
-	process.argv[2] ?? join(dirname(fileURLToPath(import.meta.url)), '..');
+// The project this file sits in: `accepts`, or a project of the
+// all-fixtures loop, which runs a copy at `<project>/src/run.ts`. Each has
+// `queries/` and `.described/`.
+const root = join(dirname(fileURLToPath(import.meta.url)), '..');
 const queries = join(root, 'queries');
 const described = join(root, '.described');
 const runtime =
