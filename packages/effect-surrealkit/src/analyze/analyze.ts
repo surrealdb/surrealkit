@@ -14,7 +14,7 @@ import {
 } from './lexer.js';
 import { analyzeProjections, type ProjectedField } from './projections.js';
 import { analyzeTargets } from './targets.js';
-import { analyzeUses, type BindingUses } from './uses.js';
+import { analyzeUses, type BindingUses, type FieldReference } from './uses.js';
 
 export interface Diagnostic {
 	readonly severity: 'error' | 'warning';
@@ -103,7 +103,9 @@ export interface Analysis {
 	 * the key of a `type::record`, or a comparison with (or, in `SET`, an
 	 * assignment to) a field of the one static table a query targets. Only
 	 * these patterns are recognised, and nothing is recorded where the lexer
-	 * is not certain; a binding with no such use is absent.
+	 * is not certain; a binding with no such use is absent. A comparison or
+	 * assignment in a statement in a block is not a use (the statement may
+	 * not run for every value), and its field name is in `fields`.
 	 */
 	readonly uses: BindingUses;
 	/**
@@ -121,6 +123,16 @@ export interface Analysis {
 	 * top-level one.
 	 */
 	readonly projected: ReadonlyArray<ProjectedField>;
+	/**
+	 * The field names each query compares in its `WHERE` (role `compare`),
+	 * where the comparison is not a binding use in `uses`: a bare field of
+	 * the one static table the query targets, read as `uses` reads one, on
+	 * either side of `=`, `==`, `!=`, `<`, `<=`, `>` or `>=`, whatever the
+	 * other operand; in top-level statements, statements in blocks and
+	 * parenthesised subqueries. Sorted by line, table, field and role,
+	 * without duplicates.
+	 */
+	readonly fields: ReadonlyArray<FieldReference>;
 	/**
 	 * For each hole, what the text around it does with names (empty for a
 	 * text without holes): `bound`, the names visible at every occurrence of
@@ -648,6 +660,7 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 	}
 	diagnostics.sort((a, b) => a.offset - b.offset);
 	const targets = analyzeTargets(tokens);
+	const { uses, fields } = analyzeUses(tokens, sorted(free));
 	return {
 		kind,
 		sql: sql.slice(0, last.end),
@@ -665,8 +678,9 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 		tables: { read: targets.read, written: targets.written },
 		functions: targets.functions,
 		openTargets: targets.openTargets,
-		uses: analyzeUses(tokens, sorted(free)),
+		uses,
 		projected: analyzeProjections(tokens),
+		fields,
 		holeScopes: holeScopesOf(holeSites, unboundReads, kind),
 		diagnostics,
 	};

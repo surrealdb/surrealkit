@@ -1367,7 +1367,12 @@ The limits are plain: only these three patterns are read, by a lexer, not
 a parser, and nothing is recorded where it is not certain (a parameter in a
 longer expression, a path, two tables or an open target, a comparison
 inside a block). A binding with no recorded use is never checked against
-the schema.
+the schema. A statement in a block records no binding use because it may
+run for some values of a binding and not others (`IF $x != NONE { UPDATE
+gauge SET station = $x }`): a `rejectsNone` entry there would refuse a codec
+that holds NONE although the text never assigns NONE. The field names it
+compares are checked all the same (see
+[Compared fields](#compared-fields)).
 
 #### Projected fields
 
@@ -1448,6 +1453,53 @@ FIELDS`). Until then an `UPDATE` of such a row fails on both versions with
 ``Found field 'extra', but no such field exists``. As for the
 binding uses, there is no way to exempt one text: a scope generated without
 schema detail is not checked at all.
+
+#### Compared fields
+
+SurrealDB 3.3 and 4.0 both answer `SELECT * FROM person WHERE nmae =
+'Ada'` with no rows and no error: on a `SCHEMAFULL` table a field it does
+not declare is NONE in every row, so the comparison never holds.
+`analyze(sql)` also reports `fields`: `{ table, field, role: 'compare',
+line }` for each bare field a query compares in its `WHERE`, whatever the
+other operand, sorted by line, table, field and role, without duplicates. A
+comparison already recorded as a binding use (`station = $station`) is not
+repeated there. A comparison is read where `uses` reads one: in a query
+whose targets are exactly one static table and not open, as a top-level
+statement, a statement in a block or a parenthesised subquery (a bare word
+there is a field of the subquery's own row on both versions, never the
+outer one's), at the query's own level or inside parentheses, before a
+second `WHERE` or `SET` clause. The field is
+recorded when it is a whole operand of `=`, `==`, `!=`, `<`, `<=`, `>` or
+`>=`:
+
+- on the left: after `WHERE`, `AND`, `OR`, `(` or `,`, and directly before
+  the operator;
+- on the right: directly after an operator that follows the end of an
+  operand (a name, a parameter, a literal or a closing bracket), and
+  before `;`, `)`, `,`, `AND`, `OR`, a clause or `FOR UPDATE`.
+
+A bare field is the word or quoted name `uses` reads: never `NONE`, `NULL`,
+`TRUE` or `FALSE` in any case nor `NaN` or `Infinity`, never a word that
+ends a clause (`AND`, `WHERE`, `ORDER`, …), and nothing followed by `.`,
+`(`, `[`, `:` or an arrow. A pinned engine test compares every keyword of
+both versions' parsers on either side and checks that the analyzer records
+one only where the engine reads the field of that name. A projection alias
+is not visible in `WHERE` on either version, so `SELECT name AS label FROM
+person WHERE label = 'Ada'` compares the field `label`. Nothing else is
+recorded: a path, a call, an index, a graph step, an operand of arithmetic
+or of a cast on the left, any other operator (`?=`, `@@`, `@1@`, `<|2|>`,
+`~`, `CONTAINS`, `IN`, …), and names in `ORDER BY`, `GROUP BY`, `SPLIT`,
+`OMIT` and `FETCH`.
+
+With `--schema` (or a scope's `declared` detail), a compared field that a
+`SCHEMAFULL` table does not declare fails generation with its file and
+line, by the rule the projected fields follow (the same names resolve, the
+same tables and texts are not checked): ``shop/q.surql:2: compares
+`staton` of `gauge`, which declares no such field``. The generated modules
+do not change: `fields` is not written into a part. The limit is the one
+the projected fields have: a row written while its table was schemaless
+still matches a comparison with its old field, and the check refuses such a
+text.
 
 #### Rendering in process
 

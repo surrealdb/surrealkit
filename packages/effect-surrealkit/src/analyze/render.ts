@@ -435,6 +435,35 @@ const checkProjected = (
 			});
 
 /**
+ * The compared fields that a table of `detail` does not declare and does
+ * not accept, by the rule {@link checkProjected} applies: the same tables,
+ * nested fields and `id` resolve, and with `schemaChanges` nothing is
+ * checked.
+ */
+const checkFields = (
+	fields: Analysis['fields'],
+	detail: DeclaredDetail,
+	schemaChanges: boolean,
+): ReadonlyArray<{ readonly line: number; readonly message: string }> =>
+	schemaChanges
+		? []
+		: fields.flatMap(({ table, field, line }) => {
+				const declared = Object.hasOwn(detail.tables, table)
+					? detail.tables[table]
+					: undefined;
+				return declared === undefined ||
+					declared.acceptsUndeclared ||
+					declaresField(declared, field)
+					? []
+					: [
+							{
+								line,
+								message: `compares ${quoted(field)} of ${quoted(table)}, which declares no such field`,
+							},
+						];
+			});
+
+/**
  * Whether a hole of `sql` starts a statement: at the start of the text, or
  * after `;` or `{`. A fill there can be a statement that defines a table or
  * a field, which the text alone does not show.
@@ -708,17 +737,26 @@ export const renderStatementModulesSync = (
 					: checkUses(analysis.uses, detail, schemaChanges);
 			binds = checked?.binds;
 			rejectsNone = checked?.rejectsNone;
+			// A fill at a hole that starts a statement can define a field.
+			const fieldsUnknown =
+				schemaChanges || holeStartsStatement(source.sql, input.holes);
 			for (const problem of [
 				...undeclared(source.sql, source.declared, input.holes),
 				...(checked?.problems ?? []),
 				...(detail === undefined
 					? []
-					: checkProjected(
-							analysis.projected,
-							detail,
-							schemaChanges ||
-								holeStartsStatement(source.sql, input.holes),
-						)),
+					: [
+							...checkProjected(
+								analysis.projected,
+								detail,
+								fieldsUnknown,
+							),
+							...checkFields(
+								analysis.fields,
+								detail,
+								fieldsUnknown,
+							),
+						]),
 			].sort((a, b) => a.line - b.line))
 				problems.push({
 					kind: 'undeclared',
