@@ -121,8 +121,8 @@ interface SurrealkitPluginOptions {
 
 ## Vite Compatibility
 
-Requires Vite `^8.0.0` and Node `>=22.15.0`. Both the dev-server and build
-paths are exercised against Vite 8 in CI, on Node 22.15 and Node 24.
+Requires Vite `^8.0.0` and Node `>=22.21.1`. Both the dev-server and build
+paths are exercised against Vite 8 in CI, on Node 22.21.1 and Node 24.
 
 For Vite 7, stay on `vite-plugin-surrealkit@0.1.x`. Do not use 0.1.x with
 Vite 8: it hands raw globs to Vite's watcher, which silently stops schema

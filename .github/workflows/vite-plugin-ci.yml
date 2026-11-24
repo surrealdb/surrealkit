@@ -27,7 +27,7 @@ jobs:
             fail-fast: false
             matrix:
                 # The floor declared in `engines`, plus current.
-                node: ["22.15", "24"]
+                node: ["22.21.1", "24"]
         defaults:
             run:
                 working-directory: packages/vite-plugin-surrealkit
