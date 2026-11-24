@@ -218,8 +218,14 @@ const observe = (engine: Engine) => {
 	return { client: makeWith(transport), counts };
 };
 
+/**
+ * The message a client operation failed with while it was still a
+ * placeholder. Such an operation is observed as Pending, not as a failure;
+ * no operation is a placeholder now, and the matrix test requires that none
+ * is pending.
+ */
 const pending =
-	/^effect-surrealkit: (bulk|stream|liveScoped|live builder) is not implemented yet \(lane L[567]\)$/u;
+	/^effect-surrealkit: (bulk|stream|liveScoped|live builder) is not implemented yet\b/u;
 
 const probe = async <A, E>(
 	engine: Engine,
