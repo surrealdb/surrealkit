@@ -1,0 +1,26 @@
+{
+	"compilerOptions": {
+		"target": "ES2022",
+		"module": "Preserve",
+		"moduleResolution": "Bundler",
+		"lib": ["ES2022"],
+		"types": ["node"],
+		"strict": true,
+		"exactOptionalPropertyTypes": true,
+		"noUncheckedIndexedAccess": true,
+		"verbatimModuleSyntax": true,
+		"allowImportingTsExtensions": true,
+		"skipLibCheck": true,
+		"noEmit": true
+	},
+	"contentMappers": [
+		{
+			"package": "effect-surrealkit",
+			"extensions": [".surql"],
+			"options": {
+				"schemas": { "queries/gauges": "../../fixtures/binds.v2.json" }
+			}
+		}
+	],
+	"include": ["src", "queries"]
+}

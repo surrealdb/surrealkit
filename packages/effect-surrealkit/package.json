@@ -35,10 +35,28 @@
 		"./testing": {
 			"types": "./dist/testing.d.ts",
 			"import": "./dist/testing.js"
+		},
+		"./mapper": {
+			"types": "./dist/mapper.d.ts",
+			"import": "./dist/mapper.js"
+		},
+		"./register": {
+			"types": "./dist/register.d.ts",
+			"import": "./dist/register.js"
 		}
 	},
 	"bin": {
 		"effect-surrealkit": "dist/cli.js"
+	},
+	"typescript": {
+		"contentMapper": {
+			"exec": [
+				"node",
+				"dist/mapper-server.js"
+			],
+			"compilerOptions": [],
+			"dynamicConfig": true
+		}
 	},
 	"files": [
 		"dist",
@@ -57,6 +75,7 @@
 		"lint": "biome ci .",
 		"test": "vitest run",
 		"test:skips": "node scripts/skips.mjs",
+		"test:mapper": "node scripts/mapper-fixtures.mjs",
 		"test:roundtrip": "node scripts/roundtrip.mjs",
 		"bench": "node scripts/bench.mjs",
 		"generate:functions": "node scripts/generate-functions.mjs",

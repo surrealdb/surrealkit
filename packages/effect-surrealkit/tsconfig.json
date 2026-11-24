@@ -39,6 +39,7 @@
 	"exclude": [
 		"test/golden",
 		"test/types",
-		"test/tmp-*"
+		"test/tmp-*",
+		"test/mapper-fixtures"
 	]
 }

@@ -1,0 +1,4 @@
+rejects/queries/broken/unterminated.surql(2,8): error effect-surrealkit1: unterminated string (unterminated)
+rejects/queries/gauges/misspelt.surql(2,1): error effect-surrealkit4: selects `statoin` of `gauge`, which declares no such field
+rejects/src/other.ts(2,14): error TS2322: Type 'string' is not assignable to type 'number'.
+rejects/src/statements.ts(8,2): error TS2322: Type '{}' is not assignable to type '"binding `$boundOwner` is read by this sequence and has no codec"'.
