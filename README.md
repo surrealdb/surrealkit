@@ -1089,7 +1089,10 @@ addition and the removal in separate rollouts.
   `REMOVE FIELD` leaves a field's values too, so a rollback could not undo the
   copy, and a value a record already held under the new name would be lost.
   Raise the database with `surrealkit compat raise --yes --wait` (see below)
-  and start the rollout again.
+  and start the rollout again. These checks guard the copy, so they apply only
+  while the start phase still has to run: a rollout already ready to complete
+  (or completing) is judged by its state, as any other is, and `complete` and
+  `up --complete` finish it.
 - An entry with no `step` that is not confirmed is a legacy hint, as releases
   before rename proposals wrote one in the then-reserved `renames`. Nothing
   runs it, as before: `lint`, `start` and `up` accept the rollout and warn

@@ -1296,3 +1296,32 @@ async fn a_hand_written_rename_on_a_table_the_database_has_schemaless_does_not_s
 		serde_json::json!([["ann", "ann@old.test"]])
 	);
 }
+
+/// The level check guards the copy, which runs in the start phase, so a rename
+/// rollout that is already past `start` is judged by its state, not by the
+/// level. Here it started at level 4 and the database went back to level 3.
+/// `start` reports it ready to complete, as for any rollout, `up` leaves it
+/// waiting and `up --complete` completes it: none of them tells the author to
+/// raise the level and start it again. Once completed, `start` says so.
+#[tokio::test]
+async fn a_rename_past_start_is_judged_by_its_state_below_level_4() {
+	let (project, db, id) = planned_rename().await;
+	confirm(&project, &id);
+	project.start(&db, &id).await.expect("start at level 4");
+	assert_eq!(status(&db, &id).await.as_deref(), Some("ready_to_complete"));
+	db.query("ALTER DATABASE COMPATIBILITY 3;").await.unwrap().check().unwrap();
+	assert_eq!(info(&db, "INFO FOR DB;").await["compatibility"], serde_json::json!(3));
+
+	project.start(&db, &id).await.expect("start of a rollout ready to complete");
+	let report = project.up(&db, false).await.expect("up");
+	assert_eq!(report.waiting.as_deref(), Some(id.as_str()));
+	assert_eq!(status(&db, &id).await.as_deref(), Some("ready_to_complete"));
+	project.up(&db, true).await.expect("up --complete");
+	assert_eq!(status(&db, &id).await.as_deref(), Some("completed"));
+	assert_eq!(
+		serde_json::json!(people(&db, "mail").await),
+		serde_json::json!([["ann", "ann@example.test"], ["bob", "bob@example.test"]])
+	);
+	let err = project.start(&db, &id).await.expect_err("start once completed").to_string();
+	assert!(err.contains("is already completed"), "{err}");
+}
