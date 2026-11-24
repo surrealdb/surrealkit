@@ -680,8 +680,10 @@ regenerating them.
 `test/types` compiles the golden modules with positive and `@ts-expect-error`
 fixtures under `strict` and `exactOptionalPropertyTypes`.
 
-The engine and field-presence suites run against a real, disposable server
-when one of these is set, and are skipped (with a notice) otherwise:
+The engine and field-presence suites, and the analyzer's engine suites
+(`test/*-engine.test.ts`: the engine facts behind what the analyzer records
+and refuses), run against a real, disposable server when one of these is set,
+and are skipped (with a notice) otherwise:
 
 ```sh
 SURREAL_BIN=/usr/local/bin/surreal bun run test          # starts `surreal start … memory`

@@ -1,0 +1,163 @@
+/**
+ * Where a NONE binding assigned to a field that rejects NONE is guarded:
+ * the text runs without an error when the binding is NONE, so reading the
+ * assignment as a use that must hold a value would refuse valid SurrealQL.
+ * The analyzer takes an assignment for a binding use only where nothing in
+ * the text can skip it; these are the engine facts behind that rule, on the
+ * engine `SURREAL_BIN` or `SURREAL_URL` names (checked on 3.3 and 4.0).
+ */
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { analyzeSync } from '../src/analyze/index.js';
+import {
+	type Engine,
+	engineConfigured,
+	engineSkipReason,
+	startEngine,
+	within,
+} from './engine.js';
+
+if (!engineConfigured) {
+	console.warn(
+		`[effect-surrealkit] guarded assignment engine suite skipped: ${engineSkipReason}`,
+	);
+}
+
+/** The major version in what the engine reports, e.g. `surrealdb-4.0.1`. */
+const majorVersion = (version: string): number => {
+	const major = /^(?:surrealdb-)?(\d+)\./u.exec(version)?.[1];
+	if (major === undefined) {
+		throw new Error(
+			`could not determine SurrealDB major version: ${version}`,
+		);
+	}
+	return Number(major);
+};
+
+/** The fields `$x` is recorded as assigned to, as `table.field`. */
+const assigned = (sql: string): ReadonlyArray<string> =>
+	(analyzeSync(sql).uses.x ?? []).flatMap((use) =>
+		use.kind === 'field' && use.role === 'assign'
+			? [`${use.table}.${use.field}`]
+			: [],
+	);
+
+describe.skipIf(!engineConfigured)(
+	'a NONE binding assigned to a field that rejects NONE',
+	() => {
+		let engine: Engine;
+
+		beforeAll(async () => {
+			engine = await startEngine();
+			await within(
+				engine.db
+					.query(
+						"DEFINE TABLE gauge SCHEMAFULL; DEFINE FIELD station ON gauge TYPE string; CREATE gauge:1 SET station = 'a'; DEFINE TABLE site SCHEMAFULL; DEFINE FIELD label ON site TYPE string; CREATE site:1 SET label = 'L';",
+					)
+					.collect(),
+			);
+		});
+		afterAll(async () => {
+			await engine?.stop();
+		});
+
+		/** Runs `sql` with `$x` NONE: the error's message, or undefined. */
+		const withNone = async (sql: string): Promise<string | undefined> => {
+			try {
+				await within(engine.db.query(sql, { x: undefined }).collect());
+				return undefined;
+			} catch (error) {
+				return error instanceof Error ? error.message : String(error);
+			}
+		};
+
+		const station = async (): Promise<unknown> =>
+			(
+				await within(
+					engine.db
+						.query('SELECT VALUE station FROM gauge:1;')
+						.collect(),
+				)
+			)[0];
+
+		it('runs without an error where a condition can skip it, and is not a binding use there', async () => {
+			for (const sql of [
+				'IF $x != NONE { (UPDATE gauge SET station = $x) };',
+				'IF $x != NONE { LET $r = (UPDATE gauge SET station = $x); RETURN $r; };',
+				'IF $x = NONE { 1 } ELSE { (UPDATE gauge SET station = $x) };',
+				'RETURN IF $x != NONE THEN (UPDATE gauge SET station = $x) END;',
+				'RETURN IF $x = NONE THEN 1 ELSE (UPDATE gauge SET station = $x) END;',
+				'RETURN $x != NONE AND (UPDATE gauge SET station = $x);',
+				'RETURN $x != NONE && (UPDATE gauge SET station = $x);',
+				'RETURN $x = NONE OR (UPDATE gauge SET station = $x);',
+				'SELECT (UPDATE gauge SET station = $x) AS u FROM site WHERE $x != NONE;',
+				'RETURN [$x].filter(|$v| $v != NONE).map(|$v| (UPDATE gauge SET station = $x));',
+			]) {
+				expect(await withNone(sql), sql).toBeUndefined();
+				expect(await station(), sql).toEqual(['a']);
+				expect(assigned(sql), sql).toEqual([]);
+			}
+		});
+
+		it('is refused where nothing can skip it, and is a binding use there', async () => {
+			for (const sql of [
+				'UPDATE gauge SET station = $x;',
+				'(UPDATE gauge SET station = $x);',
+				'LET $r = (UPDATE gauge SET station = $x);',
+				'RETURN (UPDATE gauge SET station = $x);',
+				'LET $r = UPDATE gauge SET station = $x;',
+			]) {
+				expect(await withNone(sql), sql).toMatch(/Expected `string`/u);
+				expect(assigned(sql), sql).toEqual(['gauge.station']);
+			}
+		});
+
+		it('runs without an error behind a WHERE that can skip every record, which no reading of the WHERE rules out', async () => {
+			// A function body reads the caller's bindings on both versions,
+			// and on 3.3 so does a COMPUTED field: a WHERE that names
+			// neither `$x` nor a local can still depend on it.
+			await within(
+				engine.db
+					.query(
+						"DEFINE FUNCTION fn::ok() { RETURN $x != NONE }; DEFINE TABLE meter SCHEMAFULL; DEFINE FIELD station ON meter TYPE string; DEFINE FIELD okc ON meter COMPUTED $x != NONE; CREATE meter:1 SET station = 'a';",
+					)
+					.collect(),
+			);
+			const [seen] = await within(
+				engine.db
+					.query('SELECT VALUE okc FROM meter;', { x: 'v' })
+					.collect(),
+			);
+			expect(seen).toEqual([majorVersion(engine.version) === 3]);
+			for (const sql of [
+				'UPDATE gauge SET station = $x WHERE $x != NONE;',
+				'UPSERT gauge:1 SET station = $x WHERE $x != NONE;',
+				'LET $ok = $x != NONE; UPDATE gauge SET station = $x WHERE $ok;',
+				'UPDATE gauge SET station = $x WHERE fn::ok();',
+				'LET $r = (UPDATE gauge SET station = $x WHERE $x != NONE);',
+				'UPDATE meter SET station = $x WHERE okc;',
+			]) {
+				expect(await withNone(sql), sql).toBeUndefined();
+				expect(await station(), sql).toEqual(['a']);
+				expect(assigned(sql), sql).toEqual([]);
+			}
+		});
+
+		it('is refused in operands that do not skip it, which the analyzer cannot tell apart', async () => {
+			// `??` and `?:` evaluate their right side when the left is NONE,
+			// and an early RETURN in a top-level IF block does not end the
+			// text; the first two are not read, the last is a statement.
+			for (const sql of [
+				'RETURN $x ?? (UPDATE gauge SET station = $x);',
+				'RETURN $x ?: (UPDATE gauge SET station = $x);',
+			]) {
+				expect(await withNone(sql), sql).toMatch(/Expected `string`/u);
+				expect(assigned(sql), sql).toEqual([]);
+			}
+			const early =
+				'IF $x = NONE { RETURN 1 }; UPDATE gauge SET station = $x;';
+			expect(await withNone(early)).toMatch(/Expected `string`/u);
+			expect(assigned(early)).toEqual(['gauge.station']);
+		});
+	},
+);
