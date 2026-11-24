@@ -1080,13 +1080,25 @@ addition and the removal in separate rollouts.
   the new name, which the copy would overwrite, and removing a field there
   does not clear its values, so a rollback would leave the copies behind.
   Neither can be undone without guessing which values were there first, so
-  plan such a rename by hand.
+  plan such a rename by hand. `rollout lint`, `rollout start` and `rollout up`
+  hold a `[[renames]]` entry written by hand to the same rule: they refuse one
+  whose table the rollout's schema files do not define as `SCHEMAFULL`, and
+  `start` and `up` also refuse one whose table the database does not define
+  as `SCHEMAFULL` yet.
 - `rollout start` and `rollout up` refuse a rollout with a confirmed rename on
   a database below compatibility level 4, before anything runs. There
   `REMOVE FIELD` leaves a field's values too, so a rollback could not undo the
   copy, and a value a record already held under the new name would be lost.
   Raise the database with `surrealkit compat raise --yes --wait` (see below)
-  and start the rollout again.
+  and start the rollout again. These checks guard the copy, so they apply only
+  while the start phase still has to run: a rollout already ready to complete
+  (or completing) is judged by its state, as any other is, and `complete` and
+  `up --complete` finish it.
+- An entry with no `step` that is not confirmed is a legacy hint, as releases
+  before rename proposals wrote one in the then-reserved `renames`. Nothing
+  runs it, as before: `lint`, `start` and `up` accept the rollout and warn
+  that the hint is ignored, and the rollout keeps its checksum. An entry with
+  `confirmed = true` and no `step` is refused.
 - Whitespace and comments do not count, and neither does a `MIGRATE EXISTING
   ROWS` clause on the new field, which level 4 needs when the table holds
   records and the field's `TYPE` does not accept `NONE`.

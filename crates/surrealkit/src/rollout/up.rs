@@ -128,8 +128,14 @@ async fn up_locked(
 		Vec::with_capacity(plan.pending.len());
 	for (idx, m) in plan.pending.iter().enumerate() {
 		let mut loaded = (*m).clone();
-		super::renames::check_renames(&loaded.spec)?;
-		super::renames::check_database_level(db, &loaded.spec).await?;
+		// A rollout past its start phase has run its copy, so the rename checks,
+		// which guard the copy, are for the others; `start_inner` skips them
+		// for it too.
+		if !past_start(ledger.rows.get(&loaded.spec.id)) {
+			super::renames::check_renames(&loaded.spec)?;
+			super::renames::check_tables(&loaded, || Ok(disk.clone()))?;
+			super::renames::check_database_level(db, &loaded.spec).await?;
+		}
 		let target = if loaded.spec.is_frozen() {
 			preflight_frozen(&loaded)?;
 			TargetCatalog::frozen(&loaded)?
@@ -206,12 +212,11 @@ async fn up_locked(
 				 rollout rollback {id}` or `surrealkit rollout repair {id}` first"
 			);
 		}
-		let started =
-			failed_completing || matches!(status, Some("ready_to_complete" | "running_complete"));
+		let started = past_start(row);
 		if !started {
 			let mut source = live_catalog(db, &module, Some(folder)).await?;
 			super::repair_live_catalog(&mut source, folder)?;
-			start_inner(db, loaded, &source, target, &ctx).await?;
+			start_inner(db, loaded, &source, target, || Ok(disk.clone()), &ctx).await?;
 		}
 		if idx != last || opts.complete_newest {
 			complete_inner(db, loaded, &ctx).await?;
@@ -240,6 +245,15 @@ async fn up_locked(
 		}
 	}
 	Ok(report)
+}
+
+/// Whether a rollout has finished its start phase: ready to complete, completing,
+/// or failed while completing. `up` does not start it again.
+fn past_start(row: Option<&chain::LedgerRow>) -> bool {
+	row.is_some_and(|row| {
+		matches!(row.status.as_str(), "ready_to_complete" | "running_complete")
+			|| (row.status == "failed" && row.reached_complete)
+	})
 }
 
 /// Say what a database moved past without running, and what predates it.

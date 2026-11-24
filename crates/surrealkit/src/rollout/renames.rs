@@ -19,11 +19,21 @@
 //! An author who reads the pair as no rename discards the rollout and plans the
 //! addition and the removal separately, as the refusal always advised.
 //!
+//! Before rename proposals, `renames` was a reserved field of four keys that
+//! execution ignored. An entry with no `step` that is not confirmed is such a
+//! hint: it is still ignored, with a warning, and serializes as it did, so a
+//! rollout that carries one keeps its checksum.
+//!
 //! Only a `SCHEMAFULL` table whose own definition this rollout leaves alone gets
 //! a proposal. A schemaless table can already hold values under the new name,
 //! which the copy would overwrite, and removing a field there does not clear its
 //! values, so a rollback would leave the copies behind. Neither can be undone
 //! without guessing which values were there first.
+//!
+//! `lint`, `start` and `up` hold an entry written by hand to the same rule:
+//! its table must be `SCHEMAFULL` in the schema files the rollout applies, and
+//! `start` and `up` also check that the database defines it so before the
+//! start phase runs, which `plan` cannot see.
 //!
 //! Anything less certain proposes nothing, and the plan is refused as an add
 //! and a remove that could be a rename, as it was before.
@@ -58,14 +68,7 @@ impl FieldRename {
 	/// The manifest's record of the pair, copied by the step `step`, and not
 	/// yet confirmed.
 	pub(crate) fn record(&self, step: &str) -> RolloutRename {
-		RolloutRename {
-			kind: FIELD.to_string(),
-			scope: Some(self.table.clone()),
-			from: self.from.clone(),
-			to: self.to.clone(),
-			step: Some(step.to_string()),
-			confirmed: false,
-		}
+		RolloutRename::field(&self.table, &self.from, &self.to).copied_by(step)
 	}
 
 	/// The copy. It touches only records that hold a value, and running it
@@ -283,14 +286,22 @@ pub(crate) fn apply(spec: &mut RolloutSpec, renames: &[FieldRename]) {
 /// Refuse a rollout whose renames cannot run as recorded: an entry the author
 /// has not confirmed, or one whose copy step is gone. `lint` and every way of
 /// starting a rollout call this, as they refuse an empty `revert_migration`.
+///
+/// A legacy hint, an entry with no `step` that is not confirmed, is what
+/// releases before rename proposals carried and never ran. It is not refused:
+/// it is ignored, as it always was, with a warning.
 pub(crate) fn check_renames(spec: &RolloutSpec) -> Result<()> {
 	for rename in &spec.renames {
-		let what = match &rename.scope {
-			Some(scope) => {
-				format!("the rename of `{scope}.{}` to `{scope}.{}`", rename.from, rename.to)
-			}
-			None => format!("the rename of `{}` to `{}`", rename.from, rename.to),
-		};
+		let what = describe(rename);
+		if rename.is_legacy_hint() {
+			log::warn!(
+				"rollout '{rollout}' records {what} as a legacy rename hint: a `[[renames]]` entry \
+				 with no `step`, as releases before rename proposals wrote it. Nothing runs it, as \
+				 before; the rollout copies no values for it",
+				rollout = spec.id
+			);
+			continue;
+		}
 		let copy = rename.step.as_deref().and_then(|id| spec.steps.iter().find(|s| s.id == id));
 		let copies = copy.is_some_and(|step| {
 			step.phase == RolloutPhase::Start && matches!(step.action, RolloutAction::RunSql { .. })
@@ -320,6 +331,72 @@ pub(crate) fn check_renames(spec: &RolloutSpec) -> Result<()> {
 				rename.step.as_deref().unwrap_or_default(),
 				rollout = spec.id
 			);
+		}
+	}
+	Ok(())
+}
+
+/// "the rename of `table.from` to `table.to`".
+fn describe(rename: &RolloutRename) -> String {
+	match &rename.scope {
+		Some(scope) => {
+			format!("the rename of `{scope}.{}` to `{scope}.{}`", rename.from, rename.to)
+		}
+		None => format!("the rename of `{}` to `{}`", rename.from, rename.to),
+	}
+}
+
+/// The field renames that run: every entry but a legacy hint, with its table.
+fn field_renames(spec: &RolloutSpec) -> impl Iterator<Item = (&RolloutRename, &str)> {
+	spec.renames
+		.iter()
+		.filter(|rename| !rename.is_legacy_hint() && rename.kind == FIELD)
+		.filter_map(|rename| rename.scope.as_deref().map(|table| (rename, table)))
+}
+
+/// Why a rename on a table that is not `SCHEMAFULL` is refused; `why` says
+/// where it is not.
+fn not_schemafull(spec: &RolloutSpec, rename: &RolloutRename, table: &str, why: &str) -> String {
+	format!(
+		"rollout '{rollout}' records {what}, but {why}. A schemaless table can already hold values \
+		 under `{to}`, which the copy would overwrite, and removing a field there does not clear \
+		 its values, so a rollback would leave the copies behind. Remove the `[[renames]]` entry \
+		 and plan the rename by hand, or make `{table}` SCHEMAFULL in a rollout of its own first",
+		rollout = spec.id,
+		what = describe(rename),
+		to = rename.to,
+	)
+}
+
+/// [`check_schemafull`] against the schema a rollout leaves: its frozen files,
+/// and `files` (the schema folder, or a library caller's target files) for the
+/// paths they do not cover. `files` is read only for a rollout with a rename
+/// that runs. `lint`, `up` and every way of starting a rollout call this;
+/// `start` also checks the database with [`check_database`].
+pub(crate) fn check_tables(
+	rollout: &super::LoadedRolloutSpec,
+	files: impl FnOnce() -> Result<Vec<SchemaFile>>,
+) -> Result<()> {
+	if field_renames(&rollout.spec).next().is_none() {
+		return Ok(());
+	}
+	let mut schema = super::frozen::applied_frozen_files(rollout)?;
+	let frozen: BTreeSet<String> = schema.iter().map(|file| file.path.clone()).collect();
+	schema.extend(files()?.into_iter().filter(|file| !frozen.contains(&file.path)));
+	check_schemafull(&rollout.spec, &schema)
+}
+
+/// Refuse a rename on a table that `schema` does not define as `SCHEMAFULL`:
+/// the rule `plan` proposes by, held for an entry written by hand.
+pub(crate) fn check_schemafull(spec: &RolloutSpec, schema: &[SchemaFile]) -> Result<()> {
+	for (rename, table) in field_renames(spec) {
+		if !crate::schema_state::table_is_schemafull(schema, table)? {
+			bail!(not_schemafull(
+				spec,
+				rename,
+				table,
+				&format!("`{table}` is not SCHEMAFULL in the schema it applies")
+			));
 		}
 	}
 	Ok(())
@@ -357,20 +434,72 @@ pub(crate) fn check_level(spec: &RolloutSpec, level: i64) -> Result<()> {
 	);
 }
 
-/// [`check_level`] against the connected database's level. Reads the level
-/// only for a rollout that carries a confirmed rename.
-pub(crate) async fn check_database_level(
+/// `INFO FOR DB`, for a rollout that carries a confirmed rename.
+async fn database_info(
 	db: &surrealdb::Surreal<surrealdb::engine::any::Any>,
 	spec: &RolloutSpec,
-) -> Result<()> {
+) -> Result<Option<serde_json::Value>> {
 	if !spec.renames.iter().any(|rename| rename.confirmed) {
-		return Ok(());
+		return Ok(None);
 	}
 	let info = super::retry_conflicts("reading the database", || async {
 		super::info_json(db, "INFO FOR DB;", None).await
 	})
 	.await?;
-	check_level(spec, crate::migrate::compatibility(&info))
+	Ok(Some(info))
+}
+
+/// [`check_level`] against the connected database's level. Reads the level
+/// only for a rollout that carries a confirmed rename. `up` calls this for
+/// every pending rollout before any of them starts.
+pub(crate) async fn check_database_level(
+	db: &surrealdb::Surreal<surrealdb::engine::any::Any>,
+	spec: &RolloutSpec,
+) -> Result<()> {
+	match database_info(db, spec).await? {
+		Some(info) => check_level(spec, crate::migrate::compatibility(&info)),
+		None => Ok(()),
+	}
+}
+
+/// [`check_level`], and the rule of [`check_schemafull`] against the
+/// database's own definition of each table a rename is on: the schema files say
+/// how the rollout leaves a table, the database how the rollout finds it, which
+/// `plan` cannot see. Called as the start phase is about to run.
+pub(crate) async fn check_database(
+	db: &surrealdb::Surreal<surrealdb::engine::any::Any>,
+	spec: &RolloutSpec,
+) -> Result<()> {
+	let Some(info) = database_info(db, spec).await? else {
+		return Ok(());
+	};
+	check_level(spec, crate::migrate::compatibility(&info))?;
+	for (rename, table) in field_renames(spec) {
+		let defined = info
+			.get("tables")
+			.and_then(|tables| tables.get(crate::migrate::unquote(table).as_str()))
+			.and_then(serde_json::Value::as_str);
+		let schemafull = match defined {
+			Some(sql) => crate::schema_state::table_is_schemafull(
+				&[SchemaFile {
+					path: "INFO FOR DB".into(),
+					sql: format!("{sql};"),
+					hash: String::new(),
+				}],
+				table,
+			)?,
+			None => false,
+		};
+		if !schemafull {
+			bail!(not_schemafull(
+				spec,
+				rename,
+				table,
+				&format!("this database does not define `{table}` as SCHEMAFULL")
+			));
+		}
+	}
+	Ok(())
 }
 
 #[cfg(test)]
@@ -583,6 +712,40 @@ mod tests {
 		check_level(&spec, 3).unwrap();
 	}
 
+	/// An entry written by hand is held to the rule `plan` proposes by: its
+	/// table must be `SCHEMAFULL` in the schema the rollout applies. A legacy
+	/// hint is not checked, since nothing runs it.
+	#[test]
+	fn a_rename_entry_needs_a_schemafull_table() {
+		let mut spec = RolloutSpec::builder("20260101000000__r").build();
+		spec.renames.push(RolloutRename {
+			confirmed: true,
+			..RolloutRename::field("person", "email", "mail").copied_by("copy")
+		});
+		let schemafull = [file("DEFINE TABLE person SCHEMAFULL;")];
+		check_schemafull(&spec, &schemafull).unwrap();
+		for sql in [
+			"DEFINE TABLE person SCHEMALESS;",
+			"DEFINE TABLE person;",
+			"",
+			"DEFINE TABLE other SCHEMAFULL;",
+		] {
+			let err = check_schemafull(&spec, &[file(sql)]).unwrap_err().to_string();
+			assert!(
+				err.contains(
+					"rollout '20260101000000__r' records the rename of `person.email` to \
+					 `person.mail`, but `person` is not SCHEMAFULL in the schema it applies"
+				) && err.contains("rollback would leave the copies behind"),
+				"{sql}: {err}"
+			);
+		}
+		// Unconfirmed, it is still checked: `check_renames` refuses it for that.
+		spec.renames[0].confirmed = false;
+		assert!(check_schemafull(&spec, &[file("DEFINE TABLE person;")]).is_err());
+		spec.renames[0].step = None;
+		check_schemafull(&spec, &[file("DEFINE TABLE person;")]).unwrap();
+	}
+
 	#[test]
 	fn the_copy_runs_after_the_schema_step_and_is_unconfirmed() {
 		let rename = FieldRename {
@@ -650,8 +813,27 @@ mod tests {
 			"{}",
 			refusal(&missing)
 		);
+		// A confirmed entry with no step is not a legacy hint: refused.
 		let mut unnamed = spec.clone();
 		unnamed.renames[0].step = None;
+		assert!(unnamed.renames[0].confirmed);
 		assert!(refusal(&unnamed).contains("names no copy step"), "{}", refusal(&unnamed));
+		// Without the step and unconfirmed, it is a hint as releases before
+		// rename proposals wrote it, which nothing ran: ignored, and serialized
+		// with neither field.
+		unnamed.renames[0].confirmed = false;
+		assert!(unnamed.renames[0].is_legacy_hint());
+		check_renames(&unnamed).unwrap();
+		assert_eq!(
+			toml::to_string(&unnamed.renames[0]).unwrap(),
+			"kind = \"field\"\nscope = \"person\"\nfrom = \"email\"\nto = \"mail\"\n"
+		);
+		// With a step, `confirmed` is written whatever its value, so the author
+		// sees what to change.
+		assert!(
+			toml::to_string(&rename.record("copy")).unwrap().ends_with("confirmed = false\n"),
+			"{}",
+			toml::to_string(&rename.record("copy")).unwrap()
+		);
 	}
 }
