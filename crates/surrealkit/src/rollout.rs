@@ -1732,6 +1732,7 @@ async fn start_inner(
 	ctx: &StepContext<'_>,
 ) -> Result<()> {
 	renames::check_renames(&rollout.spec)?;
+	renames::check_database_level(db, &rollout.spec).await?;
 	let lock = acquire_lock(db, &rollout.spec.module()?, "global").await?;
 	let keep_alive = LockKeepAlive::spawn(db, &lock);
 	let result = async {
