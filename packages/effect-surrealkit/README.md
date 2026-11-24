@@ -3191,21 +3191,30 @@ that was skipped and is not listed, or is listed and was not skipped. The
 lanes are `embedded`, `binary-<major>.<minor>` for `SURREAL_BIN` (by the
 version the binary reports) and `remote-<major>.<minor>` for `SURREAL_URL` (by
 the version the server answers on `GET /version`), with `-http` appended
-under `SURREAL_TRANSPORT=http`. `embedded`, `binary-3.3`, `remote-3.3` and
-`remote-4.0` are committed, and every run prints the pinned lanes; a lane
-without a list is reported as unpinned and not compared. The `-http` lanes
-are not pinned: on 3.3.4 and 4.0.1, over HTTP, the FOR UPDATE tests of
-`test/block-engine.test.ts` fail (the client reports success where they
-expect a `StatementConflict`), and a list is written only from a passing run.
-After a change that is meant to skip or un-skip a test, rewrite the list from
-a passing run and commit it with the change:
+under `SURREAL_TRANSPORT=http`. Seven lanes are pinned: `embedded`,
+`binary-3.3`, `binary-3.3-http`, `remote-3.3`, `remote-3.3-http`,
+`remote-4.0` and `remote-4.0-http`. Every run prints the pinned lanes; a
+lane without a list (`binary-4.0`, say) is reported as unpinned and not
+compared, and a list is written only from a passing run. After a change that
+is meant to skip or un-skip a test, rewrite the list from a passing run and
+commit it with the change:
 
 ```sh
 bun run test:skips                                                   # embedded
 SURREAL_BIN=/usr/local/bin/surreal bun run test:skips                # binary-3.3 with a 3.3 binary
+SURREAL_BIN=/usr/local/bin/surreal SURREAL_TRANSPORT=http bun run test:skips # binary-3.3-http
 SURREAL_URL=ws://127.0.0.1:8000/rpc bun run test:skips               # remote-4.0 against a 4.0 server
+SURREAL_URL=http://127.0.0.1:8000/rpc SURREAL_TRANSPORT=http bun run test:skips # remote-4.0-http
 UPDATE_SKIPS=1 SURREAL_BIN=/usr/local/bin/surreal bun run test:skips # rewrites test/skips/binary-3.3.txt
 ```
+
+A test that races a write against a statement sends the write with
+`Engine.aside` (`test/engine.ts`), on a connection of its own, and fails when
+the write lands after the statement has ended. Over HTTP the SDK sends
+through `fetch`, and on Node 26.7.0 (undici 8.9.0) a request to an origin can
+wait until another request to it has been answered, so a write sent through
+the client under test may not be concurrent at all; Node 22 and 24 send it at
+once.
 
 The content mapper has a suite of its own, because it needs TypeScript 7.1
 and the package's type check stays on TypeScript 5.9. `test/mapper-fixtures`
