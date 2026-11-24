@@ -1713,6 +1713,47 @@ check`, which ignores `contentMappers` (every `.surql` import is TS2307) and
 refuses `--runExternalCode`, measured on Bun 1.4.4 and 1.4.5. A project
 checked by `bun check` keeps the `statements` command.
 
+Bun reads `bunfig.toml` only from its working directory, not from the
+entry point's directory or any directory above it (measured on Bun 1.4.5).
+With the preload declared there,
+
+```toml
+# bunfig.toml, beside package.json
+preload = ["effect-surrealkit/register"]
+```
+
+`bun app.ts` in that directory loads the plugin, but a process started in a
+subdirectory or anywhere else never does, and the `.surql` import is not
+handled: `SyntaxError: Export named 'readProfile' not found in module
+'…/queries/accounts/readProfile.surql'`. Neither `--config
+<path>/bunfig.toml` nor `--preload effect-surrealkit/register` helps from
+elsewhere, since the package name is resolved from the working directory
+(`error: preload not found "effect-surrealkit/register"`). Start Bun in the
+project, or pass the preload as a path:
+
+```sh
+bun --cwd /path/to/app app.ts
+bun --preload /path/to/app/node_modules/effect-surrealkit/dist/register.js /path/to/app/app.ts
+```
+
+A type-aware linter that does not run content mappers cannot resolve a
+`.surql` import, so every constant imported from one has an unresolved type.
+typescript-eslint 8.72.2 (type information from TypeScript 5.9.3, as for
+`tsc` 5.9, which reports TS2307) reports `no-unsafe-member-access` (`Unsafe
+member access .name on a type that cannot be resolved`) and
+`no-unsafe-assignment` at each use, where `tsc --runExternalCode` from
+TypeScript 7.1 reports nothing. Lint those files without the type-aware
+rules, or keep the `statements` command.
+
+The loaders keep no cache: each process renders every `.surql` file it
+imports, when it first imports it. Importing all 31 files of this package's
+fixtures (six projects, with and without schema documents) took about 95 ms
+on Node 26.7.0, 103 ms on Node 22.21.1 and 58 ms on Bun 1.4.5, about 3 ms a
+file on Node and 2 ms on Bun (median of five fresh processes on an Apple M2
+Ultra, including the first import of `effect`). A consuming project measured
+about 0.7 s for 190 files. Where start-up time matters, the `statements`
+command's modules are ordinary TypeScript and cost nothing to render.
+
 ```jsonc
 // tsconfig.json
 {
