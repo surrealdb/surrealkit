@@ -24,13 +24,22 @@
 //! since level 4 refuses a field the records do not fit. Tables are generated
 //! both `SCHEMAFULL` and `SCHEMALESS`.
 //!
+//! That draws a rename in only some cases, so a second property runs the same
+//! checks over cases that always hold exactly one: a `SCHEMAFULL` table whose
+//! definition stays as it was, with one field removed and one added alike and a
+//! row holding a value in the removed one, beside whatever the other tables
+//! change. Every one of its cases confirms the rename, copies, completes and
+//! rolls back. With the copy broken to `SET to = NONE` it failed on each of
+//! seeds 1 to 10 (2026-11-24).
+//!
 //! The catalog compared is `INFO FOR DB`, each table's `INFO FOR TABLE` without
 //! its `migrations` (the engine's history, which a fresh database lacks), and
 //! SurrealKit's `__entity` schema catalog.
 //!
 //! `SURREALKIT_ROLLOUT_PROPTEST_CASES` sets the number of cases. The default, 12,
 //! took 16.1 to 18.3 s over ten runs (2026-11-24, Apple silicon, debug build,
-//! the property test alone, on a shared machine), about 1.4 s a case.
+//! the property test alone, on a shared machine), about 1.4 s a case. The
+//! rename property's 12 took 20.1 to 36.7 s over five runs, most near 21 s.
 //!
 //! The seed is random unless `SURREALKIT_ROLLOUT_PROPTEST_SEED` sets it, and a
 //! failure prints the variables that draw the same cases again. Failures are
@@ -687,8 +696,17 @@ async fn reversibility(db: &Surreal<Any>, id: &str) -> Result<Option<String>> {
 	Ok(rows.into_iter().next())
 }
 
+/// What a case exercised.
+#[derive(Debug, Default)]
+struct Exercised {
+	/// The renames `plan` proposed, and the test confirmed.
+	renames: usize,
+	/// Whether the rollout was rolled back after `start`.
+	rolled_back: bool,
+}
+
 /// Run every property against one case.
-async fn check(case: &Case) -> Result<()> {
+async fn check(case: &Case) -> Result<Exercised> {
 	let project = Project::new(&case.first);
 	let upgraded = mem_db().await;
 	let rolled_back = mem_db().await;
@@ -714,9 +732,10 @@ async fn check(case: &Case) -> Result<()> {
 				|| fs::read_dir(project.root.join("rollouts"))?.next().is_none(),
 			"a refused plan wrote a manifest"
 		);
-		return Ok(());
+		return Ok(Exercised::default());
 	}
 	let (id, renames) = project.plan("next").await?;
+	let renames_count = renames.len();
 
 	// 1. `up --complete` reaches the catalog a fresh sync of the second version has.
 	run_up(
@@ -794,7 +813,12 @@ async fn check(case: &Case) -> Result<()> {
 	.context("start")?;
 	match reversibility(&rolled_back, &id).await?.as_deref() {
 		Some("full" | "definition_only") => {}
-		Some("irreversible") => return Ok(()),
+		Some("irreversible") => {
+			return Ok(Exercised {
+				renames: renames_count,
+				rolled_back: false,
+			});
+		}
 		other => bail!("rollout records reversibility {other:?}"),
 	}
 	run_rollback(
@@ -816,7 +840,10 @@ async fn check(case: &Case) -> Result<()> {
 		restored_rows == first_rows,
 		"property 4: after rollback the rows are\n{restored_rows:#?}\nbut were\n{first_rows:#?}"
 	);
-	Ok(())
+	Ok(Exercised {
+		renames: renames_count,
+		rolled_back: true,
+	})
 }
 
 fn cases() -> u32 {
@@ -852,10 +879,12 @@ fn shrink_ms() -> u32 {
 }
 
 /// Run `check` over `strategy`'s cases, each turned into a `Case` by
-/// `normalize`, with the seed printed on failure.
+/// `normalize`, and `expect` over what each exercised, with the seed printed
+/// on failure.
 fn run_property(
 	strategy: impl Strategy<Value = Vec<RawTable>>,
 	normalize: fn(&[RawTable]) -> Case,
+	expect: fn(&Exercised) -> Result<()>,
 ) {
 	let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
 	let seed = seed();
@@ -872,6 +901,7 @@ fn run_property(
 		let case = normalize(&raw);
 		runtime
 			.block_on(check(&case))
+			.and_then(|exercised| expect(&exercised))
 			.map_err(|err| TestCaseError::fail(format!("{err:#}\n{case}")))
 	});
 	if let Err(err) = result {
@@ -885,7 +915,61 @@ fn run_property(
 
 #[test]
 fn rollouts_hold_their_properties_over_generated_schema_pairs() {
-	run_property(raw_case(), normalize);
+	run_property(raw_case(), normalize, |_| Ok(()));
+}
+
+/// The cases of `raw_case` with exactly one rename among their other changes:
+/// one table is made `SCHEMAFULL`, kept in both versions with its own
+/// definition unchanged, and given one field removed and one added, the pair
+/// `normalize` turns into a rename. Its first row holds a value in the removed
+/// field, so a copy that loses it is seen. The other tables are drawn as in
+/// `raw_case`, with no rename of their own.
+fn raw_rename_case() -> impl Strategy<Value = Vec<RawTable>> {
+	(raw_case(), any::<prop::sample::Index>(), 0..FIELDS, 1..FIELDS).prop_map(
+		|(mut tables, slot, from, offset)| {
+			for table in &mut tables {
+				table.rename = false;
+			}
+			let to = (from + offset) % FIELDS;
+			let slot = slot.index(tables.len());
+			let table = &mut tables[slot];
+			table.presence = Presence::Both;
+			table.schemafull = true;
+			table.comment[1] = table.comment[0];
+			table.rename = true;
+			for (f, field) in table.fields.iter_mut().enumerate() {
+				field.presence = if f == from {
+					Presence::First
+				} else if f == to {
+					Presence::Second
+				} else if matches!(field.presence, Presence::First | Presence::Second) {
+					Presence::Both
+				} else {
+					field.presence
+				};
+			}
+			if table.rows.is_empty() {
+				table.rows.push(RawRow {
+					seed: 0,
+					none: vec![false; FIELDS],
+				});
+			}
+			table.rows[0].none[from] = false;
+			tables
+		},
+	)
+}
+
+/// Every case holds one rename, so every run confirms one, copies it, completes
+/// it, and rolls it back. The default property draws a rename in only some of
+/// its cases.
+#[test]
+fn a_rename_holds_every_property_beside_other_changes() {
+	run_property(raw_rename_case(), normalize, |exercised| {
+		ensure!(exercised.renames == 1, "plan proposed {} renames, not 1", exercised.renames);
+		ensure!(exercised.rolled_back, "the rollout was not rolled back");
+		Ok(())
+	});
 }
 
 /// The normalizer is pure, so its rules are checked without an engine.
