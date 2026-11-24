@@ -3,8 +3,8 @@
  * of projected fields and binding uses: the top-level statements, and the
  * statements of each `{…}` block (the body of `IF`, `ELSE`, `FOR`, a
  * function or a bare block), split at the block's own `;`. A `{…}` that is
- * an object literal has no statement a reader can take for a query: its
- * entries start with a key followed by `:`.
+ * an object literal is split the same way; see {@link queryAt} for why a
+ * reader finds nothing in it.
  */
 import type { Token } from './lexer.js';
 
@@ -80,8 +80,12 @@ export const statementsIn = (
 
 /**
  * Whether the statement's value is a query starting with one of `words`: a
- * statement word at `first`, not a key of an object literal (`{ select: 1
- * }`) nor a record id (`select:1`).
+ * statement word at `first`. A statement word followed by `:` there is a
+ * key of an object literal (`{ select: 1, … }`; a record id with such a
+ * table, `select:1`, is a parse error on SurrealDB 3.3 and 4.0) and is read
+ * as a query too: the readers then find nothing, since every clause word
+ * they read must not be followed by `:`, and a `FROM` in an entry's value
+ * is followed by the entry's end or by an operator, never by a target.
  */
 export const queryAt = (
 	tokens: ReadonlyArray<Token>,
@@ -89,5 +93,4 @@ export const queryAt = (
 	words: ReadonlySet<string>,
 ): boolean =>
 	statement.first < statement.end &&
-	words.has(upper(tokens[statement.first])) &&
-	!isPunct(tokens[statement.first + 1], ':');
+	words.has(upper(tokens[statement.first]));

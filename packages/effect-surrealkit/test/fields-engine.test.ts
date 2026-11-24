@@ -116,6 +116,28 @@ describe.skipIf(!engineConfigured)(
 			expect(analyzeSync(bound).uses).toEqual({});
 		});
 
+		it('parses a statement word before `:` only as a key of an object literal', async () => {
+			// What the readers' statement split rests on (`statements.ts`):
+			// a record id of a table named like a statement word is a parse
+			// error, so such a word at a statement's start is an object key.
+			for (const word of [
+				'select',
+				'CREATE',
+				'update',
+				'UPSERT',
+				'delete',
+				'INSERT',
+				'relate',
+			]) {
+				await expect(
+					within(engine.db.query(`RETURN ${word}:1;`).collect()),
+				).rejects.toThrow(/Parse error/u);
+				expect(await first(`RETURN { ${word}: 1 };`)).toEqual({
+					[word]: 1,
+				});
+			}
+		});
+
 		it('names the row’s field in a parenthesised closure body and in a cast', async () => {
 			for (const sql of [
 				'SELECT VALUE id FROM person WHERE array::any([36], |$v| (age = $v));',

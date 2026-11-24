@@ -139,6 +139,34 @@ describe('analyze: field uses', () => {
 			});
 	});
 
+	it('nothing of an object literal whose key is a statement word, but its subqueries', () => {
+		for (const word of [
+			'select',
+			'CREATE',
+			'update',
+			'UPSERT',
+			'delete',
+			'INSERT',
+			'relate',
+		]) {
+			for (const sql of [
+				`RETURN { ${word}: 1, where: station = $x, set: 2 };`,
+				`RETURN { ${word}: gizmo, from: gizmo, a: 1 + from };`,
+				`IF $c { RETURN { ${word}: 1 } };`,
+			]) {
+				const analysis = analyzeSync(sql);
+				expect(analysis.uses, sql).toEqual({});
+				expect(analysis.fields, sql).toEqual([]);
+				expect(analysis.projected, sql).toEqual([]);
+			}
+			const inner = `RETURN { ${word}: 1, a: (SELECT b FROM gizmo WHERE c = $c) };`;
+			expect(uses(inner), inner).toEqual({ c: [field('gizmo', 'c')] });
+			expect(analyzeSync(inner).projected, inner).toEqual([
+				{ table: 'gizmo', field: 'b', line: 1 },
+			]);
+		}
+	});
+
 	it('an assignment in a query whose only WHERE is inside a subquery', () => {
 		for (const sql of [
 			'UPDATE gizmo SET a = $a, b = (SELECT VALUE c FROM gizmo WHERE d = 1);',
