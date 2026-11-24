@@ -191,7 +191,7 @@ describe('relations, record unions and functions', () => {
 				'sha256:9bb3a0a15eb772d737b5dd170653655b97e4833995b53d272207288b37ee0f37',
 			emitter: { name: 'effect-surrealkit' },
 			profile: { int: 'safe-number', datetime: 'sdk' },
-			peers: { effect: '4.0.6', surrealdb: '2.1.1' },
+			peers: { effect: '4.1.5', surrealdb: '2.2.2' },
 			source: {
 				kind: 'compile',
 				engine: '3.3.0',

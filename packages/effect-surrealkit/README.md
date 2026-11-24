@@ -5,7 +5,7 @@ the JavaScript SDK (`surrealdb` 2.x) decodes and encodes them, and an emitter
 that turns a SurrealKit schema document v2 into typed Effect modules.
 
 ```sh
-npm i effect-surrealkit effect@4.0.6 surrealdb@2.1.1
+npm i effect-surrealkit effect@4.1.5 surrealdb@2.2.2
 ```
 
 Every runtime export imports only `effect` and `surrealdb` value classes, so it
@@ -184,10 +184,11 @@ listed and refines like any other field.
 ### Printer: SchemaRepresentation versus a template printer
 
 The emitter prints modules with its own small template printer. The
-alternative was to build live schemas from the codecs and print them with
-`SchemaRepresentation.toRepresentation` → `toCodeDocument`, which every codec
-supports (each carries `toCode` metadata; `test/to-code.test.ts` prints a
-struct of all of them). It works mechanically but was not adopted because:
+alternative was to build live schemas from the codecs, convert them with
+`SchemaRepresentation.toRepresentation`, and print them with Effect's code
+generator (`Codegen.Module.addSchemas` and `finalize` in 4.1.5). Every codec
+carries `toCode` metadata for this (`test/to-code.test.ts` prints a struct of
+all of them). It works mechanically but was not adopted because:
 
 - it emits one line per schema, so readable output needs an external
   formatter in the generation path;
@@ -286,9 +287,9 @@ see [Generating modules](#generating-modules).
 SDK surfaces NONE) before decoding, so exact `Schema.optionalKey` fields work
 on projections and object values; `null` is kept.
 
-Every schema carries `toCode` metadata, so
-`SchemaRepresentation.toCodeDocument` prints a schema built from them back to
-source.
+Every schema carries `toCode` metadata. In Effect 4.1.5,
+`Codegen.Module.addSchemas` and `finalize` print schemas built from them back
+to source after conversion with `SchemaRepresentation.toRepresentation`.
 
 ## What the codecs refuse, and why
 

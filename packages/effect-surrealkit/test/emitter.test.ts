@@ -234,7 +234,8 @@ describe('golden generated output', () => {
 			['name: "effect-surrealkit"', 'name: "other"'],
 			['adapter: "structure-3.3"', 'adapter: "structure-3.2"'],
 			['store: "corpus"', 'store: "other"'],
-			['effect: "4.0.6"', 'effect: "4.0.7"'],
+			['effect: "4.1.5"', 'effect: "4.1.6"'],
+			['surrealdb: "2.2.2"', 'surrealdb: "2.2.3"'],
 		] as const) {
 			expect(
 				withoutToolVersions(manifest.replace(from, to)),

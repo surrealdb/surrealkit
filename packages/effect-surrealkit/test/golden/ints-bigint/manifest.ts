@@ -6,7 +6,7 @@ export const manifest = {
 	semanticDigest: "sha256:404603b033cd1d5e628ee80bdd41bd2f5b090e5856129099e1d380223771c96b",
 	emitter: { name: "effect-surrealkit", version: "0.1.0" },
 	profile: { int: "bigint", datetime: "sdk" },
-	peers: { effect: "4.0.6", surrealdb: "2.1.1" },
+	peers: { effect: "4.1.5", surrealdb: "2.2.2" },
 	source: {
 		kind: "compile",
 		modules: ["schema-gated/20_experimental_files.surql", "schema-gated/30_relations.v3.3.surql", "schema-gated/31_module.v4.0.surql", "schema/01_tables.surql", "schema/02_kinds.surql", "schema/03_ids.surql", "schema/04_fields.surql", "schema/05_declared_parent.v4.0.surql", "schema/05_nested.surql", "schema/06_references.surql", "schema/07_functions_params.surql", "schema/08_indexes_events.surql", "schema/09_access_sequences.surql", "schema/10_api_config.surql"],

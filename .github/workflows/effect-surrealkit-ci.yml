@@ -175,7 +175,7 @@ jobs:
             fail-fast: false
             matrix:
                 # `surrealkit test --exec` needs SurrealDB 4.0 from 1.0.0-rc.1, and the
-                # JS SDK this package pins (2.1) supports it.
+                # JS SDK this package pins (2.2) supports it.
                 surrealdb: ["v4.0.0"]
         services:
             surrealdb:
