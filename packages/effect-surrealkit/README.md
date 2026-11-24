@@ -1233,8 +1233,10 @@ first token is not read), then the SurrealQL after them in a fenced block, then
 the file name. `analyze(sql).comment` returns the same prose. Templates and
 fragments get the same comment. In it a `*/` is written `*\/` and an `@` after
 whitespace (SurrealQL's `@@` and `@1@`) `\@`, so neither ends the comment or
-starts a tag, and the fence is longer than any run of backticks in the text;
-`sql` is never changed.
+starts a tag, and the fence is longer than any run of backticks in the comment
+or the text. Each line inside the fence is shown as written, trailing
+whitespace included (a string literal can hold it); the prose around it loses
+its trailing whitespace. `sql` is never changed.
 
 ```ts
 import { accounts } from './generated/statements/index.js';

@@ -134,6 +134,55 @@ describe('the hover on a generated part', () => {
 			"/**\n * `````surql\n * RETURN '```' + '````';\n * `````\n *\n * `p/t.surql`: a part.\n */",
 		);
 	});
+
+	it('fences the SurrealQL longer than any run of backticks in the comment above it', () => {
+		const { files } = renderStatementModulesSync({
+			scopes: [
+				{
+					name: 'p',
+					files: [
+						{
+							name: 't',
+							sql: "-- Returns ```` as text.\n-- ```\nRETURN '`';",
+						},
+					],
+				},
+			],
+		});
+		expect(files[0]?.content).toContain(
+			"/**\n * Returns ```` as text.\n * ```\n *\n * `````surql\n * RETURN '`';\n * `````\n *\n * `p/t.surql`: a part.\n */",
+		);
+	});
+
+	it('shows each line of the SurrealQL exactly as written, trailing spaces included', () => {
+		const sql =
+			"-- Pads a name.  \nRETURN 'trailing   \n\t \nend' + $name;";
+		const { files } = renderStatementModulesSync({
+			scopes: [{ name: 'p', files: [{ name: 't', sql }] }],
+		});
+		const content = files[0]?.content ?? '';
+		// The comment above the fence is prose and loses its trailing spaces;
+		// inside the fence every character of the text is kept.
+		expect(content).toContain(
+			"/**\n * Pads a name.\n *\n * ```surql\n * RETURN 'trailing   \n * \t \n * end' + $name;\n * ```\n *\n * `p/t.surql`: a part.\n */",
+		);
+		const source = ts.createSourceFile(
+			'statements.ts',
+			content,
+			ts.ScriptTarget.ESNext,
+			true,
+		);
+		const statement = source.statements.find(ts.isVariableStatement);
+		const [jsdoc] =
+			statement === undefined
+				? []
+				: ts.getJSDocCommentsAndTags(statement);
+		expect(
+			jsdoc !== undefined && ts.isJSDoc(jsdoc)
+				? ts.getTextOfJSDocComment(jsdoc.comment)
+				: undefined,
+		).toContain("RETURN 'trailing   \n");
+	});
 });
 
 /** Pieces that could end a doc comment, a fence or a template literal. */

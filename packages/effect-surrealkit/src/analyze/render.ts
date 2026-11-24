@@ -472,12 +472,22 @@ const changesSchema = (
 	);
 };
 
+/** The lines of `text`, at every line break SurrealQL and TypeScript read. */
+const linesOf = (text: string): ReadonlyArray<string> =>
+	text.split(/\r\n|[\n\r\u2028\u2029]/u);
+
+/** A line made safe inside a doc comment; see {@link docComment}. */
+const commentSafe = (line: string): string =>
+	line.replaceAll('*/', '*\\/').replace(/(^|\s)@/gu, '$1\\@');
+
 /**
  * The doc comment an editor shows on a generated constant: the comment that
  * opens the text, the text after it in a fenced block, then `title`. A `*\/`
  * is written `*\\/` so it cannot end the comment, an `@` after whitespace
  * `\@` so TypeScript does not read a tag (SurrealQL's `@@` and `@1@`), and
- * the fence is longer than any run of backticks in the text.
+ * the fence is longer than any run of backticks in the comment or the text.
+ * Lines inside the fence keep every character, trailing whitespace
+ * included (a string literal can hold it); the prose around it does not.
  */
 const docComment = (
 	analysis: Analysis,
@@ -488,28 +498,26 @@ const docComment = (
 	const body = analysis.sql.slice(first?.start ?? 0);
 	const longest = Math.max(
 		0,
-		...[...body.matchAll(/`+/gu)].map(([run]) => run.length),
+		...[...`${analysis.comment}\n${body}\n${title}`.matchAll(/`+/gu)].map(
+			([run]) => run.length,
+		),
 	);
 	const fence = '`'.repeat(Math.max(3, longest + 1));
+	const prose = (text: string) =>
+		linesOf(text).map((line) => commentSafe(line).trimEnd());
 	const lines = [
-		...(analysis.comment === '' ? [] : [analysis.comment, '']),
+		...(analysis.comment === '' ? [] : [...prose(analysis.comment), '']),
 		`${fence}surql`,
-		body,
+		...linesOf(body).map(commentSafe),
 		fence,
 		'',
-		title,
-	]
-		.join('\n')
-		.split(/\r\n|[\n\r\u2028\u2029]/u)
-		.map((line) =>
-			line
-				.replaceAll('*/', '*\\/')
-				.replace(/(^|\s)@/gu, '$1\\@')
-				.trimEnd(),
-		);
-	return ['/**', ...lines.map((line) => ` * ${line}`.trimEnd()), ' */'].join(
-		'\n',
-	);
+		...prose(title),
+	];
+	return [
+		'/**',
+		...lines.map((line) => (line === '' ? ' *' : ` * ${line}`)),
+		' */',
+	].join('\n');
 };
 
 const renderConstant = (
