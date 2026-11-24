@@ -10,7 +10,11 @@
  *    and a schema problem inside their `.surql` files at their line and
  *    column, a missing binding where the part is used, and a type error in
  *    another file, which the `.surql` errors do not hide.
- * 4. The texts the mapper answered the type check of `accepts` (read from
+ * 4. `nested` and `nested/sub` hold the same file in their inputs with
+ *    different options: each type check fails with exactly
+ *    `nested/expected.txt`, naming both `tsconfig.json` files, and the Node
+ *    hook and the Bun plugin refuse to load the file.
+ * 5. The texts the mapper answered the type check of `accepts` (read from
  *    `TS_CONTENT_MAPPER_DEBUG`) are written to `accepts/.described`, and
  *    `accepts/src/run.ts` runs under `node --import effect-surrealkit/register`
  *    and `bun --preload effect-surrealkit/register`: each loader's text is the
@@ -101,6 +105,70 @@ if (rejects.status !== 2 || rejects.stdout !== expected)
 	);
 console.log(
 	`[mapper] rejects reports ${expected.trimEnd().split('\n').length} errors, as rejects/expected.txt lists`,
+);
+
+// One file under two entries that render it differently: `nested` holds
+// `sub/queries` with a schema, `nested/sub` holds `queries` without one.
+// Either type check and both loaders refuse the file, naming both entries.
+const outer = join(fixtures, 'nested', 'tsconfig.json');
+const inner = join(fixtures, 'nested', 'sub', 'tsconfig.json');
+const nestedText = readFileSync(
+	join(fixtures, 'nested', 'expected.txt'),
+	'utf8',
+);
+for (const [project, checked, other] of [
+	['nested', outer, inner],
+	['nested/sub', inner, outer],
+]) {
+	const wanted = nestedText
+		.replace('<checked>', checked)
+		.replace('<other>', other);
+	const nested = run(tsc, [
+		'-p',
+		project,
+		'--noEmit',
+		'--runExternalCode',
+		'--pretty',
+		'false',
+	]);
+	if (nested.status !== 2 || nested.stdout !== wanted)
+		fail(
+			`${project} (exit ${nested.status}) did not report nested/expected.txt:\n--- expected\n${wanted}--- reported\n${nested.stdout}`,
+		);
+}
+const nestedFile = join(
+	fixtures,
+	'nested',
+	'sub',
+	'queries',
+	'gauges',
+	'readings.surql',
+);
+for (const [host, command, flags] of [
+	['node', process.execPath, ['--input-type=module']],
+	['bun', 'bun', []],
+]) {
+	const loaded = run(command, [
+		...(host === 'node' ? ['--import'] : ['--preload']),
+		'effect-surrealkit/register',
+		...flags,
+		'-e',
+		`await import(${JSON.stringify(nestedFile)})`,
+	]);
+	if (loaded.error !== undefined) fail(`${host}: ${loaded.error.message}`);
+	if (
+		loaded.status === 0 ||
+		!loaded.stderr.includes('SurqlModuleError') ||
+		!loaded.stderr.includes(
+			'two contentMappers entries hold this file in their input and render it differently',
+		)
+	)
+		fail(
+			`${host} loaded nested/sub/queries/gauges/readings.surql (exit ${loaded.status}):\n${loaded.stdout}${loaded.stderr}`,
+		);
+}
+console.log(
+	'[mapper] nested: a file two entries render differently is refused by both type checks, Node and Bun',
 );
 
 // The debug log pairs each transform sent with the reply received.

@@ -1753,6 +1753,18 @@ from the written ones, or a project with no `tsconfig.json` refuse every
 file, each with that reason, rather than check with options the run time
 would not use. Write the entry in the `tsconfig.json` that is checked.
 
+One file can lie under the input of two entries: `tsconfig.json` with
+`"input": "sub/queries"` and `sub/tsconfig.json` with `"input": "queries"`.
+`tsc -p .` then renders `sub/queries/<scope>/<name>.surql` with the outer
+entry while the loaders read the nearest `tsconfig.json`, the inner one. When
+the two entries would render the file differently (another schema document,
+say), the type check of either project and every loader refuse that file by
+name (`effect-surrealkit8: two contentMappers entries hold this file in their
+input and render it differently: …`), naming both `tsconfig.json` files.
+Entries that render it the same are accepted. The entries compared are those
+written in each `tsconfig.json` at or above the file's directory, besides the
+one in use.
+
 The mapper runs the analyzer and the renderer only: no engine, no cache
 directory and no worker, so it needs neither `@surrealdb/node` nor a
 database. A problem the command reports with a file, line and column is a
@@ -3221,7 +3233,9 @@ and the package's type check stays on TypeScript 5.9. `test/mapper-fixtures`
 pins `typescript@7.1.0-beta`, and `bun run test:mapper` (after `bun run
 build`, and `npm ci` in that directory) type-checks its `accepts` project with
 `tsc --runExternalCode`, checks that `rejects` reports exactly
-`rejects/expected.txt`, and runs `accepts/src/run.ts` under the Node hook and
+`rejects/expected.txt`, that `nested` and `nested/sub` (one file under two
+entries that render it differently) each report `nested/expected.txt` and
+that both loaders refuse that file, and runs `accepts/src/run.ts` under the Node hook and
 the Bun plugin against the texts the mapper gave the type check. It then
 asks the mapper process for every authored fixture, with and without its
 schema, and loads each under the Node hook and the Bun plugin as the same

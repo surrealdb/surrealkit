@@ -502,6 +502,108 @@ describe('one literal configuration', () => {
 	});
 });
 
+describe('one file under two entries', () => {
+	/**
+	 * `<root>/tsconfig.json` holds `sub/queries` in its input and
+	 * `<root>/sub/tsconfig.json` holds `queries`, the same directory: `tsc -p
+	 * <root>` renders the file with the outer entry, and the loaders read the
+	 * nearest tsconfig.json, the inner one.
+	 */
+	const nested = (outer: object, inner: object) => {
+		const root = tempDir();
+		mkdirSync(join(root, 'sub', 'queries', 'gauges'), { recursive: true });
+		const file = join(root, 'sub', 'queries', 'gauges', 'readings.surql');
+		cpSync(
+			join(fixture('statements-binds'), 'gauges', 'readings.surql'),
+			file,
+		);
+		cpSync(bindsDocument, join(root, 'binds.json'));
+		return {
+			file,
+			sql: readFileSync(file, 'utf8'),
+			outer: { config: tsconfig(root, outer), options: outer },
+			inner: {
+				config: tsconfig(join(root, 'sub'), inner),
+				options: inner,
+			},
+		};
+	};
+
+	const transformIn = async (
+		project: { config: string; options: object },
+		file: string,
+		sql: string,
+	) => {
+		const session = mapper();
+		const opened = await session.open(project.config, project.options);
+		expect(opened.result.optionDiagnostics).toEqual([]);
+		const result = await session.transform(file, sql);
+		await session.close();
+		return result;
+	};
+
+	it('refuses the file by name, in the type check of either project and in the loaders, when the two render it differently', async () => {
+		const { file, sql, outer, inner } = nested(
+			{ input: 'sub/queries', schema: 'binds.json' },
+			{ input: 'queries' },
+		);
+		const both = new RegExp(
+			`gauges/readings\\.surql:1:1: two contentMappers entries hold this file in their input and render it differently: ${outer.config} and ${inner.config}|gauges/readings\\.surql:1:1: two contentMappers entries hold this file in their input and render it differently: ${inner.config} and ${outer.config}`,
+			'u',
+		);
+		for (const project of [outer, inner]) {
+			const result = await transformIn(project, file, sql);
+			expect(result.text, project.config).toBe(EMPTY_SURQL_MODULE);
+			expect(
+				result.diagnosticDirectives.unusedExpectDirectiveDiagnostics,
+			).toEqual([
+				{
+					code: DIAGNOSTIC_CODES.config,
+					messageText: expect.stringContaining(
+						'two contentMappers entries hold this file in their input and render it differently',
+					),
+				},
+			]);
+		}
+		expect(() => loadSurqlModule(file)).toThrow(both);
+		expect(() => loadSurqlModule(file, { tsconfig: outer.config })).toThrow(
+			both,
+		);
+		const loaded = surqlBunPlugin();
+		expect(() =>
+			loaded.setup({
+				onLoad: (_filter, load) => load({ path: file }),
+			}),
+		).toThrow(SurqlModuleError);
+	});
+
+	it('renders the file when the two render it the same, or when an entry above does not hold it', async () => {
+		for (const [outerOptions, innerOptions] of [
+			[{ input: 'sub/queries' }, { input: 'queries' }],
+			[
+				{ input: 'sub/queries', schema: 'binds.json' },
+				{ input: 'queries', schema: '../binds.json' },
+			],
+			[
+				{ input: 'elsewhere', schema: 'binds.json' },
+				{ input: 'queries' },
+			],
+		] as const) {
+			const { file, sql, inner, outer } = nested(
+				outerOptions,
+				innerOptions,
+			);
+			const result = await transformIn(inner, file, sql);
+			expect(result.diagnosticDirectives, file).toBeUndefined();
+			expect(loadSurqlModule(file)).toBe(result.text);
+			if (outerOptions.input !== 'elsewhere')
+				expect((await transformIn(outer, file, sql)).text).toBe(
+					result.text,
+				);
+		}
+	});
+});
+
 describe('the layouts the command accepts', () => {
 	/** Writes `files` (path → text) under a fresh directory. */
 	const tree = (files: Record<string, string>) => {
