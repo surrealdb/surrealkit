@@ -1087,6 +1087,11 @@ addition and the removal in separate rollouts.
   copy, and a value a record already held under the new name would be lost.
   Raise the database with `surrealkit compat raise --yes --wait` (see below)
   and start the rollout again.
+- An entry with no `step` that is not confirmed is a legacy hint, as releases
+  before rename proposals wrote one in the then-reserved `renames`. Nothing
+  runs it, as before: `lint`, `start` and `up` accept the rollout and warn
+  that the hint is ignored, and the rollout keeps its checksum. An entry with
+  `confirmed = true` and no `step` is refused.
 - Whitespace and comments do not count, and neither does a `MIGRATE EXISTING
   ROWS` clause on the new field, which level 4 needs when the table holds
   records and the field's `TYPE` does not accept `NONE`.

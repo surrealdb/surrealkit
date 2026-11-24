@@ -15,8 +15,8 @@ use surrealdb::opt::Config;
 use surrealdb::opt::capabilities::Capabilities;
 use surrealkit::module::Module;
 use surrealkit::rollout::{
-	RolloutExecutionOpts, RolloutPlanOpts, RolloutUpOpts, run_baseline, run_complete, run_discard,
-	run_freeze, run_lint, run_plan, run_rollback, run_start, run_up,
+	RolloutExecutionOpts, RolloutPlanOpts, RolloutRename, RolloutUpOpts, run_baseline,
+	run_complete, run_discard, run_freeze, run_lint, run_plan, run_rollback, run_start, run_up,
 };
 use surrealkit::sync::{SyncOpts, run_sync};
 use surrealkit::{
@@ -829,6 +829,27 @@ async fn a_code_spec_with_legacy_paths_completes_after_starting() {
 	let rollout = Rollout::new(spec, TARGET);
 	rollout.start(&db).await.expect("start");
 	rollout.complete(&db).await.expect("complete must accept the checksum start recorded");
+}
+
+/// A code-defined rollout that carries a rename hint as releases before rename
+/// proposals wrote one, with no copy step, starts and completes as it did: the
+/// hint is ignored, not refused.
+#[tokio::test]
+async fn a_code_defined_rollout_with_a_legacy_rename_hint_runs_as_before() {
+	static TARGET: &[EmbeddedSchemaFile] = &[EmbeddedSchemaFile {
+		path: "schema/person.surql",
+		sql: "DEFINE TABLE person SCHEMAFULL;\nDEFINE FIELD email ON person TYPE option<string>;\n",
+	}];
+	let db = mem_db().await;
+	let mut spec = RolloutSpec::builder("20260101000000__legacy_hint")
+		.step(RolloutStep::apply_schema("define", RolloutPhase::Start, TARGET[0].sql))
+		.build();
+	spec.renames.push(RolloutRename::field("person", "email", "mail"));
+	let rollout = Rollout::new(spec, TARGET);
+	rollout.start(&db).await.expect("start with a legacy hint");
+	rollout.complete(&db).await.expect("complete with a legacy hint");
+	assert_eq!(status(&db, "20260101000000__legacy_hint").await.as_deref(), Some("completed"));
+	assert_eq!(field_names(&db, "person").await, vec!["email"]);
 }
 
 #[tokio::test]
