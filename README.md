@@ -1080,12 +1080,12 @@ addition and the removal in separate rollouts.
   does not clear its values, so a rollback would leave the copies behind.
   Neither can be undone without guessing which values were there first, so
   plan such a rename by hand.
-- At compatibility level 3 `REMOVE FIELD` leaves the values too, so a record
-  of a `SCHEMAFULL` table can still hold a value under the new name. The copy
-  replaces it on each record whose old field holds a value, and leaves it on a
-  record whose old field is empty. A rollback there removes the new field but
-  not its values, the copies included, as it leaves any value written to a
-  field a rollout added. Raise the database to level 4 first (see below).
+- `rollout start` and `rollout up` refuse a rollout with a confirmed rename on
+  a database below compatibility level 4, before anything runs. There
+  `REMOVE FIELD` leaves a field's values too, so a rollback could not undo the
+  copy, and a value a record already held under the new name would be lost.
+  Raise the database with `surrealkit compat raise --yes --wait` (see below)
+  and start the rollout again.
 - Whitespace and comments do not count, and neither does a `MIGRATE EXISTING
   ROWS` clause on the new field, which level 4 needs when the table holds
   records and the field's `TYPE` does not accept `NONE`.
