@@ -984,8 +984,9 @@ describe.skipIf(!engineConfigured)('engine conformance', () => {
 	// A record that exists is structured. A duplicate on a unique index is
 	// `Internal` with no details, and the index is named only in the message,
 	// which the SurrealDB protocol documentation says may change between
-	// releases: these rows are what lets the client read it (resolved decision
-	// 8 of `goals/reylo-lessons.md`), so a release that changes it fails here.
+	// releases: these rows are what lets the client read it (a message pattern
+	// classifies an engine error only when a test here pins it on both engine
+	// lanes), so a release that changes it fails here.
 	describe('constraint errors: a duplicate on a unique index and a record that exists', () => {
 		interface Shape {
 			readonly kind: unknown;

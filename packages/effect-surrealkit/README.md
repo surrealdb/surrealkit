@@ -753,7 +753,8 @@ const added = run(createPerson, { person }).pipe(
 
 The duplicate is read from the engine's message, which is pinned on
 SurrealDB 3.3.4 and 4.0.1 only (`test/conformance.test.ts`, "constraint
-errors"). On any other version a duplicate may arrive as a
+errors"); [surrealdb/surrealdb#7652](https://github.com/surrealdb/surrealdb/issues/7652) asks SurrealDB to report it as a structured
+`AlreadyExists` error instead. On any other version a duplicate may arrive as a
 `StatementRequestError`, and `Effect.catchTag('StatementIndexConflict', …)`
 then catches nothing. Prefer `upsert`, `INSERT IGNORE` and
 `.onDuplicate(…)` wherever they fit, and when you upgrade the engine run
@@ -1984,7 +1985,7 @@ const client = make(db);
 | `StatementThrown<Message>` | a `THROW` the statement declares; in a transaction, `statement` names the one that declares it (`one of …` when several do); `source` and `lines` say where, when the part records them | not by a transaction; a single statement's earlier statements commit on their own |
 | `StatementUnexpectedThrow` | a `THROW` whose message the statement does not declare (a dynamic message), with the thrown text as `reason` and the SDK's error as `cause` | as for `StatementThrown` |
 | `StatementConflict` | a transaction conflict that `retry` did not resolve | the conflicting transaction rolled back. Earlier independent statements may have committed |
-| `StatementIndexConflict<Index>` | a write would duplicate a value of a unique index the statement declares (`uniqueIndexes`; a write builder declares its table's), named by `index`; in a transaction, `statement` names the one that declares it (`one of …` when several do). Prefer `upsert`, `INSERT IGNORE` or `.onDuplicate(…)` where a taken value is expected | not by that statement, nor by a transaction; a single statement's earlier statements commit on their own |
+| `StatementIndexConflict<Index>` | a write would duplicate a value of a unique index the statement declares (`uniqueIndexes`; a write builder declares its table's), named by `index`, which is read from the engine's message ([surrealdb/surrealdb#7652](https://github.com/surrealdb/surrealdb/issues/7652) asks for a structured error); in a transaction, `statement` names the one that declares it (`one of …` when several do). Prefer `upsert`, `INSERT IGNORE` or `.onDuplicate(…)` where a taken value is expected | not by that statement, nor by a transaction; a single statement's earlier statements commit on their own |
 | `StatementRecordExists` | a `CREATE` or `INSERT` of a record id that already exists | as for `StatementIndexConflict` |
 | `StatementRequestError` | any other failure of the request: transport, authentication, a SurrealQL error (a duplicate on an index the statement does not declare included), or the SDK refusing to send (a `RETURN` followed by another statement in a transaction), with the SDK's error as `cause` | unknown for a transport failure; otherwise no |
 | `StatementEmptyResult` | a `create` or `relate` that returns rows (`nonEmpty`) returned NONE or an empty list: SurrealDB reports a write the session may not make as an empty result, without an error, so the session may lack permission | not by that statement |
@@ -2010,7 +2011,8 @@ in its message, and its protocol documentation says a message may change
 between releases. The client therefore reads that message only in the form
 the conformance suite pins on SurrealDB 3.3.4 and 4.0.1 (on another version
 it may be a `StatementRequestError`; `checkConstraintErrors` tells), and only for an index
-name the statement declares; any other message stays a
+name the statement declares ([surrealdb/surrealdb#7652](https://github.com/surrealdb/surrealdb/issues/7652) asks SurrealDB for a structured error
+instead); any other message stays a
 `StatementRequestError`, as does a duplicate raised inside an event (the
 engine prefixes the event's name). The message names the index and not its
 table: a write that calls a function writing to another table with a

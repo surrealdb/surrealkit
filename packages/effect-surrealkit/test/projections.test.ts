@@ -1,5 +1,5 @@
 /**
- * Projected fields (lane L04): the bare fields and `*` a `SELECT` projects
+ * Projected fields: the bare fields and `*` a `SELECT` projects
  * from exactly one static table, and the check that fails generation when
  * a `SCHEMAFULL` table does not declare one. Every case the analyzer is not
  * certain of records nothing.
