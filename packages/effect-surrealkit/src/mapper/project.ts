@@ -280,10 +280,26 @@ export const openSurqlProject = (
 };
 
 /**
- * The text of a `tsconfig.json` as JSON: comments and trailing commas
- * removed outside strings, as TypeScript reads it.
+ * The text of a `tsconfig.json` as JSON, as TypeScript reads it: a leading
+ * byte-order mark, comments and trailing commas removed, each only outside
+ * strings. A comma is trailing when the next character that is neither
+ * white space nor inside a comment closes an object or an array.
  */
-export const stripJsonComments = (text: string): string => {
+export const stripJsonComments = (source: string): string => {
+	const text = source.startsWith('\uFEFF') ? source.slice(1) : source;
+	/** Where the comment starting at `at` ends, or `at` when none starts. */
+	const commentEnd = (at: number): number => {
+		if (text[at] !== '/') return at;
+		if (text[at + 1] === '/') {
+			const end = text.indexOf('\n', at + 2);
+			return end === -1 ? text.length : end;
+		}
+		if (text[at + 1] === '*') {
+			const end = text.indexOf('*/', at + 2);
+			return end === -1 ? text.length : end + 2;
+		}
+		return at;
+	};
 	let out = '';
 	let at = 0;
 	while (at < text.length) {
@@ -294,17 +310,30 @@ export const stripJsonComments = (text: string): string => {
 				end += text[end] === '\\' ? 2 : 1;
 			out += text.slice(at, end + 1);
 			at = end + 1;
-		} else if (char === '/' && text[at + 1] === '/') {
-			while (at < text.length && text[at] !== '\n') at++;
-		} else if (char === '/' && text[at + 1] === '*') {
-			const end = text.indexOf('*/', at + 2);
-			at = end === -1 ? text.length : end + 2;
-		} else {
-			out += char;
-			at++;
+			continue;
 		}
+		const comment = commentEnd(at);
+		if (comment !== at) {
+			at = comment;
+			continue;
+		}
+		if (char === ',') {
+			let next = at + 1;
+			for (;;) {
+				const skipped = commentEnd(next);
+				if (skipped !== next) next = skipped;
+				else if (/\s/u.test(text[next] ?? '')) next++;
+				else break;
+			}
+			if (text[next] === '}' || text[next] === ']') {
+				at++;
+				continue;
+			}
+		}
+		out += char;
+		at++;
 	}
-	return out.replace(/,(\s*[}\]])/gu, '$1');
+	return out;
 };
 
 /** The package name a `contentMappers` entry names for this mapper. */
