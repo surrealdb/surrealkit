@@ -785,8 +785,12 @@ with two more fields:
 - `confirmed: bool`, which `plan` writes as `false`. `rollout lint`,
   `rollout start`, `rollout up` and `Rollout::start` refuse an entry that names
   a step until it is `true`. They also refuse an entry whose step is missing or
-  is not a start-phase `run_sql` step, and a confirmed entry on a database
-  below compatibility level 4.
+  is not a start-phase `run_sql` step, one on a table that the rollout's schema
+  files (or, for `start`, `up` and `Rollout::start`, the database) do not
+  define as `SCHEMAFULL`, and a confirmed entry on a database below
+  compatibility level 4. A `Rollout` defined in code is checked against the
+  target files passed to `Rollout::new`, so pass the files that define the
+  table.
 
 An entry with no `step` and `confirmed` left `false` is a hint as earlier
 releases wrote it. It behaves as it did: it loads, execution ignores it (now

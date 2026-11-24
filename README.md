@@ -1080,7 +1080,11 @@ addition and the removal in separate rollouts.
   the new name, which the copy would overwrite, and removing a field there
   does not clear its values, so a rollback would leave the copies behind.
   Neither can be undone without guessing which values were there first, so
-  plan such a rename by hand.
+  plan such a rename by hand. `rollout lint`, `rollout start` and `rollout up`
+  hold a `[[renames]]` entry written by hand to the same rule: they refuse one
+  whose table the rollout's schema files do not define as `SCHEMAFULL`, and
+  `start` and `up` also refuse one whose table the database does not define
+  as `SCHEMAFULL` yet.
 - `rollout start` and `rollout up` refuse a rollout with a confirmed rename on
   a database below compatibility level 4, before anything runs. There
   `REMOVE FIELD` leaves a field's values too, so a rollback could not undo the

@@ -148,6 +148,22 @@ pub(crate) fn read_for_step(rollout: &LoadedRolloutSpec, frozen: &FrozenFile) ->
 	read_frozen_file(frozen_root(rollout)?, &rollout.spec.id, frozen)
 }
 
+/// The frozen files a rollout applies outside its rollback phase, read.
+pub(crate) fn applied_frozen_files(rollout: &LoadedRolloutSpec) -> Result<Vec<SchemaFile>> {
+	let mut files = Vec::new();
+	for (phase, frozen) in frozen_entries(rollout) {
+		if *phase == RolloutPhase::Rollback {
+			continue;
+		}
+		files.push(SchemaFile {
+			path: frozen.path.clone(),
+			sql: read_for_step(rollout, frozen)?,
+			hash: frozen.hash.clone(),
+		});
+	}
+	Ok(files)
+}
+
 /// The catalog a rollout leaves behind, recorded when it starts and written to
 /// `__entity` when it completes.
 #[derive(Debug, Clone)]
@@ -201,18 +217,7 @@ impl TargetCatalog {
 
 	/// The delta of a frozen rollout, read from its frozen files.
 	pub(crate) fn frozen(rollout: &LoadedRolloutSpec) -> Result<Self> {
-		let mut files = Vec::new();
-		for (phase, frozen) in frozen_entries(rollout) {
-			if *phase == RolloutPhase::Rollback {
-				continue;
-			}
-			files.push(SchemaFile {
-				path: frozen.path.clone(),
-				sql: read_for_step(rollout, frozen)?,
-				hash: frozen.hash.clone(),
-			});
-		}
-		Self::delta(&rollout.spec, &files)
+		Self::delta(&rollout.spec, &applied_frozen_files(rollout)?)
 	}
 
 	/// The delta of `spec`, given the contents of the files it applies.
