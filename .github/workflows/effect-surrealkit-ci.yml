@@ -68,9 +68,9 @@ jobs:
               run: npm run typecheck
 
             # Unit, property (in-process CBOR), golden and CLI suites, and the
-            # engine and field-presence suites on the in-process SurrealDB 4
-            # engine of `@surrealdb/node`. The JSON round trips over HTTP need a
-            # server and run in the `engine` job below.
+            # engine, field-presence and conformance suites on the in-process
+            # SurrealDB 4 engine of `@surrealdb/node`. The JSON round trips over
+            # HTTP need a server and run in the `engine` job below.
             - name: Test
               run: npm test
 
@@ -224,9 +224,9 @@ jobs:
                   echo "SurrealDB never became ready"; exit 1
 
             # Codec round trips through the server (the JSON world over HTTP
-            # included), and every cell of the field-presence matrix against
-            # generated schemas.
-            - name: Engine and field-presence suites
+            # included), every cell of the field-presence matrix against
+            # generated schemas, and the conformance suite.
+            - name: Engine, field-presence and conformance suites
               env:
                   SURREAL_URL: ws://127.0.0.1:8000/rpc
               run: npm test
