@@ -12,6 +12,7 @@ import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	rmSync,
 	writeFileSync,
 } from 'node:fs';
@@ -212,6 +213,45 @@ describe.skipIf(!embedded)('verifyStatements', () => {
 			expect(requests).toBe(0);
 		} finally {
 			await new Promise((done) => server.close(done));
+		}
+	});
+
+	/** The messages of a schema file the engine refused. */
+	const schemaRefusal = async (sql: string) =>
+		(
+			await problemsOf({ scopes: [], schema: [{ name: 's.surql', sql }] })
+		).map((problem) => problem.message);
+
+	// The @surrealdb/node build has no script runtime, so this holds whatever
+	// the scripting capability says; the capability is denied as well.
+	it('denies embedded scripts: a script function is refused and still counts', async () => {
+		await passed(
+			scope({ script: 'RETURN function() { return 1; };\nRETURN 1;' }),
+		);
+		expect(await schemaRefusal('RETURN function() { return 1; };')).toEqual(
+			[
+				expect.stringMatching(
+					/^s\.surql: .*Embedded functions are not enabled/u,
+				),
+			],
+		);
+	});
+
+	it('refuses a file bucket: nothing is written to the folder, and it still counts', async () => {
+		const folder = mkdtempSync(join(tmpdir(), 'effect-surrealkit-bucket-'));
+		try {
+			const bucket = `DEFINE BUCKET files BACKEND "file:${folder}";`;
+			await passed(
+				scope({
+					bucket: `${bucket}\nRETURN f"files:/x.txt".put("hi");\nRETURN 1;`,
+				}),
+			);
+			expect(await schemaRefusal(bucket)).toEqual([
+				expect.stringMatching(/^s\.surql: .*File access denied/u),
+			]);
+			expect(readdirSync(folder)).toEqual([]);
+		} finally {
+			rmSync(folder, { recursive: true, force: true });
 		}
 	});
 

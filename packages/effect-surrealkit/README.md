@@ -1534,7 +1534,11 @@ run one after another on the same database, so one text's writes are visible
 to the next. The engine is started with network targets, `http::` functions
 and embedded scripts denied: an `http::post` fails with `Function 'http::post'
 is not allowed to be executed` and sends nothing, still counting as one result.
-File buckets are refused by the engine's default (no folder is allowed). Each
+A script function fails with `Embedded functions are not enabled` (the
+`@surrealdb/node` build has no script runtime, so this holds with or without
+the capability), and a file bucket with `File access denied`, by the engine's
+default (no folder is allowed); each still counts as one result and writes
+nothing. Each
 text and each schema file may run for 10 seconds; a `sleep` or a long loop
 ends there and is a timeout problem, as above. Nothing else a text can write
 in SurrealQL reaches outside the engine.
