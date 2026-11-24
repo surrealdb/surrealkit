@@ -41,6 +41,7 @@ What the typed duplicate does not claim (README, "Running statements"):
 - The message names the index and not its table.
 - A duplicate raised inside an event, or inside a `block` or a `family`, is a `StatementRequestError`.
 - A record that exists is read from SurrealDB's structured error, not from a message.
+- The message is read before the error's kind: a message of the pinned index-conflict form is a `StatementIndexConflict` for a declared index and a `StatementRequestError` for any other, whatever kind and details the error carries, and never a `StatementRecordExists`. So it stays an index conflict if SurrealDB ships its proposed fix that reports a duplicate as an existing record. (README, "Running statements"; `test/error-display.test.ts`, "a duplicate reported as an existing record, as surrealdb/surrealdb#7653 would, is still an index conflict")
 
 ## `writes`
 

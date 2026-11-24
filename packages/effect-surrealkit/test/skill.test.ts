@@ -47,6 +47,7 @@ const elsewhere: Record<string, string> = {
 /** Option and configuration names the skill writes, which are not exports. */
 const options: Record<string, string> = {
 	contentMappers: 'src/mapper/project.ts',
+	openTargets: 'src/analyze/analyze.ts',
 	rejectsNone: 'src/statement/part.ts',
 	uniqueIndexes: 'src/statement/statement.ts',
 };
@@ -223,6 +224,8 @@ describe('the agent skill', () => {
 			...new Set(documents.flatMap(({ text }) => namesOf(text))),
 		].sort();
 		expect(names.length).toBeGreaterThan(20);
+		expect(names).toContain('schemaProblems');
+		expect(names).toContain('checkConstraintErrors');
 		const missing = names.filter((name) => {
 			if (exported.has(name)) return false;
 			const owner = elsewhere[name] ?? options[name];
@@ -243,6 +246,7 @@ describe('the agent skill', () => {
 		expect(flags).toContain('--schema');
 		expect(flags).toContain('--check');
 		expect(flags).toContain('--verify');
+		expect(flags).toContain('--verify-timeout');
 		const listed = (flag: string) =>
 			new RegExp(`(?:^|\\s)${flag}(?=[\\s,]|$)`, 'mu').test(
 				`${USAGE}\n${STATEMENTS_USAGE}`,
