@@ -1803,9 +1803,6 @@ async fn start_inner(
 	files: impl FnOnce() -> Result<Vec<SchemaFile>>,
 	ctx: &StepContext<'_>,
 ) -> Result<()> {
-	renames::check_renames(&rollout.spec)?;
-	renames::check_tables(rollout, files)?;
-	renames::check_database(db, &rollout.spec).await?;
 	let lock = acquire_lock(db, &rollout.spec.module()?, "global").await?;
 	let keep_alive = LockKeepAlive::spawn(db, &lock);
 	let result = async {
@@ -1853,6 +1850,14 @@ async fn start_inner(
 			}
 			_ => {}
 		}
+		// The rollout's state is judged first: the rename checks guard the copy,
+		// which runs in the start phase, so a rollout already past it is not held
+		// to them. A rollout ready to complete has run its copy, and refusing it
+		// for the level now would only strand it. They run before anything is
+		// recorded, so a refusal leaves no record behind.
+		renames::check_renames(&rollout.spec)?;
+		renames::check_tables(rollout, files)?;
+		renames::check_database(db, &rollout.spec).await?;
 		// Capture what a rollback would restore *before* anything else, including
 		// before the record exists. The previous definition of a modified entity
 		// lives nowhere on disk (the catalog snapshot keeps only a hash), so the
