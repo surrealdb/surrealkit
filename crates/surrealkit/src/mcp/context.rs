@@ -38,6 +38,9 @@ pub struct ServerConfig {
 	pub overrides: DbOverrides,
 	/// Template variables from the server's own `--var` flags.
 	pub vars: Vec<(String, String)>,
+	/// The project's `.env` / `.env.local` contents, read once at startup and used
+	/// only as a source of template variables (see [`ServerConfig::with_dotenv`]).
+	pub dotenv: HashMap<String, String>,
 }
 
 impl ServerConfig {
@@ -50,7 +53,16 @@ impl ServerConfig {
 			root,
 			overrides,
 			vars,
+			dotenv: HashMap::new(),
 		})
+	}
+
+	/// Resolve `${KEY}` template variables from these `.env` entries, each under
+	/// its own name, below `SURREALKIT_VAR_*` and above `surrealkit.toml`
+	/// `[variables]`. Empty by default, so an embedding application opts in.
+	pub fn with_dotenv(mut self, dotenv: HashMap<String, String>) -> Self {
+		self.dotenv = dotenv;
+		self
 	}
 }
 
@@ -144,12 +156,17 @@ impl CallContext {
 		};
 		let folder = folder.to_string_lossy().into_owned();
 
-		// 4. Variables: config `[variables]`, then `SURREALKIT_VAR_*`, then the
-		//    server's `--var` flags, then this call's `vars` -- highest last.
+		// 4. Variables: config `[variables]`, then the server's `.env`, then
+		//    `SURREALKIT_VAR_*`, then the server's `--var` flags, then this call's
+		//    `vars` -- highest last.
 		let mut merged: Vec<(String, String)> = server.vars.clone();
 		merged.extend(req.vars.iter().map(|(k, v)| (k.clone(), v.clone())));
 		let vars = TemplateVars {
-			vars: crate::variables::build_vars(&merged, config_path.as_deref())?,
+			vars: crate::variables::build_vars(
+				&merged,
+				Some(&server.dotenv),
+				config_path.as_deref(),
+			)?,
 		};
 
 		let typegen = project.typegen.clone();

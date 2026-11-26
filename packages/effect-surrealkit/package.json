@@ -15,6 +15,10 @@
 		"./emitter": {
 			"types": "./dist/emitter.d.ts",
 			"import": "./dist/emitter.js"
+		},
+		"./analyze": {
+			"types": "./dist/analyze.d.ts",
+			"import": "./dist/analyze.js"
 		}
 	},
 	"bin": {
@@ -27,7 +31,7 @@
 	],
 	"sideEffects": false,
 	"engines": {
-		"node": "^20.19.0 || >=22.12.0"
+		"node": ">=22.21.1"
 	},
 	"scripts": {
 		"build": "rm -rf dist && tsup",
@@ -46,15 +50,15 @@
 		"surrealkit"
 	],
 	"peerDependencies": {
-		"effect": "^4.0.6",
-		"surrealdb": "^2.1.1"
+		"effect": "^4.1.5",
+		"surrealdb": "^2.2.2"
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.4.2",
 		"@types/node": "^24.3.0",
 		"ajv": "8.17.1",
-		"effect": "4.0.6",
-		"surrealdb": "2.1.1",
+		"effect": "4.1.5",
+		"surrealdb": "2.2.2",
 		"tsup": "^8.2.4",
 		"typescript": "^5.9.2",
 		"vitest": "^3.2.4"

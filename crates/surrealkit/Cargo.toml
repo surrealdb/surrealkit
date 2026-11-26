@@ -88,6 +88,9 @@ tempfile = '3'
 tokio = { version = '1.47', features = ['test-util'] }
 test-case = '3'
 insta = { version = '1', features = ['json'] }
+# Generated schema pairs for the rollout properties in tests/rollout_properties.rs.
+# Only `std`: the tests need no regex strategies, forking or timeouts.
+proptest = { version = '1', default-features = false, features = ['std'] }
 # An in-process MCP client, so the protocol tests drive the real server over an
 # in-memory duplex rather than a socket. `client` is deliberately a dev-only
 # feature: the shipped server has no need of it.

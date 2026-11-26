@@ -15,7 +15,7 @@ import {
 } from 'effect';
 import { DateTime as SdkDateTime, Duration as SdkDuration } from 'surrealdb';
 
-import { quote, runtimeCode } from './internal/code.js';
+import { DATETIME_TYPE_IMPORT, quote, runtimeCode } from './internal/code.js';
 import {
 	invalid,
 	leaf,
@@ -196,13 +196,10 @@ export const DateTimeEffect = wrap(
 		id: 'effect-surrealkit/DateTimeEffect',
 		expected:
 			'a SurrealDB DateTime (as Effect DateTime.Utc, millisecond precision)',
-		code: () => ({
-			...runtimeCode('DateTimeEffect', 'DateTime.Utc'),
-			importDeclarations: [
-				...runtimeCode('', '').importDeclarations,
-				'import type { DateTime } from "effect"',
-			],
-		}),
+		code: () =>
+			runtimeCode('DateTimeEffect', 'DateTime.Utc', [
+				DATETIME_TYPE_IMPORT,
+			]),
 		equivalence: (self, that) =>
 			EffectDateTime.toEpochMillis(self) ===
 			EffectDateTime.toEpochMillis(that),

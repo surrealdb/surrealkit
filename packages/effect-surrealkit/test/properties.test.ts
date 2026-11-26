@@ -1,6 +1,6 @@
 /**
  * Property round trips through the SDK's own CBOR codec (the wire format of
- * surrealdb.js 2.1.1), in process. The engine suite repeats them through a
+ * surrealdb.js), in process. The engine suite repeats them through a
  * real server.
  */
 import { Arbitrary, Effect, Schema } from 'effect';

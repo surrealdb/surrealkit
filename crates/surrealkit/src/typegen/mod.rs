@@ -187,7 +187,14 @@ pub fn format_file(command: &str, path: &Path) {
 		return; // empty / whitespace-only command: nothing to run
 	};
 	let args: Vec<&str> = parts.collect();
-	match std::process::Command::new(program).args(&args).arg(path).status() {
+	// Under `surrealkit mcp`, stdout is the JSON-RPC channel: send the formatter's
+	// own output to stderr.
+	match std::process::Command::new(program)
+		.args(&args)
+		.arg(path)
+		.stdout(std::io::stderr())
+		.status()
+	{
 		Ok(status) if status.success() => {
 			log::info!("typegen: formatted {} with `{command}`", path.display());
 		}
