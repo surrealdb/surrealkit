@@ -16,7 +16,7 @@ export default defineConfig([
 		entry: { cli: "src/cli/main.ts" },
 		format: ["esm"],
 		sourcemap: true,
-		target: "node20",
+		target: "node22",
 		platform: "node",
 		external: ["effect", "surrealdb"],
 		banner: { js: "#!/usr/bin/env node" },

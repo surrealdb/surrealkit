@@ -27,7 +27,7 @@
 	],
 	"sideEffects": false,
 	"engines": {
-		"node": "^20.19.0 || >=22.12.0"
+		"node": ">=22.21.1"
 	},
 	"scripts": {
 		"build": "rm -rf dist && tsup",
