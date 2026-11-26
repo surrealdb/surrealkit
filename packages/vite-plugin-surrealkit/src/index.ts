@@ -5,7 +5,7 @@ import path from 'node:path';
 import picomatch from 'picomatch';
 import type { Plugin, ResolvedConfig, ViteDevServer } from 'vite';
 
-import { killTree, stopOnExit } from './process.js';
+import { killTree, spawnGuarded } from './process.js';
 
 // Inlined from Vite so that nothing is imported from `vite` at runtime: the
 // plugin only depends on Vite's types, never on its export surface. The one
@@ -278,16 +278,19 @@ function startCommand(
 	// A generation runs in its own process group so that closing the dev
 	// server stops it together with the emitters it spawned.
 	const group = options.mode === 'generate' && !isWindows;
-	const child = spawn(options.binary, commandArgs(options), {
-		cwd: options.cwd ?? root,
-		env: {
-			...process.env,
-			...options.env,
-		},
-		shell: process.platform === 'win32',
-		stdio: ['ignore', 'pipe', 'pipe'],
-		detached: group,
-	});
+	const start = () =>
+		spawn(options.binary, commandArgs(options), {
+			cwd: options.cwd ?? root,
+			env: {
+				...process.env,
+				...options.env,
+			},
+			shell: process.platform === 'win32',
+			stdio: ['ignore', 'pipe', 'pipe'],
+			detached: group,
+		});
+	const child =
+		options.mode === 'generate' ? spawnGuarded(start, group) : start();
 	const exited = new Promise<void>((resolve) => {
 		child.once('exit', () => resolve());
 		child.once('error', () => resolve());
@@ -325,9 +328,6 @@ function startCommand(
 			});
 		});
 	});
-
-	// Ctrl-C and SIGHUP do not reach a generation in its own process group.
-	if (options.mode === 'generate') stopOnExit({ child, group }, exited);
 
 	return { child, exited, group, result };
 }
