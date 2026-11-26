@@ -15,6 +15,10 @@
 		"./emitter": {
 			"types": "./dist/emitter.d.ts",
 			"import": "./dist/emitter.js"
+		},
+		"./analyze": {
+			"types": "./dist/analyze.d.ts",
+			"import": "./dist/analyze.js"
 		}
 	},
 	"bin": {
