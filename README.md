@@ -510,7 +510,7 @@ surrealkit compile --allow-experimental surrealism
 It needs no server and reads no connection settings (`SURREALDB_*`, `.env`,
 targets), so it runs in a build with no credentials and no network. Template
 variables come from `surrealkit.toml [variables]` and `--var` only; compile
-ignores `SURREALKIT_VAR_*` in the environment, so a checkout compiles to the same
+ignores `SURREALKIT_VAR_*` in the environment and `.env`, so a checkout compiles to the same
 bytes everywhere. The engine itself has no network access (`http::*` is refused)
 and no scripting. It is strict by default: an error diagnostic fails the command
 (`--lenient` logs it instead). A configured `[typegen] typescript` is written too, from the same
@@ -603,7 +603,7 @@ and accepts, plus runtime codecs for every SurrealDB value.
 `effect-surrealkit` is not published to npm yet. Build it from this repository
 (`packages/effect-surrealkit`: `npm install && npm run build`) and depend on that
 directory, or on the package from a Git checkout (its `prepare` script builds it),
-with `effect` 4 (4.0.6 or later) and `surrealdb` 2 (2.1.1 or later) as peers.
+with `effect` 4 (4.1.5 or later) and `surrealdb` 2 (2.2.2 or later) as peers.
 
 ```toml
 # surrealkit.toml
@@ -979,7 +979,8 @@ rollout `run_sql` step or by hand.
 A record `DEFINE ACCESS` with no `WITH JWT ... KEY` gets a new random signing key
 every time it is overwritten, which signs every user out. SurrealKit warns when it
 applies one. Give it a stable key, for example
-`WITH JWT ALGORITHM HS512 KEY ${JWT_SECRET}`.
+`WITH JWT ALGORITHM HS512 KEY ${JWT_SECRET}` with `JWT_SECRET` set in `.env`
+(see [Template Variables](#template-variables)).
 
 A file SurrealKit cannot read (an unterminated string, an unmatched bracket, a
 `DEFINE` that starts inside another statement) stops sync or plan with the file,
@@ -1010,8 +1011,8 @@ Keep the clause in the schema file. Each name runs once per table:
   land.
 - A name reused for a different transform is refused. Give each transform a name
   of its own.
-- `USING` reads only `$value`, the field's own value, so a rename still needs an
-  `UPDATE` in a rollout `run_sql` step.
+- `USING` reads only `$value`, the field's own value, so a rename needs an
+  `UPDATE` that copies the values, which `rollout plan` proposes (see below).
 - A field an index reads cannot be migrated while the index exists. SurrealKit
   removes such indexes, applies the file and defines them again. Define an index
   after the field it reads.
@@ -1037,6 +1038,86 @@ rollout.
 At level 4, `REMOVE FIELD` on a `SCHEMAFULL` table also clears the values the
 field held. Sync's prune and a rollout's contract phase say so for each field
 they remove.
+
+#### Renaming a field
+
+SurrealDB has no statement that renames a field or carries its values to a new
+name, so a rename is a new field, a copy, and the removal of the old field.
+When a plan removes one field and adds another on the same `SCHEMAFULL` table,
+and the two are defined the same apart from the name, `rollout plan` proposes
+the rename:
+
+```toml
+[[renames]]
+kind = "field"
+scope = "person"
+from = "email"
+to = "mail"
+step = "copy_person_email_to_mail"
+confirmed = false
+
+[[steps]]
+id = "copy_person_email_to_mail"
+phase = "start"
+kind = "run_sql"
+sql = "UPDATE person SET mail = email WHERE email != NONE;"
+```
+
+The copy runs in the start phase, after the new field is defined. The old field
+is removed in the complete phase, so between the two both fields hold the
+values. `rollout lint`, `rollout start` and `rollout up` refuse the manifest
+until you have checked the copy and set `confirmed = true`. They also refuse
+an entry whose copy step is gone: without it the rollout would add the new
+field empty and remove the old one with its values.
+
+If it is not a rename, do not edit the manifest. Run `surrealkit rollout
+discard <id>`, which deletes it and puts the snapshots back, and plan the
+addition and the removal in separate rollouts.
+
+- Only a `SCHEMAFULL` table gets a proposal, and only when the rollout leaves
+  its `DEFINE TABLE` as it was. On a schemaless table `plan` proposes nothing
+  and warns, naming the pair: a schemaless table can already hold values under
+  the new name, which the copy would overwrite, and removing a field there
+  does not clear its values, so a rollback would leave the copies behind.
+  Neither can be undone without guessing which values were there first, so
+  plan such a rename by hand. `rollout lint`, `rollout start` and `rollout up`
+  hold a `[[renames]]` entry written by hand to the same rule: they refuse one
+  whose table the rollout's schema files do not define as `SCHEMAFULL`, and
+  `start` and `up` also refuse one whose table the database does not define
+  as `SCHEMAFULL` yet.
+- `rollout start` and `rollout up` refuse a rollout with a confirmed rename on
+  a database below compatibility level 4, before anything runs. There
+  `REMOVE FIELD` leaves a field's values too, so a rollback could not undo the
+  copy, and a value a record already held under the new name would be lost.
+  Raise the database with `surrealkit compat raise --yes --wait` (see below)
+  and start the rollout again. These checks guard the copy, so they apply only
+  while the start phase still has to run: a rollout already ready to complete
+  (or completing) is judged by its state, as any other is, and `complete` and
+  `up --complete` finish it.
+- An entry with no `step` that is not confirmed is a legacy hint, as releases
+  before rename proposals wrote one in the then-reserved `renames`. Nothing
+  runs it, as before: `lint`, `start` and `up` accept the rollout and warn
+  that the hint is ignored, and the rollout keeps its checksum. An entry with
+  `confirmed = true` and no `step` is refused.
+- Whitespace and comments do not count, and neither does a `MIGRATE EXISTING
+  ROWS` clause on the new field, which level 4 needs when the table holds
+  records and the field's `TYPE` does not accept `NONE`.
+- Only top-level fields pair. A nested field moves with its parent.
+- A field with `READONLY` gets no proposal, because SurrealDB refuses the
+  copy. Neither does one with `VALUE`, which the `UPDATE` would evaluate again,
+  or `COMPUTED`, which stores nothing.
+- When the fields could pair in more than one way, `plan` proposes none of them
+  and names the candidates.
+- Without a proposal, `plan` refuses an add and a remove on one table as
+  before. Rename one field per rollout, or write the manifest by hand.
+- The copy is an `UPDATE`, so it fires `UPDATE` events, and it evaluates the
+  `VALUE` clause of every field on each record it touches, an `updated_at`
+  for example.
+- A record the old application writes after `start` keeps that write only in
+  the old field, which `complete` removes. Stop those writes during the
+  rollout, or add your own copy for them before completing.
+
+The `rollout_plan` MCP tool lists the proposals in its result as `renames`.
 
 A database a 3.x datastore created stays at level 3 after the upgrade to 4.0.
 `surrealkit compat status` shows the level and what SurrealDB is doing to each
@@ -1108,6 +1189,7 @@ Values are resolved in this order (highest wins):
 | ------------------------------------------- | --------------------------------------------------- |
 | `--var KEY=VALUE` CLI flag                  | `surrealkit sync --var schema_prefix=acme`          |
 | `SURREALKIT_VAR_<KEY>` environment variable | `SURREALKIT_VAR_SCHEMA_PREFIX=acme surrealkit sync` |
+| `KEY` in `.env` / `.env.local`              | `SCHEMA_PREFIX=acme` in `.env`                      |
 | `[variables]` section in `surrealkit.toml`  | _(see below)_                                       |
 
 Variable names are case-insensitive: `${FOO}`, `${foo}`, and `${Foo}` all match key `FOO`.
@@ -1143,6 +1225,28 @@ export SURREALKIT_VAR_TALENT_USERNAME=talent_rw
 surrealkit sync
 ```
 
+### `.env` File
+
+A variable is also read, under its own name, from the `.env` file SurrealKit already loads
+for its connection settings (`.env.local` instead, when it exists in the working directory):
+
+```sh
+# .env
+SURREALDB_HOST=http://localhost:8000
+JWT_SECRET=change_me
+```
+
+```sql
+DEFINE ACCESS account ON DATABASE TYPE RECORD
+    ...
+    WITH JWT ALGORITHM HS512 KEY '${JWT_SECRET}';
+```
+
+Keys match case-insensitively, like every other source, and an empty value (`JWT_SECRET=`)
+counts as unset. Only the file is read: a plain `JWT_SECRET` exported in your shell is not a
+source, so use `SURREALKIT_VAR_JWT_SECRET` or `--var` for that. `surrealkit compile` does not
+read `.env` (see [Compiling without a database](#compiling-without-a-database)).
+
 ### Escape Sequence
 
 To emit a literal `${...}` (no substitution), double the dollar sign:
@@ -1164,13 +1268,13 @@ An undefined variable is always a hard error. Surrealkit will not silently skip 
 
 ```
 error: template variable 'SCHEMA_PREFIX' is not defined
-       (set via --var SCHEMA_PREFIX=VALUE, SURREALKIT_VAR_SCHEMA_PREFIX env var, or surrealkit.toml [variables])
+       (set via --var SCHEMA_PREFIX=VALUE, SURREALKIT_VAR_SCHEMA_PREFIX env var, SCHEMA_PREFIX in .env / .env.local, or surrealkit.toml [variables])
 ```
 
 ### Known Limitations
 
 - **Hash-based re-sync**: `surrealkit sync` tracks schema files by content hash. Changing a variable value does not change the file hash, so sync will not re-apply the file. Touch the file or remove its tracking entry to force re-application.
-- **Watch mode**: variables are resolved once at startup. Edits to `surrealkit.toml` during `--watch` require a restart.
+- **Watch mode**: variables are resolved once at startup. Edits to `surrealkit.toml` or `.env` during `--watch` require a restart.
 - **Catalog snapshots**: entity names containing `${VAR}` tokens appear literally in `catalog_snapshot.json` and are not substituted. This affects drift detection for template-named tables; prefer fixed entity names in production schemas.
 - **String literals**: substitution is textual, so `${VAR}` inside a SurrealQL string literal is also replaced.
 

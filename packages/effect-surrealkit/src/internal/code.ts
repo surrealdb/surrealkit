@@ -1,13 +1,10 @@
 /**
- * Shared pieces of the `toCode` metadata every codec carries, so that
- * `SchemaRepresentation.toCodeDocument` can print a schema built from these
- * codecs back to source.
+ * Shared pieces of the `toCode` metadata Effect uses to generate source for
+ * schemas built from these codecs.
  *
  * Runtime code refers to this package as `SurrealSchema` and SDK types as
  * `Surreal`, the same names the emitter uses in generated modules.
  */
-import { type Schema, SchemaRepresentation } from 'effect';
-
 /** The package name, as written in generated imports. */
 export const PACKAGE_NAME = 'effect-surrealkit';
 
@@ -17,8 +14,8 @@ export const RUNTIME_IMPORT = `import * as SurrealSchema from "${PACKAGE_NAME}"`
 /** Namespace type import for SurrealDB SDK value classes. */
 export const SDK_TYPE_IMPORT = 'import type * as Surreal from "surrealdb"';
 
-/** `effect` namespace import for generated code that names `Schema`. */
-export const EFFECT_IMPORT = 'import { Schema } from "effect"';
+/** Type import for the Effect datetime used by the datetime profiles. */
+export const DATETIME_TYPE_IMPORT = 'import type { DateTime } from "effect"';
 
 /** Renders a string literal the way generated code spells it. */
 export const quote = (value: string): string => JSON.stringify(value);
@@ -31,34 +28,22 @@ export const quoteList = (values: ReadonlyArray<string>): string =>
 export const literalUnion = (values: ReadonlyArray<string>): string =>
 	values.length === 0 ? 'string' : values.map(quote).join(' | ');
 
-export interface CodeOutput {
+export interface SchemaCode {
 	readonly runtime: string;
 	readonly Type: string;
+}
+
+export interface CodeOutput extends SchemaCode {
 	readonly importDeclarations: ReadonlyArray<string>;
 }
 
-/**
- * Source for an arbitrary schema, through Effect's own code generator. Used
- * by codecs that close over schemas rather than taking type parameters.
- * TypeScript-only distinctions such as brands do not survive (see
- * `SchemaRepresentation.toRepresentation`).
- */
-export const codeOf = (
-	schema: Schema.Top,
-): { readonly runtime: string; readonly Type: string } => {
-	const document = SchemaRepresentation.toCodeDocument(
-		SchemaRepresentation.toMultiDocument(
-			SchemaRepresentation.toRepresentation(schema.ast),
-		),
-	);
-	const [code] = document.codes;
-	if (code === undefined) throw new Error('no code generated');
-	return code;
-};
-
 /** `toCode` output for a value of this package referenced by name. */
-export const runtimeCode = (runtime: string, Type: string): CodeOutput => ({
+export const runtimeCode = (
+	runtime: string,
+	Type: string,
+	extraImports: ReadonlyArray<string> = [],
+): CodeOutput => ({
 	runtime: `SurrealSchema.${runtime}`,
 	Type,
-	importDeclarations: [RUNTIME_IMPORT, SDK_TYPE_IMPORT],
+	importDeclarations: [RUNTIME_IMPORT, SDK_TYPE_IMPORT, ...extraImports],
 });

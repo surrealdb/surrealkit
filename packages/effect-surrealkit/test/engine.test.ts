@@ -1,6 +1,6 @@
 /**
  * Round trips through a real, disposable SurrealDB engine with
- * surrealdb.js 2.1.1, including the integer edges the SDK's CBOR decoder
+ * surrealdb.js, including the integer edges the SDK's CBOR decoder
  * treats specially. See `engine.ts` for how the engine is provided.
  */
 import { Arbitrary, Effect, Exit, Schema } from 'effect';

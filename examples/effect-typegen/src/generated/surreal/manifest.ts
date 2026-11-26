@@ -6,7 +6,7 @@ export const manifest = {
 	semanticDigest: "sha256:54af6f982acad58a2114c56e70d65ce5a6217fc7f881a5205a800f99504e30a1",
 	emitter: { name: "effect-surrealkit", version: "0.1.0" },
 	profile: { int: "safe-number", datetime: "sdk" },
-	peers: { effect: "4.0.6", surrealdb: "2.1.1" },
+	peers: { effect: "4.1.5", surrealdb: "2.2.2" },
 	source: {
 		kind: "compile",
 		modules: ["default"],

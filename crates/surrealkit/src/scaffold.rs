@@ -190,7 +190,7 @@ kind = "root"
 /// Starter `surrealkit.toml` written by [`scaffold`].
 pub const DEFAULT_PROJECT_CONFIG: &str = r#"# Template variables for use in .surql schema and seed files.
 # Values here have the lowest priority:
-#   --var KEY=VALUE  >  SURREALKIT_VAR_KEY env vars  >  this file
+#   --var KEY=VALUE  >  SURREALKIT_VAR_KEY env vars  >  KEY in .env  >  this file
 #
 # [variables]
 # schema_prefix = "myapp"

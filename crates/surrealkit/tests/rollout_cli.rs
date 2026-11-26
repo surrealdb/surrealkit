@@ -388,6 +388,299 @@ fn the_folder_flag_chooses_where_rollout_files_go() {
 	assert!(fs::read_dir(root.join("database/rollouts")).unwrap().next().is_none());
 }
 
+// ---- rename proposals ------------------------------------------------------
+
+const PERSON_EMAIL: &str =
+	"DEFINE TABLE person SCHEMAFULL;\nDEFINE FIELD email ON person TYPE string;\n";
+const PERSON_MAIL: &str =
+	"DEFINE TABLE person SCHEMAFULL;\nDEFINE FIELD mail ON person TYPE string;\n";
+
+fn write_person(root: &Path, sql: &str) {
+	fs::write(root.join("database/schema/002_person.surql"), sql).expect("person schema");
+}
+
+/// Plan `name` and return the new manifest's id and text, or the plan's output
+/// when it fails.
+fn plan_named(root: &Path, name: &str) -> Result<(String, String), String> {
+	let output = run(root, &["rollout", "plan", "--name", name]);
+	let text = combined(&output);
+	if !output.status.success() {
+		return Err(text);
+	}
+	let suffix = format!("__{name}.toml");
+	let path = fs::read_dir(root.join("database/rollouts"))
+		.expect("rollouts dir")
+		.filter_map(Result::ok)
+		.map(|e| e.path())
+		.find(|p| p.to_string_lossy().ends_with(&suffix))
+		.unwrap_or_else(|| panic!("no manifest named {name}: {text}"));
+	let id = path.file_stem().unwrap().to_string_lossy().into_owned();
+	Ok((id, fs::read_to_string(path).unwrap()))
+}
+
+fn manifest_count(root: &Path) -> usize {
+	fs::read_dir(root.join("database/rollouts"))
+		.expect("rollouts dir")
+		.filter_map(Result::ok)
+		.filter(|e| e.path().extension().is_some_and(|x| x == "toml"))
+		.count()
+}
+
+/// A field whose definition is the same apart from its name is planned as a
+/// rename: the pair is recorded, unconfirmed and naming its copy, the copy runs
+/// in the expand phase, and the old field is still removed only in the contract
+/// phase. Lint refuses the manifest until the author confirms the rename.
+#[test]
+fn plan_proposes_a_rename_that_lint_refuses_until_it_is_confirmed() {
+	let temp = TempDir::new().expect("tempdir");
+	let root = temp.path();
+	write_project(root, "");
+	write_person(root, PERSON_EMAIL);
+	plan_named(root, "people").expect("first plan");
+
+	write_person(root, PERSON_MAIL);
+	let (id, manifest) = plan_named(root, "rename_email").expect("a rename is planned");
+
+	assert!(
+		manifest.contains(
+			"[[renames]]\nkind = \"field\"\nscope = \"person\"\nfrom = \"email\"\nto = \"mail\"\n\
+			 step = \"copy_person_email_to_mail\"\nconfirmed = false\n"
+		),
+		"{manifest}"
+	);
+	assert!(
+		manifest.contains(
+			"[[steps]]\nid = \"copy_person_email_to_mail\"\nphase = \"start\"\nkind = \"run_sql\"\n\
+			 sql = \"UPDATE person SET mail = email WHERE email != NONE;\"\n"
+		),
+		"{manifest}"
+	);
+	// The copy runs after the new field is defined, and the old one goes only
+	// when the rollout completes.
+	let apply = manifest.find("id = \"apply_expand_schema\"").expect("expand step");
+	let copy = manifest.find("id = \"copy_person_email_to_mail\"").expect("copy step");
+	assert!(apply < copy, "{manifest}");
+	let remove =
+		&manifest[manifest.find("id = \"remove_legacy_entities\"").expect("contract step")..];
+	assert!(
+		remove.starts_with("id = \"remove_legacy_entities\"\nphase = \"complete\""),
+		"{manifest}"
+	);
+	assert!(remove.contains("name = \"email\""), "{manifest}");
+
+	for args in [&["rollout", "lint", id.as_str()][..], &["rollout", "lint"][..]] {
+		let output = run(root, args);
+		let text = combined(&output);
+		assert!(!output.status.success(), "{args:?} accepted an unconfirmed rename: {text}");
+		assert!(
+			text.contains("'copy_person_email_to_mail'") && text.contains("is unconfirmed"),
+			"{text}"
+		);
+	}
+
+	let path = root.join("database/rollouts").join(format!("{id}.toml"));
+	fs::write(&path, manifest.replace("confirmed = false\n", "confirmed = true\n")).unwrap();
+	let output = run(root, &["rollout", "lint", &id]);
+	assert!(output.status.success(), "the confirmed manifest: {}", combined(&output));
+	let output = run(root, &["rollout", "lint"]);
+	assert!(output.status.success(), "the confirmed chain: {}", combined(&output));
+}
+
+/// Deleting the copy step must not leave a plan that adds `mail` empty and
+/// removes `email` with its values, which `plan` refused before it proposed
+/// renames. Lint refuses an entry without its copy, confirmed or not, and
+/// points at `discard`.
+#[test]
+fn lint_refuses_a_rename_whose_copy_step_was_deleted() {
+	let temp = TempDir::new().expect("tempdir");
+	let root = temp.path();
+	write_project(root, "");
+	write_person(root, PERSON_EMAIL);
+	plan_named(root, "people").expect("first plan");
+	write_person(root, PERSON_MAIL);
+	let (id, manifest) = plan_named(root, "rename_email").expect("a rename is planned");
+
+	let without_copy: Vec<&str> = manifest
+		.split("[[steps]]")
+		.filter(|block| !block.contains("id = \"copy_person_email_to_mail\""))
+		.collect();
+	let without_copy = without_copy.join("[[steps]]");
+	assert!(!without_copy.contains("kind = \"run_sql\""), "{without_copy}");
+	let path = root.join("database/rollouts").join(format!("{id}.toml"));
+	for edited in
+		[without_copy.clone(), without_copy.replace("confirmed = false\n", "confirmed = true\n")]
+	{
+		fs::write(&path, &edited).unwrap();
+		for args in [&["rollout", "lint", id.as_str()][..], &["rollout", "lint"][..]] {
+			let output = run(root, args);
+			let text = combined(&output);
+			assert!(
+				!output.status.success(),
+				"{args:?} accepted a rename without its copy: {text}"
+			);
+			assert!(
+				text.contains("its copy step 'copy_person_email_to_mail' is not in the rollout")
+					&& text.contains(&format!("rollout discard {id}")),
+				"{text}"
+			);
+		}
+	}
+}
+
+/// A `[[renames]]` entry with no `step`, as releases before rename proposals
+/// wrote one, is a hint nothing runs. Lint accepts the manifest, as it did
+/// then, and says the hint is ignored.
+#[test]
+fn lint_accepts_a_legacy_rename_hint_and_says_it_is_ignored() {
+	let temp = TempDir::new().expect("tempdir");
+	let root = temp.path();
+	write_project(root, "");
+	write_person(root, PERSON_EMAIL);
+	let (id, manifest) = plan_named(root, "people").expect("first plan");
+	assert!(manifest.contains("renames = []\n"), "{manifest}");
+	let path = root.join("database/rollouts").join(format!("{id}.toml"));
+	fs::write(
+		&path,
+		format!(
+			"{}\n[[renames]]\nkind = \"field\"\nscope = \"person\"\nfrom = \"email\"\nto = \
+			 \"mail\"\n",
+			manifest.replace("renames = []\n", "")
+		),
+	)
+	.unwrap();
+	for args in [&["rollout", "lint", id.as_str()][..], &["rollout", "lint"][..]] {
+		let output = run(root, args);
+		let text = combined(&output);
+		assert!(output.status.success(), "{args:?} refused a legacy hint: {text}");
+		assert!(
+			text.contains(&format!(
+				"rollout '{id}' records the rename of `person.email` to `person.mail` as a legacy \
+				 rename hint"
+			)),
+			"{args:?}: {text}"
+		);
+	}
+}
+
+/// Definitions that differ in more than the name are not a rename, and are
+/// still refused as an add and a remove that could be one.
+#[test]
+fn plan_proposes_no_rename_when_the_definitions_differ() {
+	let temp = TempDir::new().expect("tempdir");
+	let root = temp.path();
+	write_project(root, "");
+	write_person(root, PERSON_EMAIL);
+	plan_named(root, "people").expect("first plan");
+
+	for changed in [
+		"DEFINE TABLE person SCHEMAFULL;\nDEFINE FIELD mail ON person TYPE option<string>;\n",
+		"DEFINE TABLE person SCHEMAFULL;\nDEFINE FIELD mail ON person TYPE string ASSERT $value != '';\n",
+		"DEFINE TABLE person SCHEMAFULL;\nDEFINE FIELD mail ON person TYPE string READONLY;\n",
+	] {
+		write_person(root, changed);
+		let text = plan_named(root, "rename_email").expect_err("not a rename");
+		assert!(!text.contains("copy_person_email_to_mail"), "{text}");
+		assert!(text.contains("cannot tell apart from a rename"), "{text}");
+	}
+	assert_eq!(manifest_count(root), 1, "a refused plan writes no manifest");
+}
+
+/// A schemaless table can already hold values under the new name, which the
+/// copy would overwrite, and removing a field there does not clear its values,
+/// so a rollback would leave the copies. `plan` proposes no rename there, says
+/// why, and refuses the add and the remove as it did before it proposed renames.
+#[test]
+fn plan_proposes_no_rename_on_a_schemaless_table() {
+	for table in ["DEFINE TABLE person SCHEMALESS;", "DEFINE TABLE person;"] {
+		let temp = TempDir::new().expect("tempdir");
+		let root = temp.path();
+		write_project(root, "");
+		write_person(root, &format!("{table}\nDEFINE FIELD email ON person TYPE string;\n"));
+		plan_named(root, "people").expect("first plan");
+
+		write_person(root, &format!("{table}\nDEFINE FIELD mail ON person TYPE string;\n"));
+		let text = plan_named(root, "rename_email").expect_err("no rename on a schemaless table");
+		assert!(
+			text.contains("`person.email` and `person.mail`")
+				&& text.contains("proposes no rename on `person`: it is not SCHEMAFULL")
+				&& text.contains("Plan the rename by hand"),
+			"{table}: {text}"
+		);
+		assert!(!text.contains("UPDATE person"), "{table}: {text}");
+		assert!(text.contains("cannot tell apart from a rename"), "{table}: {text}");
+		assert_eq!(manifest_count(root), 1, "{table}: a refused plan writes no manifest");
+	}
+}
+
+/// A copy re-runs a `VALUE` clause and cannot write a `READONLY` field, and a
+/// `COMPUTED` field stores nothing, so the same definitions under a new name
+/// get no proposal, and the warning says why.
+#[test]
+fn plan_proposes_no_rename_for_a_field_a_copy_cannot_carry() {
+	for (clause, old, new) in [
+		(
+			"READONLY",
+			"DEFINE FIELD email ON person TYPE string READONLY;",
+			"DEFINE FIELD mail ON person TYPE string READONLY;",
+		),
+		(
+			"VALUE",
+			"DEFINE FIELD email ON person TYPE string VALUE string::lowercase($value);",
+			"DEFINE FIELD mail ON person TYPE string VALUE string::lowercase($value);",
+		),
+		(
+			"COMPUTED",
+			"DEFINE FIELD email ON person COMPUTED 'a@x.io';",
+			"DEFINE FIELD mail ON person COMPUTED 'a@x.io';",
+		),
+	] {
+		let temp = TempDir::new().expect("tempdir");
+		let root = temp.path();
+		write_project(root, "");
+		write_person(root, &format!("DEFINE TABLE person SCHEMAFULL;\n{old}\n"));
+		plan_named(root, "people").expect("first plan");
+		write_person(root, &format!("DEFINE TABLE person SCHEMAFULL;\n{new}\n"));
+		let text = plan_named(root, "rename_email")
+			.err()
+			.unwrap_or_else(|| panic!("{clause}: planned a copy it cannot make"));
+		assert!(
+			text.contains("`person.email` and `person.mail`")
+				&& text.contains(&format!("proposes no copy for a {clause} field")),
+			"{clause}: {text}"
+		);
+		assert!(!text.contains("UPDATE person"), "{clause}: {text}");
+		assert!(text.contains("cannot tell apart from a rename"), "{clause}: {text}");
+	}
+}
+
+/// Fields that could pair in more than one way get no proposal; the warning
+/// names every candidate, and the plan is refused as before.
+#[test]
+fn plan_proposes_nothing_when_fields_could_pair_in_more_than_one_way() {
+	let temp = TempDir::new().expect("tempdir");
+	let root = temp.path();
+	write_project(root, "");
+	write_person(
+		root,
+		"DEFINE TABLE person SCHEMAFULL;\nDEFINE FIELD home ON person TYPE string;\n\
+		 DEFINE FIELD work ON person TYPE string;\n",
+	);
+	plan_named(root, "people").expect("first plan");
+
+	write_person(
+		root,
+		"DEFINE TABLE person SCHEMAFULL;\nDEFINE FIELD private ON person TYPE string;\n\
+		 DEFINE FIELD office ON person TYPE string;\n",
+	);
+	let text = plan_named(root, "ambiguous").expect_err("an ambiguous pairing");
+	assert!(text.contains("could be renamed in more than one way"), "{text}");
+	assert!(text.contains("`home` could be `office` or `private`"), "{text}");
+	assert!(text.contains("`work` could be `office` or `private`"), "{text}");
+	assert!(!text.contains("UPDATE person"), "{text}");
+	assert!(text.contains("cannot tell apart from a rename"), "{text}");
+	assert_eq!(manifest_count(root), 1, "a refused plan writes no manifest");
+}
+
 /// `discard` deletes `rollouts/<id>/` recursively and `freeze` writes there, and
 /// the id comes from inside the manifest, not from the command line. Before
 /// 1.0.0-beta.7 nothing checked it, so `id = "../../src"` made `rollout discard
@@ -418,6 +711,51 @@ fn a_manifest_id_cannot_reach_outside_rollouts() {
 		assert!(
 			root.join("database/rollouts/crafted.toml").exists(),
 			"{args:?} deleted the manifest"
+		);
+	}
+}
+
+/// `plan` proposes a rename only on a `SCHEMAFULL` table, and `lint` holds a
+/// hand-written one to the same rule: confirmed and with its copy, it is
+/// refused on a schemaless table.
+#[test]
+fn lint_refuses_a_hand_written_rename_on_a_schemaless_table() {
+	let temp = TempDir::new().expect("tempdir");
+	let root = temp.path();
+	write_project(root, "");
+	write_person(
+		root,
+		"DEFINE TABLE person SCHEMALESS;\nDEFINE FIELD email ON person TYPE string;\n",
+	);
+	plan_named(root, "people").expect("first plan");
+	write_person(
+		root,
+		"DEFINE TABLE person SCHEMALESS;\nDEFINE FIELD email ON person TYPE string;\n\
+		 DEFINE FIELD mail ON person TYPE option<string>;\n",
+	);
+	let (id, manifest) = plan_named(root, "add_mail").expect("an addition");
+	let path = root.join("database/rollouts").join(format!("{id}.toml"));
+	fs::write(
+		&path,
+		format!(
+			"{}\n[[renames]]\nkind = \"field\"\nscope = \"person\"\nfrom = \"email\"\nto = \
+			 \"mail\"\nstep = \"copy_person_email_to_mail\"\nconfirmed = true\n\n[[steps]]\nid = \
+			 \"copy_person_email_to_mail\"\nphase = \"start\"\nkind = \"run_sql\"\nsql = \"UPDATE \
+			 person SET mail = email WHERE email != NONE;\"\n",
+			manifest.replace("renames = []\n", "")
+		),
+	)
+	.unwrap();
+	for args in [&["rollout", "lint", id.as_str()][..], &["rollout", "lint"][..]] {
+		let output = run(root, args);
+		let text = combined(&output);
+		assert!(!output.status.success(), "{args:?} accepted a rename on a schemaless table");
+		assert!(
+			text.contains(
+				"records the rename of `person.email` to `person.mail`, but `person` is not \
+				 SCHEMAFULL in the schema it applies"
+			),
+			"{args:?}: {text}"
 		);
 	}
 }

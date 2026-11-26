@@ -1,20 +1,34 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { Schema, SchemaRepresentation } from 'effect';
+import { Codegen, Schema, SchemaRepresentation } from 'effect';
 import { describe, expect, it } from 'vitest';
 
 import * as S from '../src/index.js';
 
-const print = (schema: Schema.Top) =>
-	SchemaRepresentation.toCodeDocument(
-		SchemaRepresentation.toMultiDocument(
-			SchemaRepresentation.toRepresentation(schema.ast),
-		),
-	);
+const print = (schema: Schema.Top) => {
+	const { representation, references } =
+		SchemaRepresentation.toRepresentation(schema.ast);
+	const generator = new Codegen.Module();
+	const root = generator
+		.addSchemas({ GeneratedSchema: representation }, { references })
+		.get('GeneratedSchema');
+	const { imports, declarations } = generator.finalize();
+	const [type, runtime] =
+		declarations.find(({ binding }) => binding === root)?.fragments ?? [];
+	if (root === undefined || type === undefined || runtime === undefined) {
+		throw new Error('Missing generated schema declaration');
+	}
+	return {
+		runtime: runtime.slice(`export const ${root.name} = `.length),
+		Type: type.slice(`export type ${root.name} = `.length),
+		imports,
+		declarations,
+	};
+};
 
 describe('toCode metadata', () => {
-	it('every codec prints itself by name through toCodeDocument', () => {
+	it('every codec prints itself by name', () => {
 		const row = Schema.Struct({
 			id: S.RecordIdFor('person'),
 			key: S.RecordIdFor('id_object', {
@@ -47,15 +61,49 @@ describe('toCode metadata', () => {
 			any: S.RecordIdAny,
 			jsonAt: S.DateTimeFromJson,
 		});
-		const document = print(S.NoneAsAbsent(row));
-		const [code] = document.codes;
-		expect(code?.runtime).toMatchSnapshot();
-		expect(code?.Type).toMatchSnapshot();
-		expect(document.artifacts).toContainEqual({
-			_tag: 'Import',
-			importDeclaration:
-				'import * as SurrealSchema from "effect-surrealkit"',
+		const code = print(S.NoneAsAbsent(row));
+		expect(code.runtime).toMatchSnapshot();
+		expect(code.Type).toMatchSnapshot();
+		expect(code.imports).toContain(
+			'import * as SurrealSchema from "effect-surrealkit"',
+		);
+	});
+
+	it('preserves shared references and imports in nested codec source', () => {
+		const account = S.RecordIdFor('account').annotate({
+			identifier: 'AccountId',
 		});
+		const point = S.GeometryPoint.annotate({ identifier: 'Position' });
+		const code = print(
+			Schema.Struct({
+				owner: S.taggedRecordId({ account }),
+				id: S.RecordIdFromJsonAs(account),
+				point: S.GeometryFromJson(point),
+				seenAt: S.SetFromJson(S.DateTimeEffectFromJson, { length: 2 }),
+			}),
+		);
+		expect(code.runtime).toContain(
+			'SurrealSchema.taggedRecordId({ "account": AccountId })',
+		);
+		expect(code.runtime).toContain(
+			'SurrealSchema.RecordIdFromJsonAs(AccountId)',
+		);
+		expect(code.runtime).toContain(
+			'SurrealSchema.GeometryFromJson(Position)',
+		);
+		expect(code.runtime).toContain(
+			'SurrealSchema.SetFromJson(SurrealSchema.DateTimeEffectFromJson.annotate({ "expected": "an RFC 3339 datetime string" }), { length: 2 })',
+		);
+		expect(code.Type).toContain('ReadonlySet<DateTime.Utc>');
+		expect(code.declarations.flatMap(({ fragments }) => fragments)).toEqual(
+			expect.arrayContaining([
+				'export type AccountId = Surreal.RecordId<"account">',
+				'export type Position = Surreal.GeometryPoint',
+			]),
+		);
+		expect(code.imports).toContain(
+			'import type { DateTime } from "effect"',
+		);
 	});
 });
 

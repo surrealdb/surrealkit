@@ -40,7 +40,7 @@ jobs:
             fail-fast: false
             matrix:
                 # The floor declared in `engines`, plus current.
-                node: ["20.19", "24"]
+                node: ["22.21.1", "24"]
         defaults:
             run:
                 working-directory: packages/effect-surrealkit
@@ -90,7 +90,7 @@ jobs:
                   # the build to stdout, so inspect the packed tarball, not `pack --json`.
                   npm pack --ignore-scripts --pack-destination /tmp/pack > /dev/null
                   listing="$(tar -tzf /tmp/pack/effect-surrealkit-*.tgz)"
-                  for f in dist/index.js dist/emitter.js dist/cli.js; do
+                  for f in dist/index.js dist/emitter.js dist/analyze.js dist/cli.js; do
                       grep -qx "package/$f" <<<"$listing" || { echo "::error::$f is not in the package"; exit 1; }
                   done
                   # npm 11 refuses even a dry run over a version already on the
@@ -179,7 +179,7 @@ jobs:
             fail-fast: false
             matrix:
                 # `surrealkit test --exec` needs SurrealDB 4.0 from 1.0.0-rc.1, and the
-                # JS SDK this package pins (2.1) supports it.
+                # JS SDK this package pins (2.2) supports it.
                 surrealdb: ["v4.0.0"]
         services:
             surrealdb:

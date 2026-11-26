@@ -21,6 +21,7 @@ import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { PEER_VERSIONS } from '../src/emitter/version.js';
 import { goldenDir } from './documents.js';
 
 const pkg = join(import.meta.dirname, '..');
@@ -65,13 +66,18 @@ describe('declaration emit in a pnpm consumer', () => {
 		};
 		place('uuidv7', '1.2.1', []);
 		place('@surrealdb/cbor', '2.0.0-alpha.4', []);
-		place('@surrealdb/sqon', '0.1.6', [
+		place('@surrealdb/sqon', '0.2.1', [
 			['@surrealdb/cbor', '2.0.0-alpha.4'],
 			['uuidv7', '1.2.1'],
 		]);
-		place('surrealdb', '2.1.1', [['@surrealdb/sqon', '0.1.6']]);
+		place('surrealdb', PEER_VERSIONS.surrealdb, [
+			['@surrealdb/sqon', '0.2.1'],
+		]);
 		// effect is large and has no dependencies: link it in place.
-		link(join(modules, 'effect'), join(entry('effect', '4.0.6'), 'effect'));
+		link(
+			join(modules, 'effect'),
+			join(entry('effect', PEER_VERSIONS.effect), 'effect'),
+		);
 		const self = join(
 			entry('effect-surrealkit', '0.1.0'),
 			'effect-surrealkit',
@@ -80,8 +86,8 @@ describe('declaration emit in a pnpm consumer', () => {
 		cpSync(join(pkg, 'package.json'), join(self, 'package.json'));
 		cpSync(join(pkg, 'dist'), join(self, 'dist'), { recursive: true });
 		const consumer: Array<readonly [string, string]> = [
-			['effect', '4.0.6'],
-			['surrealdb', '2.1.1'],
+			['effect', PEER_VERSIONS.effect],
+			['surrealdb', PEER_VERSIONS.surrealdb],
 			['effect-surrealkit', '0.1.0'],
 		];
 		for (const [name, version] of consumer) {

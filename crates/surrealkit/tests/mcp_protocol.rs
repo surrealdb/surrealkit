@@ -281,3 +281,49 @@ async fn rollout_discard_refuses_a_manifest_whose_id_leaves_the_rollouts_dir() {
 	assert!(rollouts.join("crafted.toml").exists(), "nothing should have been deleted at all");
 	client.cancel().await.expect("shutdown");
 }
+
+#[tokio::test]
+async fn rollout_plan_reports_the_renames_it_proposes() {
+	let dir = project();
+	let schema = dir.path().join("database").join("schema").join("person.surql");
+	let client = connect(&dir).await;
+	let plan = |name: &str| {
+		let mut arguments = serde_json::Map::new();
+		arguments.insert("name".to_string(), serde_json::json!(name));
+		call_params("rollout_plan", arguments)
+	};
+
+	std::fs::write(
+		&schema,
+		"DEFINE TABLE person SCHEMAFULL;\nDEFINE FIELD email ON person TYPE string;\n",
+	)
+	.expect("write");
+	let first = client.call_tool(plan("people")).await.expect("tools/call");
+	assert_ne!(first.is_error, Some(true), "{first:?}");
+	assert_eq!(
+		first.structured_content.as_ref().map(|v| v["renames"].clone()),
+		Some(serde_json::json!([]))
+	);
+
+	std::fs::write(
+		&schema,
+		"DEFINE TABLE person SCHEMAFULL;\nDEFINE FIELD mail ON person TYPE string;\n",
+	)
+	.expect("write");
+	let result = client.call_tool(plan("rename_email")).await.expect("tools/call");
+	assert_ne!(result.is_error, Some(true), "{result:?}");
+	assert_eq!(
+		result.structured_content.as_ref().map(|v| v["renames"].clone()),
+		Some(serde_json::json!([{
+			"kind": "field",
+			"scope": "person",
+			"from": "email",
+			"to": "mail",
+			"step": "copy_person_email_to_mail",
+			"confirmed": false
+		}]))
+	);
+	let text = serde_json::to_string(&result.content).expect("serialize");
+	assert!(text.contains("proposed 1 field rename whose copy step must be confirmed"), "{text}");
+	client.cancel().await.expect("shutdown");
+}
