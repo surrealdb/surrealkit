@@ -320,7 +320,8 @@ fn typegen_from_a_v1_document_reproduces_the_v1_outputs() {
 }
 
 /// Template variables come from `surrealkit.toml` and `--var`, never from `SURREALKIT_VAR_*`
-/// in the environment, so the same checkout compiles to the same document anywhere.
+/// in the environment or a local `.env`, so the same checkout compiles to the same document
+/// anywhere.
 #[test]
 fn compile_ignores_template_variables_from_the_environment() {
 	let tmp = tempfile::TempDir::new().expect("tempdir");
@@ -332,6 +333,7 @@ fn compile_ignores_template_variables_from_the_environment() {
 		&tmp.path().join("surrealkit.toml"),
 		"[variables]\nnote = \"from_toml\"\n\n[typegen]\nschema_version = 2\njson = \"out/schema.json\"\n",
 	);
+	write(&tmp.path().join(".env"), "NOTE=from_dotenv\n");
 	let compile = |args: &[&str]| {
 		let output = Command::new(env!("CARGO_BIN_EXE_surrealkit"))
 			.current_dir(tmp.path())

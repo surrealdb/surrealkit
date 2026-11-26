@@ -176,3 +176,36 @@ fn the_catalog_covers_every_cli_capability() {
 		assert!(names.contains(expected), "missing tool {expected}; have {names:?}");
 	}
 }
+
+/// A server given the project's `.env` resolves `${KEY}` from it under the key's own name,
+/// below the server's `--var` flags and a call's `vars`, above `surrealkit.toml`.
+#[test]
+fn template_variables_resolve_from_the_servers_dotenv() {
+	use std::collections::HashMap;
+	use std::sync::Arc;
+
+	use surrealkit::mcp::{CallContext, WorkRequest};
+
+	let tmp = tempfile::TempDir::new().expect("tempdir");
+	std::fs::write(
+		tmp.path().join("surrealkit.toml"),
+		"[variables]\nmcp_dotenv_test_secret = \"from_toml\"\nmcp_dotenv_test_other = \"toml_only\"\n",
+	)
+	.expect("config");
+	let dotenv: HashMap<String, String> = [
+		("MCP_DOTENV_TEST_SECRET".to_string(), "from_dotenv".to_string()),
+		("MCP_DOTENV_TEST_FLAG".to_string(), "from_dotenv".to_string()),
+	]
+	.into();
+	let config = ServerConfig::new(
+		tmp.path().to_path_buf(),
+		DbOverrides::default(),
+		vec![("MCP_DOTENV_TEST_FLAG".to_string(), "from_flag".to_string())],
+	)
+	.expect("config")
+	.with_dotenv(dotenv);
+	let ctx = CallContext::resolve(&Arc::new(config), &WorkRequest::default()).expect("context");
+	assert_eq!(ctx.vars.apply("${mcp_dotenv_test_secret}").unwrap(), "from_dotenv");
+	assert_eq!(ctx.vars.apply("${MCP_DOTENV_TEST_FLAG}").unwrap(), "from_flag");
+	assert_eq!(ctx.vars.apply("${MCP_DOTENV_TEST_OTHER}").unwrap(), "toml_only");
+}

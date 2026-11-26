@@ -43,7 +43,9 @@ pub fn apply(content: &str, vars: &HashMap<String, String>) -> Result<String> {
 				None => {
 					return Err(anyhow!(
 						"template variable '{}' is not defined \
-                         (set via --var {}=VALUE, SURREALKIT_VAR_{} env var, or surrealkit.toml [variables])",
+                         (set via --var {}=VALUE, SURREALKIT_VAR_{} env var, {} in .env / .env.local, \
+                         or surrealkit.toml [variables])",
+						key,
 						key,
 						key,
 						key,
@@ -59,30 +61,40 @@ pub fn apply(content: &str, vars: &HashMap<String, String>) -> Result<String> {
 	Ok(result)
 }
 
-/// Merge variables from all three sources. Highest priority wins:
-/// `cli_vars` > `SURREALKIT_VAR_*` env vars > `surrealkit.toml [variables]`.
+/// Merge variables from every source. Highest priority wins:
+/// `cli_vars` > `SURREALKIT_VAR_*` env vars > `dotenv` > `surrealkit.toml [variables]`.
+///
+/// `dotenv` is the contents of the project's `.env` / `.env.local` (the same file
+/// the connection settings are read from). A template variable is looked up there
+/// under its own name, so `${JWT_SECRET}` is satisfied by `JWT_SECRET=...` in `.env`.
+/// An empty value there counts as unset, as it does for the `SURREALDB_*` settings.
+/// Only the file is consulted: a plain `JWT_SECRET` in the process environment is
+/// not picked up, so unrelated shell variables never leak into a schema.
+///
 /// Keys are uppercased. `toml_path` defaults to `./surrealkit.toml` when `None`.
 #[doc(hidden)]
 pub fn build_vars(
 	cli_vars: &[(String, String)],
+	dotenv: Option<&HashMap<String, String>>,
 	toml_path: Option<&Path>,
 ) -> Result<HashMap<String, String>> {
-	merge_vars(cli_vars, toml_path, true)
+	merge_vars(cli_vars, dotenv, toml_path, true)
 }
 
-/// [`build_vars`] without the environment: `cli_vars` > `surrealkit.toml [variables]`.
-/// `surrealkit compile` uses it, so its output depends only on files and flags, never on a
-/// `SURREALKIT_VAR_*` left in a shell or CI job.
+/// [`build_vars`] without the environment or `.env`: `cli_vars` > `surrealkit.toml [variables]`.
+/// `surrealkit compile` uses it, so its output depends only on checked-in files and flags,
+/// never on a `SURREALKIT_VAR_*` left in a shell or CI job, or on a local `.env`.
 #[doc(hidden)]
 pub fn build_project_vars(
 	cli_vars: &[(String, String)],
 	toml_path: Option<&Path>,
 ) -> Result<HashMap<String, String>> {
-	merge_vars(cli_vars, toml_path, false)
+	merge_vars(cli_vars, None, toml_path, false)
 }
 
 fn merge_vars(
 	cli_vars: &[(String, String)],
+	dotenv: Option<&HashMap<String, String>>,
 	toml_path: Option<&Path>,
 	from_env: bool,
 ) -> Result<HashMap<String, String>> {
@@ -98,7 +110,14 @@ fn merge_vars(
 		}
 	}
 
-	// Middle priority: SURREALKIT_VAR_* environment variables
+	// Then: the project's .env / .env.local, each key under its own name
+	for (key, value) in dotenv.into_iter().flatten() {
+		if !key.is_empty() && !value.is_empty() {
+			map.insert(key.to_ascii_uppercase(), value.clone());
+		}
+	}
+
+	// Then: SURREALKIT_VAR_* environment variables
 	for (key, value) in std::env::vars().filter(|_| from_env) {
 		if let Some(stripped) = key.strip_prefix("SURREALKIT_VAR_")
 			&& !stripped.is_empty()
@@ -461,6 +480,10 @@ mod tests {
 		assert!(msg.contains("MISSING"), "error should name the variable: {err}");
 		assert!(msg.contains("not defined"), "error should explain the cause: {err}");
 		assert!(msg.contains("--var"), "error should hint at remediation: {err}");
+		assert!(
+			msg.contains("MISSING in .env / .env.local"),
+			"error should name the .env source: {err}"
+		);
 	}
 
 	#[test]
@@ -606,7 +629,7 @@ mod tests {
 		let tmp = TempDir::new().unwrap();
 		let cfg = tmp.path().join("surrealkit.toml");
 		std::fs::write(&cfg, "[variables]\nbuild_vars_test_only_a = \"from_toml\"\n").unwrap();
-		let map = build_vars(&[], Some(&cfg)).unwrap();
+		let map = build_vars(&[], None, Some(&cfg)).unwrap();
 		assert_eq!(map.get("BUILD_VARS_TEST_ONLY_A").map(String::as_str), Some("from_toml"));
 	}
 
@@ -617,6 +640,7 @@ mod tests {
 		std::fs::write(&cfg, "[variables]\nbuild_vars_test_only_b = \"from_toml\"\n").unwrap();
 		let map = build_vars(
 			&[("BUILD_VARS_TEST_ONLY_B".to_string(), "from_cli".to_string())],
+			None,
 			Some(&cfg),
 		)
 		.unwrap();
@@ -627,9 +651,12 @@ mod tests {
 	fn build_vars_normalizes_cli_key_to_uppercase() {
 		let tmp = TempDir::new().unwrap();
 		let cfg = tmp.path().join("surrealkit.toml");
-		let map =
-			build_vars(&[("build_vars_test_only_c".to_string(), "v".to_string())], Some(&cfg))
-				.unwrap();
+		let map = build_vars(
+			&[("build_vars_test_only_c".to_string(), "v".to_string())],
+			None,
+			Some(&cfg),
+		)
+		.unwrap();
 		assert!(map.contains_key("BUILD_VARS_TEST_ONLY_C"), "CLI key should be uppercased");
 	}
 
@@ -638,7 +665,7 @@ mod tests {
 		let tmp = TempDir::new().unwrap();
 		let nonexistent = tmp.path().join("does_not_exist.toml");
 		// No CLI vars + no env-var prefix collisions expected with a unique key check below.
-		let map = build_vars(&[], Some(&nonexistent)).unwrap();
+		let map = build_vars(&[], None, Some(&nonexistent)).unwrap();
 		assert!(
 			!map.contains_key("BUILD_VARS_TEST_ONLY_D"),
 			"no spurious key should appear from a missing TOML"
@@ -651,8 +678,78 @@ mod tests {
 		let cfg = tmp.path().join("surrealkit.toml");
 		// A surrealkit.toml that exists but has no [variables] section must not error.
 		std::fs::write(&cfg, "# no variables section\n").unwrap();
-		let map = build_vars(&[], Some(&cfg)).unwrap();
+		let map = build_vars(&[], None, Some(&cfg)).unwrap();
 		assert!(!map.contains_key("BUILD_VARS_TEST_ONLY_E"));
+	}
+
+	fn dotenv(pairs: &[(&str, &str)]) -> HashMap<String, String> {
+		pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
+	}
+
+	#[test]
+	fn build_vars_reads_dotenv_key_under_its_own_name() {
+		let tmp = TempDir::new().unwrap();
+		let cfg = tmp.path().join("surrealkit.toml");
+		let env = dotenv(&[("BUILD_VARS_TEST_ONLY_JWT_SECRET", "from_dotenv")]);
+		let map = build_vars(&[], Some(&env), Some(&cfg)).unwrap();
+		let vars = TemplateVars {
+			vars: map,
+		};
+		let out = vars.apply("KEY '${build_vars_test_only_jwt_secret}'").unwrap();
+		assert_eq!(out, "KEY 'from_dotenv'");
+	}
+
+	#[test]
+	fn build_vars_dotenv_key_is_case_insensitive() {
+		let tmp = TempDir::new().unwrap();
+		let cfg = tmp.path().join("surrealkit.toml");
+		let env = dotenv(&[("build_vars_test_only_f", "lower")]);
+		let map = build_vars(&[], Some(&env), Some(&cfg)).unwrap();
+		assert_eq!(map.get("BUILD_VARS_TEST_ONLY_F").map(String::as_str), Some("lower"));
+	}
+
+	#[test]
+	fn build_vars_dotenv_beats_toml() {
+		let tmp = TempDir::new().unwrap();
+		let cfg = tmp.path().join("surrealkit.toml");
+		std::fs::write(
+			&cfg,
+			"[variables]\nbuild_vars_test_only_g = \"from_toml\"\nbuild_vars_test_only_h = \"toml_only\"\n",
+		)
+		.unwrap();
+		let env = dotenv(&[("BUILD_VARS_TEST_ONLY_G", "from_dotenv")]);
+		let map = build_vars(&[], Some(&env), Some(&cfg)).unwrap();
+		assert_eq!(map.get("BUILD_VARS_TEST_ONLY_G").map(String::as_str), Some("from_dotenv"));
+		assert_eq!(
+			map.get("BUILD_VARS_TEST_ONLY_H").map(String::as_str),
+			Some("toml_only"),
+			"toml stays the fallback for keys .env does not set"
+		);
+	}
+
+	#[test]
+	fn build_vars_empty_dotenv_value_falls_through_to_toml() {
+		let tmp = TempDir::new().unwrap();
+		let cfg = tmp.path().join("surrealkit.toml");
+		std::fs::write(&cfg, "[variables]\nbuild_vars_test_only_i = \"from_toml\"\n").unwrap();
+		let env = dotenv(&[("BUILD_VARS_TEST_ONLY_I", ""), ("BUILD_VARS_TEST_ONLY_J", "")]);
+		let map = build_vars(&[], Some(&env), Some(&cfg)).unwrap();
+		assert_eq!(map.get("BUILD_VARS_TEST_ONLY_I").map(String::as_str), Some("from_toml"));
+		assert!(!map.contains_key("BUILD_VARS_TEST_ONLY_J"), "an empty .env value is unset");
+	}
+
+	#[test]
+	fn build_vars_cli_beats_dotenv() {
+		let tmp = TempDir::new().unwrap();
+		let cfg = tmp.path().join("surrealkit.toml");
+		let env = dotenv(&[("BUILD_VARS_TEST_ONLY_K", "from_dotenv")]);
+		let map = build_vars(
+			&[("build_vars_test_only_k".to_string(), "from_cli".to_string())],
+			Some(&env),
+			Some(&cfg),
+		)
+		.unwrap();
+		assert_eq!(map.get("BUILD_VARS_TEST_ONLY_K").map(String::as_str), Some("from_cli"));
 	}
 
 	#[test]
@@ -660,7 +757,7 @@ mod tests {
 		let tmp = TempDir::new().unwrap();
 		let cfg = tmp.path().join("surrealkit.toml");
 		std::fs::write(&cfg, "this is = not = valid = toml [[[").unwrap();
-		let err = build_vars(&[], Some(&cfg)).unwrap_err();
+		let err = build_vars(&[], None, Some(&cfg)).unwrap_err();
 		let _ = err;
 	}
 
