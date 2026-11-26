@@ -26,7 +26,7 @@ import { Decimal, decimalFromString, SurrealNumber } from './decimal.js';
 import { INT64_MAX, INT64_MIN, Int64 } from './int.js';
 import {
 	type CodeOutput,
-	codeOf,
+	DATETIME_TYPE_IMPORT,
 	literalUnion,
 	quote,
 	quoteList,
@@ -334,13 +334,9 @@ export const RecordIdFromJsonAs = <
 	wrap(RecordIdAnyFromJson.pipe(Schema.decodeTo(id)), {
 		id: 'effect-surrealkit/RecordIdFromJsonAs',
 		expected: 'a record id string',
-		code: () => {
-			const inner = codeOf(id);
-			return runtimeCode(
-				`RecordIdFromJsonAs(${inner.runtime})`,
-				inner.Type,
-			);
-		},
+		codeParameters: [id],
+		code: ([, idCode]) =>
+			runtimeCode(`RecordIdFromJsonAs(${idCode.runtime})`, idCode.Type),
 	});
 
 /** `table` / `table<a | b>` from the bare table name SurrealDB JSON renders. */
@@ -428,13 +424,12 @@ export const GeometryFromJson = <S extends Schema.Codec<unknown, SdkGeometry>>(
 		{
 			id: 'effect-surrealkit/GeometryFromJson',
 			expected: 'a GeoJSON geometry',
-			code: () => {
-				const inner = codeOf(geometry);
-				return runtimeCode(
-					`GeometryFromJson(${inner.runtime})`,
-					inner.Type,
-				);
-			},
+			codeParameters: [geometry],
+			code: ([, geometryCode]) =>
+				runtimeCode(
+					`GeometryFromJson(${geometryCode.runtime})`,
+					geometryCode.Type,
+				),
 		},
 	);
 
@@ -479,7 +474,10 @@ export const DateTimeEffectFromJson = wrap(
 	{
 		id: 'effect-surrealkit/DateTimeEffectFromJson',
 		expected: 'an RFC 3339 datetime string',
-		code: () => runtimeCode('DateTimeEffectFromJson', 'DateTime.Utc'),
+		code: () =>
+			runtimeCode('DateTimeEffectFromJson', 'DateTime.Utc', [
+				DATETIME_TYPE_IMPORT,
+			]),
 	},
 );
 
@@ -516,9 +514,8 @@ export const SetFromJson = <S extends Schema.Top>(
 		{
 			id: 'effect-surrealkit/SetFromJson',
 			expected: 'an array of distinct elements',
-			// The wrapped array only shows the encoded side, so print the item.
-			code: () => {
-				const itemCode = codeOf(item);
+			codeParameters: [item],
+			code: ([, itemCode]) => {
 				const lengthCode =
 					options.length === undefined
 						? ''

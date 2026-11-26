@@ -22,7 +22,6 @@ import {
 } from 'surrealdb';
 import { Int } from './int.js';
 import {
-	codeOf,
 	literalUnion,
 	quote,
 	quoteList,
@@ -444,10 +443,12 @@ export const taggedRecordId = <const M extends RecordIdSchemas>(ids: M) => {
 		id: 'effect-surrealkit/TaggedRecordId',
 		payload: tables,
 		expected: `a record id of ${tables.join(', ')}`,
-		// The wrapped union only shows the encoded side, so print the map.
-		code: () => {
-			const entries = tables.map((table) => {
-				const code = codeOf(ids[table] as Schema.Top);
+		codeParameters: idSchemas,
+		code: ([, ...idCodes]) => {
+			const entries = tables.map((table, index) => {
+				const code = idCodes[index];
+				if (code === undefined)
+					throw new Error(`Missing schema code for ${table}`);
 				return { table, code };
 			});
 			const runtimeMap = entries
@@ -459,11 +460,10 @@ export const taggedRecordId = <const M extends RecordIdSchemas>(ids: M) => {
 						`${quote(table)}: Schema.Codec<${code.Type}>`,
 				)
 				.join('; ');
-			return {
-				runtime: `SurrealSchema.taggedRecordId({ ${runtimeMap} })`,
-				Type: `SurrealSchema.TaggedRecordId<{ ${typeMap} }>`,
-				importDeclarations: runtimeCode('', '').importDeclarations,
-			};
+			return runtimeCode(
+				`taggedRecordId({ ${runtimeMap} })`,
+				`SurrealSchema.TaggedRecordId<{ ${typeMap} }>`,
+			);
 		},
 		equivalence: (self, that) =>
 			(self as { _tag: string })._tag ===
