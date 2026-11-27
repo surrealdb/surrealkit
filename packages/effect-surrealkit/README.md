@@ -146,7 +146,7 @@ matrix of the contract (section 7):
 | `PersonCreate` | `CREATE … CONTENT` / `INSERT`; the id is an operation argument. |
 | `PersonMerge` | `UPDATE … MERGE`: omission keeps a value, `undefined` (NONE) removes an `option<T>` field and re-applies a `DEFAULT ALWAYS` one (an `option<T>` included). |
 | `PersonContent` | `UPDATE … CONTENT`: a full replacement. |
-| `PersonTable` | The descriptor: `{ name, type, id, select, create, merge, content, fields, presence, relations, permissions, fieldPermissions, indexes, edge? }`. |
+| `PersonTable` | The descriptor: `{ name, type, id, select, visible, create, merge, content, fields, presence, relations, permissions, fieldPermissions, indexes, edge? }`. |
 | `PersonFromJson` | The same selected row as SurrealDB's HTTP `/sql` renders it, decoding to the same types as `Person`; `PersonJsonFields` holds its field schemas for `Struct.pick` and field maps, and `PersonJsonEncoded` its JSON shape. Never the default; see [Two codec worlds](#two-codec-worlds). |
 
 A descriptor's `indexes` holds every `DEFINE INDEX` of the table by name,
@@ -187,8 +187,28 @@ ranges stay server-side.
 
 ### What changes for existing users of the emitter
 
-Regenerating with this version adds to the output and tightens one schema
-(below); every existing export keeps its name and its type:
+Regenerating with this version changes the schemas of some fields, adds to
+the output and tightens one schema. Every existing export keeps its name.
+
+The schemas change for schemas that use these kinds (see
+[Interpretation notes](#interpretation-notes) and the kinds table under
+[Two codec worlds](#two-codec-worlds)):
+
+- `any` is `Schema.UndefinedOr(SurrealSchema.SurrealValue)`, and
+  `SurrealSchema.SurrealJsonValue` in the JSON world, instead of
+  `Schema.Unknown`. An open `object`, the extra keys of a `FLEXIBLE` or
+  SCHEMALESS row and the items of an `array<any>` or `set<any>` use
+  `SurrealValue` and `SurrealJsonValue` the same way, and the extra keys of
+  an open row's Merge schema use `SurrealMergeValue`. Their types are those
+  values instead of `unknown`.
+- `float` is `SurrealSchema.Float` instead of `Schema.Number`, and
+  `Schema.Finite` in the JSON world.
+- A field whose `VALUE` ignores its input is excluded from Create, Merge and
+  Content, where it was optional, and its presence entry says so.
+- `ids.ts` declares a record ID after the IDs its key refers to, so the
+  order of its declarations can change.
+
+The output gains:
 
 - every table descriptor gains `fieldPermissions`, `indexes` and `visible`,
   and every table module a `<Table>Visible` export (with its `Type` and
@@ -200,8 +220,8 @@ Regenerating with this version adds to the output and tightens one schema
   as it does every generated file.
 
 Code that spells out a descriptor's full type, or compares one with
-`toEqual`, sees the new keys. Hand-written descriptors without them keep
-working with every builder.
+`toEqual`, sees the new keys. They are optional in `TableDescriptor`, so
+hand-written descriptors without them keep working.
 
 One schema is stricter at run time, with the same type: a closed object with
 no fields (the Create, Merge and Content of a SCHEMAFULL table whose only
@@ -3692,9 +3712,9 @@ fixed limit. `test/execution-budget.test.ts` adds separate compiler budgets
 for 30 eight-member pipelines and 30 bulk calls. `test/requests.test.ts`
 counts transport calls for each execution method.
 
-The engine, statement, field-presence and conformance suites need a real
-engine. A plain `bun run test` runs them on the in-process, in-memory engine of
-`@surrealdb/node` (SurrealDB 4.0.1; a dev dependency). Set one of these to run
+The engine, statement, field-presence, analyzer and conformance suites need
+a real engine. A plain `bun run test` runs them on the in-process, in-memory
+engine of `@surrealdb/node` (SurrealDB 4.0.1; a dev dependency). Set one of these to run
 them against a server instead, which is also the only way to run the JSON
 round trips over HTTP `/sql`; the embedded engine has no HTTP endpoint, so
 those are skipped (with a notice) without a server:
@@ -3765,12 +3785,15 @@ bun run test:mapper
 ```
 
 `test/conformance.test.ts` pins engine and SDK behaviour the documentation
-does not state and the statement layer relies on: what each statement
-contributes to a request's results, the stateless transaction, unbound and
-protected parameters, missing records and tables, `LIMIT`/`START`/`TIMEOUT`
-with bindings, `RETURN` modes, and what a record user sees where permissions
-deny a table, a write, a field or a function. It names the mode and engine
-version it ran on, and where SurrealDB 3 and 4 differ it asserts each.
+does not state: what each statement contributes to a request's results, the
+stateless and interactive transactions, unbound and protected parameters,
+missing records and tables, clauses and record ids from bindings, the index
+a lookup reads, `RETURN` modes on every write, grouping and aggregates,
+`SPLIT` and `OMIT`, what a record user sees where permissions deny a table, a
+write, a field or a function, arithmetic, `INFO … STRUCTURE`, blocks,
+full-text and nearest-neighbour search, and record links, graph steps,
+`FETCH` and recursive paths. It names the mode and engine version it ran on,
+and where SurrealDB 3 and 4 differ it asserts each.
 
 The round-trip properties (`test/roundtrip.test.ts`) run the generated corpus
 modules against a database prepared by `surrealkit test --exec`: create →
