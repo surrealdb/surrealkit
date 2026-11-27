@@ -11,33 +11,35 @@
 //!    database synced to the second version;
 //! 2. planning again produces a rollout with nothing in it;
 //! 3. a row's values in fields whose definition did not change are the same
-//!    before and after;
+//!    before and after, and a renamed field carries its old values;
 //! 4. when the rollout records itself as reversible, `rollback` after `start`
 //!    restores the first version's catalog and rows.
 //!
-//! The generator keeps to what `plan` accepts, with one exception. `plan`
-//! refuses to add and remove the same kind of entity in one scope, since it
-//! cannot tell that apart from a rename, so the generator otherwise never does.
-//! The exception is one field removed and another added with the same
-//! definition apart from the name, which is the pair a rename most looks like.
-//! `plan` refuses any field added and removed on one table, whatever their
-//! definitions; this pair is the one worth drawing. A case holding that pair is a refused case: it expects `plan` to fail with
-//! the rename guard's error, to write nothing to the project, and to leave both
-//! databases as they were. About 10% of generated cases are refused (10,191 of
-//! 100,000 pairs drawn from the generator with seed 1), so about one of the
-//! default 12.
-//! A fixed case below checks the refusal on every run. Added fields on a table
-//! that holds records are `option<…>`, since at compatibility level 4 `up`
-//! refuses a field the records do not fit. Tables are generated both
-//! `SCHEMAFULL` and `SCHEMALESS`.
+//! The generator keeps to what `plan` accepts. It never adds and removes the
+//! same kind of entity in one scope (the rename guard refuses that), except for
+//! one field pair defined the same apart from the name. On a `SCHEMAFULL` table
+//! whose definition stays as it was, `plan` proposes that pair as a rename and
+//! the test confirms it. Anywhere else the case expects `plan` to refuse it and
+//! write nothing. Added fields on a table that holds records are `option<…>`,
+//! since level 4 refuses a field the records do not fit. Tables are generated
+//! both `SCHEMAFULL` and `SCHEMALESS`.
+//!
+//! That draws a rename in only some cases, so a second property runs the same
+//! checks over cases that always hold exactly one: a `SCHEMAFULL` table whose
+//! definition stays as it was, with one field removed and one added alike and a
+//! row holding a value in the removed one, beside whatever the other tables
+//! change. Every one of its cases confirms the rename, copies, completes and
+//! rolls back. With the copy broken to `SET to = NONE` it failed on each of
+//! seeds 1 to 10 (2026-11-24).
 //!
 //! The catalog compared is `INFO FOR DB`, each table's `INFO FOR TABLE` without
 //! its `migrations` (the engine's history, which a fresh database lacks), and
 //! SurrealKit's `__entity` schema catalog.
 //!
 //! `SURREALKIT_ROLLOUT_PROPTEST_CASES` sets the number of cases. The default, 12,
-//! took 15.9 to 19.2 s over ten runs (2026-11-24, Apple silicon, debug build,
-//! the property test alone, on a shared machine), about 1.4 s a case.
+//! took 16.1 to 18.3 s over ten runs (2026-11-24, Apple silicon, debug build,
+//! the property test alone, on a shared machine), about 1.4 s a case. The
+//! rename property's 12 took 20.1 to 36.7 s over five runs, most near 21 s.
 //!
 //! The seed is random unless `SURREALKIT_ROLLOUT_PROPTEST_SEED` sets it, and a
 //! failure prints the variables that draw the same cases again. Failures are
@@ -45,8 +47,8 @@
 //! case has one to three tables, so the shrinker can drop the tables a failure
 //! does not need. A case whose outcome depends on timing can shrink to a
 //! different minimum on a replay. Commit a minimal failing case as an ordinary
-//! test in a `regressions` module, written from the `Case` text the failure
-//! prints, reduced further by hand where the shrinker stops early.
+//! test under `regressions`, written from the `Case` text the failure prints,
+//! reduced further by hand where the shrinker stops early.
 
 #![expect(clippy::unwrap_used, reason = "test helpers fail the test on any unexpected state")]
 
@@ -139,8 +141,7 @@ struct RawTable {
 	presence: Presence,
 	schemafull: bool,
 	comment: [Option<u8>; 2],
-	/// Make a removed and an added field the refused pair, when there are both.
-	pair: bool,
+	rename: bool,
 	fields: Vec<RawField>,
 	indexes: Vec<RawIndex>,
 	rows: Vec<RawRow>,
@@ -195,11 +196,11 @@ fn raw_table() -> impl Strategy<Value = RawTable> {
 			0..=ROWS,
 		),
 	)
-		.prop_map(|(presence, schemafull, comment, pair, fields, indexes, rows)| RawTable {
+		.prop_map(|(presence, schemafull, comment, rename, fields, indexes, rows)| RawTable {
 			presence,
 			schemafull,
 			comment,
-			pair,
+			rename,
 			fields,
 			indexes,
 			rows,
@@ -248,8 +249,8 @@ struct Case {
 	first: Vec<(String, String)>,
 	second: Vec<(String, String)>,
 	rows: String,
-	/// The pair holds a field removed and another added with the same
-	/// definition, which `plan` must refuse as a possible rename.
+	/// The pair holds a rename `plan` must refuse: on a table that is not
+	/// `SCHEMAFULL`, or whose own definition changes too.
 	refused: bool,
 }
 
@@ -265,8 +266,8 @@ impl fmt::Display for Case {
 	}
 }
 
-/// Turn raw choices into a pair `plan` accepts, or one it must refuse. Every
-/// rule here is one the product documents; see the module comment.
+/// Turn raw choices into a pair `plan` accepts. Every rule here is one the
+/// product documents; see the module comment.
 fn normalize(raw: &[RawTable]) -> Case {
 	let mut raw = raw.to_vec();
 
@@ -292,8 +293,9 @@ fn normalize(raw: &[RawTable]) -> Case {
 		}
 	}
 
+	let mut renamed: BTreeMap<usize, (usize, usize)> = BTreeMap::new();
 	let mut refused = false;
-	for table in &mut raw {
+	for (slot, table) in raw.iter_mut().enumerate() {
 		if table.presence != Presence::Both {
 			continue;
 		}
@@ -302,14 +304,12 @@ fn normalize(raw: &[RawTable]) -> Case {
 		let added: Vec<usize> =
 			(0..FIELDS).filter(|&f| table.fields[f].presence == Presence::Second).collect();
 		if !removed.is_empty() && !added.is_empty() {
-			if table.pair {
-				// One pair defined the same apart from the name, which `plan`
-				// refuses as a possible rename.
+			if table.rename {
+				// One pair defined the same apart from the name: a rename.
 				let (from, to) = (removed[0], added[0]);
 				let source = table.fields[from].clone();
 				let target = &mut table.fields[to];
 				target.kind = source.kind;
-				// Added fields are optional (below), so the removed one is too.
 				target.optional = true;
 				target.comment[1] = source.comment[0];
 				target.assert[1] = source.assert[0];
@@ -320,15 +320,17 @@ fn normalize(raw: &[RawTable]) -> Case {
 				for &f in &added[1..] {
 					table.fields[f].presence = Presence::Neither;
 				}
-				refused = true;
+				renamed.insert(slot, (from, to));
+				// `plan` proposes a rename only on a SCHEMAFULL table whose
+				// definition stays as it was, and refuses the pair elsewhere.
+				refused |= !table.schemafull || table.comment[0] != table.comment[1];
 			} else {
 				for &f in &removed {
 					table.fields[f].presence = Presence::Both;
 				}
 			}
 		}
-		// A field added to a table with records must accept NONE: at
-		// compatibility level 4, `up` refuses a field the records do not fit.
+		// A field added to a table with records must accept NONE.
 		for field in &mut table.fields {
 			if field.presence == Presence::Second {
 				field.optional = true;
@@ -338,14 +340,17 @@ fn normalize(raw: &[RawTable]) -> Case {
 
 	let mut versions: [Version; 2] = [Version::new(), Version::new()];
 	for (slot, table) in raw.iter().enumerate() {
+		let pair = renamed.get(&slot).copied();
 		let mut index_presence: Vec<[bool; 2]> = table
 			.indexes
 			.iter()
 			.map(|index| {
+				let on_rename = pair.is_some_and(|(a, b)| index.field == a || index.field == b);
 				[0, 1].map(|v| {
 					table.presence.in_version(v)
 						&& index.presence.in_version(v)
 						&& table.fields[index.field].presence.in_version(v)
+						&& !on_rename
 				})
 			})
 			.collect();
@@ -568,9 +573,10 @@ impl Project {
 		.context("sync")
 	}
 
-	/// Plan, and return the rollout id.
-	async fn plan(&self, name: &str) -> Result<String> {
-		run_plan(
+	/// Plan, and confirm every rename it proposes, as an author who read the
+	/// copy would. Returns the rollout id and the renames as (table, from, to).
+	async fn plan(&self, name: &str) -> Result<(String, Vec<(String, String, String)>)> {
+		let planned = run_plan(
 			&self.folder(),
 			RolloutPlanOpts {
 				name: Some(name.to_string()),
@@ -586,27 +592,17 @@ impl Project {
 			.map(|e| e.path())
 			.find(|p| p.to_string_lossy().ends_with(&suffix))
 			.context("no manifest")?;
-		Ok(path.file_stem().unwrap().to_string_lossy().into_owned())
-	}
-
-	/// Every file in the project outside `schema/`, by path, with its bytes.
-	fn state(&self) -> Result<BTreeMap<PathBuf, Vec<u8>>> {
-		let mut files = BTreeMap::new();
-		let mut dirs = vec![self.root.clone()];
-		while let Some(dir) = dirs.pop() {
-			for entry in fs::read_dir(&dir)? {
-				let path = entry?.path();
-				if path == self.root.join("schema") {
-					continue;
-				}
-				if path.is_dir() {
-					dirs.push(path);
-				} else {
-					files.insert(path.clone(), fs::read(&path)?);
-				}
-			}
+		let id = path.file_stem().unwrap().to_string_lossy().into_owned();
+		if !planned.renames.is_empty() {
+			let raw = fs::read_to_string(&path)?;
+			fs::write(&path, raw.replace("confirmed = false", "confirmed = true"))?;
 		}
-		Ok(files)
+		let renames = planned
+			.renames
+			.iter()
+			.map(|r| (r.scope.clone().unwrap_or_default(), r.from.clone(), r.to.clone()))
+			.collect();
+		Ok((id, renames))
 	}
 
 	fn manifest(&self, id: &str) -> Result<RolloutSpec> {
@@ -700,8 +696,17 @@ async fn reversibility(db: &Surreal<Any>, id: &str) -> Result<Option<String>> {
 	Ok(rows.into_iter().next())
 }
 
+/// What a case exercised.
+#[derive(Debug, Default)]
+struct Exercised {
+	/// The renames `plan` proposed, and the test confirmed.
+	renames: usize,
+	/// Whether the rollout was rolled back after `start`.
+	rolled_back: bool,
+}
+
 /// Run every property against one case.
-async fn check(case: &Case) -> Result<()> {
+async fn check(case: &Case) -> Result<Exercised> {
 	let project = Project::new(&case.first);
 	let upgraded = mem_db().await;
 	let rolled_back = mem_db().await;
@@ -713,24 +718,24 @@ async fn check(case: &Case) -> Result<()> {
 	let first_catalog = catalog(&rolled_back).await?;
 	let first_rows = rows(&rolled_back).await?;
 
-	let first_state = project.state()?;
 	project.write(&case.second);
 	if case.refused {
 		let Err(err) = project.plan("next").await else {
-			bail!("plan accepted a removed and an added field it must refuse");
+			bail!("plan accepted a rename it must refuse");
 		};
 		ensure!(
 			format!("{err:#}").contains("cannot tell apart from a rename"),
-			"plan refused the pair for another reason: {err:#}"
+			"plan refused the rename for another reason: {err:#}"
 		);
-		ensure!(project.state()? == first_state, "a refused plan wrote to the project");
-		for db in [&upgraded, &rolled_back] {
-			ensure!(catalog(db).await? == first_catalog, "a refused plan changed the catalog");
-			ensure!(rows(db).await? == first_rows, "a refused plan changed the rows");
-		}
-		return Ok(());
+		ensure!(
+			!project.root.join("rollouts").exists()
+				|| fs::read_dir(project.root.join("rollouts"))?.next().is_none(),
+			"a refused plan wrote a manifest"
+		);
+		return Ok(Exercised::default());
 	}
-	let id = project.plan("next").await?;
+	let (id, renames) = project.plan("next").await?;
+	let renames_count = renames.len();
 
 	// 1. `up --complete` reaches the catalog a fresh sync of the second version has.
 	run_up(
@@ -756,11 +761,15 @@ async fn check(case: &Case) -> Result<()> {
 	);
 
 	// 2. Planning again finds nothing to do.
-	let again = project.plan("again").await?;
+	let (again, again_renames) = project.plan("again").await?;
 	let spec = project.manifest(&again)?;
-	ensure!(spec.steps.is_empty(), "property 2: planning again produced steps {:?}", spec.steps);
+	ensure!(
+		spec.steps.is_empty() && again_renames.is_empty(),
+		"property 2: planning again produced steps {:?} and renames {again_renames:?}",
+		spec.steps
+	);
 
-	// 3. Fields whose definition did not change keep their values.
+	// 3. Unchanged fields keep their values; a renamed field carries them.
 	let after = rows(&upgraded).await?;
 	for (table, fields) in unchanged_fields(&first_catalog, &second_catalog) {
 		let before = &first_rows[&table];
@@ -771,14 +780,22 @@ async fn check(case: &Case) -> Result<()> {
 			before.keys().collect::<Vec<_>>(),
 			now.keys().collect::<Vec<_>>()
 		);
-		let kept = fields.iter().map(String::as_str).chain(["x"]);
+		let mut kept: Vec<(String, String)> =
+			fields.iter().map(|f| (f.clone(), f.clone())).collect();
+		kept.extend(
+			renames
+				.iter()
+				.filter(|(t, _, _)| *t == table)
+				.map(|(_, f, to)| (f.clone(), to.clone())),
+		);
+		kept.push(("x".into(), "x".into()));
 		for (rid, row) in before {
-			for field in kept.clone() {
+			for (from, to) in &kept {
 				ensure!(
-					row.get(field) == now[rid].get(field),
-					"property 3: {rid}.{field} was {:?} and is {:?}",
-					row.get(field),
-					now[rid].get(field)
+					row.get(from) == now[rid].get(to),
+					"property 3: {rid}.{from} was {:?} and {rid}.{to} is {:?}",
+					row.get(from),
+					now[rid].get(to)
 				);
 			}
 		}
@@ -796,7 +813,12 @@ async fn check(case: &Case) -> Result<()> {
 	.context("start")?;
 	match reversibility(&rolled_back, &id).await?.as_deref() {
 		Some("full" | "definition_only") => {}
-		Some("irreversible") => return Ok(()),
+		Some("irreversible") => {
+			return Ok(Exercised {
+				renames: renames_count,
+				rolled_back: false,
+			});
+		}
 		other => bail!("rollout records reversibility {other:?}"),
 	}
 	run_rollback(
@@ -818,7 +840,10 @@ async fn check(case: &Case) -> Result<()> {
 		restored_rows == first_rows,
 		"property 4: after rollback the rows are\n{restored_rows:#?}\nbut were\n{first_rows:#?}"
 	);
-	Ok(())
+	Ok(Exercised {
+		renames: renames_count,
+		rolled_back: true,
+	})
 }
 
 fn cases() -> u32 {
@@ -853,8 +878,14 @@ fn shrink_ms() -> u32 {
 		.saturating_mul(1000)
 }
 
-#[test]
-fn rollouts_hold_their_properties_over_generated_schema_pairs() {
+/// Run `check` over `strategy`'s cases, each turned into a `Case` by
+/// `normalize`, and `expect` over what each exercised, with the seed printed
+/// on failure.
+fn run_property(
+	strategy: impl Strategy<Value = Vec<RawTable>>,
+	normalize: fn(&[RawTable]) -> Case,
+	expect: fn(&Exercised) -> Result<()>,
+) {
 	let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
 	let seed = seed();
 	let mut runner = TestRunner::new(Config {
@@ -866,10 +897,11 @@ fn rollouts_hold_their_properties_over_generated_schema_pairs() {
 		max_shrink_time: shrink_ms(),
 		..Config::default()
 	});
-	let result = runner.run(&raw_case(), |raw| {
+	let result = runner.run(&strategy, |raw| {
 		let case = normalize(&raw);
 		runtime
 			.block_on(check(&case))
+			.and_then(|exercised| expect(&exercised))
 			.map_err(|err| TestCaseError::fail(format!("{err:#}\n{case}")))
 	});
 	if let Err(err) = result {
@@ -879,6 +911,65 @@ fn rollouts_hold_their_properties_over_generated_schema_pairs() {
 			cases()
 		);
 	}
+}
+
+#[test]
+fn rollouts_hold_their_properties_over_generated_schema_pairs() {
+	run_property(raw_case(), normalize, |_| Ok(()));
+}
+
+/// The cases of `raw_case` with exactly one rename among their other changes:
+/// one table is made `SCHEMAFULL`, kept in both versions with its own
+/// definition unchanged, and given one field removed and one added, the pair
+/// `normalize` turns into a rename. Its first row holds a value in the removed
+/// field, so a copy that loses it is seen. The other tables are drawn as in
+/// `raw_case`, with no rename of their own.
+fn raw_rename_case() -> impl Strategy<Value = Vec<RawTable>> {
+	(raw_case(), any::<prop::sample::Index>(), 0..FIELDS, 1..FIELDS).prop_map(
+		|(mut tables, slot, from, offset)| {
+			for table in &mut tables {
+				table.rename = false;
+			}
+			let to = (from + offset) % FIELDS;
+			let slot = slot.index(tables.len());
+			let table = &mut tables[slot];
+			table.presence = Presence::Both;
+			table.schemafull = true;
+			table.comment[1] = table.comment[0];
+			table.rename = true;
+			for (f, field) in table.fields.iter_mut().enumerate() {
+				field.presence = if f == from {
+					Presence::First
+				} else if f == to {
+					Presence::Second
+				} else if matches!(field.presence, Presence::First | Presence::Second) {
+					Presence::Both
+				} else {
+					field.presence
+				};
+			}
+			if table.rows.is_empty() {
+				table.rows.push(RawRow {
+					seed: 0,
+					none: vec![false; FIELDS],
+				});
+			}
+			table.rows[0].none[from] = false;
+			tables
+		},
+	)
+}
+
+/// Every case holds one rename, so every run confirms one, copies it, completes
+/// it, and rolls it back. The default property draws a rename in only some of
+/// its cases.
+#[test]
+fn a_rename_holds_every_property_beside_other_changes() {
+	run_property(raw_rename_case(), normalize, |exercised| {
+		ensure!(exercised.renames == 1, "plan proposed {} renames, not 1", exercised.renames);
+		ensure!(exercised.rolled_back, "the rollout was not rolled back");
+		Ok(())
+	});
 }
 
 /// The normalizer is pure, so its rules are checked without an engine.
@@ -905,26 +996,45 @@ fn generated_pairs_keep_to_what_plan_accepts() {
 		.unwrap();
 }
 
-mod refused {
-	//! The refused pair, spelled out, so the refusal is checked on every run and
-	//! not only when the generator happens to draw it.
+mod regressions {
+	//! Minimal failing cases the property test has found, kept as ordinary tests.
 
 	use super::{Case, check};
 
-	fn table(field: &str) -> Vec<(String, String)> {
+	fn person(mode: &str, field: &str) -> Vec<(String, String)> {
 		vec![(
 			"t0.surql".to_string(),
-			format!("DEFINE TABLE t0 SCHEMAFULL;\nDEFINE FIELD {field} ON t0 TYPE option<int>;\n"),
+			format!("DEFINE TABLE t0 {mode};\nDEFINE FIELD {field} ON t0 TYPE option<int>;\n"),
 		)]
 	}
 
+	/// Property 4 found this on 2026-11-23, reduced by hand to one table from
+	/// the three-table case the shrinker stopped at. `plan` proposed renaming
+	/// `f3` to `f2` on a schemaless table, the rollout recorded itself as
+	/// reversible, and after `rollback` the record still held the copied
+	/// `f2: 3`, since `REMOVE FIELD` leaves values on a schemaless table. `plan`
+	/// now proposes no rename there and refuses the pair.
 	#[tokio::test(flavor = "multi_thread")]
-	async fn a_field_removed_and_another_added_alike_is_refused_and_writes_nothing() {
+	async fn a_rename_on_a_schemaless_table_is_refused_rather_than_left_behind_by_rollback() {
 		check(&Case {
-			first: table("f3"),
-			second: table("f2"),
+			first: person("SCHEMALESS", "f3"),
+			second: person("SCHEMALESS", "f2"),
 			rows: "CREATE t0:r0 CONTENT { f3: 3 };\n".into(),
 			refused: true,
+		})
+		.await
+		.unwrap();
+	}
+
+	/// The same rename on a `SCHEMAFULL` table, where level 4 clears the copies
+	/// on rollback, holds every property.
+	#[tokio::test(flavor = "multi_thread")]
+	async fn the_same_rename_on_a_schemafull_table_holds_every_property() {
+		check(&Case {
+			first: person("SCHEMAFULL", "f3"),
+			second: person("SCHEMAFULL", "f2"),
+			rows: "CREATE t0:r0 CONTENT { f3: 3 };\n".into(),
+			refused: false,
 		})
 		.await
 		.unwrap();
