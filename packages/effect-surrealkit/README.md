@@ -78,6 +78,7 @@ file (`--config emit.json`):
 | `acknowledge` | `{ "<error code>": "<reason>" }`: error diagnostics generation may proceed past |
 | `names` | PascalCase names for tables whose default names collide |
 | `patch` | Also emit `<Table>Patch` JSON Patch unions (not yet qualified against an engine) |
+| `pipeable` | Emit nested unary field schemas such as `Schema.Array(item).pipe(Schema.optionalKey)`. Enable in JSON or with `--pipeable`. Defaults to false. |
 | `importExtension` | `".js"` (default) or `".ts"`: the extension of the generated modules' imports of each other (`--import-extension`) |
 
 The default `.js` imports are what `tsc` and bundlers resolve to the `.ts`
