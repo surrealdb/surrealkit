@@ -788,15 +788,44 @@ regenerating them.
 `test/types` compiles the golden modules with positive and `@ts-expect-error`
 fixtures under `strict` and `exactOptionalPropertyTypes`.
 
-The engine and field-presence suites, and the analyzer's engine suites
-(`test/*-engine.test.ts`: the engine facts behind what the analyzer records
-and refuses), run against a real, disposable server when one of these is set,
-and are skipped (with a notice) otherwise:
+The engine, field-presence, analyzer and conformance suites need a real engine. A
+plain `bun run test` runs them on the in-process, in-memory engine of
+`@surrealdb/node` (SurrealDB 4.0.1; a dev dependency). Set one of these to run
+them against a server instead, which is also the only way to run the JSON
+round trips over HTTP `/sql`; the embedded engine has no HTTP endpoint, so
+those are skipped (with a notice) without a server:
 
 ```sh
 SURREAL_BIN=/usr/local/bin/surreal bun run test          # starts `surreal start … memory`
 SURREAL_URL=ws://127.0.0.1:8000/rpc bun run test         # a throwaway container, root/root
 ```
+
+Which tests a lane skips is pinned. `bun run test:skips` runs the whole suite
+on the lane the same variables select and exits 1 when its skipped tests
+differ from `test/skips/<lane>.txt` in either direction, printing each name
+that was skipped and is not listed, or is listed and was not skipped. The
+lanes are `embedded`, `binary-<major>.<minor>` for `SURREAL_BIN` (by the
+version the binary reports) and `remote` for `SURREAL_URL`. `embedded` and
+`binary-3.3` are committed; a lane without a list is reported as unpinned and
+not compared. After a change that is meant to skip or un-skip a test, rewrite
+the list from a passing run and commit it with the change:
+
+```sh
+bun run test:skips                                                   # embedded
+SURREAL_BIN=/usr/local/bin/surreal bun run test:skips                # binary-3.3 with a 3.3 binary
+UPDATE_SKIPS=1 SURREAL_BIN=/usr/local/bin/surreal bun run test:skips # rewrites test/skips/binary-3.3.txt
+```
+
+`test/conformance.test.ts` pins engine and SDK behaviour the documentation
+does not state: what each statement contributes to a request's results, the
+stateless and interactive transactions, unbound and protected parameters,
+missing records and tables, clauses and record ids from bindings, the index
+a lookup reads, `RETURN` modes on every write, grouping and aggregates,
+`SPLIT` and `OMIT`, what a record user sees where permissions deny a table, a
+write, a field or a function, arithmetic, `INFO … STRUCTURE`, blocks,
+full-text and nearest-neighbour search, and record links, graph steps,
+`FETCH` and recursive paths. It names the mode and engine version it ran on,
+and where SurrealDB 3 and 4 differ it asserts each.
 
 The round-trip properties (`test/roundtrip.test.ts`) run the generated corpus
 modules against a database prepared by `surrealkit test --exec`: create →

@@ -6,6 +6,8 @@
       "name": "effect-surrealkit",
       "devDependencies": {
         "@biomejs/biome": "2.4.2",
+        "@surrealdb/node": "3.2.0",
+        "@surrealdb/node-native": "4.0.1",
         "@types/node": "^24.3.0",
         "ajv": "8.17.1",
         "effect": "4.1.5",
@@ -152,6 +154,26 @@
     "@rollup/rollup-win32-x64-msvc": ["@rollup/rollup-win32-x64-msvc@4.65.0", "", { "os": "win32", "cpu": "x64" }, "sha512-wPWi++K4Bs1VR4XihOhfGi4IGX6Cub7FlerTf8X2v+2BtDHddgSqWCXwGD+h2yAe4/niIhNDwAltioOC+wEogQ=="],
 
     "@surrealdb/cbor": ["@surrealdb/cbor@2.0.0-alpha.4", "", {}, "sha512-l/hNZ3ZCOJq8rzwx1y5ZV/8b2bYCWdhGqRVY33Pu50NAHyAW5qLsMn3ZBkZow77mAKwNCsbDsRGnyYEuU95mjw=="],
+
+    "@surrealdb/node": ["@surrealdb/node@3.2.0", "", { "peerDependencies": { "@surrealdb/node-native": "^3.3.0-beta.3 || ^4.0.0", "surrealdb": "^2.0.1" } }, "sha512-ha8pr6rrDtfTuWYeb9WveAZmHMAbGJkFBwpKrKUFOv+3EmiCH/16TFXiQFOrmKu+JWXwbmva6Nd8QMP+jOlZEQ=="],
+
+    "@surrealdb/node-native": ["@surrealdb/node-native@4.0.1", "", { "optionalDependencies": { "@surrealdb/node-native-darwin-arm64": "4.0.1", "@surrealdb/node-native-darwin-x64": "4.0.1", "@surrealdb/node-native-linux-arm64-gnu": "4.0.1", "@surrealdb/node-native-linux-arm64-musl": "4.0.1", "@surrealdb/node-native-linux-x64-gnu": "4.0.1", "@surrealdb/node-native-linux-x64-musl": "4.0.1", "@surrealdb/node-native-win32-arm64-msvc": "4.0.1", "@surrealdb/node-native-win32-x64-msvc": "4.0.1" } }, "sha512-PHEnISJTK1Ga8n2Vo1a44EbMq+VD7Raa3gqS71ySxN+usuyz+SMfvLedWdgLjSSaFYl5IqsHzAb3jlXNgnlxXg=="],
+
+    "@surrealdb/node-native-darwin-arm64": ["@surrealdb/node-native-darwin-arm64@4.0.1", "", { "os": "darwin", "cpu": "arm64" }, "sha512-VEAGDh4AGQ3Z6nh9zkk69P3EZ3BhJD+G19+/2TYa+bMwp9DMvgPA52+aDOWITipmhHL7dXbqUsL4uY673N069Q=="],
+
+    "@surrealdb/node-native-darwin-x64": ["@surrealdb/node-native-darwin-x64@4.0.1", "", { "os": "darwin", "cpu": "x64" }, "sha512-k9ONAL3knkrBmoyZQzCJ3Z92GnFyZ5CilPUHtldD+vwE3ma0u6TqFeOg3KeZuX69TcIxtYuNpS/UxtmSGLxWCA=="],
+
+    "@surrealdb/node-native-linux-arm64-gnu": ["@surrealdb/node-native-linux-arm64-gnu@4.0.1", "", { "os": "linux", "cpu": "arm64", "libc": "glibc" }, "sha512-YYZUwqaPUKzxnsD6eGKF6s3pHR2d03DfSxRAIaA/IMzkSF0pRF8mcVfgyBoxnRHsUBgoWvJ622lL0H1q95MqaA=="],
+
+    "@surrealdb/node-native-linux-arm64-musl": ["@surrealdb/node-native-linux-arm64-musl@4.0.1", "", { "os": "linux", "cpu": "arm64", "libc": "musl" }, "sha512-LmrFnxuORaDBBiDLZyirDKZ8MF5wFIUXGUJ2m86lx61X0cbu/yD/VaAmWRvjYGBLVjSS0qn1pxiXG0ETdF1lVA=="],
+
+    "@surrealdb/node-native-linux-x64-gnu": ["@surrealdb/node-native-linux-x64-gnu@4.0.1", "", { "os": "linux", "cpu": "x64", "libc": "glibc" }, "sha512-bOEqCUIhC1kBUklka2P0wIRp6j61xM4oeDNJDgtodC2MXGMaHnWeX6mre/MZfu1JJsD8dTQUnNdgAhRo5h8Jvw=="],
+
+    "@surrealdb/node-native-linux-x64-musl": ["@surrealdb/node-native-linux-x64-musl@4.0.1", "", { "os": "linux", "cpu": "x64", "libc": "musl" }, "sha512-R/D6BWagVYC5jSvOHxkzg5PLj0NrHn6QDPIYVXCOimRytE+2Qeu2h4C75aAXSs1wQrV61ZlsB97a9a0kXmPLPQ=="],
+
+    "@surrealdb/node-native-win32-arm64-msvc": ["@surrealdb/node-native-win32-arm64-msvc@4.0.1", "", { "os": "win32", "cpu": "arm64" }, "sha512-Xd+2ANgNiEmeRMJUCeJGuFq6rIe5KCerFwfNYTlhJfmMs5SvJ81QUbwUFVg84pp2Hkr82P/WXijCcXGsVZLOog=="],
+
+    "@surrealdb/node-native-win32-x64-msvc": ["@surrealdb/node-native-win32-x64-msvc@4.0.1", "", { "os": "win32", "cpu": "x64" }, "sha512-FEAVBNT/9/82UnUUsASLSKrnpNr9LkLkm9SOjGGJ/WuUFLXfjeNu6nyztxshG1b8QT1cGFBFNdEwsaRuO1isOQ=="],
 
     "@surrealdb/sqon": ["@surrealdb/sqon@0.2.1", "", { "dependencies": { "@surrealdb/cbor": "2.0.0-alpha.4", "uuidv7": "^1.0.1" }, "peerDependencies": { "tslib": "^2.6.3", "typescript": "^5.0.0" } }, "sha512-syLKHRHMoyzbimUAOni3Jn8oeEIGXpsHJjIOaZ5qJ17BQHXQvlvlhqRL5/r83YKWz7ptgt2lVNyoU857lOfvAQ=="],
 

@@ -40,6 +40,7 @@
 		"prepare": "tsup",
 		"lint": "biome ci .",
 		"test": "vitest run",
+		"test:skips": "node scripts/skips.mjs",
 		"test:roundtrip": "node scripts/roundtrip.mjs",
 		"typecheck": "tsc --noEmit && tsc --noEmit -p test/types"
 	},
@@ -55,6 +56,8 @@
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.4.2",
+		"@surrealdb/node": "3.2.0",
+		"@surrealdb/node-native": "4.0.1",
 		"@types/node": "^24.3.0",
 		"ajv": "8.17.1",
 		"effect": "4.1.5",

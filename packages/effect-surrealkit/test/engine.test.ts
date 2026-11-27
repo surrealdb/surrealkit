@@ -12,6 +12,8 @@ import {
 	type Engine,
 	engineConfigured,
 	engineSkipReason,
+	httpConfigured,
+	httpSkipReason,
 	startEngine,
 	within,
 } from './engine.js';
@@ -20,6 +22,10 @@ import { expectRoundTrip } from './helpers.js';
 if (!engineConfigured) {
 	console.warn(
 		`[effect-surrealkit] engine suite skipped: ${engineSkipReason}`,
+	);
+} else if (!httpConfigured) {
+	console.info(
+		`[effect-surrealkit] JSON round trips skipped: ${httpSkipReason}`,
 	);
 }
 
@@ -34,7 +40,9 @@ describe.skipIf(!engineConfigured)('disposable engine round trips', () => {
 
 	beforeAll(async () => {
 		engine = await startEngine();
-		console.info(`[effect-surrealkit] engine ${engine.version}`);
+		console.info(
+			`[effect-surrealkit] engine ${engine.version} (${engine.mode})`,
+		);
 	});
 	afterAll(async () => {
 		await engine?.stop();
@@ -86,7 +94,7 @@ describe.skipIf(!engineConfigured)('disposable engine round trips', () => {
 		});
 	}
 
-	describe('the JSON world over HTTP /sql', () => {
+	describe.skipIf(!httpConfigured)('the JSON world over HTTP /sql', () => {
 		/** What JSON does to a value it cannot carry: a decode failure, or another value. */
 		type Loss = (value: unknown) => 'fails' | 'changes' | undefined;
 		const unsafeInt = (value: unknown) =>
