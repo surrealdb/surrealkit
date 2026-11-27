@@ -10,6 +10,16 @@ const list = (values: ReadonlyArray<string>): string =>
 
 const SAFE = Number.MAX_SAFE_INTEGER;
 
+/** Keep leaf references compact; allow nested schema expressions to compose left to right. */
+export const unarySchema = (
+	operator: string,
+	value: string,
+	pipeable?: boolean,
+): string =>
+	pipeable && value.endsWith(')')
+		? `${value}.pipe(${operator})`
+		: `${operator}(${value})`;
+
 const isSafeIntText = (text: string): boolean => {
 	if (!/^-?\d+$/.test(text)) return false;
 	const big = BigInt(text);
@@ -287,7 +297,11 @@ export const printKind = (
 		}
 		case 'array': {
 			const item = hooks.item ?? printItem(kind.item, ctx);
-			const array = `Schema.Array(${item})`;
+			const array = unarySchema(
+				'Schema.Array',
+				item,
+				ctx.profile.pipeable,
+			);
 			return kind.length === undefined
 				? array
 				: `${array}.check(Schema.isBetweenLength(${kind.length}, ${kind.length}))`;
@@ -304,7 +318,7 @@ export const printKind = (
 			if (kind.fields.length === 0) return 'SurrealSchema.EmptyObject';
 			const entries = kind.fields.map((field) => {
 				const value = printKind(field.kind, ctx);
-				return `${propertyKey(field.name)}: ${field.optional ? `Schema.optionalKey(${value})` : value}`;
+				return `${propertyKey(field.name)}: ${field.optional ? unarySchema('Schema.optionalKey', value, ctx.profile.pipeable) : value}`;
 			});
 			return `Schema.Struct({ ${entries.join(', ')} })`;
 		}
