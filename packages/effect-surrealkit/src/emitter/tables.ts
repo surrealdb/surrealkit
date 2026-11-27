@@ -22,6 +22,7 @@ import {
 	printKind,
 	printOpenRecord,
 	printRecord,
+	unarySchema,
 } from './kinds.js';
 import { propertyAccess, propertyKey } from './names.js';
 import type { EmitterOptions } from './options.js';
@@ -181,15 +182,15 @@ const derivePresence = (
 	}
 };
 
-const wrap = (code: string, presence: Presence): string => {
+const wrap = (code: string, presence: Presence, pipeable?: boolean): string => {
 	switch (presence) {
 		case 'required':
 			return code;
 		case 'optional':
-			return `Schema.optionalKey(${code})`;
+			return unarySchema('Schema.optionalKey', code, pipeable);
 		case 'removable':
 		case 'resettable':
-			return `Schema.optional(${code})`;
+			return unarySchema('Schema.optional', code, pipeable);
 		case 'excluded':
 			throw new Error('excluded fields are not printed');
 	}
@@ -356,6 +357,7 @@ class TablePrinter {
 				wrap(
 					this.field(child, operation, indent + 1, element),
 					presence,
+					this.options.pipeable,
 				),
 			]);
 		}
@@ -665,7 +667,7 @@ export const printTable = (input: TableInput): string => {
 			const code = sharedKeys.has(field.key)
 				? `${fieldsName}${propertyAccess(field.key)}`
 				: (codes.get(field.key)?.get(operation) as string);
-			entries.push([field.key, wrap(code, p)]);
+			entries.push([field.key, wrap(code, p, options.pipeable)]);
 		}
 		lines.push(`/** ${VARIANT_DOCS[operation](table.name)} */`);
 		lines.push(
@@ -872,7 +874,11 @@ const printJsonWorld = (
 	for (const [field, presence] of selected) {
 		entries.push([
 			field.key,
-			wrap(`${jsonFields}${propertyAccess(field.key)}`, presence),
+			wrap(
+				`${jsonFields}${propertyAccess(field.key)}`,
+				presence,
+				options.pipeable,
+			),
 		]);
 	}
 	return [
