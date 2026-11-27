@@ -9,10 +9,10 @@ export { KindsId } from "./ids.js";
 
 /** Field schemas of `kinds` that are the same in every operation using them; `refine` and `replaceField` accept these keys. */
 export const KindsFields = {
-	k_any: Schema.Unknown,
-	k_array: Schema.Array(Schema.Unknown),
+	k_any: Schema.UndefinedOr(SurrealSchema.SurrealValue),
+	k_array: Schema.Array(SurrealSchema.SurrealValue),
 	k_array_bounded: Schema.Array(SurrealSchema.Int).check(Schema.isBetweenLength(3, 3)),
-	k_array_nested: Schema.Array(Schema.Array(Schema.Number)),
+	k_array_nested: Schema.Array(Schema.Array(SurrealSchema.Float)),
 	k_array_of: Schema.Array(SurrealSchema.String),
 	k_array_or_set: Schema.Union([Schema.Array(SurrealSchema.Int).check(Schema.isBetweenLength(2, 2)), SurrealSchema.SetOf(SurrealSchema.String)]),
 	k_bool: Schema.Boolean,
@@ -23,7 +23,7 @@ export const KindsFields = {
 	k_file: SurrealSchema.FileRefFor([]),
 	k_file_bucket: SurrealSchema.FileRefFor(["avatars"]),
 	k_file_buckets: SurrealSchema.FileRefFor(["avatars", "docs"]),
-	k_float: Schema.Number,
+	k_float: SurrealSchema.Float,
 	k_function: SurrealSchema.Unsupported("function"),
 	k_geometry: SurrealSchema.Geometry,
 	k_geometry_all: SurrealSchema.GeometryOf(["collection", "line", "multiline", "multipoint", "multipolygon", "point", "polygon"]),
@@ -38,9 +38,9 @@ export const KindsFields = {
 	k_nullable: Schema.NullOr(SurrealSchema.String),
 	k_number: SurrealSchema.SurrealNumber,
 	k_object: Schema.Record(Schema.String, Schema.Never),
-	k_object_flexible: Schema.Record(Schema.String, Schema.Unknown),
+	k_object_flexible: Schema.Record(Schema.String, SurrealSchema.SurrealValue),
 	k_object_literal: Schema.Struct({ a: SurrealSchema.Int, b: Schema.optionalKey(SurrealSchema.String), c: Schema.Struct({ d: Schema.Boolean }) }),
-	k_object_union: Schema.Union([Schema.Struct({ h: Schema.Number, kind: Schema.Literal("rect"), w: Schema.Number }), Schema.Struct({ kind: Schema.Literal("circle"), r: Schema.Number })]),
+	k_object_union: Schema.Union([Schema.Struct({ h: SurrealSchema.Float, kind: Schema.Literal("rect"), w: SurrealSchema.Float }), Schema.Struct({ kind: Schema.Literal("circle"), r: SurrealSchema.Float })]),
 	k_option: SurrealSchema.String,
 	k_option_array: Schema.Array(TeamId),
 	k_option_nullable: Schema.NullOr(SurrealSchema.String),
@@ -51,7 +51,7 @@ export const KindsFields = {
 	k_record_any: SurrealSchema.RecordIdAny,
 	k_record_union: PersonOrTeamId,
 	k_regex: SurrealSchema.Unsupported("regex"),
-	k_set: SurrealSchema.SetOf(Schema.Unknown),
+	k_set: SurrealSchema.SetOf(SurrealSchema.SurrealValue),
 	k_set_bounded: SurrealSchema.SetOf(SurrealSchema.Int, { length: 5 }),
 	k_set_of: SurrealSchema.SetOf(SurrealSchema.String),
 	k_string: SurrealSchema.String,
@@ -122,6 +122,11 @@ export type KindsEncoded = typeof Kinds.Encoded;
 export const KindsRow = SurrealSchema.NoneAsAbsent(Kinds);
 export type KindsRow = typeof KindsRow.Type;
 export type KindsRowEncoded = typeof KindsRow.Encoded;
+
+/** `Kinds` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Kinds`. */
+export const KindsVisible = Kinds;
+export type KindsVisible = typeof KindsVisible.Type;
+export type KindsVisibleEncoded = typeof KindsVisible.Encoded;
 
 /** Input for `CREATE kinds CONTENT` / `INSERT`. The record id is an operation argument. */
 export const KindsCreate = Schema.Struct({
@@ -299,6 +304,7 @@ export const KindsTable = SurrealSchema.table({
 	drop: false,
 	id: KindsId,
 	select: Kinds,
+	visible: KindsVisible,
 	create: KindsCreate,
 	merge: KindsMerge,
 	content: KindsContent,
@@ -358,14 +364,83 @@ export const KindsTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		k_any: { select: true, create: true, update: true },
+		k_array: { select: true, create: true, update: true },
+		k_array_bounded: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true },
+		} },
+		k_array_nested: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true, fields: {
+				"*": { select: true, create: true, update: true },
+			} },
+		} },
+		k_array_of: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true },
+		} },
+		k_array_or_set: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true },
+		} },
+		k_bool: { select: true, create: true, update: true },
+		k_bytes: { select: true, create: true, update: true },
+		k_datetime: { select: true, create: true, update: true },
+		k_decimal: { select: true, create: true, update: true },
+		k_duration: { select: true, create: true, update: true },
+		k_file: { select: true, create: true, update: true },
+		k_file_bucket: { select: true, create: true, update: true },
+		k_file_buckets: { select: true, create: true, update: true },
+		k_float: { select: true, create: true, update: true },
+		k_function: { select: true, create: true, update: true },
+		k_geometry: { select: true, create: true, update: true },
+		k_geometry_all: { select: true, create: true, update: true },
+		k_geometry_point: { select: true, create: true, update: true },
+		k_int: { select: true, create: true, update: true },
+		k_literal_double_quoted: { select: true, create: true, update: true },
+		k_literal_mixed: { select: true, create: true, update: true },
+		k_literal_numbers: { select: true, create: true, update: true },
+		k_literal_strings: { select: true, create: true, update: true },
+		k_none: { select: true, create: true, update: true },
+		k_null: { select: true, create: true, update: true },
+		k_nullable: { select: true, create: true, update: true },
+		k_number: { select: true, create: true, update: true },
+		k_object: { select: true, create: true, update: true },
+		k_object_flexible: { select: true, create: true, update: true },
+		k_object_literal: { select: true, create: true, update: true },
+		k_object_union: { select: true, create: true, update: true },
+		k_option: { select: true, create: true, update: true },
+		k_option_array: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true },
+		} },
+		k_option_nullable: { select: true, create: true, update: true },
+		k_option_record: { select: true, create: true, update: true },
+		k_primitive_union: { select: true, create: true, update: true },
+		k_range: { select: true, create: true, update: true },
+		k_record: { select: true, create: true, update: true },
+		k_record_any: { select: true, create: true, update: true },
+		k_record_union: { select: true, create: true, update: true },
+		k_regex: { select: true, create: true, update: true },
+		k_set: { select: true, create: true, update: true },
+		k_set_bounded: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true },
+		} },
+		k_set_of: { select: true, create: true, update: true, fields: {
+			"*": { select: true, create: true, update: true },
+		} },
+		k_string: { select: true, create: true, update: true },
+		k_table: { select: true, create: true, update: true },
+		k_table_any: { select: true, create: true, update: true },
+		k_tuple: { select: true, create: true, update: true },
+		k_uuid: { select: true, create: true, update: true },
+	},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `kinds` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */
 export const KindsJsonFields = {
-	k_any: Schema.Unknown,
-	k_array: Schema.Array(Schema.Unknown),
+	k_any: SurrealSchema.SurrealJsonValue,
+	k_array: Schema.Array(SurrealSchema.SurrealJsonValue),
 	k_array_bounded: Schema.Array(SurrealSchema.Int).check(Schema.isBetweenLength(3, 3)),
-	k_array_nested: Schema.Array(Schema.Array(Schema.Number)),
+	k_array_nested: Schema.Array(Schema.Array(Schema.Finite)),
 	k_array_of: Schema.Array(SurrealSchema.String),
 	k_array_or_set: Schema.Union([Schema.Array(SurrealSchema.Int).check(Schema.isBetweenLength(2, 2)), SurrealSchema.SetFromJson(SurrealSchema.String)]),
 	k_bool: Schema.Boolean,
@@ -376,7 +451,7 @@ export const KindsJsonFields = {
 	k_file: SurrealSchema.FileRefFromJson([]),
 	k_file_bucket: SurrealSchema.FileRefFromJson(["avatars"]),
 	k_file_buckets: SurrealSchema.FileRefFromJson(["avatars", "docs"]),
-	k_float: Schema.Number,
+	k_float: Schema.Finite,
 	k_function: SurrealSchema.Unsupported("function"),
 	k_geometry: SurrealSchema.GeometryFromJson(SurrealSchema.Geometry),
 	k_geometry_all: SurrealSchema.GeometryFromJson(SurrealSchema.GeometryOf(["collection", "line", "multiline", "multipoint", "multipolygon", "point", "polygon"])),
@@ -391,9 +466,9 @@ export const KindsJsonFields = {
 	k_nullable: Schema.NullOr(SurrealSchema.String),
 	k_number: SurrealSchema.SurrealNumberFromJson,
 	k_object: Schema.Record(Schema.String, Schema.Never),
-	k_object_flexible: Schema.Record(Schema.String, Schema.Unknown),
+	k_object_flexible: Schema.Record(Schema.String, SurrealSchema.SurrealJsonValue),
 	k_object_literal: Schema.Struct({ a: SurrealSchema.Int, b: Schema.optionalKey(SurrealSchema.String), c: Schema.Struct({ d: Schema.Boolean }) }),
-	k_object_union: Schema.Union([Schema.Struct({ h: Schema.Number, kind: Schema.Literal("rect"), w: Schema.Number }), Schema.Struct({ kind: Schema.Literal("circle"), r: Schema.Number })]),
+	k_object_union: Schema.Union([Schema.Struct({ h: Schema.Finite, kind: Schema.Literal("rect"), w: Schema.Finite }), Schema.Struct({ kind: Schema.Literal("circle"), r: Schema.Finite })]),
 	k_option: SurrealSchema.String,
 	k_option_array: Schema.Array(SurrealSchema.RecordIdFromJsonAs(TeamId)),
 	k_option_nullable: Schema.NullOr(SurrealSchema.String),
@@ -404,7 +479,7 @@ export const KindsJsonFields = {
 	k_record_any: SurrealSchema.RecordIdFromJsonAs(SurrealSchema.RecordIdAny),
 	k_record_union: SurrealSchema.RecordIdFromJsonAs(PersonOrTeamId),
 	k_regex: SurrealSchema.Unsupported("regex"),
-	k_set: SurrealSchema.SetFromJson(Schema.Unknown),
+	k_set: SurrealSchema.SetFromJson(SurrealSchema.SurrealJsonValue),
 	k_set_bounded: SurrealSchema.SetFromJson(SurrealSchema.Int, { length: 5 }),
 	k_set_of: SurrealSchema.SetFromJson(SurrealSchema.String),
 	k_string: SurrealSchema.String,

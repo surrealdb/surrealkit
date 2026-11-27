@@ -22,18 +22,23 @@ export const IdObjectRow = SurrealSchema.NoneAsAbsent(IdObject);
 export type IdObjectRow = typeof IdObjectRow.Type;
 export type IdObjectRowEncoded = typeof IdObjectRow.Encoded;
 
+/** `IdObject` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `IdObject`. */
+export const IdObjectVisible = IdObject;
+export type IdObjectVisible = typeof IdObjectVisible.Type;
+export type IdObjectVisibleEncoded = typeof IdObjectVisible.Encoded;
+
 /** Input for `CREATE id_object CONTENT` / `INSERT`. The record id is an operation argument. */
-export const IdObjectCreate = Schema.Struct({});
+export const IdObjectCreate = SurrealSchema.EmptyObject;
 export type IdObjectCreate = typeof IdObjectCreate.Type;
 export type IdObjectCreateEncoded = typeof IdObjectCreate.Encoded;
 
 /** Input for `UPDATE id_object MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
-export const IdObjectMerge = Schema.Struct({});
+export const IdObjectMerge = SurrealSchema.EmptyObject;
 export type IdObjectMerge = typeof IdObjectMerge.Type;
 export type IdObjectMergeEncoded = typeof IdObjectMerge.Encoded;
 
 /** Input for `UPDATE id_object CONTENT`: a full replacement of the writable fields. */
-export const IdObjectContent = Schema.Struct({});
+export const IdObjectContent = SurrealSchema.EmptyObject;
 export type IdObjectContent = typeof IdObjectContent.Type;
 export type IdObjectContentEncoded = typeof IdObjectContent.Encoded;
 
@@ -45,6 +50,7 @@ export const IdObjectTable = SurrealSchema.table({
 	drop: false,
 	id: IdObjectId,
 	select: IdObject,
+	visible: IdObjectVisible,
 	create: IdObjectCreate,
 	merge: IdObjectMerge,
 	content: IdObjectContent,
@@ -54,6 +60,8 @@ export const IdObjectTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `id_object` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

@@ -9,7 +9,7 @@ export { TeamId } from "./ids.js";
 
 /** Field schemas of `team` that are the same in every operation using them; `refine` and `replaceField` accept these keys. */
 export const TeamFields = {
-	meta: Schema.Record(Schema.String, Schema.Unknown),
+	meta: Schema.Record(Schema.String, SurrealSchema.SurrealValue),
 	name: SurrealSchema.String,
 } as const;
 
@@ -26,6 +26,11 @@ export type TeamEncoded = typeof Team.Encoded;
 export const TeamRow = SurrealSchema.NoneAsAbsent(Team);
 export type TeamRow = typeof TeamRow.Type;
 export type TeamRowEncoded = typeof TeamRow.Encoded;
+
+/** `Team` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Team`. */
+export const TeamVisible = Team;
+export type TeamVisible = typeof TeamVisible.Type;
+export type TeamVisibleEncoded = typeof TeamVisible.Encoded;
 
 /** Input for `CREATE team CONTENT` / `INSERT`. The record id is an operation argument. */
 export const TeamCreate = Schema.Struct({
@@ -59,6 +64,7 @@ export const TeamTable = SurrealSchema.table({
 	drop: false,
 	id: TeamId,
 	select: Team,
+	visible: TeamVisible,
 	create: TeamCreate,
 	merge: TeamMerge,
 	content: TeamContent,
@@ -70,11 +76,16 @@ export const TeamTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: ["member_of"] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		meta: { select: true, create: true, update: true },
+		name: { select: true, create: true, update: true },
+	},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `team` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */
 export const TeamJsonFields = {
-	meta: Schema.Record(Schema.String, Schema.Unknown),
+	meta: Schema.Record(Schema.String, SurrealSchema.SurrealJsonValue),
 	name: SurrealSchema.String,
 } as const;
 

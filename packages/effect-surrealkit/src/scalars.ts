@@ -1,5 +1,5 @@
-/** `uuid`, `bytes`, and kinds with no SDK value representation. */
-import { Schema, SchemaGetter } from 'effect';
+/** `float`, `uuid`, `bytes`, and kinds with no SDK value representation. */
+import { Order, Schema, SchemaGetter } from 'effect';
 import { Uuid as SdkUuid } from 'surrealdb';
 
 import { quote, runtimeCode } from './internal/code.js';
@@ -19,9 +19,12 @@ const byte = Schema.Number.check(
 const LONE_SURROGATE =
 	/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
 
+const LONE_SURROGATES =
+	/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g;
+
 /** Replaces lone surrogates with U+FFFD, as UTF-8 transport would. */
 export const toWellFormed = (text: string): string =>
-	text.replace(new RegExp(LONE_SURROGATE.source, 'g'), '�');
+	text.replace(LONE_SURROGATES, '�');
 
 /**
  * `string`: a JS string SurrealDB can store. SurrealDB strings are UTF-8, so
@@ -46,6 +49,23 @@ export const SurrealString = leaf<string>({
 			decode: SchemaGetter.transform(toWellFormed),
 			encode: SchemaGetter.transform((text) => text),
 		}),
+});
+
+/** A native IEEE-754 float, including NaN, infinities, signed zero and subnormals. */
+export const Float = leaf<number>({
+	id: 'effect-surrealkit/Float',
+	expected: 'a native SurrealDB float (IEEE-754 number)',
+	code: runtimeCode('Float', 'number'),
+	parse: (input) => (typeof input === 'number' ? ok(input) : wrongType),
+	equivalence: Object.is,
+	arbitrary: (constraint) => {
+		// Effect supplies declaration constraints without their primitive order.
+		const bounds = constraint && { ...constraint, order: Order.Number };
+		return Schema.link<number>()(constrained(Schema.Number, bounds), {
+			decode: SchemaGetter.transform((value) => value),
+			encode: SchemaGetter.transform((value) => value),
+		});
+	},
 });
 
 /** `uuid`: the SDK `Uuid` class (any version). */

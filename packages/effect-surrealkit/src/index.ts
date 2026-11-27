@@ -20,6 +20,7 @@ export {
 	decimalFromString,
 	SurrealNumber,
 } from './decimal.js';
+export { EmptyObject, isEmptyObject } from './empty.js';
 export {
 	Geometry,
 	GeometryCollection,
@@ -79,6 +80,7 @@ export {
 export { NoneAsAbsent, stripNone } from './row.js';
 export {
 	Bytes,
+	Float,
 	SurrealString as String,
 	toWellFormed,
 	Unsupported,
@@ -89,12 +91,16 @@ export {
 	type EdgeIn,
 	type EdgeOut,
 	edge,
+	type FieldPermissions,
 	type FieldPresence,
 	type FunctionArgs,
 	type FunctionDescriptor,
 	type FunctionResult,
 	fn,
+	type IndexDescriptor,
+	type IndexType,
 	type Narrowing,
+	type NoEntries,
 	type Operation,
 	type Permission,
 	type Presence,
@@ -103,6 +109,8 @@ export {
 	type RowSchema,
 	refine,
 	replaceField,
+	type StoreDescriptor,
+	store,
 	type TableDescriptor,
 	type TablePermissions,
 	table,
@@ -121,3 +129,4 @@ export {
 	dateTimeFromString,
 	dateTimeToString,
 } from './temporal.js';
+export { SurrealJsonValue, SurrealMergeValue, SurrealValue } from './value.js';

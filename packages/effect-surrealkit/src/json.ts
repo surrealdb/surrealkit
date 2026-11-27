@@ -439,7 +439,7 @@ export const GeometryFromJson = <S extends Schema.Codec<unknown, SdkGeometry>>(
  * `JSON.parse`.
  */
 export const SurrealNumberFromJson = wrap(
-	Schema.Union([Schema.Number, Schema.String]).pipe(
+	Schema.Union([Schema.Finite, Schema.String]).pipe(
 		Schema.decodeTo(
 			SurrealNumber,
 			SchemaTransformation.transformEffect({

@@ -15,7 +15,7 @@ export const Knows = Schema.StructWithRest(Schema.Struct({
 	id: KnowsId,
 	in: PersonId,
 	out: PersonId,
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)]);
 export type Knows = typeof Knows.Type;
 export type KnowsEncoded = typeof Knows.Encoded;
 
@@ -23,6 +23,11 @@ export type KnowsEncoded = typeof Knows.Encoded;
 export const KnowsRow = SurrealSchema.NoneAsAbsent(Knows);
 export type KnowsRow = typeof KnowsRow.Type;
 export type KnowsRowEncoded = typeof KnowsRow.Encoded;
+
+/** `Knows` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Knows`. */
+export const KnowsVisible = Knows;
+export type KnowsVisible = typeof KnowsVisible.Type;
+export type KnowsVisibleEncoded = typeof KnowsVisible.Encoded;
 
 /** Endpoints of the `knows` relation, for typed `RELATE` arguments. */
 export const KnowsEdge = SurrealSchema.edge({
@@ -41,6 +46,7 @@ export const KnowsTable = SurrealSchema.table({
 	drop: false,
 	id: KnowsId,
 	select: Knows,
+	visible: KnowsVisible,
 	fields: KnowsFields,
 	presence: {
 		id: { select: "required", create: "excluded", merge: "excluded", content: "excluded" },
@@ -49,6 +55,8 @@ export const KnowsTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {},
+	indexes: {},
 	edge: KnowsEdge,
 });
 
@@ -61,5 +69,5 @@ export const KnowsFromJson = Schema.StructWithRest(Schema.Struct({
 	id: SurrealSchema.RecordIdFromJsonAs(KnowsId),
 	in: SurrealSchema.RecordIdFromJsonAs(PersonId),
 	out: SurrealSchema.RecordIdFromJsonAs(PersonId),
-}), [Schema.Record(Schema.String, Schema.Unknown)]);
+}), [Schema.Record(Schema.String, SurrealSchema.SurrealJsonValue)]);
 export type KnowsJsonEncoded = typeof KnowsFromJson.Encoded;

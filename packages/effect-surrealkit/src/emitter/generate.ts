@@ -16,6 +16,7 @@ import {
 	decodeDocument,
 	type SchemaDocument,
 	type SurrealFunction,
+	type Table,
 } from './document.js';
 import { printKind } from './kinds.js';
 import { functionIdentifier, propertyKey } from './names.js';
@@ -152,6 +153,7 @@ const checkNames = (
 		for (const suffix of [
 			'',
 			'Row',
+			'Visible',
 			'Id',
 			'Create',
 			'Merge',
@@ -175,57 +177,137 @@ const checkNames = (
 	return exports;
 };
 
-const printIds = (
+interface IdExpression {
+	readonly code: string;
+	readonly dependencies: ReadonlySet<string>;
+}
+
+/** Print keys first so references used only in keys participate in name checks. */
+const printIdKeys = (
 	registry: IdRegistry,
 	options: EmitterOptions,
-	document: SchemaDocument,
+	tables: ReadonlyArray<Table>,
 	warnings: string[],
-): string => {
-	const scope = new ModuleScope(registry, warnings);
-	const keys = new Map(
-		document.tables.map((table) => [table.name, table.idKey]),
-	);
-	const lines: string[] = [];
-	for (const [table, name] of registry.tables) {
-		const idKey = keys.get(table);
-		const brand = `Schema.brand(${json(`${options.store}/${table}`)})`;
+): ReadonlyMap<string, IdExpression> => {
+	const keys = new Map<string, IdExpression>();
+	for (const { name, idKey } of tables) {
+		if (idKey === undefined) continue;
+		const scope = new ModuleScope(registry, warnings);
+		const location = `${name}.id`;
 		// A key is checked against the SDK value it decodes from (`sameKey`), so
 		// datetimes in it stay SDK values whatever the datetime profile: the
 		// lossy Effect DateTime would differ from every valid key.
 		const profile = {
-			...profileFor(options, `${table}.id`),
+			...profileFor(options, location),
 			datetime: 'sdk' as const,
 		};
-		const key =
-			idKey === undefined
-				? ''
-				: `, { key: ${printKind(idKey, { scope, profile, location: `${table}.id` })} }`;
+		keys.set(name, {
+			code: printKind(idKey, { scope, profile, location }),
+			dependencies: scope.ids,
+		});
+	}
+	return keys;
+};
+
+interface IdDeclaration extends IdExpression {
+	readonly name: string;
+	readonly rank: number;
+	readonly dependents: IdDeclaration[];
+	remaining: number;
+}
+
+/** Keep the original order among declarations ready to initialize. */
+const orderIds = (expressions: ReadonlyMap<string, IdExpression>): string => {
+	const declarations = new Map<string, IdDeclaration>();
+	const ready: IdDeclaration[] = [];
+	for (const [name, expression] of expressions) {
+		const declaration: IdDeclaration = {
+			...expression,
+			name,
+			rank: declarations.size,
+			dependents: [],
+			remaining: expression.dependencies.size,
+		};
+		declarations.set(name, declaration);
+		if (declaration.remaining === 0) ready.push(declaration);
+	}
+	for (const declaration of declarations.values()) {
+		for (const dependency of declaration.dependencies) {
+			const target =
+				declarations.get(dependency) ??
+				fail(`missing record ID declaration ${dependency}`);
+			target.dependents.push(declaration);
+		}
+	}
+	// Use descending ranks so the earliest ready declaration is at the end.
+	ready.reverse();
+	const ordered: string[] = [];
+	for (let next = ready.pop(); next !== undefined; next = ready.pop()) {
+		ordered.push(next.code);
+		for (const dependent of next.dependents) {
+			dependent.remaining -= 1;
+			if (dependent.remaining !== 0) continue;
+			const index = ready.findIndex(
+				(other) => other.rank < dependent.rank,
+			);
+			ready.splice(index === -1 ? ready.length : index, 0, dependent);
+		}
+	}
+	if (ordered.length !== declarations.size) {
+		const blocked = [...declarations.values()]
+			.filter((declaration) => declaration.remaining > 0)
+			.map((declaration) => declaration.name);
+		fail(
+			`cyclic record ID key dependencies prevent initializing ${blocked.join(', ')}`,
+		);
+	}
+	return ordered.join('\n\n');
+};
+
+const printIds = (
+	registry: IdRegistry,
+	options: EmitterOptions,
+	keys: ReadonlyMap<string, IdExpression>,
+): string => {
+	const declarations = new Map<string, IdExpression>();
+	for (const [table, name] of registry.tables) {
+		const idKey = keys.get(table);
+		const brand = `Schema.brand(${json(`${options.store}/${table}`)})`;
+		const key = idKey === undefined ? '' : `, { key: ${idKey.code} }`;
 		const note = registry.isDefined(table)
 			? ''
 			: ' (referenced, not defined in this schema)';
-		lines.push(
-			`/** Record id of \`${table}\`${note}. */`,
-			`export const ${name} = SurrealSchema.RecordIdFor(${json(table)}${key}).pipe(${brand});`,
-			`export type ${name} = typeof ${name}.Type;`,
-			'',
-		);
+		declarations.set(name, {
+			code: [
+				`/** Record id of \`${table}\`${note}. */`,
+				`export const ${name} = SurrealSchema.RecordIdFor(${json(table)}${key}).pipe(${brand});`,
+				`export type ${name} = typeof ${name}.Type;`,
+			].join('\n'),
+			dependencies: idKey?.dependencies ?? new Set(),
+		});
 	}
 	for (const [name, tables] of registry.unions) {
 		const tagged = IdRegistry.tagged(name);
 		const spelled = `record<${tables.join(' | ')}>`;
-		lines.push(
-			`/** \`${spelled}\`. */`,
-			`export const ${name} = Schema.Union([${tables.map((t) => registry.table(t)).join(', ')}]);`,
-			`export type ${name} = typeof ${name}.Type;`,
-			`/** \`${spelled}\` as \`{ _tag, id }\`, to match on the table. An application representation; never stored. */`,
-			`export const ${tagged} = SurrealSchema.taggedRecordId({ ${tables
-				.map((t) => `${propertyKey(t)}: ${registry.table(t)}`)
-				.join(', ')} });`,
-			`export type ${tagged} = typeof ${tagged}.Type;`,
-			'',
-		);
+		const members = tables.map((table) => registry.table(table));
+		declarations.set(name, {
+			code: [
+				`/** \`${spelled}\`. */`,
+				`export const ${name} = Schema.Union([${members.join(', ')}]);`,
+				`export type ${name} = typeof ${name}.Type;`,
+				`/** \`${spelled}\` as \`{ _tag, id }\`, to match on the table. An application representation; never stored. */`,
+				`export const ${tagged} = SurrealSchema.taggedRecordId({ ${tables
+					.map(
+						(table, index) =>
+							`${propertyKey(table)}: ${members[index]}`,
+					)
+					.join(', ')} });`,
+				`export type ${tagged} = typeof ${tagged}.Type;`,
+			].join('\n'),
+			dependencies: new Set(members),
+		});
 	}
-	return lines.join('\n').trimEnd();
+	return orderIds(declarations);
 };
 
 const printFunction = (
@@ -296,6 +378,98 @@ const printManifest = (
 		`\tfunctions: ${jsonList(document.functions.map((fn) => fn.name))},`,
 		'} as const;',
 	].join('\n');
+};
+
+/**
+ * The store registry: every table, view, relation endpoint and function by
+ * its SurrealDB name. Its file name cannot be a table's (table modules are
+ * kebab-case words), so no schema loses a table name to it.
+ */
+const printStore = (
+	tables: ReadonlyArray<Table>,
+	functions: ReadonlyArray<SurrealFunction>,
+	registry: IdRegistry,
+	options: EmitterOptions,
+	ext: string,
+): string => {
+	const imported = new Map<string, Array<string>>();
+	const use = (module: string, name: string): string => {
+		imported.set(module, [...(imported.get(module) ?? []), name]);
+		return name;
+	};
+	const entries = (
+		pairs: ReadonlyArray<readonly [string, string]>,
+	): string =>
+		pairs.length === 0
+			? '{}'
+			: `{\n${pairs.map(([key, value]) => `\t\t${propertyKey(key)}: ${value},`).join('\n')}\n\t}`;
+	// The registry's type names each descriptor with `typeof`. Left to inference,
+	// a declaration file has to print every descriptor's whole type inside this
+	// one, which fails with TS7056 on a large store (seen at 171 entries). A
+	// group with no entries is named, `SurrealSchema.NoEntries`: writing the
+	// empty object type here would be reported by lint rules against it.
+	const typeEntries = (
+		pairs: ReadonlyArray<readonly [string, string]>,
+	): string =>
+		pairs.length === 0
+			? 'SurrealSchema.NoEntries'
+			: `{\n${pairs.map(([key, value]) => `\t\treadonly ${propertyKey(key)}: typeof ${value};`).join('\n')}\n\t}`;
+	const tableEntries: Array<readonly [string, string]> = [];
+	const viewEntries: Array<readonly [string, string]> = [];
+	const edgeEntries: Array<readonly [string, string]> = [];
+	for (const table of tables) {
+		const module = `./${registry.file(table.name)}${ext}`;
+		const pascal = registry.pascal(table.name);
+		const descriptor = use(module, `${pascal}Table`);
+		if (table.view !== undefined) {
+			viewEntries.push([table.name, descriptor]);
+			continue;
+		}
+		tableEntries.push([table.name, descriptor]);
+		if (table.type.kind === 'relation') {
+			edgeEntries.push([table.name, use(module, `${pascal}Edge`)]);
+		}
+	}
+	const functionEntries = functions.map(
+		(fn) =>
+			[
+				fn.name,
+				use(`./functions${ext}`, functionIdentifier(fn.name)),
+			] as const,
+	);
+	const importLines = [...imported.entries()]
+		.sort(([a], [b]) => compare(a, b))
+		.map(
+			([module, names]) =>
+				`import { ${[...names].sort(compare).join(', ')} } from "${module}";`,
+		);
+	const body = [
+		'/** The type of `store`. Each entry names its descriptor, so a declaration file refers to the descriptors instead of copying them. */',
+		'export interface Store {',
+		`\treadonly name: ${json(options.store)};`,
+		`\treadonly tables: ${typeEntries(tableEntries)};`,
+		`\treadonly views: ${typeEntries(viewEntries)};`,
+		`\treadonly edges: ${typeEntries(edgeEntries)};`,
+		`\treadonly functions: ${typeEntries(functionEntries)};`,
+		'}',
+		'',
+		`/** Every table, view, relation endpoint and function of store \`${options.store}\`, by its SurrealDB name. */`,
+		'export const store: Store = SurrealSchema.store({',
+		`\tname: ${json(options.store)},`,
+		`\ttables: ${entries(tableEntries)},`,
+		`\tviews: ${entries(viewEntries)},`,
+		`\tedges: ${entries(edgeEntries)},`,
+		`\tfunctions: ${entries(functionEntries)},`,
+		'});',
+	].join('\n');
+	return assemble(
+		[
+			'import * as SurrealSchema from "effect-surrealkit";',
+			'import type {} from "surrealdb";',
+			...importLines,
+		].join('\n'),
+		body,
+	);
 };
 
 /** Generates the module set from an already decoded document and options. */
@@ -378,9 +552,9 @@ export const emit = (
 		),
 	});
 
-	// Printed last: every module above has registered the ids it uses. Ids of
-	// tables that are referenced but not defined, and id unions, are exported
-	// from ids.ts too, so they must not collide with any other export.
+	// Every module and id key has registered the ids it uses. Referenced
+	// tables and id unions are exported from ids.ts too, so check their names.
+	const idKeys = printIdKeys(registry, options, tables, warnings);
 	const exported = new Map(claimed);
 	for (const [table, name] of registry.tables) {
 		if (registry.isDefined(table)) continue;
@@ -409,8 +583,7 @@ export const emit = (
 	}
 	// Without tables there are no ids, and `export *` of a file with no export
 	// is an error (TS2306), so the file says it is a module.
-	const idsBody =
-		printIds(registry, options, document, warnings) || 'export {};';
+	const idsBody = printIds(registry, options, idKeys) || 'export {};';
 	files.push({
 		path: 'ids.ts',
 		content: assemble(imports(idsBody, new Set(), false, ext), idsBody),
@@ -421,6 +594,10 @@ export const emit = (
 		path: 'manifest.ts',
 		content: assemble('', manifestBody),
 	});
+	files.push({
+		path: '_store.ts',
+		content: printStore(tables, functions, registry, options, ext),
+	});
 
 	const barrel = [
 		`export * from "./ids${ext}";`,
@@ -429,6 +606,7 @@ export const emit = (
 		),
 		`export * from "./functions${ext}";`,
 		`export { manifest } from "./manifest${ext}";`,
+		`export { store } from "./_store${ext}";`,
 	].join('\n');
 	files.push({ path: 'index.ts', content: assemble('', barrel) });
 

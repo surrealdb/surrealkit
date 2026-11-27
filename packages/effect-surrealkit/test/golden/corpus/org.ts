@@ -25,6 +25,11 @@ export const OrgRow = SurrealSchema.NoneAsAbsent(Org);
 export type OrgRow = typeof OrgRow.Type;
 export type OrgRowEncoded = typeof OrgRow.Encoded;
 
+/** `Org` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `Org`. */
+export const OrgVisible = Org;
+export type OrgVisible = typeof OrgVisible.Type;
+export type OrgVisibleEncoded = typeof OrgVisible.Encoded;
+
 /** Input for `CREATE org CONTENT` / `INSERT`. The record id is an operation argument. */
 export const OrgCreate = Schema.Struct({
 	name: OrgFields.name,
@@ -54,6 +59,7 @@ export const OrgTable = SurrealSchema.table({
 	drop: false,
 	id: OrgId,
 	select: Org,
+	visible: OrgVisible,
 	create: OrgCreate,
 	merge: OrgMerge,
 	content: OrgContent,
@@ -64,6 +70,10 @@ export const OrgTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: ["member_of"] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		name: { select: true, create: true, update: true },
+	},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `org` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */

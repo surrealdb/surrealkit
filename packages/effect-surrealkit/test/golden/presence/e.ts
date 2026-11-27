@@ -27,6 +27,11 @@ export const ERow = SurrealSchema.NoneAsAbsent(E);
 export type ERow = typeof ERow.Type;
 export type ERowEncoded = typeof ERow.Encoded;
 
+/** `E` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `E`. */
+export const EVisible = E;
+export type EVisible = typeof EVisible.Type;
+export type EVisibleEncoded = typeof EVisible.Encoded;
+
 /** Input for `CREATE e CONTENT` / `INSERT`. The record id is an operation argument. */
 export const ECreate = Schema.Struct({
 	w: Schema.optionalKey(EFields.w),
@@ -65,6 +70,7 @@ export const ETable = SurrealSchema.table({
 	drop: false,
 	id: EId,
 	select: E,
+	visible: EVisible,
 	create: ECreate,
 	merge: EMerge,
 	content: EContent,
@@ -77,6 +83,10 @@ export const ETable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		w: { select: true, create: true, update: true },
+	},
+	indexes: {},
 	edge: EEdge,
 });
 

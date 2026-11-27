@@ -36,7 +36,7 @@ export const M = Schema.Struct({
 	dflt: MFields.dflt,
 	flex: Schema.optionalKey(Schema.StructWithRest(Schema.Struct({
 		a: Schema.optionalKey(SurrealSchema.Int),
-	}), [Schema.Record(Schema.String, Schema.Unknown)])),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)])),
 	nul: MFields.nul,
 	obj: Schema.optionalKey(Schema.Struct({
 		a: Schema.optionalKey(SurrealSchema.Int),
@@ -58,13 +58,18 @@ export const MRow = SurrealSchema.NoneAsAbsent(M);
 export type MRow = typeof MRow.Type;
 export type MRowEncoded = typeof MRow.Encoded;
 
+/** `M` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `M`. */
+export const MVisible = M;
+export type MVisible = typeof MVisible.Type;
+export type MVisibleEncoded = typeof MVisible.Encoded;
+
 /** Input for `CREATE m CONTENT` / `INSERT`. The record id is an operation argument. */
 export const MCreate = Schema.Struct({
 	dalw: Schema.optionalKey(MFields.dalw),
 	dflt: Schema.optionalKey(MFields.dflt),
 	flex: Schema.optionalKey(Schema.StructWithRest(Schema.Struct({
 		a: Schema.optionalKey(SurrealSchema.Int),
-	}), [Schema.Record(Schema.String, Schema.Unknown)])),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)])),
 	nul: MFields.nul,
 	obj: Schema.optionalKey(Schema.Struct({
 		a: Schema.optionalKey(SurrealSchema.Int),
@@ -76,7 +81,6 @@ export const MCreate = Schema.Struct({
 	roopt: Schema.optionalKey(MFields.roopt),
 	vfall: MFields.vfall,
 	vin: MFields.vin,
-	vout: Schema.optionalKey(MFields.vout),
 });
 export type MCreate = typeof MCreate.Type;
 export type MCreateEncoded = typeof MCreate.Encoded;
@@ -87,7 +91,7 @@ export const MMerge = Schema.Struct({
 	dflt: Schema.optionalKey(MFields.dflt),
 	flex: Schema.optional(Schema.StructWithRest(Schema.Struct({
 		a: Schema.optional(SurrealSchema.Int),
-	}), [Schema.Record(Schema.String, Schema.Unknown)])),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealMergeValue)])),
 	nul: Schema.optionalKey(MFields.nul),
 	obj: Schema.optional(Schema.Struct({
 		a: Schema.optional(SurrealSchema.Int),
@@ -97,7 +101,6 @@ export const MMerge = Schema.Struct({
 	req: Schema.optionalKey(MFields.req),
 	vfall: Schema.optionalKey(MFields.vfall),
 	vin: Schema.optionalKey(MFields.vin),
-	vout: Schema.optionalKey(MFields.vout),
 });
 export type MMerge = typeof MMerge.Type;
 export type MMergeEncoded = typeof MMerge.Encoded;
@@ -108,7 +111,7 @@ export const MContent = Schema.Struct({
 	dflt: MFields.dflt,
 	flex: Schema.optionalKey(Schema.StructWithRest(Schema.Struct({
 		a: Schema.optionalKey(SurrealSchema.Int),
-	}), [Schema.Record(Schema.String, Schema.Unknown)])),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealValue)])),
 	nul: MFields.nul,
 	obj: Schema.optionalKey(Schema.Struct({
 		a: Schema.optionalKey(SurrealSchema.Int),
@@ -118,7 +121,6 @@ export const MContent = Schema.Struct({
 	req: MFields.req,
 	vfall: MFields.vfall,
 	vin: MFields.vin,
-	vout: Schema.optionalKey(MFields.vout),
 });
 export type MContent = typeof MContent.Type;
 export type MContentEncoded = typeof MContent.Encoded;
@@ -131,6 +133,7 @@ export const MTable = SurrealSchema.table({
 	drop: false,
 	id: MId,
 	select: M,
+	visible: MVisible,
 	create: MCreate,
 	merge: MMerge,
 	content: MContent,
@@ -150,10 +153,31 @@ export const MTable = SurrealSchema.table({
 		roopt: { select: "optional", create: "optional", merge: "excluded", content: "excluded" },
 		vfall: { select: "required", create: "required", merge: "optional", content: "required" },
 		vin: { select: "required", create: "required", merge: "optional", content: "required" },
-		vout: { select: "required", create: "optional", merge: "optional", content: "optional" },
+		vout: { select: "required", create: "excluded", merge: "excluded", content: "excluded" },
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {
+		comp: { select: true, create: true, update: true },
+		dalw: { select: true, create: true, update: true },
+		dflt: { select: true, create: true, update: true },
+		flex: { select: true, create: true, update: true, fields: {
+			a: { select: true, create: true, update: true },
+		} },
+		nul: { select: true, create: true, update: true },
+		obj: { select: true, create: true, update: true, fields: {
+			a: { select: true, create: true, update: true },
+		} },
+		opt: { select: true, create: true, update: true },
+		optd: { select: true, create: true, update: true },
+		req: { select: true, create: true, update: true },
+		ro: { select: true, create: true, update: true },
+		roopt: { select: true, create: true, update: true },
+		vfall: { select: true, create: true, update: true },
+		vin: { select: true, create: true, update: true },
+		vout: { select: true, create: true, update: true },
+	},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `m` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */
@@ -163,7 +187,7 @@ export const MJsonFields = {
 	dflt: SurrealSchema.String,
 	flex: Schema.StructWithRest(Schema.Struct({
 		a: Schema.optionalKey(SurrealSchema.Int),
-	}), [Schema.Record(Schema.String, Schema.Unknown)]),
+	}), [Schema.Record(Schema.String, SurrealSchema.SurrealJsonValue)]),
 	nul: Schema.NullOr(SurrealSchema.String),
 	obj: Schema.Struct({
 		a: Schema.optionalKey(SurrealSchema.Int),

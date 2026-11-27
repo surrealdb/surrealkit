@@ -104,8 +104,22 @@ member-of.ts    … plus MemberOfEdge (relation endpoints)
 team-size.ts    TeamSizeTable (a view: id and query only)
 functions.ts    fn_greet = { name, args: Schema.Tuple([...]), returns }
 manifest.ts     store, semanticDigest, emitter version, codec profile, peer versions, source
+_store.ts       store = { name, tables, views, edges, functions }, each by its SurrealDB name
 index.ts        re-exports everything
 ```
+
+`store` registers every table, view, relation endpoint and function of the
+store under its SurrealDB name (`store.tables.person`,
+`store.edges.member_of`, `store.functions["fn::greet"]`), so a record link
+(`RecordId<"person">`) or a graph step resolves to the descriptor of its
+target. Its file name has a leading underscore because table modules are
+kebab-case words, so no table can be written there. The module also exports
+the registry's type, `Store`, whose entries are `typeof PersonTable` and the
+like: a declaration file then names the descriptors, where an inferred type
+would copy every one of them and fail with TS7056 on a large schema. A group
+with no entries is typed `SurrealSchema.NoEntries`, a named empty type, so
+the module does not write `{}` where lint rules report it. `Store` is not
+re-exported from `index.ts`, where a table named `store` owns that name.
 
 Each table gets one schema per operation, derived from the field-presence
 matrix of the contract (section 7):
@@ -114,11 +128,21 @@ matrix of the contract (section 7):
 | --- | --- |
 | `Person` | A stored row as a privileged reader selects it: the plain struct, which `refine` works on. |
 | `PersonRow` | `NoneAsAbsent(Person)`: decode rows the SDK returned with this one, so NONE (an `undefined` property) is an absent optional field. |
+| `PersonVisible` | The row as a session reads it when field permissions may hide fields: every field (at any depth) whose `select` permission is not FULL is optional. `Person` itself when no permission can hide a field. |
 | `PersonCreate` | `CREATE … CONTENT` / `INSERT`; the id is an operation argument. |
 | `PersonMerge` | `UPDATE … MERGE`: omission keeps a value, `undefined` (NONE) removes an `option<T>` field and re-applies a `DEFAULT ALWAYS` one (an `option<T>` included). |
 | `PersonContent` | `UPDATE … CONTENT`: a full replacement. |
-| `PersonTable` | The descriptor: `{ name, type, id, select, create, merge, content, fields, presence, relations, permissions, edge? }`. |
+| `PersonTable` | The descriptor: `{ name, type, id, select, visible, create, merge, content, fields, presence, relations, permissions, fieldPermissions, indexes, edge? }`. |
 | `PersonFromJson` | The same selected row as SurrealDB's HTTP `/sql` renders it, decoding to the same types as `Person`; `PersonJsonFields` holds its field schemas for `Struct.pick` and field maps, and `PersonJsonEncoded` its JSON shape. Never the default; see [Two codec worlds](#two-codec-worlds). |
+
+A descriptor's `indexes` holds every `DEFINE INDEX` of the table by name,
+with its kind and the field paths it covers kept as literal types
+(`indexes.idx_owner_status` is `{ type: "standard", columns: [["owner"],
+["status"]] }`), plus the analyzer of a `FULLTEXT` index, the vector shape
+of an `HNSW` or `DISKANN` one and the condition of a `COUNT … WHERE` one.
+`fieldPermissions` holds each top-level field's `select`, `create` and
+`update` permission (`true` for FULL, `false` for NONE, or the `WHERE`
+expression), with those of its declared children under `fields`.
 
 `Merge` is never `Partial<Create>`: READONLY, COMPUTED, `id` and relation
 endpoints are excluded, and NONE is only accepted where the matrix allows it.
@@ -130,6 +154,52 @@ literal membership narrows the type, int and float ranges become
 `isGreaterThan…`/`isLessThan…`, and `string::len` / `array::len` become
 code-point and array length checks. `string::is_email`, decimal and duration
 ranges stay server-side.
+
+### What changes for existing users of the emitter
+
+Regenerating with this version changes the schemas of some fields, adds to
+the output and tightens one schema. Every existing export keeps its name.
+
+The schemas change for schemas that use these kinds (see
+[Interpretation notes](#interpretation-notes) and the kinds table under
+[Two codec worlds](#two-codec-worlds)):
+
+- `any` is `Schema.UndefinedOr(SurrealSchema.SurrealValue)`, and
+  `SurrealSchema.SurrealJsonValue` in the JSON world, instead of
+  `Schema.Unknown`. An open `object`, the extra keys of a `FLEXIBLE` or
+  SCHEMALESS row and the items of an `array<any>` or `set<any>` use
+  `SurrealValue` and `SurrealJsonValue` the same way, and the extra keys of
+  an open row's Merge schema use `SurrealMergeValue`. Their types are those
+  values instead of `unknown`.
+- `float` is `SurrealSchema.Float` instead of `Schema.Number`, and
+  `Schema.Finite` in the JSON world.
+- A field whose `VALUE` ignores its input is excluded from Create, Merge and
+  Content, where it was optional, and its presence entry says so.
+- `ids.ts` declares a record ID after the IDs its key refers to, so the
+  order of its declarations can change.
+
+The output gains:
+
+- every table descriptor gains `fieldPermissions`, `indexes` and `visible`,
+  and every table module a `<Table>Visible` export (with its `Type` and
+  `Encoded` types), so a table whose PascalCase name is another table's
+  plus `Visible` (`person` and `person_visible`) now needs a `names` entry;
+- a new module, `_store.ts`, exports `store` and its type `Store`, and
+  `index.ts` re-exports `store`.
+  A SurrealKit-run emitter records the new file in `.surrealkit-emit.json`
+  as it does every generated file.
+
+Code that spells out a descriptor's full type, or compares one with
+`toEqual`, sees the new keys. They are optional in `TableDescriptor`, so
+hand-written descriptors without them keep working.
+
+One schema is stricter at run time, with the same type: a closed object with
+no fields (the Create, Merge and Content of a SCHEMAFULL table whose only
+field is its id, or a `{}` literal kind) is now `SurrealSchema.EmptyObject`
+instead of `Schema.Struct({})`, so a value other than `{}` fails to decode or
+encode instead of reaching SurrealDB (see
+[Interpretation notes](#interpretation-notes)). The generated modules need
+an `effect-surrealkit` that exports `EmptyObject`.
 
 ### Refinements
 
@@ -160,14 +230,29 @@ its reason in the comment above `PersonFields`. An object that is the same
 wherever it is used (a `READONLY` one, which Merge and Content exclude) is
 listed and refines like any other field.
 
+In an open struct's Merge schema, the rest record accepts `SurrealMergeValue`:
+a member can be `undefined` (NONE), including inside an object patch. This lets
+a declared removable child such as `address.zip` pass both its own codec and
+the rest-record codec. Array and set elements still use the stored-value codec.
+
 ### Interpretation notes
 
 - A field with no `TYPE` (and no declared children), or `TYPE any`, can hold
   NONE, so it is optional in every operation that includes it.
 - Array and set elements are written whole, so the children of an element
-  object follow the Create rules in Create, Merge and Content.
+  object follow the Create rules in Create, Merge and Content. Collections
+  whose item kind is `any` use the kind declared on the `*` field when
+  present. Otherwise their items use `SurrealValue` or `SurrealJsonValue`,
+  which exclude NONE.
 - Views get an id and a descriptor; their row shape is not derived.
   Lightweight relations get a select row and an edge, no write schemas.
+- A `VALUE` that ignores its input is selected, and excluded from Create,
+  Merge and Content. The engine accepts a value supplied for such a field and
+  discards it, storing what the `VALUE` produces, so a schema that allowed it
+  would let a caller's value be thrown away without an error.
+- The emitter reserves `id` for the table's record ID and `in` and `out` for
+  relation endpoints. The record ID declarations in `ids.ts` put dependencies
+  before the keys that reference them.
 - A `VALUE` that reads its input but has a fallback gets the conservative
   (required) contract; override it per field (`fields`) if the fallback is
   intended.
@@ -181,7 +266,24 @@ listed and refines like any other field.
   can hold only `{}` and is printed `Schema.Record(Schema.String, Schema.Never)`.
   A `FLEXIBLE` parent does not open a declared child object. A `FLEXIBLE`
   object, an `array<object> FLEXIBLE` element, and an object on a SCHEMALESS
-  table keep their keys and are open records.
+  table keep their keys and are open records. Open records, flexible structs
+  and schemaless rows use `SurrealValue` for extra keys in native schemas and
+  `SurrealJsonValue` in JSON schemas.
+- A closed object with no fields to print is `SurrealSchema.EmptyObject`,
+  never `Schema.Struct({})`: the Create, Merge and Content inputs of a
+  SCHEMAFULL table with no writable fields, a declared object whose children
+  are all excluded from an operation, and the `{}` literal kind. Effect 4's
+  `Schema.Struct({})` checks only that a value is not `null` or `undefined`,
+  so it would pass `{ stray: 1 }`, a string or an array through unchanged
+  (even with `onExcessProperty: "error"`), and an encoded binding would carry
+  the stray keys to SurrealDB, which refuses them (`Found field 'stray', but
+  no such field exists`; ``Expected `{  }` ``). `EmptyObject` is
+  `Schema.Struct({}).check(isEmptyObject())`: it accepts exactly `{}` in both
+  directions, its JSON Schema requires `{ "type": "object",
+  "additionalProperties": false }`, and it stays a `Schema.Struct` whose type is `{}`, so a caller
+  that passes `{}` and `refine` work as before. An open row keeps
+  `Schema.Struct({})` as the base of its `Schema.StructWithRest`, where the
+  record rest holds the keys.
 - `regex` and `function` kinds become `Unsupported(kind)` (with a warning):
   the values have no SDK representation.
 
@@ -547,10 +649,11 @@ types) and are never the default.
 
 Every generated table also gets the JSON world of its selected row:
 `<Table>JsonFields`, `<Table>FromJson` and `<Table>JsonEncoded`. They decode
-the JSON SurrealDB 3.2 and 3.3 render to the same types as the native
-exports (brands and checks included), so projections are derived the same
-way: `Schema.Struct(Struct.pick(PersonJsonFields, ['name', 'born']))`. What
-JSON loses, and what these codecs then do:
+the JSON SurrealDB 3.2 and 3.3 render. Declared kinds recover their native
+representations where the JSON retains enough information. Open values stay
+in their JSON representation. Derive projections with
+`Schema.Struct(Struct.pick(PersonJsonFields, ['name', 'born']))`. The table
+below describes how the codecs handle JSON conversions.
 
 | Value | SurrealDB JSON | JSON world |
 | --- | --- | --- |
@@ -593,9 +696,11 @@ const people = rows.map(Schema.decodeUnknownSync(Person));
 | SurrealQL | Schema | Decoded type |
 | --- | --- | --- |
 | `int` | `Int` (`int: "safe-number"`, default) / `Int64` (`int: "bigint"`) | `number` / branded `bigint` |
-| `float` | `Schema.Number` | `number` |
+| `float` | `Float` (native IEEE-754, including NaN, infinities and signed zero) / `Schema.Finite` (JSON) | `number` |
 | `decimal` | `Decimal` | SDK `Decimal` |
-| `number` | `SurrealNumber` | `number \| bigint \| Decimal` |
+| `number` | `SurrealNumber` / `SurrealNumberFromJson` (finite JSON numbers or decimal strings) | `number \| bigint \| Decimal` |
+| `any` | `Schema.UndefinedOr(SurrealValue)` / `SurrealJsonValue` (JSON) | `SurrealValue \| undefined` / `SurrealJsonValue` |
+| open `object` | `Schema.Record(Schema.String, SurrealValue)` / `Schema.Record(Schema.String, SurrealJsonValue)` (JSON) | string-keyed record of open values |
 | `string` | `String` | `string` (well-formed Unicode) |
 | `datetime` | `DateTime` (`datetime: "sdk"`, default) / `DateTimeEffect` | SDK `DateTime` / Effect `DateTime.Utc` |
 | `duration` | `Duration` | SDK `Duration` |
@@ -671,7 +776,9 @@ process (`Arbitrary.schema` + `Arbitrary.checkEffect`). Golden output lives in
 `example.v2.json`, the same with the `bigint`/`effect-datetime`/`patch`
 options, the whole corpus, the integer-keyed corpus tables in the `bigint` profile (the
 whole corpus in that profile is checked line by line against the `corpus`
-golden instead of being pinned twice) and the field-presence evidence tables. The corpus
+golden instead of being pinned twice), the field-presence evidence tables and
+the `members` fixture (`test/fixtures/members`: field permissions and unique
+indexes, compiled with `surrealkit compile` in that directory). The corpus
 inputs are real `surrealkit compile` output, pinned byte for byte by
 SurrealKit's own test suite under `typegen_corpus/compiled/`, and every input
 document is validated against the published JSON Schema. The golden

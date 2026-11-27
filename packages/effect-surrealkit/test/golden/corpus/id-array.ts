@@ -22,18 +22,23 @@ export const IdArrayRow = SurrealSchema.NoneAsAbsent(IdArray);
 export type IdArrayRow = typeof IdArrayRow.Type;
 export type IdArrayRowEncoded = typeof IdArrayRow.Encoded;
 
+/** `IdArray` as a session reads it when field permissions may hide fields: every field's select permission is FULL, so it is `IdArray`. */
+export const IdArrayVisible = IdArray;
+export type IdArrayVisible = typeof IdArrayVisible.Type;
+export type IdArrayVisibleEncoded = typeof IdArrayVisible.Encoded;
+
 /** Input for `CREATE id_array CONTENT` / `INSERT`. The record id is an operation argument. */
-export const IdArrayCreate = Schema.Struct({});
+export const IdArrayCreate = SurrealSchema.EmptyObject;
 export type IdArrayCreate = typeof IdArrayCreate.Type;
 export type IdArrayCreateEncoded = typeof IdArrayCreate.Encoded;
 
 /** Input for `UPDATE id_array MERGE`: omitting a field leaves it unchanged; `undefined` (NONE) removes a removable field and re-applies a resettable one's default. */
-export const IdArrayMerge = Schema.Struct({});
+export const IdArrayMerge = SurrealSchema.EmptyObject;
 export type IdArrayMerge = typeof IdArrayMerge.Type;
 export type IdArrayMergeEncoded = typeof IdArrayMerge.Encoded;
 
 /** Input for `UPDATE id_array CONTENT`: a full replacement of the writable fields. */
-export const IdArrayContent = Schema.Struct({});
+export const IdArrayContent = SurrealSchema.EmptyObject;
 export type IdArrayContent = typeof IdArrayContent.Type;
 export type IdArrayContentEncoded = typeof IdArrayContent.Encoded;
 
@@ -45,6 +50,7 @@ export const IdArrayTable = SurrealSchema.table({
 	drop: false,
 	id: IdArrayId,
 	select: IdArray,
+	visible: IdArrayVisible,
 	create: IdArrayCreate,
 	merge: IdArrayMerge,
 	content: IdArrayContent,
@@ -54,6 +60,8 @@ export const IdArrayTable = SurrealSchema.table({
 	},
 	relations: { in: [], out: [] },
 	permissions: { select: false, create: false, update: false, delete: false },
+	fieldPermissions: {},
+	indexes: {},
 });
 
 /** JSON world: the field schemas of a selected `id_array` row as SurrealDB's HTTP `/sql` renders it (lossy; see the effect-surrealkit README), decoding to the native types. */
