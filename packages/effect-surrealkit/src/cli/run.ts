@@ -30,11 +30,12 @@ Options:
   --input <file>             Read the schema document from a file (default: stdin)
   --out <dir>                Output directory (required)
   --config <file>            Emitter options as JSON: store, int, datetime, patch,
-                             importExtension, acknowledge, fields, names
+                             pipeable, importExtension, acknowledge, fields, names
   --store <name>             Logical store name, used in record-id brands
   --int <profile>            safe-number (default) | bigint
   --datetime <profile>       sdk (default) | effect-datetime
   --patch                    Also emit JSON Patch unions (not yet qualified)
+  --pipeable                 Print nested unary field schemas with .pipe(...)
   --import-extension <ext>   .js (default) | .ts: extension of imports between the
                              generated modules; .ts loads under Node type stripping
   --acknowledge <code=why>   Proceed past an error diagnostic code (repeatable)
@@ -82,6 +83,7 @@ const readOptions = async (
 		readonly int?: string | undefined;
 		readonly datetime?: string | undefined;
 		readonly patch?: boolean | undefined;
+		readonly pipeable?: boolean | undefined;
 		readonly 'import-extension'?: string | undefined;
 		readonly acknowledge?: ReadonlyArray<string> | undefined;
 	},
@@ -122,6 +124,7 @@ const readOptions = async (
 		...(values.int !== undefined && { int: values.int }),
 		...(values.datetime !== undefined && { datetime: values.datetime }),
 		...(values.patch !== undefined && { patch: values.patch }),
+		...(values.pipeable !== undefined && { pipeable: values.pipeable }),
 		...(values['import-extension'] !== undefined && {
 			importExtension: values['import-extension'],
 		}),
@@ -167,6 +170,7 @@ const execute = async (
 			int: { type: 'string' },
 			datetime: { type: 'string' },
 			patch: { type: 'boolean' },
+			pipeable: { type: 'boolean' },
 			'import-extension': { type: 'string' },
 			acknowledge: { type: 'string', multiple: true },
 			check: { type: 'boolean' },
