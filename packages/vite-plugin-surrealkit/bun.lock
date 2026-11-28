@@ -17,8 +17,12 @@
         "vitest": "^3.2.4",
       },
       "peerDependencies": {
+        "effect-surrealkit": ">=0.1.0",
         "vite": "^8.0.0",
       },
+      "optionalPeers": [
+        "effect-surrealkit",
+      ],
     },
   },
   "packages": {
