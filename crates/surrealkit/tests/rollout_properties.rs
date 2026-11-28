@@ -760,8 +760,11 @@ async fn check(case: &Case) -> Result<Exercised> {
 		 of the second version has\n{second_catalog:#}"
 	);
 
-	// 2. Planning again finds nothing to do.
-	let (again, again_renames) = project.plan("again").await?;
+	// 2. Planning again finds nothing to do. Ids are the planning second and the
+	//    name, and when both versions are the same both rollouts are no-ops,
+	//    which run in id order. This name sorts after "next", so a plan made
+	//    within the same second still runs after it.
+	let (again, again_renames) = project.plan("replan").await?;
 	let spec = project.manifest(&again)?;
 	ensure!(
 		spec.steps.is_empty() && again_renames.is_empty(),
