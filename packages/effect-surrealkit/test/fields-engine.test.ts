@@ -1,9 +1,9 @@
 /**
- * Compared fields against an engine: why a comparison in a `WHERE` of a
- * field a SCHEMAFULL table does not declare is worth recording, and the reading
+ * Compared fields against an engine: why a field a SCHEMAFULL table does
+ * not declare is checked when it is compared in a `WHERE`, and the reading
  * of each rule the analyzer uses to record one (`test/fields.test.ts`).
- * Every fact is pinned on the engine `SURREAL_BIN` or `SURREAL_URL` names
- * (checked on SurrealDB 3.3 and 4.0).
+ * Every fact is pinned on the lane it runs on: SurrealDB 4.0 embedded, and
+ * 3.3 with `SURREAL_BIN`.
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';

@@ -27,9 +27,10 @@ export interface TextHoleScope<
 export type TextHoleScopes = { readonly [hole: string]: TextHoleScope };
 
 /**
- * A fragment or template, declared with {@link text}. The names it reads,
- * defines and throws, and the scope of each hole, are kept as literal
- * types, so code that fills it can work out what the filled text reads.
+ * A fragment or template, as the `statements` command writes it. The names
+ * it reads, defines and throws, and the scope of each hole, are kept as
+ * literal types, so `compose` (in `effect-surrealkit/statement`) can work
+ * out what a filled text reads.
  */
 export interface Text<
 	Holes extends string = string,

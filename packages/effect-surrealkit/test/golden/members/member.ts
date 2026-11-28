@@ -44,7 +44,7 @@ export const MemberRow = SurrealSchema.NoneAsAbsent(Member);
 export type MemberRow = typeof MemberRow.Type;
 export type MemberRowEncoded = typeof MemberRow.Encoded;
 
-/** `Member` as a session reads it when field permissions may hide fields: each field whose select permission is not FULL may be NONE (absent). */
+/** `Member` as a session reads it when field permissions may hide fields: each field whose select permission is not FULL may be NONE (absent). Build statements from `readAs(MemberTable)`. */
 export const MemberVisible = Schema.Struct({
 	id: MemberId,
 	email: Schema.optionalKey(MemberFields.email),

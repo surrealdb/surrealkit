@@ -1,6 +1,6 @@
 /**
  * What an authored SurrealQL text does with variables, results and `THROW`s,
- * derived from its tokens.
+ * derived from its tokens: the facts a {@link Part} declares.
  */
 import { Effect } from 'effect';
 
@@ -438,7 +438,7 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 						diagnose(
 							'warning',
 							'contextualName',
-							`\`$${name}\` is read here without a LET; SurrealDB sets it inside definitions and some clauses, so LET it before reading it rather than bind it`,
+							`\`$${name}\` is read here without a LET; SurrealDB sets it inside definitions and some clauses, and \`sequence\` refuses it as a binding, so LET it in an earlier part`,
 							token,
 						);
 					}
@@ -524,7 +524,7 @@ const analyzeLexed = (sql: string, lexed: Lexed): Analysis => {
 						diagnose(
 							'warning',
 							'dynamicThrow',
-							'THROW of something other than a string literal: its message is not in `throws`',
+							'THROW of something other than a string literal: its message is not declared, so a client reports it as an unexpected throw',
 							token,
 						);
 					}
@@ -818,7 +818,7 @@ export const analyzeSync = (
  * which holes it leaves. Fails with the line and column of anything it
  * cannot classify. Errors in `diagnostics` (a `LET $auth`, a `RETURN` inside
  * `BEGIN … COMMIT` followed by another statement) do not fail the analysis;
- * the caller decides what to refuse.
+ * the `statements` command refuses them.
  */
 export const analyze = (
 	sql: string,

@@ -6,7 +6,14 @@ export default defineConfig({
 	resolve: {
 		// Generated modules import the package by name; point that at the
 		// sources so tests run without a build.
+		// The subpaths come first: an alias also matches what starts with it.
 		alias: {
+			'effect-surrealkit/statement': fileURLToPath(
+				new URL('./src/statement/index.ts', import.meta.url),
+			),
+			'effect-surrealkit/analyze': fileURLToPath(
+				new URL('./src/analyze/index.ts', import.meta.url),
+			),
 			'effect-surrealkit': fileURLToPath(
 				new URL('./src/index.ts', import.meta.url),
 			),

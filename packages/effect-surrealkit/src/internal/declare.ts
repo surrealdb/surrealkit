@@ -8,6 +8,7 @@ import {
 } from 'effect';
 
 import type { CodeOutput, SchemaCode } from './code.js';
+import { staticCodecIssue } from './codecIssue.js';
 
 /** Outcome of checking one input value. */
 export type Parsed<T> =
@@ -143,23 +144,37 @@ export const wrap = <
 		readonly equivalence?: (self: S['Type'], that: S['Type']) => boolean;
 		/** Applied to the input before the inner codec, when decoding only. */
 		readonly preprocess?: (input: unknown) => unknown;
+		/**
+		 * Refuses an input during decoding, before the inner codec sees it.
+		 * The message is authored with the schema and carries no input.
+		 */
+		readonly refuse?: {
+			readonly when: (input: unknown) => boolean;
+			readonly message: string;
+		};
 		/** Replaces the arbitrary derived from the wrapped codec's type side. */
 		readonly arbitrary?: () => SchemaAST.Link;
 	},
 ) => {
 	const preprocess = annotations.preprocess ?? ((input: unknown) => input);
 	const parser =
-		(before: (input: unknown) => unknown): DeclarationRun =>
+		(
+			before: (input: unknown) => unknown,
+			refuse?: typeof annotations.refuse,
+		): DeclarationRun =>
 		(typeParameters) => {
 			// The first parameter is `inner`, flipped when encoding.
 			const codec = Schema.make<Schema.Codec<unknown, unknown>>(
 				typeParameters[0] ?? inner.ast,
 			);
-			return (input, _ast, parseOptions) =>
-				SchemaParser.decodeUnknownEffect(codec)(
-					before(input),
-					parseOptions,
-				);
+			return (input, _ast, parseOptions) => {
+				return refuse?.when(input) === true
+					? Effect.fail(staticCodecIssue(refuse.message))
+					: SchemaParser.decodeUnknownEffect(codec)(
+							before(input),
+							parseOptions,
+						);
+			};
 		};
 	const declaration: Schema.Annotations.Declaration<S['Type'], readonly [S]> =
 		{
@@ -193,7 +208,7 @@ export const wrap = <
 				...(annotations.codeParameters?.map((schema) => schema.ast) ??
 					[]),
 			],
-			parser(preprocess),
+			parser(preprocess, annotations.refuse),
 			declaration,
 			undefined,
 			undefined,

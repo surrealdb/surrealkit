@@ -51,13 +51,33 @@ export const sha256 = (text: string): string =>
 
 /**
  * The `members` fixture (`test/fixtures/members`): field permissions and
- * unique indexes, compiled by `surrealkit compile` from its `.surql`.
+ * unique indexes, compiled by `surrealkit compile` from its `.surql`, which
+ * the engine suites apply.
  */
 export const membersPath = join(
 	import.meta.dirname,
 	'fixtures',
 	'members',
 	'members.v2.json',
+);
+export const membersSchemaPath = join(
+	import.meta.dirname,
+	'fixtures',
+	'members',
+	'database',
+	'schema',
+	'members.surql',
+);
+
+/**
+ * The schema of the block scripts (`test/fixtures/scripts/schema`), as
+ * `surrealkit compile` wrote it in that directory.
+ */
+export const scriptsDocumentPath = join(
+	import.meta.dirname,
+	'fixtures',
+	'scripts',
+	'schema.v2.json',
 );
 
 /** The compiled document for the presence-evidence tables (`e`, `ip`, `m`, `oa`, `p`, `up`). */
@@ -157,6 +177,12 @@ export const goldens = [
 		name: 'members',
 		document: () => readJson(membersPath),
 		options: { store: 'members' },
+	},
+	{
+		// The tables and functions of the block scripts (test/block-engine.test.ts).
+		name: 'scripts',
+		document: () => readJson(scriptsDocumentPath),
+		options: { store: 'scripts' },
 	},
 ] as const;
 
