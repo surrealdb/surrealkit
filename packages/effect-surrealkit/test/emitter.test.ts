@@ -277,6 +277,22 @@ describe('golden generated output', () => {
 });
 
 describe('generation rules', () => {
+	it('opts into pipeable composition without changing default output', async () => {
+		const document = readJson(compiledPath('corpus'));
+		const normal = await run(generate(document, corpusOptions));
+		const piped = await run(
+			generate(document, { ...corpusOptions, pipeable: true }),
+		);
+		expect(piped.files.map((file) => file.path)).toEqual(
+			normal.files.map((file) => file.path),
+		);
+		expect(piped.files.map((file) => file.content).join('\n')).toContain(
+			'.pipe(Schema.optionalKey)',
+		);
+		expect(
+			normal.files.map((file) => file.content).join('\n'),
+		).not.toContain('.pipe(Schema.optionalKey)');
+	});
 	const example = () =>
 		readJson(examplePath) as Record<string, unknown> & {
 			tables: Array<Record<string, unknown>>;

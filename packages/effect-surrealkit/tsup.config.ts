@@ -8,14 +8,19 @@ export default defineConfig([
 			index: "src/index.ts",
 			emitter: "src/emitter/index.ts",
 			statement: "src/statement/index.ts",
+			functions: "src/functions/index.ts",
+			client: "src/client/index.ts",
 			analyze: "src/analyze/index.ts",
+			// Imports `@surrealdb/node` (an optional peer) only when a memory
+			// database starts; nothing else imports this entry.
+			testing: "src/testing/index.ts",
 		},
 		format: ["esm"],
 		dts: true,
 		sourcemap: true,
 		target: "es2022",
 		platform: "neutral",
-		external: ["effect", "surrealdb"],
+		external: ["effect", "surrealdb", "@surrealdb/node"],
 	},
 	{
 		entry: { cli: "src/cli/main.ts" },
