@@ -10,15 +10,48 @@ const list = (values: ReadonlyArray<string>): string =>
 
 const SAFE = Number.MAX_SAFE_INTEGER;
 
-/** Keep leaf references compact; allow nested schema expressions to compose left to right. */
+/**
+ * The index of the `(` that the final `)` of `text` closes, skipping string
+ * literals, or `undefined` when `text` does not end with a balanced call.
+ */
+const finalCallOpen = (text: string): number | undefined => {
+	if (!text.endsWith(')')) return undefined;
+	const open: Array<number> = [];
+	let quote: string | undefined;
+	for (let i = 0; i < text.length; i++) {
+		const char = text[i] as string;
+		if (quote !== undefined) {
+			if (char === '\\') i++;
+			else if (char === quote) quote = undefined;
+		} else if (char === '"' || char === "'" || char === '`') quote = char;
+		else if (char === '(') open.push(i);
+		else if (char === ')') {
+			const start = open.pop();
+			if (start === undefined) return undefined;
+			if (i === text.length - 1)
+				return open.length === 0 ? start : undefined;
+		}
+	}
+	return undefined;
+};
+
+/**
+ * Keep leaf references compact; allow nested schema expressions to compose
+ * left to right. A value that already ends in `.pipe(...)` gains the operator
+ * as one more argument, so the output never chains `.pipe(a).pipe(b)`.
+ */
 export const unarySchema = (
 	operator: string,
 	value: string,
 	pipeable?: boolean,
-): string =>
-	pipeable && value.endsWith(')')
-		? `${value}.pipe(${operator})`
-		: `${operator}(${value})`;
+): string => {
+	if (!pipeable) return `${operator}(${value})`;
+	const open = finalCallOpen(value);
+	if (open === undefined) return `${operator}(${value})`;
+	return value.slice(0, open).endsWith('.pipe')
+		? `${value.slice(0, -1)}, ${operator})`
+		: `${value}.pipe(${operator})`;
+};
 
 const isSafeIntText = (text: string): boolean => {
 	if (!/^-?\d+$/.test(text)) return false;
