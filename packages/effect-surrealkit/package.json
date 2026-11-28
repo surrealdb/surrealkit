@@ -20,6 +20,10 @@
 			"types": "./dist/statement.d.ts",
 			"import": "./dist/statement.js"
 		},
+		"./functions": {
+			"types": "./dist/functions.d.ts",
+			"import": "./dist/functions.js"
+		},
 		"./analyze": {
 			"types": "./dist/analyze.d.ts",
 			"import": "./dist/analyze.js"
@@ -46,6 +50,7 @@
 		"test": "vitest run",
 		"test:skips": "node scripts/skips.mjs",
 		"test:roundtrip": "node scripts/roundtrip.mjs",
+		"generate:functions": "node scripts/generate-functions.mjs",
 		"typecheck": "tsc --noEmit && tsc --noEmit -p test/types"
 	},
 	"keywords": [

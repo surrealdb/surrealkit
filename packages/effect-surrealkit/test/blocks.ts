@@ -1,0 +1,538 @@
+/**
+ * Every block the test suites build, in one place, so `test/block.test.ts`
+ * checks each against the analyzer (`consistent`): the two scripts ported
+ * from authored SurrealQL, and the small blocks the unit, client and
+ * transaction tests use.
+ */
+import { Schema } from 'effect';
+import { RecordId } from 'surrealdb';
+
+import { array, math, string } from '../src/functions/index.js';
+import * as SurrealSchema from '../src/index.js';
+import {
+	and,
+	block,
+	call,
+	count,
+	create,
+	eq,
+	follow,
+	gte,
+	insert,
+	knn,
+	knnDistance,
+	literal,
+	lt,
+	match,
+	ne,
+	not,
+	object,
+	outgoing,
+	param,
+	recordId,
+	score,
+	select,
+	sum,
+	unsafeExpr,
+	update,
+	upsert,
+} from '../src/statement/index.js';
+import {
+	store as corpus,
+	DocTable,
+	PersonId,
+	PersonTable,
+} from './golden/corpus/index.js';
+import {
+	AccountId,
+	fn_debit,
+	fn_membership_key,
+	fn_payment_key,
+	fn_seats_taken,
+	InviteId,
+	InviteTable,
+	MembershipTable,
+	PaymentTable,
+	TeamTable,
+	WalletId,
+	WalletTable,
+} from './golden/scripts/index.js';
+
+const account = param('account', AccountId);
+const amount = param('amount', SurrealSchema.Int);
+
+/**
+ * Accepting a team invite: lock the invite and read it, check it, lock the
+ * team, compute the membership key, and either report the membership that
+ * already exists or check the seats, create the membership, close the
+ * invite and report it.
+ */
+export const acceptInvite = block()
+	.let('invite', () =>
+		select(InviteTable, param('invite_id', InviteId))
+			.forUpdate()
+			.only()
+			.build(),
+	)
+	.throwIfNone('invite', 'Invite not found')
+	.throwIf(($) => ne($.invite.status, 'open'), 'Invite is not open')
+	.throwIf(
+		($) => lt($.invite.expires_at, param('now', SurrealSchema.DateTime)),
+		'Invite has expired',
+	)
+	.let('team_id', ($) => $.invite.team)
+	.let('team', ($) => select(TeamTable, $.team_id).forUpdate().only().build())
+	.throwIfNone('team', 'Team not found')
+	.let('key', ($) => call(fn_membership_key, $.team.id, account))
+	.let('existing', ($) =>
+		select(MembershipTable)
+			.where((row) => eq(row.key, $.key))
+			.only()
+			.build(),
+	)
+	.ifNotNone('existing', (arm) =>
+		arm.return(($) => ({
+			kind: 'member',
+			membership: $.existing.id,
+			role: $.existing.role,
+		})),
+	)
+	.else((arm) =>
+		arm
+			.throwIf(
+				($) => gte(call(fn_seats_taken, $.team.id), $.team.seats),
+				'Team is full',
+			)
+			.let('created', ($) =>
+				create(MembershipTable)
+					.content(
+						object({
+							team: $.team.id,
+							account,
+							role: $.invite.role,
+							key: $.key,
+						}),
+					)
+					.build(),
+			)
+			.do(($) =>
+				update(InviteTable, $.invite.id)
+					.merge(object({ status: 'accepted' }))
+					.returning('none')
+					.build(),
+			)
+			.return(($) => ({
+				kind: 'joined',
+				membership: $.created.id,
+				role: $.created.role,
+			})),
+	)
+	.build('accept invite');
+
+/**
+ * Paying from a wallet with an idempotency key: lock the wallet and read
+ * it, check the payer, compute the key, and either replay the payment
+ * already made, refuse a frozen wallet, decline when the balance is short,
+ * or record the payment and debit the wallet.
+ */
+export const pay = block()
+	.let('wallet', () =>
+		select(WalletTable, param('wallet_id', WalletId))
+			.forUpdate()
+			.only()
+			.build(),
+	)
+	.throwIfNone('wallet', 'Wallet not found')
+	.throwIf(
+		($) => ne($.wallet.owner, param('payer', AccountId)),
+		'Not your wallet',
+	)
+	.let('key', ($) =>
+		call(
+			fn_payment_key,
+			$.wallet.id,
+			param('request', SurrealSchema.String),
+		),
+	)
+	.let('previous', ($) =>
+		select(PaymentTable)
+			.where((row) => eq(row.key, $.key))
+			.only()
+			.build(),
+	)
+	.ifNotNone('previous', (arm) =>
+		arm.return(($) => ({
+			kind: 'replayed',
+			payment: $.previous.id,
+			amount: $.previous.amount,
+		})),
+	)
+	.elseIf(
+		($) => $.wallet.frozen,
+		(arm) => arm.throw('Wallet is frozen'),
+	)
+	.elseIf(
+		($) => lt($.wallet.balance, amount),
+		(arm) =>
+			arm.return(($) => ({
+				kind: 'declined',
+				balance: $.wallet.balance,
+			})),
+	)
+	.else((arm) =>
+		arm
+			.let('balance', ($) => call(fn_debit, $.wallet.balance, amount))
+			.let('payment', ($) =>
+				create(PaymentTable)
+					.content(
+						object({ wallet: $.wallet.id, amount, key: $.key }),
+					)
+					.build(),
+			)
+			.do(($) =>
+				update(WalletTable, $.wallet.id)
+					.merge(object({ balance: $.balance }))
+					.returning('none')
+					.build(),
+			)
+			.return(($) => ({
+				kind: 'paid',
+				payment: $.payment.id,
+				balance: $.balance,
+			})),
+	)
+	.build('pay');
+
+const n = param('n', SurrealSchema.Int);
+
+/** A guard, then a value: the smallest script. */
+export const guarded = block()
+	.throwIf(() => eq(n, 0), 'zero')
+	.return(() => ({ n }))
+	.build('guarded');
+
+/** An `if` without `else`: NONE when its condition fails. */
+export const unlessNegative = block()
+	.if(
+		() => gte(n, 0),
+		(arm) => arm.return(() => ({ sign: 'positive', n })),
+	)
+	.build('unless negative');
+
+/** A block that only binds a local: NONE. */
+export const onlyLocals = block()
+	.let('debited', () => call(fn_debit, n, n))
+	.build('only locals');
+
+/** A block that always throws. */
+export const onlyThrows = block().throw('always').build('only throws');
+
+/** Branches inside a branch, and a branch's own local. */
+export const nested = block()
+	.let('first', () => n)
+	.if(
+		($) => gte($.first, 10),
+		(arm) =>
+			arm
+				.if(
+					($) => gte($.first, 100),
+					(inner) => inner.return(() => ({ size: 'huge' })),
+				)
+				.else((inner) => inner.return(() => ({ size: 'big' }))),
+	)
+	.elseIf(
+		($) => eq($.first, 0),
+		(arm) => arm.throw('zero'),
+	)
+	.else((arm) =>
+		arm
+			.let('second', ($) => call(fn_debit, $.first, 1))
+			.return(($) => ({ size: 'small', less: $.second })),
+	)
+	.build('nested');
+
+/** A read whose fields are NONE until a guard refuses NONE. */
+export const inviteStatus = block()
+	.let('invite', () =>
+		select(InviteTable, param('invite_id', InviteId)).only().build(),
+	)
+	.return(($) => ({ status: $.invite.status, team: $.invite.team }))
+	.build('invite status', { writes: false });
+
+/**
+ * Debiting a wallet, then refusing a negative balance: a guard after a
+ * write, which undoes the write even when the block runs on its own.
+ */
+export const withdraw = block()
+	.let('wallet', () =>
+		select(WalletTable, param('wallet_id', WalletId))
+			.forUpdate()
+			.only()
+			.build(),
+	)
+	.throwIfNone('wallet', 'Wallet not found')
+	.let('debited', ($) =>
+		update(WalletTable, $.wallet.id)
+			.merge(
+				object({ balance: call(fn_debit, $.wallet.balance, amount) }),
+			)
+			.build(),
+	)
+	.throwIfNone('debited', 'Wallet not found')
+	.throwIf(($) => lt($.debited.balance, 0), 'Insufficient funds')
+	.return(($) => ({ balance: $.debited.balance }))
+	.build('withdraw');
+
+/** A block as a local of another: `pay`, then the wallet as it is after. */
+export const payAndRead = block()
+	.let('outcome', () => pay)
+	.let('wallet_after', () =>
+		select(WalletTable, param('wallet_id', WalletId)).only().build(),
+	)
+	.return(($) => ({ outcome: $.outcome, balance: $.wallet_after.balance }))
+	.build('pay and read');
+
+const label = param('label', SurrealSchema.String);
+const prefix = param('prefix', SurrealSchema.String);
+
+/**
+ * Built-in functions wherever a block takes an expression: a guard, a
+ * local, the result, and a select's condition and projection, a grouped
+ * select's condition included.
+ */
+export const summarise = block()
+	.let('wallet', () =>
+		select(WalletTable, param('wallet_id', WalletId)).only().build(),
+	)
+	.throwIfNone('wallet', 'Wallet not found')
+	.throwIf(() => not(string.isAlphanum(label)), 'Label is not alphanumeric')
+	.throwIf(($) => lt(math.abs($.wallet.balance), 1), 'Wallet is empty')
+	.let('shout', () => string.uppercase(label))
+	.let('payments', ($) =>
+		select(PaymentTable)
+			.where((row) =>
+				and(
+					eq(row.wallet, $.wallet.id),
+					string.startsWith(row.key, prefix),
+				),
+			)
+			.project((row) => ({
+				key: string.uppercase(row.key),
+				size: math.abs(row.amount),
+			}))
+			.orderByAlias('key')
+			.build(),
+	)
+	.let('totals', () =>
+		select(PaymentTable)
+			.where((row) => string.startsWith(row.key, prefix))
+			.groupBy((row) => ({ wallet: row.wallet }))
+			.aggregate((row) => ({ total: sum(row.amount), payments: count() }))
+			.build(),
+	)
+	.return(($) => ({
+		shout: $.shout,
+		length: string.len($.shout),
+		payments: $.payments,
+		count: array.len($.payments),
+		totals: $.totals,
+		rounded: math.fixed($.wallet.balance, 1),
+	}))
+	.build('summarise', { writes: false });
+
+/**
+ * The newer writes as locals: an UPSERT of a wallet by id, then an INSERT
+ * of its payment, each result read by later steps.
+ */
+export const topUp = block()
+	.let('wallet', () =>
+		upsert(WalletTable, param('wallet_id', WalletId))
+			.content(
+				object({
+					owner: param('owner', AccountId),
+					balance: amount,
+					frozen: false,
+				}),
+			)
+			.build(),
+	)
+	.let('receipts', ($) =>
+		insert(
+			PaymentTable,
+			object({
+				wallet: $.wallet.id,
+				amount,
+				key: string.concat(
+					$.wallet.id,
+					'/',
+					param('request', SurrealSchema.String),
+				),
+			}),
+		).build(),
+	)
+	.return(($) => ({
+		balance: $.wallet.balance,
+		receipts: $.receipts,
+		first: array.first($.receipts),
+	}))
+	.build('top up');
+
+/**
+ * Selects that follow a record link and take a graph step as locals, over
+ * the corpus schema (`test/graph-engine.test.ts` runs it).
+ */
+export const personAndTeams = block()
+	.let('person', () =>
+		select(PersonTable, param('who', PersonId))
+			.only()
+			.project((row) => ({
+				id: row.id,
+				boss: follow(corpus, row.manager).name,
+			}))
+			.build(),
+	)
+	.throwIfNone('person', 'Person not found')
+	.let('teams', ($) =>
+		select(PersonTable, $.person.id)
+			.only()
+			.value((row) => outgoing(corpus, row.id, 'member_of'))
+			.build(),
+	)
+	.return(($) => ({ boss: $.person.boss, teams: $.teams }))
+	.build('person and teams', { writes: false });
+
+const terms = match(DocTable, 'body', param('terms', SurrealSchema.String), {
+	ref: 1,
+});
+const near = knn(DocTable, 'embedding', 'query', { k: 3, ef: 40 });
+
+/**
+ * The README's combined example: a hybrid search ordered by its score, with
+ * a built-in function and a record link in its projection, bound in a block
+ * whose guard and result call built-in functions (`test/search-engine.test.ts`
+ * runs it).
+ */
+export const bestMatch = block()
+	.let('hits', () =>
+		select(DocTable)
+			.where(() => and(terms, near))
+			.project((row) => ({
+				id: row.id,
+				title: string.uppercase(row.title),
+				owner: follow(corpus, row.owner).name,
+				score: score(terms),
+				distance: knnDistance(near),
+			}))
+			.orderByAlias('score', 'DESC')
+			.build(),
+	)
+	.throwIf(($) => eq(array.len($.hits), 0), 'No match')
+	.return(($) => ({ best: array.first($.hits), matches: array.len($.hits) }))
+	.build('best match', { writes: false });
+
+/** Long enough for a test to write a record while a block is between steps. */
+const pause = unsafeExpr({
+	sql: 'sleep(400ms)',
+	codec: Schema.Undefined,
+	params: {},
+});
+
+const recording = (locked: boolean) => {
+	const read = select(WalletTable, param('wallet_id', WalletId));
+	return block()
+		.let('wallet', () => (locked ? read.forUpdate() : read).only().build())
+		.throwIfNone('wallet', 'Wallet not found')
+		.let('pause', () => pause)
+		.let('payment', ($) =>
+			create(PaymentTable)
+				.content(
+					object({
+						wallet: $.wallet.id,
+						amount: $.wallet.balance,
+						key: param('key', SurrealSchema.String),
+					}),
+				)
+				.build(),
+		)
+		.return(($) => ({ seen: $.wallet.balance }));
+};
+
+/** {@link recording} from the literal id `wallet:held`. */
+const recordingByLiteral = (locked: boolean) => {
+	const read = select(
+		WalletTable,
+		literal(new RecordId('wallet', 'held') as WalletId, WalletId),
+	);
+	return block()
+		.let('wallet', () => (locked ? read.forUpdate() : read).only().build())
+		.throwIfNone('wallet', 'Wallet not found')
+		.let('pause', () => pause)
+		.let('payment', ($) =>
+			create(PaymentTable)
+				.content(
+					object({
+						wallet: $.wallet.id,
+						amount: $.wallet.balance,
+						key: param('key', SurrealSchema.String),
+					}),
+				)
+				.build(),
+		)
+		.return(($) => ({ seen: $.wallet.balance }));
+};
+
+/** {@link recording} from `type::record(s"wallet", $wallet_key)`. */
+const recordingByBuiltId = (locked: boolean) => {
+	const read = select(
+		WalletTable,
+		recordId(WalletTable, param('wallet_key', SurrealSchema.String)),
+	);
+	return block()
+		.let('wallet', () => (locked ? read.forUpdate() : read).only().build())
+		.throwIfNone('wallet', 'Wallet not found')
+		.let('pause', () => pause)
+		.let('payment', ($) =>
+			create(PaymentTable)
+				.content(
+					object({
+						wallet: $.wallet.id,
+						amount: $.wallet.balance,
+						key: param('key', SurrealSchema.String),
+					}),
+				)
+				.build(),
+		)
+		.return(($) => ({ seen: $.wallet.balance }));
+};
+
+/**
+ * Reads a wallet `FOR UPDATE`, pauses, and records the balance it read in
+ * another record: a write to the wallet during the pause conflicts with the
+ * read (`test/block-engine.test.ts` races one against it).
+ */
+export const recordBalance = recording(true).build('record balance');
+
+/** The same without the lock: it records a balance that has since changed. */
+export const recordBalanceUnlocked = recording(false).build(
+	'record balance, unlocked',
+);
+
+/** {@link recordBalance} from the literal id `wallet:held`. */
+export const recordBalanceByLiteral = recordingByLiteral(true).build(
+	'record balance by a literal id',
+);
+
+/** {@link recordBalanceByLiteral} without the lock. */
+export const recordBalanceByLiteralUnlocked = recordingByLiteral(false).build(
+	'record balance by a literal id, unlocked',
+);
+
+/** {@link recordBalance} from a record id built from its key. */
+export const recordBalanceByBuiltId = recordingByBuiltId(true).build(
+	'record balance by a built id',
+);
+
+/** {@link recordBalanceByBuiltId} without the lock. */
+export const recordBalanceByBuiltIdUnlocked = recordingByBuiltId(false).build(
+	'record balance by a built id, unlocked',
+);
