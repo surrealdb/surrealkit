@@ -1,5 +1,47 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
+exports[`type diagnostics > arithmetic/none-operand 1`] = `
+[
+  "TS2345: Argument of type 'Path<UndefinedOr<declareConstructor<number, number, readonly [], number> & Codec>>' is not assignable to parameter of type '"this operand may be NONE, and SurrealDB refuses NONE in arithmetic (\`1 + NONE\` fails the statement): read it where it is set"'.",
+]
+`;
+
+exports[`type diagnostics > arithmetic/string-constant 1`] = `
+[
+  "TS2345: Argument of type '"1"' is not assignable to parameter of type '"arithmetic takes numbers: SurrealDB refuses a string, a boolean, an array or another value as an operand of + - * /"'.",
+]
+`;
+
+exports[`type diagnostics > arithmetic/string-operand 1`] = `
+[
+  "TS2345: Argument of type 'Path<declareConstructor<string, string, readonly [], string> & Codec>' is not assignable to parameter of type '"arithmetic takes numbers: SurrealDB refuses a string, a boolean, an array or another value as an operand of + - * /"'.",
+]
+`;
+
+exports[`type diagnostics > bind/extra-value 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'extra' does not exist in type '{ readonly email: string; }'.",
+]
+`;
+
+exports[`type diagnostics > bind/missing-input 1`] = `
+[
+  "TS2554: Expected 2 arguments, but got 1.",
+]
+`;
+
+exports[`type diagnostics > bind/missing-value 1`] = `
+[
+  "TS2345: Argument of type '{ email: string; }' is not assignable to parameter of type '"binding \`name\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > bind/wrong-type 1`] = `
+[
+  "TS2322: Type 'number' is not assignable to type 'string'.",
+]
+`;
+
 exports[`type diagnostics > binds/argument-narrow-undefined-or 1`] = `
 [
   "TS2322: Type '{ weight: Schema.UndefinedOr<Schema.Literal<1>>; }' is not assignable to type '"binding \`weight\` is passed to \`fn::score\` at index 0 (float), which its codec cannot hold"'.",
@@ -144,6 +186,723 @@ exports[`type diagnostics > block/unknown-local 1`] = `
 ]
 `;
 
+exports[`type diagnostics > bound/hand-built 1`] = `
+[
+  "TS2322: Type '{ statement: Statement<{ readonly email: Schema.declareConstructor<string, string, readonly [], string>; }, Schema.$Array<Schema.declareConstructor<{ readonly name: string; readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 17 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { readonly name:...' is not assignable to type '"statements that run together are paired with their input by \`bind\`"'.",
+]
+`;
+
+exports[`type diagnostics > bound/hand-built-wrong-value 1`] = `
+[
+  "TS2322: Type '{ statement: Statement<{ readonly email: Schema.declareConstructor<string, string, readonly [], string>; }, Schema.$Array<Schema.declareConstructor<{ readonly name: string; readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 17 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { readonly name:...' is not assignable to type '"statements that run together are paired with their input by \`bind\`"'.",
+]
+`;
+
+exports[`type diagnostics > bulk-list-required 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type 'never'.",
+]
+`;
+
+exports[`type diagnostics > bulk-merge-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<$Array<Struct<{ readonly id: declareConstructor<_RecordId<"bulk_row">, _RecordId<"bulk_row">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>; readonly set: Struct<...>; }>>, { ...; }>' is not assignable to parameter of type '"\`set.absent\` is not a field \`bulk_row\` accepts in UPDATE EACH"'.",
+]
+`;
+
+exports[`type diagnostics > bulk-other-binding 1`] = `
+[
+  "TS2345: Argument of type '{ rows: number[]; }' is not assignable to parameter of type 'BulkInput<{ readonly rows: $Array<declareConstructor<number, number, readonly [], number>>; readonly label: String; }, "rows", never, never>'.
+  Property 'label' is missing in type '{ rows: number[]; }' but required in type 'Omit<{ readonly rows: readonly number[]; readonly label: string; }, "rows">'.",
+]
+`;
+
+exports[`type diagnostics > bulk-over-kind 1`] = `
+[
+  "TS2322: Type '"label"' is not assignable to type '"rows"'.",
+]
+`;
+
+exports[`type diagnostics > bulk-record-id 1`] = `
+[
+  "TS2345: Argument of type 'Expr<$Array<Struct<{ readonly id: declareConstructor<_RecordId<"other_row">, _RecordId<"other_row">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>; readonly set: Struct<...>; }>>, { ...; }>' is not assignable to parameter of type '"\`id\` is not a value \`bulk_row\` accepts in UPDATE EACH"'.",
+]
+`;
+
+exports[`type diagnostics > bulk-row-kind 1`] = `
+[
+  "TS2322: Type 'string[]' is not assignable to type 'Iterable<number> | Stream<number, never, never>'.
+  Type 'string[]' is not assignable to type 'Iterable<number>'.
+    The types returned by '[Symbol.iterator]().next(...)' are incompatible between these types.
+      Type 'IteratorResult<string, undefined>' is not assignable to type 'IteratorResult<number, any>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+        Type 'IteratorYieldResult<string>' is not assignable to type 'IteratorResult<number, any>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+          Type 'IteratorYieldResult<string>' is not assignable to type 'IteratorYieldResult<number>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+            Type 'string' is not assignable to type 'number'.",
+]
+`;
+
+exports[`type diagnostics > bulk-stream-kind 1`] = `
+[
+  "TS2345: Argument of type '{ rows: Stream.Stream<"wrong", never, never>; label: string; }' is not assignable to parameter of type 'BulkInput<{ readonly rows: $Array<declareConstructor<number, number, readonly [], number>>; readonly label: String; }, "rows", never, never>'.
+  Type '{ rows: Stream.Stream<"wrong", never, never>; label: string; }' is not assignable to type '{ readonly rows: Iterable<number> | Stream<number, never, never>; }'.
+    Types of property 'rows' are incompatible.
+      Type 'Stream<"wrong", never, never>' is not assignable to type 'Iterable<number> | Stream<number, never, never>'.
+        Type 'Stream<"wrong", never, never>' is not assignable to type 'Stream<number, never, never>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+          Type 'string' is not assignable to type 'number'.",
+]
+`;
+
+exports[`type diagnostics > call/missing-argument 1`] = `
+[
+  "TS2345: Argument of type '{ readonly name: "fn::greet"; readonly args: Schema.Tuple<readonly [Schema.declareConstructor<string, string, readonly [], string>, Schema.optional<Schema.declareConstructor<string, string, readonly [], string>>, Schema.optional<...>]>; readonly returns: Schema.declareConstructor<...>; }' is not assignable to parameter of type '"\`fn::greet\` needs more than 0 arguments"'.",
+]
+`;
+
+exports[`type diagnostics > call/too-many-arguments 1`] = `
+[
+  "TS2345: Argument of type '2' is not assignable to parameter of type '"\`fn::greet\` takes no fourth argument"'.",
+]
+`;
+
+exports[`type diagnostics > call/wrong-argument 1`] = `
+[
+  "TS2345: Argument of type 'Path<UndefinedOr<declareConstructor<number, number, readonly [], number> & Codec>>' is not assignable to parameter of type '"\`fn::greet\` does not accept this as its first argument"'.",
+]
+`;
+
+exports[`type diagnostics > condition/and-non-boolean 1`] = `
+[
+  "TS2345: Argument of type 'Path<declareConstructor<string, string, readonly [], string> & Codec>' is not assignable to parameter of type 'Expr<BooleanCodec, Params>'.
+  The types of '[ExprTypeId].codec["Encoded"]' are incompatible between these types.
+    Type 'string' is not assignable to type 'boolean'.",
+]
+`;
+
+exports[`type diagnostics > condition/contains-wrong-element 1`] = `
+[
+  "TS2345: Argument of type '1' is not assignable to parameter of type '"these operands never compare: their stored types do not overlap"'.",
+]
+`;
+
+exports[`type diagnostics > condition/inside-wrong-elements 1`] = `
+[
+  "TS2345: Argument of type 'number[]' is not assignable to parameter of type '"these operands never compare: their stored types do not overlap"'.",
+]
+`;
+
+exports[`type diagnostics > condition/int-field-with-string-binding 1`] = `
+[
+  "TS2345: Argument of type 'Expr<declareConstructor<string, string, readonly [], string>, { readonly minimum: declareConstructor<string, string, readonly [], string>; }>' is not assignable to parameter of type '"these operands never compare: their stored types do not overlap"'.",
+]
+`;
+
+exports[`type diagnostics > condition/literal-union-non-member 1`] = `
+[
+  "TS2345: Argument of type '"guest"' is not assignable to parameter of type '"these operands never compare: their stored types do not overlap"'.",
+]
+`;
+
+exports[`type diagnostics > condition/no-such-child 1`] = `
+[
+  "TS2339: Property 'street' does not exist on type 'FieldExpr<StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [$Record<String, Codec<SurrealValue, SurrealValue, never, never>>]>, false>'.",
+]
+`;
+
+exports[`type diagnostics > condition/no-such-field 1`] = `
+[
+  "TS2339: Property 'nope' does not exist on type 'RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }>'.",
+]
+`;
+
+exports[`type diagnostics > condition/not-boolean 1`] = `
+[
+  "TS2322: Type 'Path<declareConstructor<string, string, readonly [], string> & Codec>' is not assignable to type 'Condition<NoParams>'.
+  The types of '[ExprTypeId].codec["Encoded"]' are incompatible between these types.
+    Type 'string' is not assignable to type 'boolean'.",
+]
+`;
+
+exports[`type diagnostics > condition/not-non-boolean 1`] = `
+[
+  "TS2345: Argument of type 'Path<declareConstructor<string, string, readonly [], string> & Codec>' is not assignable to parameter of type 'Expr<BooleanCodec, NoParams>'.
+  The types of '[ExprTypeId].codec["Encoded"]' are incompatible between these types.
+    Type 'string' is not assignable to type 'boolean'.",
+]
+`;
+
+exports[`type diagnostics > condition/person-id-with-team-id 1`] = `
+[
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to parameter of type '"these operands never compare: their stored types do not overlap"'.",
+]
+`;
+
+exports[`type diagnostics > condition/string-field-with-number 1`] = `
+[
+  "TS2345: Argument of type '5' is not assignable to parameter of type '"these operands never compare: their stored types do not overlap"'.",
+]
+`;
+
+exports[`type diagnostics > conflict/index-not-a-string 1`] = `
+[
+  "TS2322: Type 'number' is not assignable to type 'string'.",
+]
+`;
+
+exports[`type diagnostics > conflict/undeclared-index 1`] = `
+[
+  "TS2367: This comparison appears to be unintentional because the types '"uniq_email"' and '"uniq_handle"' have no overlap.",
+]
+`;
+
+exports[`type diagnostics > content/extra-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly bogus: declareConstructor<number, number, readonly [], number>; readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [...]>; ... 14 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }>' is not assignable to parameter of type '"\`bogus\` is not a field \`person\` accepts in CONTENT"'.",
+]
+`;
+
+exports[`type diagnostics > content/merge-value-missing-fields 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<SurrealMergeValue, SurrealMergeValue, never, never>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' is not assignable to parameter of type '"\`name\` is required by \`person\` in CONTENT" | "\`role\` is required by \`person\` in CONTENT" | "\`address\` is required by \`person\` in CONTENT" | "\`email\` is required by \`person\` in CONTENT" | "\`bio\` is required by \`person\` in CONTENT" | "\`phones\` is required by \`person\` in CONTENT" | "\`score\` is required by \`person\` in ...'.",
+]
+`;
+
+exports[`type diagnostics > create/depth-two-extra-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly settings: Struct<{ readonly notify: Struct<{ readonly email: Boolean; readonly bogus: declareConstructor<number, number, readonly [], number>; }>; }>; ... 29 more ...; readonly watchers: optionalKey<...>; }>, { ...; }>' is not assignable to parameter of type '"\`settings.notify.bogus\` is not a field \`person\` accepts in CREATE"'.",
+]
+`;
+
+exports[`type diagnostics > create/extra-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly bogus: declareConstructor<number, number, readonly [], number>; readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [...]>; ... 15 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }>' is not assignable to parameter of type '"\`bogus\` is not a field \`person\` accepts in CREATE"'.",
+]
+`;
+
+exports[`type diagnostics > create/merge-value-missing-fields 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<SurrealMergeValue, SurrealMergeValue, never, never>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' is not assignable to parameter of type '"\`name\` is required by \`person\` in CREATE" | "\`address\` is required by \`person\` in CREATE" | "\`email\` is required by \`person\` in CREATE" | "\`bio\` is required by \`person\` in CREATE" | "\`score\` is required by \`person\` in CREATE"'.",
+]
+`;
+
+exports[`type diagnostics > create/missing-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [$Record<String, Codec<SurrealValue, SurrealValue, never, never>>]>; readonly bio: NullOr<...>; readonly email: declareConstructor<...>; readonly score: declareConstructor<...>...' is not assignable to parameter of type '"\`name\` is required by \`person\` in CREATE"'.",
+]
+`;
+
+exports[`type diagnostics > create/not-an-object 1`] = `
+[
+  "TS2345: Argument of type 'Expr<declareConstructor<string, string, readonly [], string>, { readonly person: declareConstructor<string, string, readonly [], string>; }>' is not assignable to parameter of type '"this value is not an object, which \`person\` takes in CREATE"'.",
+]
+`;
+
+exports[`type diagnostics > create/return-before 1`] = `
+[
+  "TS2769: No overload matches this call.
+  Overload 1 of 2, '(mode: "CREATE has no RETURN BEFORE: a record it makes had no state before"): Create<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; ... 11 more ...; readonly indexes: { ...; }; }, NoParams, $Array<...>>', gave the following error.
+    Argument of type '"before"' is not assignable to parameter of type '"CREATE has no RETURN BEFORE: a record it makes had no state before"'.
+  Overload 2 of 2, '(fields: (row: RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }>) => CheckedProjection<...>): Create<...>', gave the following error.
+    Argument of type 'string' is not assignable to parameter of type '(row: RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }>) => CheckedProjection<...'.",
+]
+`;
+
+exports[`type diagnostics > delete/unknown-mode 1`] = `
+[
+  "TS2769: No overload matches this call.
+  Overload 1 of 2, '(mode: "\`everything\` is not a RETURN mode of DELETE"): Delete<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<...>, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, NoParams, $Array<...>, "many">', gave the following error.
+    Argument of type '"everything"' is not assignable to parameter of type '"\`everything\` is not a RETURN mode of DELETE"'.
+  Overload 2 of 2, '(fields: (row: RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }>) => CheckedProjection<...>): Delete<...>', gave the following error.
+    Argument of type 'string' is not assignable to parameter of type '(row: RowExprs<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }>) => CheckedProjection<...'.",
+]
+`;
+
+exports[`type diagnostics > duplicate/readonly-field 1`] = `
+[
+  "TS2322: Type 'Path<declareConstructor<DateTime, DateTime, readonly [], DateTime> & Codec>' is not assignable to type '"\`created_at\` is not a field \`person\` accepts in ON DUPLICATE KEY UPDATE"'.",
+]
+`;
+
+exports[`type diagnostics > duplicate/wrong-value 1`] = `
+[
+  "TS2322: Type '"high"' is not assignable to type '"\`score\` does not hold this value"'.",
+]
+`;
+
+exports[`type diagnostics > expr/index-non-array 1`] = `
+[
+  "TS2769: No overload matches this call.
+  Overload 1 of 2, '(array: Path<declareConstructor<string, string, readonly [], string> & Codec> & { readonly 'this expression is not an array, so it has no elements to index': string; }, index: number): Path<...>', gave the following error.
+    Argument of type 'Path<declareConstructor<string, string, readonly [], string> & Codec>' is not assignable to parameter of type 'Path<declareConstructor<string, string, readonly [], string> & Codec> & { readonly 'this expression is not an array, so it has no elements to index': string; }'.
+      Property ''this expression is not an array, so it has no elements to index'' is missing in type 'Path<declareConstructor<string, string, readonly [], string> & Codec>' but required in type '{ readonly 'this expression is not an array, so it has no elements to index': string; }'.
+  Overload 2 of 2, '(array: Expr<declareConstructor<string, string, readonly [], string> & Codec, NoParams> & { readonly 'this expression is not an array, so it has no elements to index': string; }, index: number): Expr<...>', gave the following error.
+    Argument of type 'Path<declareConstructor<string, string, readonly [], string> & Codec>' is not assignable to parameter of type 'Expr<declareConstructor<string, string, readonly [], string> & Codec, NoParams> & { readonly 'this expression is not an array, so it has no elements to index': string; }'.
+      Property ''this expression is not an array, so it has no elements to index'' is missing in type 'Path<declareConstructor<string, string, readonly [], string> & Codec>' but required in type '{ readonly 'this expression is not an array, so it has no elements to index': string; }'.",
+]
+`;
+
+exports[`type diagnostics > family/binding-constant-fill 1`] = `
+[
+  "TS2322: Type 'Expr<declareConstructor<number, number, readonly [], number>, { readonly limit: declareConstructor<number, number, readonly [], number>; }>' is not assignable to type '"a constant fill binds nothing: put the binding in a \`.surql\` fragment"'.",
+]
+`;
+
+exports[`type diagnostics > family/extra-codec 1`] = `
+[
+  "TS2322: Type 'declareConstructor<string, string, readonly [], string>' is not assignable to type '"binding \`$colour\` is not read by any variant of this family"'.",
+]
+`;
+
+exports[`type diagnostics > family/extra-fill 1`] = `
+[
+  "TS2322: Type 'Empty' is not assignable to type '"\`__COLOUR__\` is not a hole of this template"'.",
+]
+`;
+
+exports[`type diagnostics > family/missing-codec 1`] = `
+[
+  "TS2322: Type '{ tenant: declareConstructor<string, string, readonly [], string>; terms: declareConstructor<string, string, readonly [], string>; region: declareConstructor<string, string, readonly [], string>; vector: $Array<...>; }' is not assignable to type '"binding \`$maxPrice\` is read by a variant of this family and has no codec"'.",
+]
+`;
+
+exports[`type diagnostics > family/missing-fill 1`] = `
+[
+  "TS2345: Argument of type '{ __PRICE__: Empty; }' is not assignable to parameter of type '"hole \`__REGION__\` has no fill"'.",
+]
+`;
+
+exports[`type diagnostics > family/option-without-text 1`] = `
+[
+  "TS2345: Argument of type '{ price: string[]; region: readonly [false, true]; vector: readonly [false, true]; }' is not assignable to parameter of type '"choose('price', …) has no text for \`none\`" | "choose('price', …) has no text for \`capped\`" | "choose('price', …) has a text for \`false\`, which is not a value of the axis" | "choose('price', …) has a text for \`true\`, which is not a value of the axis"'.",
+]
+`;
+
+exports[`type diagnostics > family/raw-string-fill 1`] = `
+[
+  "TS2322: Type '"AND price < 3"' is not assignable to type '"a hole takes a generated text or part, \`compose(…)\`, \`choose(…)\`, \`literal(…)\` or \`empty\`, not raw SurrealQL"'.",
+]
+`;
+
+exports[`type diagnostics > family/raw-string-option 1`] = `
+[
+  "TS2322: Type '"AND TRUE"' is not assignable to type '"a hole takes a generated text or part, \`compose(…)\`, \`choose(…)\`, \`literal(…)\` or \`empty\`, not raw SurrealQL"'.",
+]
+`;
+
+exports[`type diagnostics > family/runtime-key-missing-binding 1`] = `
+[
+  "TS2345: Argument of type '{ tenant: string; terms: string; maxPrice: number; }' is not assignable to parameter of type '"binding \`vector\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > family/select-bad-value 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type 'boolean'.",
+]
+`;
+
+exports[`type diagnostics > family/select-extra-binding 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'region' does not exist in type '{ readonly tenant: string; readonly terms: string; readonly maxPrice: number; }'.",
+]
+`;
+
+exports[`type diagnostics > family/select-missing-axis 1`] = `
+[
+  "TS2345: Argument of type '{ price: true; region: false; }' is not assignable to parameter of type 'KeyOf<{ readonly price: readonly [false, true]; readonly region: readonly [false, true]; readonly vector: readonly [false, true]; }>'.
+  Property 'vector' is missing in type '{ price: true; region: false; }' but required in type 'KeyOf<{ readonly price: readonly [false, true]; readonly region: readonly [false, true]; readonly vector: readonly [false, true]; }>'.",
+]
+`;
+
+exports[`type diagnostics > family/select-missing-binding 1`] = `
+[
+  "TS2345: Argument of type '{ tenant: string; terms: string; }' is not assignable to parameter of type '"binding \`maxPrice\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > family/select-misspelt-binding 1`] = `
+[
+  "TS2561: Object literal may only specify known properties, but 'maxprice' does not exist in type '{ readonly tenant: string; readonly terms: string; readonly maxPrice: number; }'. Did you mean to write 'maxPrice'?",
+]
+`;
+
+exports[`type diagnostics > family/select-unknown-axis 1`] = `
+[
+  "TS2322: Type 'number' is not assignable to type '"\`colour\` is not an axis of this family"'.",
+]
+`;
+
+exports[`type diagnostics > family/select-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type 'number'.",
+]
+`;
+
+exports[`type diagnostics > family/template-fill 1`] = `
+[
+  "TS2322: Type 'Text<"__NEAR__" | "__READINESS__" | "__WORDS__", never, never, never, { readonly __NEAR__: { readonly bound: readonly ["readiness", "words"]; readonly binds: readonly []; }; readonly __READINESS__: { readonly bound: readonly ["words"]; readonly binds: readonly []; }; readonly __WORDS__: { ...; }; }>' is not assignable to type '"this fill is a template with holes (__NEAR__): compose it first" | "this fill is a template with holes (__READINESS__): compose it first" | "this fill is a template with holes (__WORDS__): compose it first"'.",
+]
+`;
+
+exports[`type diagnostics > family/undeclared-axis 1`] = `
+[
+  "TS2345: Argument of type '{ price: boolean[]; region: boolean[]; }' is not assignable to parameter of type '"choose('vector', …) names an axis this family does not declare"'.",
+]
+`;
+
+exports[`type diagnostics > family/union-typed-fill 1`] = `
+[
+  "TS2322: Type 'Text<never, "maxPrice", never, never, Record<never, never>> | Text<never, "region", never, never, Record<never, never>>' is not assignable to type '"this fill is typed as one of several texts, so the compiler cannot tell which a variant holds: choose between them with \`choose(…)\`"'.
+  Type 'Text<never, "maxPrice", never, never, Record<never, never>>' is not assignable to type '"this fill is typed as one of several texts, so the compiler cannot tell which a variant holds: choose between them with \`choose(…)\`"'.",
+]
+`;
+
+exports[`type diagnostics > family/unused-axis 1`] = `
+[
+  "TS2345: Argument of type '{ size: string[]; price: readonly [false, true]; region: readonly [false, true]; vector: readonly [false, true]; }' is not assignable to parameter of type '"axis \`size\` is never chosen on, so every value of it gives the same text"'.",
+]
+`;
+
+exports[`type diagnostics > fetch/any-table 1`] = `
+[
+  "TS2345: Argument of type '"k_record_any"' is not assignable to parameter of type '"\`k_record_any\` can point at any table (\`record\`), so FETCH has no row type for it"'.",
+]
+`;
+
+exports[`type diagnostics > fetch/group-after 1`] = `
+[
+  "TS2684: The 'this' context of type 'FetchedSelect<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, NoP...' is not assignable to method's 'this' of type '"call \`groupAll\` before \`fetch\`: FETCH names fields of what the select returns"'.",
+]
+`;
+
+exports[`type diagnostics > fetch/nested-not-a-link 1`] = `
+[
+  "TS2345: Argument of type '"manager.name"' is not assignable to parameter of type '"\`manager.name\` is not a record link, so FETCH has nothing to replace"'.",
+]
+`;
+
+exports[`type diagnostics > fetch/no-such-field 1`] = `
+[
+  "TS2345: Argument of type '"nope"' is not assignable to parameter of type '"\`nope\` is not a field of what the select returns"'.",
+]
+`;
+
+exports[`type diagnostics > fetch/not-a-link 1`] = `
+[
+  "TS2345: Argument of type '"name"' is not assignable to parameter of type '"\`name\` is not a record link, so FETCH has nothing to replace"'.",
+]
+`;
+
+exports[`type diagnostics > fetch/project-after 1`] = `
+[
+  "TS2345: Argument of type '(row: any) => { name: any; }' is not assignable to parameter of type '"call \`project\` before \`fetch\`: FETCH names fields of what the select returns"'.",
+  "TS7006: Parameter 'row' implicitly has an 'any' type.",
+]
+`;
+
+exports[`type diagnostics > fetch/projection-has-no-such-alias 1`] = `
+[
+  "TS2345: Argument of type '"manager"' is not assignable to parameter of type '"\`manager\` is not a field of what the select returns"'.",
+]
+`;
+
+exports[`type diagnostics > fetch/value-after 1`] = `
+[
+  "TS2345: Argument of type '(row: any) => any' is not assignable to parameter of type '"call \`value\` before \`fetch\`: FETCH names fields of what the select returns"'.",
+  "TS7006: Parameter 'row' implicitly has an 'any' type.",
+]
+`;
+
+exports[`type diagnostics > flag/build-read-only 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'readOnly' does not exist in type '{ readonly writes?: boolean; }'.",
+]
+`;
+
+exports[`type diagnostics > flag/define-read-only 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'readOnly' does not exist in type '{ readonly name?: string; readonly writes?: boolean; readonly params: {}; readonly result: declareConstructor<number, number, readonly [], number>; readonly uniqueIndexes?: readonly never[]; }'.",
+]
+`;
+
+exports[`type diagnostics > flag/make-read-only 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'readOnly' does not exist in type '{ readonly name?: string; readonly sql: string; readonly params: {}; readonly result: declareConstructor<number, number, readonly [], number>; readonly slots?: number; readonly valueSlot?: number; ... 11 more ...; readonly uses?: Readonly<...>; }'.",
+]
+`;
+
+exports[`type diagnostics > group/alias-of-key 1`] = `
+[
+  "TS2322: Type 'Aggregate<declareConstructor<number, number, readonly [], number>>' is not assignable to type '"\`role\` is already a key of this GROUP BY"'.",
+]
+`;
+
+exports[`type diagnostics > group/all-ungrouped-field 1`] = `
+[
+  "TS2322: Type 'RowValue<declareConstructor<number, number, readonly [], number> & Codec, false, true>' is not assignable to type '"\`score\` is a field that is neither grouped nor aggregated: group by it, or aggregate it (count, sum, …)"'.",
+]
+`;
+
+exports[`type diagnostics > group/group-of-array 1`] = `
+[
+  "TS2345: Argument of type 'RowValue<declareConstructor<ReadonlySet<string>, ReadonlySet<string>, readonly [declareConstructor<string, string, readonly [], string>], ReadonlySet<string>> & Codec, false, false>' is not assignable to parameter of type '"this aggregate takes a field that is not an array: SurrealDB 4 flattens the arrays of a group and 3.3 does not"'.",
+]
+`;
+
+exports[`type diagnostics > group/key-not-a-path 1`] = `
+[
+  "TS2322: Type 'Expr<declareConstructor<string, string, readonly [], string>, NoParams>' is not assignable to type '"GROUP BY takes a field path of the row, like \`row.role\` or \`row.address.city\`"'.",
+]
+`;
+
+exports[`type diagnostics > group/order-by-unknown 1`] = `
+[
+  "TS2345: Argument of type '"name"' is not assignable to parameter of type '"\`name\` is not a group key or an aggregate of this SELECT"'.",
+]
+`;
+
+exports[`type diagnostics > group/sum-of-string 1`] = `
+[
+  "TS2345: Argument of type 'RowValue<declareConstructor<string, string, readonly [], string> & Codec, false, false>' is not assignable to parameter of type '"\`math::sum\` takes a number field"'.",
+]
+`;
+
+exports[`type diagnostics > group/time-of-string 1`] = `
+[
+  "TS2345: Argument of type 'RowValue<declareConstructor<string, string, readonly [], string> & Codec, false, false>' is not assignable to parameter of type '"\`time::min\` takes a datetime field"'.",
+]
+`;
+
+exports[`type diagnostics > group/ungrouped-field 1`] = `
+[
+  "TS2322: Type 'RowValue<declareConstructor<string, string, readonly [], string> & Codec, false, false>' is not assignable to type '"\`name\` is a field that is neither grouped nor aggregated: group by it, or aggregate it (count, sum, …)"'.",
+]
+`;
+
+exports[`type diagnostics > insert/extra-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly bogus: declareConstructor<string, string, readonly [], string>; readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [...]>; ... 15 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }>' is not assignable to parameter of type '"\`bogus\` is not a field \`person\` accepts in INSERT"'.",
+]
+`;
+
+exports[`type diagnostics > insert/rows-missing-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<$Array<Struct<{ readonly name: declareConstructor<string, string, readonly [], string>; }>>, { readonly people: $Array<Struct<{ readonly name: declareConstructor<string, string, readonly [], string>; }>>; }>' is not assignable to parameter of type '"\`address\` is required by \`person\` in INSERT" | "\`email\` is required by \`person\` in INSERT" | "\`bio\` is required by \`person\` in INSERT" | "\`score\` is required by \`person\` in INSERT"'.",
+]
+`;
+
+exports[`type diagnostics > insert-relation/no-endpoints 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly role: optionalKey<Literals<readonly ["lead", "member"]>>; readonly since: optionalKey<declareConstructor<DateTime, DateTime, readonly [], DateTime>>; }>, { ...; }>' is not assignable to parameter of type '"\`in\` is required by \`member_of\` in INSERT RELATION" | "\`out\` is required by \`member_of\` in INSERT RELATION"'.",
+]
+`;
+
+exports[`type diagnostics > insert-relation/wrong-endpoint 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly in: brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">; readonly out: brand<...>; }>, { ...; }>' is not assignable to parameter of type '"\`in\` is not a value \`member_of\` accepts in INSERT RELATION"'.",
+]
+`;
+
+exports[`type diagnostics > interactive-no-bulk-atomic 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'atomic' does not exist in type 'Omit<BulkOptions<"values", number, never, never>, "atomic" | "retry">'.",
+]
+`;
+
+exports[`type diagnostics > interactive-no-bulk-retry 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'retry' does not exist in type 'Omit<BulkOptions<"values", number, never, never>, "atomic" | "retry">'.",
+]
+`;
+
+exports[`type diagnostics > interactive-no-join-retry 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'retry' does not exist in type 'TransactionRunOptions'.",
+]
+`;
+
+exports[`type diagnostics > interactive-no-live 1`] = `
+[
+  "TS2339: Property 'live' does not exist on type 'TransactionClient'.",
+]
+`;
+
+exports[`type diagnostics > interactive-no-live-scoped 1`] = `
+[
+  "TS2339: Property 'liveScoped' does not exist on type 'TransactionClient'.",
+]
+`;
+
+exports[`type diagnostics > interactive-no-pipeline 1`] = `
+[
+  "TS2339: Property 'pipeline' does not exist on type 'TransactionClient'.",
+]
+`;
+
+exports[`type diagnostics > interactive-no-run-retry 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'retry' does not exist in type 'TransactionRunOptions'.",
+]
+`;
+
+exports[`type diagnostics > interactive-no-savepoint 1`] = `
+[
+  "TS2551: Property 'withTransaction' does not exist on type 'TransactionClient'. Did you mean 'transaction'?",
+]
+`;
+
+exports[`type diagnostics > interactive-no-stream 1`] = `
+[
+  "TS2339: Property 'stream' does not exist on type 'TransactionClient'.",
+]
+`;
+
+exports[`type diagnostics > link/any-table 1`] = `
+[
+  "TS2345: Argument of type 'Path<declareConstructor<_RecordId, _RecordId, readonly [], _RecordId> & Codec>' is not assignable to parameter of type '"this link can point at any table (\`record\`), so its target has no known fields; declare it \`record<table>\`"'.",
+]
+`;
+
+exports[`type diagnostics > link/destructure-constant 1`] = `
+[
+  "TS2322: Type '1' is not assignable to type '"a destructured field is an expression: inline a constant with \`literal\`"'.",
+]
+`;
+
+exports[`type diagnostics > link/no-such-field 1`] = `
+[
+  "TS2339: Property 'nope' does not exist on type 'FollowedOf<Store, Path<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person"> & Codec>>'.",
+]
+`;
+
+exports[`type diagnostics > link/not-a-link 1`] = `
+[
+  "TS2345: Argument of type 'Path<declareConstructor<string, string, readonly [], string> & Codec>' is not assignable to parameter of type '"this expression is not a record link: follow a field typed \`record<table>\`, a list of them, or a graph step"'.",
+]
+`;
+
+exports[`type diagnostics > link/union-uncommon-field 1`] = `
+[
+  "TS2339: Property 'members' does not exist on type 'FollowedOf<Store, Path<Union<readonly [brand<declareConstructor<_RecordId<"org">, _RecordId<"org">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/org">, brand<...>]> & Codec>>'.",
+]
+`;
+
+exports[`type diagnostics > live/group-by 1`] = `
+[
+  "TS2339: Property 'groupBy' does not exist on type 'Live<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, NoParams, de...'.",
+  "TS7006: Parameter 'row' implicitly has an 'any' type.",
+]
+`;
+
+exports[`type diagnostics > live/limit 1`] = `
+[
+  "TS2339: Property 'limit' does not exist on type 'Live<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, NoParams, de...'.",
+]
+`;
+
+exports[`type diagnostics > live/only 1`] = `
+[
+  "TS2339: Property 'only' does not exist on type 'Live<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, NoParams, de...'.",
+]
+`;
+
+exports[`type diagnostics > live/order-by 1`] = `
+[
+  "TS2339: Property 'orderBy' does not exist on type 'Live<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, NoParams, de...'.",
+  "TS7006: Parameter 'row' implicitly has an 'any' type.",
+]
+`;
+
+exports[`type diagnostics > live/project-expression 1`] = `
+[
+  "TS2322: Type '42' is not assignable to type '"a projected field is an expression: inline a constant with \`literal\`"'.",
+]
+`;
+
+exports[`type diagnostics > live/required-binding 1`] = `
+[
+  "TS2554: Expected 2 arguments, but got 1.",
+]
+`;
+
+exports[`type diagnostics > live/where-comparison 1`] = `
+[
+  "TS2345: Argument of type '12' is not assignable to parameter of type '"these operands never compare: their stored types do not overlap"'.",
+]
+`;
+
+exports[`type diagnostics > merge/element-extra-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly phones: $Array<Struct<{ readonly kind: Literals<readonly ["home", "mobile", "work"]>; readonly bogus: declareConstructor<number, number, readonly [], number>; }>>; }>, { ...; }>' is not assignable to parameter of type '"\`phones[*].bogus\` is not a field \`person\` accepts in MERGE"'.",
+]
+`;
+
+exports[`type diagnostics > merge/element-missing-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly phones: $Array<Struct<{}>>; }>, { readonly changes: Struct<{ readonly phones: $Array<Struct<{}>>; }>; }>' is not assignable to parameter of type '"\`phones\` is not a value \`person\` accepts in MERGE"'.",
+]
+`;
+
+exports[`type diagnostics > merge/extra-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly bogus: declareConstructor<string, string, readonly [], string>; readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [...]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' is not assignable to parameter of type '"\`bogus\` is not a field \`person\` accepts in MERGE"'.",
+]
+`;
+
+exports[`type diagnostics > merge/nested-extra-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly settings: Struct<{ readonly theme: optionalKey<Literals<readonly ["dark", "light"]>>; readonly bogus: declareConstructor<number, number, readonly [], number>; }>; }>, { ...; }>' is not assignable to parameter of type '"\`settings.bogus\` is not a field \`person\` accepts in MERGE"'.",
+]
+`;
+
+exports[`type diagnostics > module/binds-wrong-record 1`] = `
+[
+  "TS2322: Type '{ raw: Schema.declareConstructor<number, number, readonly [], number>; site: Schema.declareConstructor<string, string, readonly [], string>; station: Schema.declareConstructor<string, string, readonly [], string>; tags: Schema.Unknown; }' is not assignable to type '"binding \`site\` is assigned to \`gauge.site\` (record<site>), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > module/binds-wrong-representation 1`] = `
+[
+  "TS2322: Type '{ siteKey: Schema.declareConstructor<number, number, readonly [], number>; }' is not assignable to type '"binding \`siteKey\` is the key of a \`site\` record (string), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > module/none-assigned 1`] = `
+[
+  "TS2322: Type '{ raw: Schema.declareConstructor<number, number, readonly [], number>; site: Schema.declareConstructor<_RecordId<"site">, _RecordId<"site">, readonly [Schema.declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>; station: Schema.UndefinedOr<...>; tags: Schema.Unknown; }' is not assignable to type '"binding \`station\` is assigned to \`gauge.station\` (string), which rejects NONE, and its codec can hold NONE"'.",
+]
+`;
+
+exports[`type diagnostics > module/presence-required-narrow-undefined-or 1`] = `
+[
+  "TS2322: Type '{ opt: Schema.declareConstructor<string, string, readonly [], string>; req: Schema.UndefinedOr<Schema.Literal<"a">>; }' is not assignable to type '"binding \`req\` is assigned to \`m.req\` (string), which rejects NONE, and its codec can hold NONE"'.",
+]
+`;
+
+exports[`type diagnostics > module/sequence-extra-binding 1`] = `
+[
+  "TS2322: Type 'declareConstructor<_RecordId, _RecordId, readonly [], _RecordId>' is not assignable to type '"binding \`$owner\` is not read by this sequence"'.",
+]
+`;
+
+exports[`type diagnostics > module/sequence-missing-binding 1`] = `
+[
+  "TS2322: Type '{}' is not assignable to type '"binding \`$boundOwner\` is read by this sequence and has no codec"'.",
+]
+`;
+
+exports[`type diagnostics > module/sequence-missing-principal 1`] = `
+[
+  "TS2322: Type '{ owner: declareConstructor<_RecordId, _RecordId, readonly [], _RecordId>; }' is not assignable to type '"binding \`$principal\` is read by this sequence and has no codec"'.",
+]
+`;
+
+exports[`type diagnostics > module/template-missing-fill 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '{ readonly __FILTER__: string | Text<string, string, string, string, TextHoleScopes>; }'.
+  Property '__FILTER__' is missing in type '{}' but required in type '{ readonly __FILTER__: string | Text<string, string, string, string, TextHoleScopes>; }'.",
+]
+`;
+
 exports[`type diagnostics > none/assigned-and-compared 1`] = `
 [
   "TS2322: Type '{ name: Schema.UndefinedOr<Schema.declareConstructor<string, string, readonly [], string>>; }' is not assignable to type '"binding \`name\` is assigned to \`person.name\` (string), which rejects NONE, and its codec can hold NONE"'.",
@@ -183,6 +942,501 @@ exports[`type diagnostics > none/assigned-without-binds 1`] = `
 exports[`type diagnostics > object/not-an-expression 1`] = `
 [
   "TS2353: Object literal may only specify known properties, and 'a' does not exist in type 'Expr<Codec, Params>'.",
+]
+`;
+
+exports[`type diagnostics > omit/unknown-field 1`] = `
+[
+  "TS2345: Argument of type '"nope"' is not assignable to parameter of type '"\`nope\` is not a field of \`person\`"'.",
+]
+`;
+
+exports[`type diagnostics > order/bound-array-element 1`] = `
+[
+  "TS2322: Type 'Expr<UndefinedOr<declareConstructor<number, number, readonly [], number>>, { readonly xs: $Array<declareConstructor<number, number, readonly [], number>>; }>' is not assignable to type '"ORDER BY takes a field path of the row, like \`row.name\` or \`at(row.pins, 0)\`"'.",
+]
+`;
+
+exports[`type diagnostics > order/call 1`] = `
+[
+  "TS2322: Type 'Expr<declareConstructor<string, string, readonly [], string>, NoParams>' is not assignable to type '"ORDER BY takes a field path of the row, like \`row.name\` or \`at(row.pins, 0)\`"'.",
+]
+`;
+
+exports[`type diagnostics > order/cast 1`] = `
+[
+  "TS2322: Type 'Expr<declareConstructor<string, string, readonly [], string>, NoParams>' is not assignable to type '"ORDER BY takes a field path of the row, like \`row.name\` or \`at(row.pins, 0)\`"'.",
+]
+`;
+
+exports[`type diagnostics > order/comparison 1`] = `
+[
+  "TS2322: Type 'Expr<Boolean, NoParams>' is not assignable to type '"ORDER BY takes a field path of the row, like \`row.name\` or \`at(row.pins, 0)\`"'.",
+]
+`;
+
+exports[`type diagnostics > order/constant 1`] = `
+[
+  "TS2322: Type 'Expr<Literal<1>, NoParams>' is not assignable to type '"ORDER BY takes a field path of the row, like \`row.name\` or \`at(row.pins, 0)\`"'.",
+]
+`;
+
+exports[`type diagnostics > order/param 1`] = `
+[
+  "TS2322: Type 'Expr<declareConstructor<number, number, readonly [], number>, { readonly x: declareConstructor<number, number, readonly [], number>; }>' is not assignable to type '"ORDER BY takes a field path of the row, like \`row.name\` or \`at(row.pins, 0)\`"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-collect-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-collect-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-destructure-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-destructure-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-destructureStep-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-destructureStep-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-edges-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-edges-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-follow-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-follow-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-followTwice-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-followTwice-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-incoming-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-incoming-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-nested-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-nested-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-outgoing-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-outgoing-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-rows-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/evaluated-rows-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-destructure-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-destructure-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-destructureStep-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-destructureStep-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-follow-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-follow-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-followTwice-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-followTwice-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-incoming-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-incoming-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-nested-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-nested-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-outgoing-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-outgoing-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-selectFrom-missing 1`] = `
+[
+  "TS2345: Argument of type '{}' is not assignable to parameter of type '"binding \`who\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > origin/projected-selectFrom-wrong-type 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type 'string' is not assignable to type '_RecordId<"person">'.",
+]
+`;
+
+exports[`type diagnostics > pipeline/item-must-be-bound 1`] = `
+[
+  "TS2322: Type 'Statement<{}, Number, never, never>' is not assignable to type '"statements that run together are paired with their input by \`bind\`"'.",
+]
+`;
+
+exports[`type diagnostics > pipeline/retry-is-not-an-option 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'retry' does not exist in type 'PipelineOptions'.",
+]
+`;
+
+exports[`type diagnostics > project/alias-number 1`] = `
+[
+  "TS2322: Type '1' is not assignable to type '"a projected field is an expression: inline a constant with \`literal\`"'.",
+]
+`;
+
+exports[`type diagnostics > project/alias-string 1`] = `
+[
+  "TS2322: Type '"person"' is not assignable to type '"a projected field is an expression: inline a constant with \`literal\`"'.",
+]
+`;
+
+exports[`type diagnostics > range/not-a-record 1`] = `
+[
+  "TS2345: Argument of type 'IdRange<"id_int", Record<never, never>>' is not assignable to parameter of type 'IdOf<{ readonly name: "id_int"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<RecordIdOf<"id_int", number>, RecordIdOf<"id_int", number>, readonly [...], RecordIdOf<...>>, "corpus/id_int">; ... 10 more ...; readonly indexes: {}; }, Params>'.
+  Property '[ExprTypeId]' is missing in type 'IdRange<"id_int", Record<never, never>>' but required in type 'Expr<Codec<unknown, RecordIdOf<"id_int", number>, never, never>, Params>'.",
+]
+`;
+
+exports[`type diagnostics > range/other-table 1`] = `
+[
+  "TS2345: Argument of type 'IdRange<"team", Record<never, never>>' is not assignable to parameter of type 'IdOf<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, Record<...>> | IdRange<...>'.
+  Type 'IdRange<"team", Record<never, never>>' is not assignable to type 'IdRange<"person", Record<never, never>>'.
+    Type '"team"' is not assignable to type '"person"'.",
+]
+`;
+
+exports[`type diagnostics > range/two-ends 1`] = `
+[
+  "TS2345: Argument of type '{ to: number; through: number; }' is not assignable to parameter of type '"a range ends \`to\` a key (excluded) or \`through\` one (included), not both"'.",
+]
+`;
+
+exports[`type diagnostics > range/two-starts 1`] = `
+[
+  "TS2345: Argument of type '{ from: number; after: number; }' is not assignable to parameter of type '"a range starts \`from\` a key (included) or \`after\` one (excluded), not both"'.",
+]
+`;
+
+exports[`type diagnostics > range/wrong-bound 1`] = `
+[
+  "TS2345: Argument of type '{ from: string; }' is not assignable to parameter of type '"\`from\`: this is not a key of \`id_int\`"'.",
+]
+`;
+
+exports[`type diagnostics > read-view/no-visible-row 1`] = `
+[
+  "TS2345: Argument of type '{ readonly name: "note"; readonly id: Schema.declareConstructor<_RecordId<"note">, _RecordId<"note">, readonly [Schema.declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>; readonly select: Schema.Struct<...>; }' is not assignable to parameter of type '"this descriptor has no generated \`visible\` row: regenerate it, or pass the row the session reads as the second argument"'.",
+]
+`;
+
+exports[`type diagnostics > read-view/unknown-stored-field 1`] = `
+[
+  "TS2345: Argument of type 'Struct<{ readonly emial: String; }>' is not assignable to parameter of type 'Struct<{ readonly emial: String; }> & { readonly unknownReadFields: "emial"; }'.
+  Property 'unknownReadFields' is missing in type 'Struct<{ readonly emial: String; }>' but required in type '{ readonly unknownReadFields: "emial"; }'.",
+]
+`;
+
+exports[`type diagnostics > read-view/wrong-record-table 1`] = `
+[
+  "TS2345: Argument of type 'Struct<{ readonly id: brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">; }>' is not assignable to parameter of type 'Struct<{ readonly id: brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">; }> & { ...; }'.
+  Property 'incompatibleRecordLinks' is missing in type 'Struct<{ readonly id: brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">; }>' but required in type '{ readonly incompatibleRecordLinks: "id"; }'.",
+]
+`;
+
+exports[`type diagnostics > record/array-length 1`] = `
+[
+  "TS2345: Argument of type 'string[]' is not assignable to parameter of type '"a key of \`id_array\` has 2 parts, not 1"'.",
+]
+`;
+
+exports[`type diagnostics > record/array-part 1`] = `
+[
+  "TS2345: Argument of type '(string | number)[]' is not assignable to parameter of type '"the part at index 1 of this key is not what a key of \`id_array\` holds there"'.",
+]
+`;
+
+exports[`type diagnostics > record/not-an-array 1`] = `
+[
+  "TS2345: Argument of type 'number[]' is not assignable to parameter of type '"the key of \`id_int\` is not an array"'.",
+]
+`;
+
+exports[`type diagnostics > record/object-extra-part 1`] = `
+[
+  "TS2345: Argument of type '{ n: number; region: string; extra: number; }' is not assignable to parameter of type '"\`extra\` is not part of a key of \`id_object\`"'.",
+]
+`;
+
+exports[`type diagnostics > record/object-missing-part 1`] = `
+[
+  "TS2345: Argument of type '{ n: number; }' is not assignable to parameter of type '"a key of \`id_object\` also needs \`region\`"'.",
+]
+`;
+
+exports[`type diagnostics > record/object-wrong-part 1`] = `
+[
+  "TS2345: Argument of type '{ n: string; region: string; }' is not assignable to parameter of type '"\`n\` is not what a key of \`id_object\` holds there"'.",
+]
+`;
+
+exports[`type diagnostics > record/other-table 1`] = `
+[
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, Record<...>>' is not assignable to parameter of type 'IdOf<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, Record<...>> | IdRange<...>'.
+  Type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, Record<...>>' is not assignable to type 'IdOf<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, Record<...>>'.
+    Type 'brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">' is not assignable to type 'Codec<unknown, _RecordId<"person">, never, never>'.
+      Types of property '"Encoded"' are incompatible.
+        Type '_RecordId<"team">' is not assignable to type '_RecordId<"person">'.
+          Type '"team"' is not assignable to type '"person"'.",
+]
+`;
+
+exports[`type diagnostics > record/wrong-key 1`] = `
+[
+  "TS2345: Argument of type 'Expr<declareConstructor<string, string, readonly [], string>, { readonly key: declareConstructor<string, string, readonly [], string>; }>' is not assignable to parameter of type '"this is not a key of \`id_int\`"'.",
+]
+`;
+
+exports[`type diagnostics > recurse/from-a-list 1`] = `
+[
+  "TS2345: Argument of type 'Step<Store, Path<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person"> & Codec>, "knows", "out", NoParams>' is not assignable to parameter of type '"a recursive path starts from one record: \`row.id\`, a record link or a binding"'.",
+]
+`;
+
+exports[`type diagnostics > recurse/not-a-step 1`] = `
+[
+  "TS2322: Type 'Path<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person"> & Codec>' is not assignable to type '"a recursive path repeats a graph step from the node it is given, like \`(node) => outgoing(store, node, \\"knows\\")\`"'.",
+]
+`;
+
+exports[`type diagnostics > recurse/not-back-to-start 1`] = `
+[
+  "TS2322: Type 'Step<Store, Node<Path<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person"> & Codec>>, "member_of", "out", NoParams>' is not assignable to type '"a recursive path repeats a step that leads back to the table it starts from"'.",
+]
+`;
+
+exports[`type diagnostics > recurse/shortest-to-other-table 1`] = `
+[
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to parameter of type '"a shortest path leads to a record of the table it starts from"'.",
+]
+`;
+
+exports[`type diagnostics > relate/not-a-relation 1`] = `
+[
+  "TS2345: Argument of type '{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: Schema.brand<Schema.declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [Schema.declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/p...' is not assignable to parameter of type 'RelationTable'.
+  Property 'edge' is missing in type '{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: Schema.brand<Schema.declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [Schema.declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/p...' but required in type '{ readonly edge: { readonly table: string; readonly in: readonly Codec[]; readonly out: readonly Codec[]; }; }'.",
+]
+`;
+
+exports[`type diagnostics > relate/return-before 1`] = `
+[
+  "TS2769: No overload matches this call.
+  Overload 1 of 2, '(mode: "RELATE has no RETURN BEFORE: a record it makes had no state before"): Relate<{ readonly name: "member_of"; readonly type: "relation"; readonly schemafull: true; readonly drop: false; ... 12 more ...; readonly edge: { ...; }; }, { ...; } & { ...; }, $Array<...>>', gave the following error.
+    Argument of type '"before"' is not assignable to parameter of type '"RELATE has no RETURN BEFORE: a record it makes had no state before"'.
+  Overload 2 of 2, '(fields: (row: RowExprs<{ readonly name: "member_of"; readonly type: "relation"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"member_of">, _RecordId<"member_of">, readonly [...], _RecordId<...>>, "corpus/member_of">; ... 11 more ...; readonly edge: { ...; }; }>) => CheckedProjection<...>): Relate<...>', gave the following error.
+    Argument of type 'string' is not assignable to parameter of type '(row: RowExprs<{ readonly name: "member_of"; readonly type: "relation"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"member_of">, _RecordId<"member_of">, readonly [...], _RecordId<...>>, "corpus/member_of">; ... 11 more ...; readonly edge: { ...; }; }>) => Checked...'.",
+]
+`;
+
+exports[`type diagnostics > relate/wrong-content 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [$Record<String, Codec<SurrealValue, SurrealValue, never, never>>]>; ... 15 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }>' is not assignable to parameter of type '"\`role\` is not a value \`member_of\` accepts in RELATE"'.",
+]
+`;
+
+exports[`type diagnostics > relate/wrong-in-endpoint 1`] = `
+[
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to parameter of type '"this record id is not an \`in\` endpoint of \`member_of\`"'.",
+]
+`;
+
+exports[`type diagnostics > relate/wrong-out-endpoint 1`] = `
+[
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person">, { ...; }>' is not assignable to parameter of type '"this record id is not an \`out\` endpoint of \`member_of\`"'.",
+]
+`;
+
+exports[`type diagnostics > run/extra-value 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'extra' does not exist in type '{ readonly email: string; }'.",
+]
+`;
+
+exports[`type diagnostics > run/missing-input 1`] = `
+[
+  "TS2554: Expected 2-3 arguments, but got 1.",
+]
+`;
+
+exports[`type diagnostics > run/missing-value 1`] = `
+[
+  "TS2345: Argument of type '{ email: string; }' is not assignable to parameter of type '"binding \`name\` has no value"'.",
+]
+`;
+
+exports[`type diagnostics > run/misspelt-binding 1`] = `
+[
+  "TS2561: Object literal may only specify known properties, but 'mail' does not exist in type '{ readonly email: string; }'. Did you mean to write 'email'?",
+]
+`;
+
+exports[`type diagnostics > run/wrong-type 1`] = `
+[
+  "TS2322: Type 'number' is not assignable to type 'string'.",
 ]
 `;
 
@@ -563,5 +1817,276 @@ exports[`type diagnostics > select/for-update-late 1`] = `
 exports[`type diagnostics > select/for-update-table 1`] = `
 [
   "TS2339: Property 'forUpdate' does not exist on type 'Select<{ readonly name: "invite"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"invite">, _RecordId<"invite">, readonly [declareConstructor<...>], _RecordId<...>>, "scripts/invite">; ... 10 more ...; readonly indexes: {}; }, NoParams, decla...'.",
+]
+`;
+
+exports[`type diagnostics > select/id-of-other-table 1`] = `
+[
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to parameter of type 'IdOf<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, { ...; }> | IdRange<...>'.
+  Type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to type 'IdOf<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, { ...; }>'.
+    Type 'brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">' is not assignable to type 'Codec<unknown, _RecordId<"person">, never, never>'.
+      Types of property '"Encoded"' are incompatible.
+        Type '_RecordId<"team">' is not assignable to type '_RecordId<"person">'.
+          Type '"team"' is not assignable to type '"person"'.",
+]
+`;
+
+exports[`type diagnostics > select/limit-non-number 1`] = `
+[
+  "TS2345: Argument of type 'Expr<declareConstructor<string, string, readonly [], string>, { readonly rows: declareConstructor<string, string, readonly [], string>; }>' is not assignable to parameter of type 'Count'.
+  Type 'Expr<declareConstructor<string, string, readonly [], string>, { readonly rows: declareConstructor<string, string, readonly [], string>; }>' is not assignable to type 'Expr<Codec<unknown, number, never, never>, Params>'.
+    Type 'declareConstructor<string, string, readonly [], string>' is not assignable to type 'Codec<unknown, number, never, never>'.
+      Types of property '"Encoded"' are incompatible.
+        Type 'string' is not assignable to type 'number'.",
+]
+`;
+
+exports[`type diagnostics > sequence/contract-of-other-sequence 1`] = `
+[
+  "TS2322: Type 'declareConstructor<string, string, readonly [], string>' is not assignable to type '"binding \`$boundProducer\` is not read by this sequence"'.",
+]
+`;
+
+exports[`type diagnostics > sequence/extra-binding 1`] = `
+[
+  "TS2322: Type 'declareConstructor<string, string, readonly [], string>' is not assignable to type '"binding \`$producer\` is not read by this sequence"'.",
+]
+`;
+
+exports[`type diagnostics > sequence/missing-binding 1`] = `
+[
+  "TS2322: Type '{}' is not assignable to type '"binding \`$boundProducer\` is read by this sequence and has no codec"'.",
+]
+`;
+
+exports[`type diagnostics > split/not-an-array 1`] = `
+[
+  "TS2345: Argument of type '"name"' is not assignable to parameter of type '"\`name\` is not an array field of \`person\`: SPLIT takes one"'.",
+]
+`;
+
+exports[`type diagnostics > split/projection-without-field 1`] = `
+[
+  "TS2322: Type '{ readonly name: Path<Schema.declareConstructor<string, string, readonly [], string> & Codec>; readonly pin: Path<SplitCodec<Schema.$Array<Schema.declareConstructor<string, string, readonly [], string>>> & Codec>; }' is not assignable to type 'CheckedProjection<{ name: Path<declareConstructor<string, string, readonly [], string> & Codec>; pin: Path<SplitCodec<$Array<declareConstructor<string, string, readonly [], string>>> & Codec>; }> & { ...; }'.
+  Property 'pins' is missing in type '{ readonly name: Path<Schema.declareConstructor<string, string, readonly [], string> & Codec>; readonly pin: Path<SplitCodec<Schema.$Array<Schema.declareConstructor<string, string, readonly [], string>>> & Codec>; }' but required in type '{ readonly pins: "the SPLIT field \`pins\` must be projected under its own name"; }'.",
+]
+`;
+
+exports[`type diagnostics > split/set-field 1`] = `
+[
+  "TS2345: Argument of type '"tags"' is not assignable to parameter of type '"\`tags\` is not an array field of \`person\`: SPLIT takes one"'.",
+]
+`;
+
+exports[`type diagnostics > split/where-after 1`] = `
+[
+  "TS2339: Property 'where' does not exist on type 'Split<Omit<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, "select"> & { ...; }, NoPa...'.",
+  "TS7006: Parameter 'row' implicitly has an 'any' type.",
+]
+`;
+
+exports[`type diagnostics > step/after-recursion 1`] = `
+[
+  "TS2345: Argument of type 'RecursionResult<Path<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person"> & Codec>, Step<...>, false, NoParams>' is not assignable to parameter of type '"a graph step chains only from another step: from the records of a recursive path or the edges of a step SurrealDB yields one list per record"'.",
+]
+`;
+
+exports[`type diagnostics > step/edges-of-recursion 1`] = `
+[
+  "TS2345: Argument of type 'RecursionResult<Path<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person"> & Codec>, Step<...>, false, NoParams>' is not assignable to parameter of type '"only a graph step walks edges; a recursive path has none to read"'.",
+]
+`;
+
+exports[`type diagnostics > step/filter-no-such-field 1`] = `
+[
+  "TS2339: Property 'nope' does not exist on type 'RowExprs<{ readonly name: "member_of"; readonly type: "relation"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"member_of">, _RecordId<"member_of">, readonly [...], _RecordId<...>>, "corpus/member_of">; ... 11 more ...; readonly edge: { ...; }; }>'.",
+]
+`;
+
+exports[`type diagnostics > step/filter-wrong-type 1`] = `
+[
+  "TS2345: Argument of type '5' is not assignable to parameter of type '"these operands never compare: their stored types do not overlap"'.",
+]
+`;
+
+exports[`type diagnostics > step/from-list-of-links 1`] = `
+[
+  "TS2345: Argument of type 'Path<$Array<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person">> & Codec>' is not assignable to parameter of type '"a graph step starts from one record or from another step: from a list of record links SurrealDB yields one list per link"'.",
+]
+`;
+
+exports[`type diagnostics > step/from-non-id 1`] = `
+[
+  "TS2345: Argument of type 'Path<declareConstructor<string, string, readonly [], string> & Codec>' is not assignable to parameter of type '"a graph step starts from a record id: \`row.id\`, a record link, a binding of a record id, or another step"'.",
+]
+`;
+
+exports[`type diagnostics > step/into-wrong-table 1`] = `
+[
+  "TS2345: Argument of type 'Path<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person"> & Codec>' is not assignable to parameter of type '"\`member_of\` has no edges into \`person\`"'.",
+]
+`;
+
+exports[`type diagnostics > step/not-a-relation 1`] = `
+[
+  "TS2345: Argument of type '"team"' is not assignable to parameter of type '"follows" | "knows" | "likes" | "member_of" | "rates"'.",
+]
+`;
+
+exports[`type diagnostics > step/out-of-wrong-table 1`] = `
+[
+  "TS2345: Argument of type 'Path<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team"> & Codec>' is not assignable to parameter of type '"\`member_of\` has no edges out of \`team\`"'.",
+]
+`;
+
+exports[`type diagnostics > step/parent-not-a-path 1`] = `
+[
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person">, { ...; }>' is not assignable to parameter of type '"\`parent\` takes a field path of a select’s row, like \`parent(row.name)\`"'.",
+]
+`;
+
+exports[`type diagnostics > step/target-filter-no-such-field 1`] = `
+[
+  "TS2339: Property 'nope' does not exist on type 'ReachedRow<Store, "knows", "out">'.",
+]
+`;
+
+exports[`type diagnostics > step/target-filter-uncommon-field 1`] = `
+[
+  "TS2339: Property 'members' does not exist on type 'ReachedRow<Store, "member_of", "out">'.",
+]
+`;
+
+exports[`type diagnostics > stream/result-must-be-list-of-rows-only 1`] = `
+[
+  "TS2379: Argument of type 'Statement<{ readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person">; }, UndefinedOr<...>, never, never>' is not assignable to parameter of type 'Statement<{ readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person">; }, $Array<...>, never, never>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Property 'value' is missing in type 'UndefinedOr<declareConstructor<{ readonly name: string; readonly id: _RecordId<"person"> & Brand<"corpus/person">; readonly role: "owner" | "member" | "admin"; readonly address: { readonly [x: string]: SurrealValue; readonly city: string; }; ... 15 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { ...;...' but required in type '$Array<Codec>'.",
+]
+`;
+
+exports[`type diagnostics > stream/result-must-be-list-of-rows-optional 1`] = `
+[
+  "TS2379: Argument of type 'Statement<{}, UndefinedOr<$Array<Number>>, never, never>' is not assignable to parameter of type 'Statement<{}, $Array<Codec>, never, never>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Property 'value' is missing in type 'UndefinedOr<$Array<Number>>' but required in type '$Array<Codec>'.",
+]
+`;
+
+exports[`type diagnostics > stream/result-must-be-list-of-rows-tuple 1`] = `
+[
+  "TS2379: Argument of type 'Statement<{}, Tuple<readonly [Number]>, never, never>' is not assignable to parameter of type 'Statement<{}, $Array<Codec>, never, never>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Property 'value' is missing in type 'Tuple<readonly [Number]>' but required in type '$Array<Codec>'.",
+]
+`;
+
+exports[`type diagnostics > subject/not-a-traversal 1`] = `
+[
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person">, { ...; }>' is not assignable to parameter of type '"a select reads the records of a graph step or a recursive path, like \`outgoing(store, param('who', PersonId), 'knows')\`"'.",
+]
+`;
+
+exports[`type diagnostics > subject/several-tables 1`] = `
+[
+  "TS2345: Argument of type 'Step<Store, Expr<brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/person">, { ...; }>, "member_of", "out", NoParams>' is not assignable to parameter of type '"the records of this step are of several tables, and a select reads the rows of one"'.",
+]
+`;
+
+exports[`type diagnostics > transaction/unbound-statement 1`] = `
+[
+  "TS2322: Type 'Statement<{ readonly email: declareConstructor<string, string, readonly [], string>; }, $Array<declareConstructor<{ readonly name: string; readonly id: _RecordId<"person"> & Brand<"corpus/person">; ... 17 more ...; readonly ssn?: string; }, { ...; }, readonly [...], { ...; }>>, never, never>' is not assignable to type '"statements that run together are paired with their input by \`bind\`"'.",
+]
+`;
+
+exports[`type diagnostics > unique/array-on-any-field 1`] = `
+[
+  "TS2345: Argument of type '{ f: Expr<Schema.$Array<Schema.declareConstructor<number, number, readonly [], number>>, { readonly f: Schema.$Array<Schema.declareConstructor<number, number, readonly [], number>>; }>; }' is not assignable to parameter of type '"\`f\` may hold an array or another kind, and SurrealDB 3.3 finds no array through its unique index (4.0 does): look it up by a value that is not an array, or declare it an array kind only"'.",
+]
+`;
+
+exports[`type diagnostics > unique/array-on-union-field 1`] = `
+[
+  "TS2345: Argument of type '{ f: Expr<Schema.$Array<Schema.declareConstructor<number, number, readonly [], number>>, { readonly f: Schema.$Array<Schema.declareConstructor<number, number, readonly [], number>>; }>; }' is not assignable to parameter of type '"\`f\` may hold an array or another kind, and SurrealDB 3.3 finds no array through its unique index (4.0 does): look it up by a value that is not an array, or declare it an array kind only"'.",
+]
+`;
+
+exports[`type diagnostics > unique/extra-field 1`] = `
+[
+  "TS2345: Argument of type '{ handle: string; region: string; }' is not assignable to parameter of type '"\`region\` is not a field of the unique index \`member_handle\`"'.",
+]
+`;
+
+exports[`type diagnostics > unique/maybe-array-on-any-field 1`] = `
+[
+  "TS2345: Argument of type '{ f: Expr<Schema.Codec<SurrealSchema.SurrealValue, SurrealSchema.SurrealValue, never, never>, { readonly f: Schema.Codec<SurrealSchema.SurrealValue, SurrealSchema.SurrealValue, never, never>; }>; }' is not assignable to parameter of type '"\`f\` may hold an array or another kind, and SurrealDB 3.3 finds no array through its unique index (4.0 does): look it up by a value that is not an array, or declare it an array kind only"'.",
+]
+`;
+
+exports[`type diagnostics > unique/missing-field 1`] = `
+[
+  "TS2345: Argument of type '{ region: string; }' is not assignable to parameter of type '"the unique index \`member_region_number\` also needs \`number\`"'.",
+]
+`;
+
+exports[`type diagnostics > unique/nested-by-root 1`] = `
+[
+  "TS2345: Argument of type '{ profile: string; }' is not assignable to parameter of type '"the unique index \`member_bio\` also needs \`profile.bio\`"'.",
+]
+`;
+
+exports[`type diagnostics > unique/no-such-index 1`] = `
+[
+  "TS2345: Argument of type '"member_nope"' is not assignable to parameter of type '"\`member\` has no index \`member_nope\`"'.",
+]
+`;
+
+exports[`type diagnostics > unique/not-unique 1`] = `
+[
+  "TS2345: Argument of type '"member_region"' is not assignable to parameter of type '"\`member_region\` is a standard index of \`member\`, not a unique one"'.",
+]
+`;
+
+exports[`type diagnostics > unique/path-through-nullable 1`] = `
+[
+  "TS2345: Argument of type '"shipment_parcel"' is not assignable to parameter of type '"\`parcel.code\` of the unique index \`shipment_parcel\` is no field path of \`shipment\` a lookup can read: a field on it is not one object (a union or a nullable object has no fields to address)"'.",
+]
+`;
+
+exports[`type diagnostics > unique/path-through-union 1`] = `
+[
+  "TS2345: Argument of type '"shipment_event"' is not assignable to parameter of type '"\`event.id\` of the unique index \`shipment_event\` is no field path of \`shipment\` a lookup can read: a field on it is not one object (a union or a nullable object has no fields to address)"'.",
+]
+`;
+
+exports[`type diagnostics > unique/wrong-value 1`] = `
+[
+  "TS2345: Argument of type '{ handle: Expr<Schema.declareConstructor<number, number, readonly [], number>, { readonly handle: Schema.declareConstructor<number, number, readonly [], number>; }>; }' is not assignable to parameter of type '"\`handle\` never compares with this value: their stored types do not overlap"'.",
+]
+`;
+
+exports[`type diagnostics > update/id-of-other-table 1`] = `
+[
+  "TS2345: Argument of type 'Expr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">, { ...; }>' is not assignable to parameter of type 'IdOf<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [declareConstructor<...>], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }, { ...; }>'.
+  Type 'brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/team">' is not assignable to type 'Codec<unknown, _RecordId<"person">, never, never>'.
+    Types of property '"Encoded"' are incompatible.
+      Type '_RecordId<"team">' is not assignable to type '_RecordId<"person">'.
+        Type '"team"' is not assignable to type '"person"'.",
+]
+`;
+
+exports[`type diagnostics > upsert/merge-missing-required 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly address: optionalKey<StructWithRest<Struct<{ readonly city: optionalKey<declareConstructor<string, string, readonly [], string>>; }>, readonly [$Record<String, Codec<SurrealMergeValue, SurrealMergeValue, never, never>>]>>; ... 14 more ...; readonly updated_at: optional<...>; }>, { ...; }>' is not assignable to parameter of type '"\`name\` is required by \`person\` in UPSERT … MERGE" | "\`address\` is required by \`person\` in UPSERT … MERGE" | "\`email\` is required by \`person\` in UPSERT … MERGE" | "\`bio\` is required by \`person\` in UPSERT … MERGE" | "\`score\` is required by \`person\` in UPSERT … MERGE"'.",
+]
+`;
+
+exports[`type diagnostics > upsert/merge-readonly-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Struct<{ readonly address: StructWithRest<Struct<{ readonly city: declareConstructor<string, string, readonly [], string>; }>, readonly [$Record<String, Codec<SurrealValue, SurrealValue, never, never>>]>; ... 15 more ...; readonly updated_at: optionalKey<...>; }>, { ...; }>' is not assignable to parameter of type '"\`created_at\` is not a field \`person\` accepts in UPSERT … MERGE"'.",
+]
+`;
+
+exports[`type diagnostics > upsert/one-record-where 1`] = `
+[
+  "TS2345: Argument of type '(row: any) => Expr<Boolean, Params & NoParams>' is not assignable to parameter of type '"an UPSERT of one record creates or changes that record; it takes no condition"'.",
+  "TS7006: Parameter 'row' implicitly has an 'any' type.",
 ]
 `;

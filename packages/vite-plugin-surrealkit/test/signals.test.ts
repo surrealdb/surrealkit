@@ -5,7 +5,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { exitGuardInstalled, killTree, stopOnExit } from '../src/process.js';
+import { exitGuardInstalled, killTree, spawnGuarded } from '../src/process.js';
 import { createFixture, type Fixture, waitFor } from './helpers.js';
 
 const root = path.resolve(import.meta.dirname, '..');
@@ -40,22 +40,19 @@ describe('killTree', () => {
 	});
 });
 
-describe('stopOnExit', () => {
-	it('guards the process only while a command runs', async () => {
+describe('spawnGuarded', () => {
+	it('guards the process only while a command runs', () => {
 		const child = Object.assign(new EventEmitter(), {
 			pid: undefined,
 			kill: () => true,
 		}) as unknown as ChildProcess;
-		let finish = (): void => {};
-		const exited = new Promise<void>((resolve) => {
-			finish = resolve;
-		});
 		expect(exitGuardInstalled()).toBe(false);
-		stopOnExit({ child, group: false }, exited);
+		spawnGuarded(() => {
+			expect(exitGuardInstalled()).toBe(true);
+			return child;
+		}, false);
 		expect(exitGuardInstalled()).toBe(true);
-		finish();
-		await exited;
-		await new Promise((resolve) => setImmediate(resolve));
+		child.emit('exit');
 		expect(exitGuardInstalled()).toBe(false);
 	});
 });

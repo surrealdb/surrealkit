@@ -6,6 +6,8 @@
  */
 import { Data, Effect, Schema, SchemaIssue } from 'effect';
 
+import type { DeclaredNames } from '../analyze/render.js';
+
 const Name = Schema.String.check(Schema.isMinLength(1));
 const Expr = Schema.String;
 const Path = Schema.Array(Name).check(Schema.isMinLength(1));
@@ -521,6 +523,183 @@ export const SchemaDocument = Schema.Struct({
 	diagnostics: Schema.Array(Diagnostic),
 });
 export type SchemaDocument = typeof SchemaDocument.Type;
+
+/**
+ * The SurrealQL text of a kind, printed from the document's structure:
+ * `string`, `record<person | team>`, `option<int>`, `array<string, 3>`, …
+ */
+export const kindText = (kind: Kind): string => {
+	const params = (names: ReadonlyArray<string>, word: string) =>
+		names.length === 0 ? word : `${word}<${names.join(' | ')}>`;
+	switch (kind.kind) {
+		case 'record':
+		case 'table':
+			return params(kind.tables, kind.kind);
+		case 'file':
+			return params(kind.buckets, 'file');
+		case 'geometry':
+			return params(kind.types, 'geometry');
+		case 'array':
+		case 'set':
+			return kind.length === undefined
+				? `${kind.kind}<${kindText(kind.item)}>`
+				: `${kind.kind}<${kindText(kind.item)}, ${kind.length}>`;
+		case 'tuple':
+			return `[${kind.items.map(kindText).join(', ')}]`;
+		case 'objectLiteral':
+			return `{ ${kind.fields
+				.map(
+					(field) =>
+						`${field.name}${field.optional ? '?' : ''}: ${kindText(field.kind)}`,
+				)
+				.join(', ')} }`;
+		case 'literal':
+			return kind.type === 'string'
+				? JSON.stringify(kind.value)
+				: String(kind.value);
+		case 'option':
+			return `option<${kindText(kind.item)}>`;
+		case 'union':
+			return kind.variants.map(kindText).join(' | ');
+		case 'unknown':
+			return kind.source;
+		default:
+			return kind.kind;
+	}
+};
+
+/**
+ * The kind text of a value whose kind is `kind` and that the document
+ * records as `optional` (the engine's `option<K>`, its `none` variant
+ * removed): `option<K>`. A kind that already is `option<…>`, or `none`
+ * itself, is printed as it is, and so is any kind that is not optional.
+ */
+const optionalKindText = (kind: Kind, optional: boolean): string =>
+	optional && kind.kind !== 'option' && kind.kind !== 'none'
+		? `option<${kindText(kind)}>`
+		: kindText(kind);
+
+/**
+ * Whether a value of `kind` can never be NONE: every kind but `any`,
+ * `none`, `option<…>` and those whose NONE handling is not established
+ * (`regex`, `function`, `file`, `table` and kinds the document does not
+ * recognise). A union qualifies when each variant does.
+ */
+const excludesNone = (kind: Kind): boolean => {
+	switch (kind.kind) {
+		case 'any':
+		case 'none':
+		case 'option':
+		case 'unknown':
+		case 'regex':
+		case 'function':
+		case 'file':
+		case 'table':
+			return false;
+		case 'union':
+			return kind.variants.every(excludesNone);
+		default:
+			return true;
+	}
+};
+
+/**
+ * Whether the engine rejects NONE assigned to `field` (`SET field = NONE`)
+ * in every statement that can assign it: `CREATE`, `UPDATE` and `UPSERT`,
+ * creating or updating. That holds for a top-level field that declares a
+ * kind without NONE and no clause that supplies a value: no `DEFAULT`
+ * (applied when a record is created), no `VALUE` (its expression may
+ * accept NONE) and not `COMPUTED`. `READONLY`, `ASSERT` and a schemaless
+ * table do not change it. The `id`, a relation's `in` and `out`, and the
+ * fields of a view, a `DROP` table or a lightweight relation are never
+ * stored as written, so they do not qualify.
+ */
+const rejectsNone = (table: Table, field: Field): boolean => {
+	const [name, ...rest] = field.path;
+	return (
+		rest.length === 0 &&
+		name !== 'id' &&
+		!(
+			table.type.kind === 'relation' &&
+			(name === 'in' || name === 'out')
+		) &&
+		!(table.type.kind === 'relation' && table.type.lightweight) &&
+		table.view === undefined &&
+		!table.drop &&
+		field.kind !== undefined &&
+		!field.optional &&
+		excludesNone(field.kind) &&
+		field.default === undefined &&
+		field.value === undefined &&
+		field.computed === undefined
+	);
+};
+
+/**
+ * The tables (edge tables included) and custom functions a schema document
+ * declares, each sorted: the `declared` names of a statement scope. Its
+ * `detail` holds, for each table, its declared fields (each path joined
+ * with `.`) with each field's kind text (`option<K>` for a field the
+ * document records as optional) and whether the engine rejects
+ * NONE assigned to it (see `DeclaredTable`), whether it accepts undeclared
+ * fields (it is not schemafull, or it is a view) and the kind text of its
+ * id key; and for
+ * each function the kind texts of its arguments, in order (`option<K>`
+ * for an optional one). An id key has no optional flag. A field or key
+ * the document gives no kind has none.
+ */
+export const declaredNames = (document: SchemaDocument): DeclaredNames => ({
+	tables: [...new Set(document.tables.map((table) => table.name))].sort(),
+	functions: [...new Set(document.functions.map((fn) => fn.name))].sort(),
+	detail: {
+		tables: Object.fromEntries(
+			[...document.tables]
+				.sort((a, b) =>
+					a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+				)
+				.map((table) => [
+					table.name,
+					{
+						fields: Object.fromEntries(
+							table.fields.map((field) => [
+								field.path.join('.'),
+								{
+									...(field.kind !== undefined && {
+										kind: optionalKindText(
+											field.kind,
+											field.optional,
+										),
+									}),
+									...(rejectsNone(table, field) && {
+										rejectsNone: true as const,
+									}),
+								},
+							]),
+						),
+						// A view's fields come from its SELECT, not from
+						// declarations, so it accepts any name, SCHEMAFULL or not.
+						acceptsUndeclared:
+							!table.schemafull || table.view !== undefined,
+						...(table.idKey !== undefined && {
+							idKey: kindText(table.idKey),
+						}),
+					},
+				]),
+		),
+		functions: Object.fromEntries(
+			[...document.functions]
+				.sort((a, b) =>
+					a.name < b.name ? -1 : a.name > b.name ? 1 : 0,
+				)
+				.map((fn) => [
+					fn.name,
+					fn.args.map((arg) =>
+						optionalKindText(arg.kind, arg.optional),
+					),
+				]),
+		),
+	},
+});
 
 /** A document that failed strict decoding. */
 export class DocumentError extends Data.TaggedError('DocumentError')<{

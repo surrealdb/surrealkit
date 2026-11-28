@@ -1,0 +1,10 @@
+{
+	"name": "effect-surrealkit-mapper-fixtures",
+	"private": true,
+	"type": "module",
+	"description": "Projects that import .surql files through the content mapper; run by npm run test:mapper",
+	"devDependencies": {
+		"effect-surrealkit": "file:../..",
+		"typescript": "7.1.0-beta"
+	}
+}

@@ -1,11 +1,22 @@
 /**
  * Projected fields: the bare fields and `*` a `SELECT` projects
- * from exactly one static table. Every case the analyzer is not
+ * from exactly one static table, and the check that fails generation when
+ * a `SCHEMAFULL` table does not declare one. Every case the analyzer is not
  * certain of records nothing.
  */
+import { join } from 'node:path';
+
+import { Effect } from 'effect';
 import { describe, expect, it } from 'vitest';
 
-import { analyzeSync } from '../src/analyze/index.js';
+import {
+	analyzeSync,
+	type DeclaredNames,
+	renderStatementModulesSync,
+	StatementModulesError,
+} from '../src/analyze/index.js';
+import { declaredNames, decodeDocument } from '../src/emitter/index.js';
+import { readJson } from './documents.js';
 
 const projected = (sql: string) => analyzeSync(sql).projected;
 
@@ -417,5 +428,245 @@ describe('analyze: trailing clauses of a SELECT', () => {
 		])('for %s', (sql) => {
 			expect(projected(sql)).toEqual([]);
 		});
+	});
+});
+
+const bindsDocument = join(import.meta.dirname, 'fixtures', 'binds.v2.json');
+const declared = async (): Promise<DeclaredNames> =>
+	declaredNames(
+		await Effect.runPromise(decodeDocument(readJson(bindsDocument))),
+	);
+
+/** The binds document with a SCHEMAFULL view, which declares no fields. */
+const withView = async (): Promise<DeclaredNames> => {
+	const document = readJson(bindsDocument);
+	const tables = document.tables as ReadonlyArray<Record<string, unknown>>;
+	return declaredNames(
+		await Effect.runPromise(
+			decodeDocument({
+				...document,
+				tables: [
+					...tables,
+					{
+						name: 'tally',
+						type: { kind: 'normal' },
+						schemafull: true,
+						drop: false,
+						view: {
+							select: 'SELECT count() AS n FROM gauge GROUP ALL',
+						},
+						permissions: {
+							select: false,
+							create: false,
+							update: false,
+							delete: false,
+						},
+						fields: [],
+						indexes: [],
+						events: [],
+					},
+				],
+			}),
+		),
+	);
+};
+
+const problems = async (
+	sql: string,
+	names?: DeclaredNames,
+): Promise<ReadonlyArray<string>> => {
+	try {
+		renderStatementModulesSync({
+			scopes: [
+				{
+					name: 'shop',
+					files: [{ name: 'q', sql }],
+					declared: names ?? (await declared()),
+				},
+			],
+		});
+	} catch (error) {
+		if (error instanceof StatementModulesError)
+			return error.problems.map((problem) => problem.text);
+		throw error;
+	}
+	return [];
+};
+
+describe('statements with schema detail: projected fields', () => {
+	it('fails generation on a field a SCHEMAFULL table does not declare, with its file and line', async () => {
+		expect(await problems('SELECT station,\n\tstaton FROM gauge;')).toEqual(
+			[
+				'shop/q.surql:2: selects `staton` of `gauge`, which declares no such field',
+			],
+		);
+		expect(
+			await problems("SELECT labl FROM ONLY type::record('site', $k);"),
+		).toEqual([
+			'shop/q.surql:1: selects `labl` of `site`, which declares no such field',
+		]);
+		// `VALUE` with one bare field, and a bare field with an alias.
+		expect(await problems('SELECT VALUE staton FROM gauge;')).toEqual([
+			'shop/q.surql:1: selects `staton` of `gauge`, which declares no such field',
+		]);
+		expect(await problems('SELECT staton AS station FROM gauge;')).toEqual([
+			'shop/q.surql:1: selects `staton` of `gauge`, which declares no such field',
+		]);
+		expect(await problems('SELECT station AS s FROM gauge;')).toEqual([]);
+		// In a template, as for the uses of its bindings.
+		expect(
+			await problems('SELECT nope FROM gauge WHERE __FILTER__;'),
+		).toEqual([
+			'shop/q.surql:1: selects `nope` of `gauge`, which declares no such field',
+		]);
+	});
+
+	it('escapes a quoted name in the message', async () => {
+		// The quoted names `lab\`el` and `a\\b`: `lab`el` and `a\b`.
+		expect(await problems('SELECT `lab\\`el` FROM site;')).toEqual([
+			'shop/q.surql:1: selects `lab\\`el` of `site`, which declares no such field',
+		]);
+		expect(await problems('SELECT `a\\\\b` FROM site;')).toEqual([
+			'shop/q.surql:1: selects `a\\\\b` of `site`, which declares no such field',
+		]);
+	});
+
+	it('accepts declared fields, `id` and `*`', async () => {
+		expect(
+			await problems(
+				'SELECT id, station, reading, note, *, site, tags FROM gauge;',
+			),
+		).toEqual([]);
+	});
+
+	it('accepts a field whose nested fields alone are declared', async () => {
+		const names = await declared();
+		const detail = names.detail;
+		if (detail === undefined) throw new Error('no detail');
+		const nested: DeclaredNames = {
+			...names,
+			detail: {
+				...detail,
+				tables: {
+					...detail.tables,
+					gauge: {
+						fields: { 'pos.x': { kind: 'int' }, 'list[*]': {} },
+						acceptsUndeclared: false,
+					},
+				},
+			},
+		};
+		expect(await problems('SELECT pos, list FROM gauge;', nested)).toEqual(
+			[],
+		);
+		expect(await problems('SELECT po FROM gauge;', nested)).toEqual([
+			'shop/q.surql:1: selects `po` of `gauge`, which declares no such field',
+		]);
+	});
+
+	describe('checks nothing', () => {
+		it('on a schemaless table, whose fields the analyzer still records', async () => {
+			expect(projected('SELECT whatever FROM scratch;')).toEqual([
+				at('scratch', 'whatever'),
+			]);
+			expect(await problems('SELECT whatever FROM scratch;')).toEqual([]);
+		});
+
+		it('on a view, whose fields come from its SELECT', async () => {
+			const names = await withView();
+			expect(names.detail?.tables.tally?.acceptsUndeclared).toBe(true);
+			expect(await problems('SELECT n FROM tally;', names)).toEqual([]);
+			// The uses of a binding are not checked against it either.
+			expect(
+				await problems('SELECT * FROM tally WHERE n = $n;', names),
+			).toEqual([]);
+		});
+
+		it('for a bare word SurrealQL reads as a value, in a projection or a comparison', async () => {
+			expect(await problems('SELECT NaN, Infinity FROM gauge;')).toEqual(
+				[],
+			);
+			expect(
+				analyzeSync('SELECT * FROM gauge WHERE NaN = $x;').uses,
+			).toEqual({});
+			expect(
+				analyzeSync('SELECT * FROM gauge WHERE $x < Infinity;').uses,
+			).toEqual({});
+			expect(
+				await problems('SELECT * FROM gauge WHERE $x < Infinity;'),
+			).toEqual([]);
+		});
+
+		it('in a template where a hole starts a statement, which a fill can make define a field', async () => {
+			expect(
+				await problems('__SETUP__;\nSELECT nope FROM gauge;'),
+			).toEqual([]);
+			expect(
+				await problems(
+					'{ __SETUP__; RETURN (SELECT nope FROM gauge); };',
+				),
+			).toEqual([]);
+			expect(
+				projected('{ __SETUP__; RETURN (SELECT nope FROM gauge); };'),
+			).toEqual([at('gauge', 'nope')]);
+			// A hole elsewhere does not start a statement: still checked.
+			expect(
+				await problems('LET $x = __VALUE__;\nSELECT nope FROM gauge;'),
+			).toEqual([
+				'shop/q.surql:2: selects `nope` of `gauge`, which declares no such field',
+			]);
+		});
+
+		it('on a table the schema does not declare, reported once by the names check', async () => {
+			expect(await problems('SELECT nope FROM shipment;')).toEqual([
+				'shop/q.surql:1: reads table `shipment`, which the schema does not declare',
+			]);
+		});
+
+		it('in a text that defines, alters or removes a table or field itself', async () => {
+			expect(
+				await problems(
+					'DEFINE FIELD extra ON gauge TYPE string;\nSELECT extra FROM gauge;',
+				),
+			).toEqual([]);
+			expect(
+				await problems(
+					'DEFINE TABLE fresh SCHEMAFULL;\nSELECT nope FROM fresh;',
+				),
+			).toEqual([]);
+		});
+
+		it('without schema detail', async () => {
+			const { detail: _, ...names } = await declared();
+			expect(await problems('SELECT nope FROM gauge;', names)).toEqual(
+				[],
+			);
+		});
+
+		it('for what the analyzer does not record', async () => {
+			expect(await problems('SELECT VALUE nope.x FROM gauge;')).toEqual(
+				[],
+			);
+			expect(await problems('SELECT nope + 1 AS x FROM gauge;')).toEqual(
+				[],
+			);
+			expect(await problems('SELECT nope.x FROM gauge;')).toEqual([]);
+		});
+	});
+
+	it('changes nothing in the generated module', async () => {
+		const render = async (sql: string) =>
+			renderStatementModulesSync({
+				scopes: [
+					{
+						name: 'shop',
+						files: [{ name: 'q', sql }],
+						declared: await declared(),
+					},
+				],
+			}).files;
+		const files = await render('SELECT station, reading FROM gauge;');
+		expect(files[0]?.content).not.toContain('projected');
+		expect(files[0]?.content).not.toContain('station"');
 	});
 });
