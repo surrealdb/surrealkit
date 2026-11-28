@@ -1,12 +1,23 @@
 /**
  * Field names a query compares in its `WHERE`, whatever the other operand,
- * and the fields a `SET` assigns a literal to. A comparison that is a binding use (`uses`) is not repeated
+ * and the check that fails generation when a `SCHEMAFULL` table does not
+ * declare one. A comparison that is a binding use (`uses`) is not repeated
  * here. Every case the analyzer is not certain of records nothing; the
  * engine facts behind each rule are pinned in `test/fields-engine.test.ts`.
  */
+import { join } from 'node:path';
+
+import { Effect } from 'effect';
 import { describe, expect, it } from 'vitest';
 
-import { analyzeSync } from '../src/analyze/index.js';
+import {
+	analyzeSync,
+	type DeclaredNames,
+	renderStatementModulesSync,
+	StatementModulesError,
+} from '../src/analyze/index.js';
+import { declaredNames, decodeDocument } from '../src/emitter/index.js';
+import { readJson } from './documents.js';
 
 const fields = (sql: string) => analyzeSync(sql).fields;
 
@@ -503,5 +514,185 @@ describe('analyze: a local the text fixes to one table', () => {
 			expect(analyzeSync(sql).projected, sql).toEqual([]);
 			expect(analyzeSync(sql).fields, sql).toEqual([]);
 		});
+	});
+});
+
+const bindsDocument = join(import.meta.dirname, 'fixtures', 'binds.v2.json');
+const declared = async (): Promise<DeclaredNames> =>
+	declaredNames(
+		await Effect.runPromise(decodeDocument(readJson(bindsDocument))),
+	);
+
+const render = async (sql: string, names?: DeclaredNames) => {
+	try {
+		const { files } = renderStatementModulesSync({
+			scopes: [
+				{
+					name: 'shop',
+					files: [{ name: 'q', sql }],
+					declared: names ?? (await declared()),
+				},
+			],
+		});
+		return { problems: [], content: files[0]?.content ?? '' };
+	} catch (error) {
+		if (error instanceof StatementModulesError)
+			return {
+				problems: error.problems.map((problem) => problem.text),
+				content: '',
+			};
+		throw error;
+	}
+};
+
+const problems = async (sql: string, names?: DeclaredNames) =>
+	(await render(sql, names)).problems;
+
+describe('statements with schema detail: compared fields', () => {
+	it('fails generation on a compared field a SCHEMAFULL table does not declare', async () => {
+		expect(
+			await problems("SELECT * FROM gauge\nWHERE staton = 'a';"),
+		).toEqual([
+			'shop/q.surql:2: compares `staton` of `gauge`, which declares no such field',
+		]);
+		expect(
+			await problems(
+				'IF $x {\n\tDELETE gauge WHERE $s = staton RETURN NONE;\n};',
+			),
+		).toEqual([
+			'shop/q.surql:2: compares `staton` of `gauge`, which declares no such field',
+		]);
+	});
+
+	it('accepts a field of a subquery in FROM, compared with a literal or a binding, and still checks the subquery', async () => {
+		for (const sql of [
+			"SELECT * FROM (SELECT station AS s FROM gauge) WHERE s = 'a';",
+			'SELECT * FROM (SELECT station AS s FROM gauge) WHERE s = $x;',
+			'SELECT * FROM (SELECT station AS s FROM gauge) WHERE $x = s;',
+			"SELECT * FROM (SELECT VALUE site FROM gauge) WHERE label = 'L';",
+			"SELECT * FROM gauge, (SELECT station AS s FROM gauge) WHERE s = 'a';",
+			"SELECT * FROM ONLY (SELECT station AS s FROM ONLY gauge:1) WHERE s = 'a';",
+			"LET $r = SELECT * FROM (SELECT station AS s FROM gauge) WHERE s = 'a';",
+			"IF true { SELECT * FROM (SELECT station AS s FROM gauge) WHERE s = 'a' };",
+			'FOR $i IN [1] { SELECT * FROM (SELECT station AS s FROM gauge) WHERE s = $x };',
+			'SELECT s, label FROM (SELECT station AS s FROM gauge);',
+		])
+			expect(await problems(sql), sql).toEqual([]);
+		expect(
+			await problems(
+				"SELECT * FROM (SELECT staton AS s FROM gauge WHERE nte = 1) WHERE s = 'a';",
+			),
+		).toEqual([
+			'shop/q.surql:1: selects `staton` of `gauge`, which declares no such field',
+			'shop/q.surql:1: compares `nte` of `gauge`, which declares no such field',
+		]);
+	});
+
+	it('reports a binding use once, as before', async () => {
+		expect(
+			await problems('SELECT * FROM gauge WHERE staton = $s;'),
+		).toEqual([
+			'shop/q.surql:1: compares `staton` of `gauge`, which declares no such field',
+		]);
+	});
+
+	it('accepts declared fields, `id`, and a field whose nested fields alone are declared', async () => {
+		expect(
+			await problems(
+				"SELECT * FROM gauge WHERE station = 'a' AND id = gauge:1 AND reading > 1 AND note != NONE AND site = $s AND tags = [];",
+			),
+		).toEqual([]);
+		const names = await declared();
+		const detail = names.detail;
+		if (detail === undefined) throw new Error('no detail');
+		const nested: DeclaredNames = {
+			...names,
+			detail: {
+				...detail,
+				tables: {
+					...detail.tables,
+					gauge: {
+						fields: { 'pos.x': { kind: 'int' } },
+						acceptsUndeclared: false,
+					},
+				},
+			},
+		};
+		expect(
+			await problems('SELECT * FROM gauge WHERE pos = {};', nested),
+		).toEqual([]);
+	});
+
+	describe('checks nothing', () => {
+		it.each([
+			[
+				'on a schemaless table',
+				'SELECT * FROM scratch WHERE whatever = 1;',
+			],
+			[
+				'in a text that defines a field itself',
+				'DEFINE FIELD extra ON gauge TYPE int; SELECT * FROM gauge WHERE extra = 1;',
+			],
+			[
+				'in a template where a hole starts a statement',
+				'__SETUP__; SELECT * FROM gauge WHERE extra = 1;',
+			],
+		])('%s', async (_, sql) => {
+			expect(await problems(sql)).toEqual([]);
+		});
+
+		it('on a table the schema does not declare, reported once by the names check', async () => {
+			expect(
+				await problems('SELECT * FROM shipment WHERE nope = 1;'),
+			).toEqual([
+				'shop/q.surql:1: reads table `shipment`, which the schema does not declare',
+			]);
+		});
+	});
+
+	it('fails generation on an assigned field a SCHEMAFULL table does not declare', async () => {
+		expect(
+			await problems("UPDATE gauge\n\tSET staton = 'a', note = 'b';"),
+		).toEqual([
+			'shop/q.surql:2: assigns `staton` of `gauge`, which declares no such field',
+		]);
+		expect(
+			await problems(
+				'IF $x { CREATE gauge SET reading = 1, staton = 2 RETURN NONE };',
+			),
+		).toEqual([
+			'shop/q.surql:1: assigns `staton` of `gauge`, which declares no such field',
+		]);
+		// NONE clears a field, which both versions accept: not checked.
+		expect(await problems('UPDATE gauge SET staton = NONE;')).toEqual([]);
+		expect(await problems('UPDATE gauge UNSET staton;')).toEqual([]);
+	});
+
+	it('fails generation on a field of a local the text fixes to one table', async () => {
+		expect(
+			await problems(
+				"LET $x = type::record('gauge', $k);\nSELECT staton FROM ONLY $x;\nUPDATE $x SET nte = 'a';\nDELETE $x WHERE readng = 1;",
+			),
+		).toEqual([
+			'shop/q.surql:2: selects `staton` of `gauge`, which declares no such field',
+			'shop/q.surql:3: assigns `nte` of `gauge`, which declares no such field',
+			'shop/q.surql:4: compares `readng` of `gauge`, which declares no such field',
+		]);
+		// A binding assigned to it writes no rejectsNone entry.
+		const { content, problems: none } = await render(
+			"LET $x = type::record('gauge', $k);\nUPSERT $x SET station = $s;",
+		);
+		expect(none).toEqual([]);
+		expect(content).not.toContain('rejectsNone');
+		expect(content).not.toContain('binds: { s');
+	});
+
+	it('changes nothing in the generated module', async () => {
+		const { content } = await render(
+			"SELECT * FROM gauge WHERE station = 'a';",
+		);
+		expect(content).toContain('tables: { read: ["gauge"], written: [] }');
+		expect(content).not.toContain('fields');
+		expect(content).not.toContain('uses');
 	});
 });

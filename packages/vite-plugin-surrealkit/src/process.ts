@@ -83,19 +83,27 @@ function uninstall(): void {
 	for (const signal of SIGNALS) process.off(signal, onSignal);
 }
 
-/**
- * Stops `running` if this process exits or receives SIGINT or SIGHUP while it
- * runs. A generation runs in its own process group, so the terminal's Ctrl-C
- * does not reach it, and Vite itself handles only SIGTERM. The handlers are
- * installed only while some command runs.
- */
-export function stopOnExit(running: Stoppable, exited: Promise<void>): void {
-	active.add(running);
+/** Arm the signal handlers before the child can start its own process group. */
+export function spawnGuarded(
+	start: () => ChildProcess,
+	group: boolean,
+): ChildProcess {
 	install();
-	void exited.then(() => {
-		active.delete(running);
+	try {
+		const child = start();
+		const running = { child, group };
+		active.add(running);
+		const release = () => {
+			active.delete(running);
+			if (active.size === 0) uninstall();
+		};
+		child.once('exit', release);
+		child.once('error', release);
+		return child;
+	} catch (error) {
 		if (active.size === 0) uninstall();
-	});
+		throw error;
+	}
 }
 
 /** Whether the exit and signal handlers are installed (for tests). */

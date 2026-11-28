@@ -919,6 +919,12 @@ The macros were updated to emit it, so regenerating is enough.
 - New `schemas`, `targets` and `all` options map to `--schema`, `--target` and
   `--all`. The default watch globs now cover `database/modules/*/schema`.
 
+### Node 22.21.1 or later
+
+`vite-plugin-surrealkit` now declares `engines.node` as `>=22.21.1`, raised
+from `^20.19.0 || >=22.12.0`. Node 20 and Node 22 before 22.21.1 are no longer
+supported or tested; move to Node 22.21.1 or later.
+
 ### 0.2.0 requires Vite 8
 
 `vite-plugin-surrealkit@0.2.0` narrows its peer range to `vite@^8` and raises

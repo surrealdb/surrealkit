@@ -1,0 +1,1 @@
+string::uppercase($row.title)

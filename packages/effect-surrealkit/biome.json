@@ -12,7 +12,9 @@
 			"test/**/*.ts",
 			"vitest.config.ts",
 			"scripts/**/*.mjs",
-			"!test/golden"
+			"!test/golden",
+			"!test/mapper-fixtures/accepts/.described",
+			"!test/mapper-fixtures/.all"
 		]
 	},
 	"formatter": {

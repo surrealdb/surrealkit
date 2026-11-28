@@ -17,9 +17,13 @@
         "vitest": "^3.2.4",
       },
       "peerDependencies": {
+        "@surrealdb/node": "^3.2.0",
         "effect": "^4.1.5",
         "surrealdb": "^2.2.2",
       },
+      "optionalPeers": [
+        "@surrealdb/node",
+      ],
     },
   },
   "packages": {

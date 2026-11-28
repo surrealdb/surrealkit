@@ -21,6 +21,7 @@ import {
 	generate,
 	semanticDigest,
 } from '../src/emitter/index.js';
+import { unarySchema } from '../src/emitter/kinds.js';
 import { refine, type TableDescriptor } from '../src/index.js';
 import {
 	at,
@@ -277,6 +278,84 @@ describe('golden generated output', () => {
 });
 
 describe('generation rules', () => {
+	it('opts into pipeable composition without changing default output', async () => {
+		const document = readJson(compiledPath('corpus'));
+		const normal = await run(generate(document, corpusOptions));
+		const piped = await run(
+			generate(document, { ...corpusOptions, pipeable: true }),
+		);
+		expect(piped.files.map((file) => file.path)).toEqual(
+			normal.files.map((file) => file.path),
+		);
+		expect(piped.files.map((file) => file.content).join('\n')).toContain(
+			'.pipe(Schema.optionalKey)',
+		);
+		expect(
+			normal.files.map((file) => file.content).join('\n'),
+		).not.toContain('.pipe(Schema.optionalKey)');
+	});
+	it('extends a trailing pipe instead of chaining another one', () => {
+		expect(unarySchema('Schema.Array', 'SurrealSchema.String', true)).toBe(
+			'Schema.Array(SurrealSchema.String)',
+		);
+		expect(
+			unarySchema('Schema.optionalKey', 'Schema.Struct({ a: X })', true),
+		).toBe('Schema.Struct({ a: X }).pipe(Schema.optionalKey)');
+		expect(
+			unarySchema(
+				'Schema.optionalKey',
+				'Schema.Struct({ a: X }).pipe(Schema.Array)',
+				true,
+			),
+		).toBe(
+			'Schema.Struct({ a: X }).pipe(Schema.Array, Schema.optionalKey)',
+		);
+		expect(
+			unarySchema('Schema.optionalKey', 'Schema.Literals([")"])', true),
+		).toBe('Schema.Literals([")"]).pipe(Schema.optionalKey)');
+		expect(
+			unarySchema(
+				'Schema.optionalKey',
+				'X.pipe(Schema.Array).check(c)',
+				true,
+			),
+		).toBe('X.pipe(Schema.Array).check(c).pipe(Schema.optionalKey)');
+		expect(
+			unarySchema('Schema.optionalKey', 'Schema.Struct({})', false),
+		).toBe('Schema.optionalKey(Schema.Struct({}))');
+	});
+	it('pipes nullable and optional wrappers around a call', () => {
+		expect(
+			unarySchema(
+				'Schema.NullOr',
+				'SurrealSchema.RecordIdFromJsonAs(SiteId)',
+				true,
+			),
+		).toBe('SurrealSchema.RecordIdFromJsonAs(SiteId).pipe(Schema.NullOr)');
+		expect(
+			unarySchema(
+				'Schema.optionalKey',
+				unarySchema(
+					'Schema.NullOr',
+					'SurrealSchema.RecordIdFromJsonAs(SiteId)',
+					true,
+				),
+				true,
+			),
+		).toBe(
+			'SurrealSchema.RecordIdFromJsonAs(SiteId).pipe(Schema.NullOr, Schema.optionalKey)',
+		);
+	});
+	it('never chains pipe calls in pipeable output', async () => {
+		const document = readJson(compiledPath('corpus'));
+		const piped = await run(
+			generate(document, { ...corpusOptions, pipeable: true }),
+		);
+		for (const file of piped.files)
+			expect(file.content, file.path).not.toMatch(
+				/\)\.pipe\([^()]*\)\.pipe\(/,
+			);
+	});
 	const example = () =>
 		readJson(examplePath) as Record<string, unknown> & {
 			tables: Array<Record<string, unknown>>;

@@ -1,6 +1,20 @@
-import { describe, expect, it } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
-import { analyzeSync } from '../src/analyze/index.js';
+import { Effect, Schema } from 'effect';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import {
+	analyzeSync,
+	renderStatementModulesSync,
+	StatementModulesError,
+	type StatementScope,
+} from '../src/analyze/index.js';
+import { run } from '../src/cli/run.js';
+import { declaredNames, decodeDocument } from '../src/emitter/index.js';
+import { part, sequence } from '../src/statement/index.js';
+import { examplePath, readJson } from './documents.js';
 
 /** The names a text uses, as the analyzer reports them. */
 const names = (sql: string) => {
@@ -208,5 +222,244 @@ describe('analyze: what contributes nothing', () => {
 		expect(
 			names('RETURN { info: 1, x: (SELECT * FROM gizmo) };').read,
 		).toEqual(['gizmo']);
+	});
+});
+
+describe('part: tables and functions', () => {
+	it('exposes the analysed values', () => {
+		const p = part({
+			sql: 'UPDATE gizmo SET n = fn::next(n); SELECT * FROM $ids;',
+			free: ['ids'],
+			slots: 2,
+		});
+		expect(p.tables).toEqual({ read: [], written: ['gizmo'] });
+		expect(p.functions).toEqual(['fn::next']);
+		expect(p.openTargets).toBe(true);
+	});
+
+	it('accepts a declaration that matches', () => {
+		expect(() =>
+			part({
+				sql: 'SELECT * FROM gizmo;',
+				tables: { read: ['gizmo'], written: [] },
+				functions: [],
+				openTargets: false,
+			}),
+		).not.toThrow();
+	});
+
+	it('refuses a wrong declaration with the difference', () => {
+		expect(() =>
+			part({
+				name: 'wrong',
+				sql: 'SELECT * FROM gizmo WHERE n = fn::count();',
+				tables: { read: ['sprocket'], written: ['gizmo'] },
+				functions: ['fn::other'],
+				openTargets: true,
+			}),
+		).toThrow(
+			'part `wrong` does not declare what its text does: tables.read: the text reads `gizmo`, which is not declared; tables.read: declared `sprocket`, which the text never reads; tables.written: declared `gizmo`, which the text never writes; functions: the text calls `fn::count`, which is not declared; functions: declared `fn::other`, which the text never calls; openTargets: declared true, every target of the text is a static table name',
+		);
+	});
+
+	it('refuses openTargets false for an open text', () => {
+		expect(() =>
+			part({ sql: 'SELECT * FROM $t;', free: ['t'], openTargets: false }),
+		).toThrow(
+			'openTargets: declared false, a target of the text is not a static table name',
+		);
+	});
+});
+
+describe('sequence: tables and functions', () => {
+	it('the statement carries the union over its parts', () => {
+		const a = part({ sql: 'UPDATE gizmo SET n = fn::a();' });
+		const b = part({
+			sql: 'SELECT * FROM sprocket, gizmo WHERE n = fn::b();',
+		});
+		const c = part({ sql: 'SELECT * FROM $t;', free: ['t'] });
+		const closed = sequence(a, b).define({
+			params: {},
+			result: Schema.Unknown,
+		});
+		expect(closed.tables).toEqual({
+			read: ['gizmo', 'sprocket'],
+			written: ['gizmo'],
+		});
+		expect(closed.functions).toEqual(['fn::a', 'fn::b']);
+		expect(closed.openTargets).toBe(false);
+		const opened = sequence(a, c).define({
+			params: { t: Schema.Unknown },
+			result: Schema.Unknown,
+		});
+		expect(opened.openTargets).toBe(true);
+	});
+});
+
+const scope = (
+	sql: string,
+	declared?: StatementScope['declared'],
+): StatementScope => ({
+	name: 'shop',
+	files: [{ name: 'q', sql }],
+	...(declared !== undefined && { declared }),
+});
+
+const problemsOf = (scopes: ReadonlyArray<StatementScope>) => {
+	try {
+		renderStatementModulesSync({ scopes });
+	} catch (error) {
+		if (error instanceof StatementModulesError) return error.problems;
+		throw error;
+	}
+	return [];
+};
+
+describe('renderStatementModules: tables and functions', () => {
+	it('renders tables, functions and, only when true, openTargets', () => {
+		const { files } = renderStatementModulesSync({
+			scopes: [
+				{
+					name: 'shop',
+					files: [
+						{
+							name: 'closed',
+							sql: 'UPDATE gizmo SET n = fn::next(n);',
+						},
+						{ name: 'opened', sql: 'SELECT * FROM $t;' },
+					],
+				},
+			],
+		});
+		const content = files[0]?.content ?? '';
+		expect(content).toContain(
+			'\tthrowsAt: {},\n\ttables: { read: [], written: ["gizmo"] },\n\tfunctions: ["fn::next"],\n} as const);',
+		);
+		expect(content).toContain(
+			'\ttables: { read: [], written: [] },\n\tfunctions: [],\n\topenTargets: true,\n} as const);',
+		);
+	});
+
+	const declared = { tables: ['gizmo'], functions: ['fn::known'] };
+
+	it('reports a table the schema does not declare, at its first use', () => {
+		const problems = problemsOf([
+			scope(
+				'SELECT * FROM gizmo;\nSELECT * FROM shipmnt;\nCREATE crate;',
+				declared,
+			),
+		]);
+		expect(problems.map((p) => p.text)).toEqual([
+			'shop/q.surql:2: reads table `shipmnt`, which the schema does not declare',
+			'shop/q.surql:3: writes table `crate`, which the schema does not declare',
+		]);
+		expect(problems[0]).toMatchObject({
+			kind: 'undeclared',
+			scope: 'shop',
+			file: 'q',
+			line: 2,
+		});
+	});
+
+	it('reports a function the schema does not declare', () => {
+		expect(
+			problemsOf([
+				scope('RETURN fn::known() + fn::unknwn();', declared),
+			]).map((p) => p.text),
+		).toEqual([
+			'shop/q.surql:1: calls function `fn::unknwn`, which the schema does not declare',
+		]);
+	});
+
+	it('a name the same text defines counts as declared', () => {
+		expect(
+			problemsOf([
+				scope(
+					'DEFINE TABLE IF NOT EXISTS scratch; DEFINE FUNCTION OVERWRITE fn::local() { RETURN 1; };\nCREATE scratch SET n = fn::local();',
+					declared,
+				),
+			]),
+		).toEqual([]);
+	});
+
+	it('names behind an open target are not reported', () => {
+		expect(
+			problemsOf([scope('SELECT * FROM $anything;', declared)]),
+		).toEqual([]);
+	});
+
+	it('checks nothing for a scope without declared names', () => {
+		expect(problemsOf([scope('SELECT * FROM shipmnt;')])).toEqual([]);
+	});
+});
+
+describe('declaredNames', () => {
+	it('returns the tables, edge tables included, and functions of a document', async () => {
+		const document = await Effect.runPromise(
+			decodeDocument(readJson(examplePath)),
+		);
+		expect(declaredNames(document)).toMatchObject({
+			tables: ['doc', 'id_object', 'member_of', 'person', 'team'],
+			functions: ['fn::double', 'fn::greet', 'fn::optional_first'],
+		});
+	});
+});
+
+describe('statements --schema', () => {
+	const dirs: string[] = [];
+	afterEach(() => {
+		for (const dir of dirs.splice(0))
+			rmSync(dir, { recursive: true, force: true });
+	});
+	const cli = async (sql: string, extra: string[]) => {
+		const dir = mkdtempSync(join(tmpdir(), 'effect-surrealkit-schema-'));
+		dirs.push(dir);
+		mkdirSync(join(dir, 'queries', 'shop'), { recursive: true });
+		writeFileSync(join(dir, 'queries', 'shop', 'q.surql'), sql);
+		let stderr = '';
+		const code = await run(
+			['statements', '--input', 'queries', '--out', 'gen', ...extra],
+			{
+				cwd: dir,
+				stdin: async () => '',
+				stdout: () => {},
+				stderr: (text) => {
+					stderr += text;
+				},
+			},
+		);
+		return { code, stderr };
+	};
+
+	it('passes names the document declares', async () => {
+		const result = await cli(
+			'SELECT ->member_of->team FROM person WHERE n = fn::double(1);',
+			['--schema', examplePath],
+		);
+		expect(result).toMatchObject({ code: 0 });
+	});
+
+	it('fails on a name the document does not declare', async () => {
+		const result = await cli('SELECT * FROM shipmnt;', [
+			'--schema',
+			examplePath,
+		]);
+		expect(result.code).toBe(1);
+		expect(result.stderr).toContain(
+			'shop/q.surql:1: reads table `shipmnt`, which the schema does not declare',
+		);
+	});
+
+	it('without --schema checks nothing', async () => {
+		expect((await cli('SELECT * FROM shipmnt;', [])).code).toBe(0);
+	});
+
+	it('refuses a file that is not a schema document', async () => {
+		const result = await cli('SELECT * FROM gizmo;', [
+			'--schema',
+			'missing.json',
+		]);
+		expect(result.code).toBe(2);
+		expect(result.stderr).toContain('--schema missing.json');
 	});
 });

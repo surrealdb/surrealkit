@@ -3081,6 +3081,9 @@ mod tests {
 			})
 			.filter_map(Result::ok)
 			.filter(|entry| entry.path().extension().is_some_and(|ext| ext == "surql"))
+			// Fixtures written to be refused, such as the content mapper's
+			// `rejects/`, which holds an unterminated string on purpose.
+			.filter(|entry| !entry.path().components().any(|c| c.as_os_str() == "rejects"))
 			.map(|entry| {
 				let path = entry.path().strip_prefix(&root).unwrap().display().to_string();
 				(path, fs::read_to_string(entry.path()).unwrap())

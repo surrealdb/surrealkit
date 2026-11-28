@@ -18,7 +18,7 @@ import {
 	type SurrealFunction,
 	type Table,
 } from './document.js';
-import { printKind } from './kinds.js';
+import { printKind, unarySchema } from './kinds.js';
 import { functionIdentifier, propertyKey } from './names.js';
 import {
 	decodeOptions,
@@ -323,9 +323,11 @@ const printFunction = (
 	const args = fn.args.map((arg) => {
 		const code = printKind(arg.kind, ctx(`${fn.name}($${arg.name})`));
 		if (!arg.optional) return code;
-		return arg.omittable
-			? `Schema.optional(${code})`
-			: `Schema.UndefinedOr(${code})`;
+		return unarySchema(
+			arg.omittable ? 'Schema.optional' : 'Schema.UndefinedOr',
+			code,
+			profileFor(options, fn.name).pipeable,
+		);
 	});
 	const returns =
 		fn.returns === undefined

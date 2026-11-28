@@ -37,7 +37,13 @@
 		"surrealkit"
 	],
 	"peerDependencies": {
-		"vite": "^8.0.0"
+		"vite": "^8.0.0",
+		"effect-surrealkit": ">=0.1.0"
+	},
+	"peerDependenciesMeta": {
+		"effect-surrealkit": {
+			"optional": true
+		}
 	},
 	"dependencies": {
 		"picomatch": "^4.0.3"
