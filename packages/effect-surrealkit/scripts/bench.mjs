@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { execFile, spawn } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:net';
@@ -247,9 +248,11 @@ const runWorker = async (task, fixture, wsUrl) => {
 			const endpoint = new URL(wsUrl);
 			assert.equal(endpoint.protocol, 'ws:');
 			assert.equal(endpoint.hostname, '127.0.0.1');
+			const password = process.env[PASSWORD_ENV];
+			assert(password, `${PASSWORD_ENV} is not set`);
 			db = new Surreal();
 			await db.connect(endpoint, {
-				authentication: { username: 'root', password: 'root' },
+				authentication: { username: 'root', password },
 				reconnect: false,
 			});
 			await db.query(
@@ -322,9 +325,14 @@ const findPort = async () => {
 	return port;
 };
 
+// The benchmark server's root password is made for the run, and its workers
+// read it from their environment.
+const PASSWORD_ENV = 'SURREALKIT_BENCH_PASSWORD';
+
 const withServer = async (binary, use) => {
 	const port = await findPort();
 	const host = `127.0.0.1:${port}`;
+	const password = randomUUID();
 	const child = spawn(
 		binary,
 		[
@@ -334,7 +342,7 @@ const withServer = async (binary, use) => {
 			'--user',
 			'root',
 			'--pass',
-			'root',
+			password,
 			'--log',
 			'error',
 			'memory',
@@ -353,7 +361,7 @@ const withServer = async (binary, use) => {
 				(response) => response.ok,
 				() => false,
 			);
-			if (ready) return await use(`ws://${host}/rpc`);
+			if (ready) return await use(`ws://${host}/rpc`, password);
 			await delay(100);
 		}
 		throw new Error('benchmark server did not start');
@@ -367,7 +375,7 @@ const execWorker = promisify(execFile);
 const median = (values) =>
 	[...values].sort((a, b) => a - b)[Math.floor(values.length / 2)];
 
-const collect = async (fixture, wsUrl) => {
+const collect = async (fixture, wsUrl, password) => {
 	const results = {};
 	let version;
 	for (const task of tasks) {
@@ -383,7 +391,13 @@ const collect = async (fixture, wsUrl) => {
 					fixture,
 					...(wsUrl === undefined ? [] : [wsUrl]),
 				],
-				{ timeout: 120_000 },
+				{
+					timeout: 120_000,
+					env:
+						password === undefined
+							? process.env
+							: { ...process.env, [PASSWORD_ENV]: password },
+				},
 			);
 			const { version: observedVersion, ...sample } = JSON.parse(stdout);
 			version ??= observedVersion;
@@ -418,8 +432,8 @@ const main = async () => {
 		const engines = [await collect(fixture)];
 		if (process.env.SURREAL_BIN) {
 			engines.push(
-				await withServer(process.env.SURREAL_BIN, (url) =>
-					collect(fixture, url),
+				await withServer(process.env.SURREAL_BIN, (url, password) =>
+					collect(fixture, url, password),
 				),
 			);
 		}
