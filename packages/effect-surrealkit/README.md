@@ -1494,6 +1494,825 @@ taken](#a-value-that-may-already-be-taken)); a statement declared not to
 write is refused one. Only `part` and `sequence` import the
 analyzer, so code that uses only the builders does not bundle it.
 
+### Statements from `.surql` files
+
+`effect-surrealkit statements` writes the parts for you. `--input` holds one
+directory per scope, each with `.surql` files; every scope becomes
+`<out>/<scope>/statements.ts`, and `<out>/index.ts` re-exports each scope as a
+namespace:
+
+```sh
+effect-surrealkit statements --input queries --out src/generated/statements
+```
+
+`queries/accounts/bindOwner.surql`:
+
+```surql
+-- Binds the owner a caller names, and the caller.
+LET $owner = $boundOwner;
+LET $principal = $auth.id;
+```
+
+`queries/accounts/requireOwner.surql`:
+
+```surql
+IF $owner != $principal { THROW 'Not the owner' };
+```
+
+```ts
+// src/generated/statements/accounts/statements.ts (excerpt)
+/**
+ * Binds the owner a caller names, and the caller.
+ *
+ * ```surql
+ * LET $owner = $boundOwner;
+ * LET $principal = $auth.id;
+ * ```
+ *
+ * `accounts/bindOwner.surql`: a part.
+ */
+export const bindOwner = $statement.part({
+	name: "accounts.bindOwner",
+	source: "accounts/bindOwner.surql",
+	sql: `-- Binds the owner a caller names, and the caller.
+LET $owner = $boundOwner;
+LET $principal = $auth.id;`,
+	free: ["boundOwner"],
+	defines: ["owner", "principal"],
+	slots: 2,
+	throws: [],
+	throwsAt: {},
+	tables: { read: [], written: [] },
+	functions: [],
+} as const);
+```
+
+The doc comment is what an editor's hover shows where the part is used:
+the comments that open the file as prose (`--`, `//` and `#` without their
+marker, a `/* … */` without its delimiters and `*` margin; a comment after the
+first token is not read), then the SurrealQL after them in a fenced block, then
+the file name. `analyze(sql).comment` returns the same prose. Templates and
+fragments get the same comment. In it a `*/` is written `*\/` and an `@` after
+whitespace (SurrealQL's `@@` and `@1@`) `\@`, so neither ends the comment or
+starts a tag, and the fence is longer than any run of backticks in the comment
+or the text. Each line inside the fence is shown as written, trailing
+whitespace included (a string literal can hold it); the prose around it loses
+its trailing whitespace. `sql` is never changed.
+
+```ts
+import { accounts } from './generated/statements/index.js';
+
+const guarded = sequence(accounts.bindOwner, accounts.requireOwner).define({
+  params: { boundOwner: PersonId }, // a missing or extra name is a compile error
+  result: Schema.Undefined,
+});
+```
+
+A file name must be a JavaScript identifier (letters, digits, underscores)
+and not a reserved word; names that differ only in case, and anything in
+`--input` other than scope directories of `.surql` files, are errors
+(dotfiles are ignored). Output follows the emitter's rules: atomic writes,
+unchanged files untouched, stale generated files removed, files without the
+generated header never touched (nor overwritten), and `--check` writes
+nothing and exits 1 when anything is missing, stale or edited. `--watch`
+regenerates on change; `--import-extension .ts` changes the index's imports;
+`--hole-open <text>` and `--hole-close <text>` change the delimiters of a
+hole (default `__` and `__`); `--schema <file>` takes a SurrealKit schema
+document v2 (the JSON the emitter reads) and fails generation, with the file
+and the line of the first use, on any table or `fn::` function a file names
+that the document does not declare (edge tables included) and that the same
+file does not create with `DEFINE TABLE` or `DEFINE FUNCTION`. Any error stops
+generation with its file, line and column; warnings are printed. `--verify`
+also sends each complete text to an in-memory engine before writing (see
+[Checking texts on an engine](#checking-texts-on-an-engine---verify)).
+
+#### What bindings are used as
+
+`analyze(sql)` also reports `uses`: for each free binding (keyed without
+`$`), what the text uses it as, sorted and without duplicates. Three
+patterns are recognised, each on tokens outside strings and comments:
+
+```ts
+type BindingUse =
+  | { kind: 'argument'; function: string; index: number; line: number }
+  | { kind: 'key'; table: string; line: number }
+  | {
+      kind: 'field';
+      table: string;
+      field: string;
+      role?: 'compare' | 'assign';
+      line: number;
+    };
+```
+
+- `argument`: an argument of a custom function that is exactly one
+  parameter. `RETURN fn::scaled($raw);` uses `$raw` as argument 0 of
+  `fn::scaled`.
+- `key`: `type::record('table', $key)` (or `type::thing`) with a plain
+  string literal and exactly one parameter. `SELECT * FROM
+  type::record('site', $siteKey);` uses `$siteKey` as the key of `site`.
+- `field`: inside one query (a top-level statement or a parenthesised
+  subquery) whose targets are exactly one static table and not open, and,
+  for a `SELECT`, with no subquery in its `FROM` (the rows are then the
+  subquery's results, not rows of its table), a comparison (`=`, `==`,
+  `!=`, `<`, `<=`, `>`, `>=`) in its `WHERE` between a bare field name and a
+  parameter, or an assignment `field = $name` in the `SET` of an `UPDATE`,
+  `UPSERT` or `CREATE` that is a top-level statement or the whole value of
+  one (`(UPDATE …);`, `LET $r = (UPDATE …);`, `RETURN (UPDATE …);`) and
+  has no `WHERE` of its own. `SELECT * FROM gauge WHERE
+  station = $station;` uses `$station` as `gauge.station`. The analyzer sets
+  `role` to `compare` for the `WHERE` comparison and `assign` for the `SET`
+  assignment, which messages say; a declared use may leave it out.
+
+`part` exposes the analysed `uses` (and checks declared ones against the
+text); `sequence(...).define` merges them into the statement's `uses` for
+the names that remain bindings.
+
+With `--schema` (or a scope's `declared` names from
+`declaredNames(document)`, whose `detail` holds each table's fields with
+their kind text and whether they reject NONE, whether it accepts
+undeclared fields (a schemaless table or a view, whose fields come from its
+`SELECT`), its id key's kind,
+and each function's argument kinds; a field or argument the document
+records as optional has the kind text `option<K>`), every use must resolve when the
+modules are generated: a field the table neither declares nor accepts
+(`compares \`utcDy\` of \`snapshot\`, which declares no such field`) or
+an argument beyond the function's arguments is an error with its file and
+line. `id` resolves to the table's own record kind. Tables and functions
+the schema does not declare are reported once, by the names check.
+
+A binding whose every use resolves to the same simple kind (`string`,
+`bool`, `int`, `float`, `number`, `decimal`, `datetime`, `duration`,
+`uuid`, or `record<table>` of one table; `option<K>` counts as `K`) is
+written into the part as `binds: { station: "option<string>" }`. At compile time
+`sequence(...).define` then refuses a codec whose stored type cannot hold
+that kind, by the same rule that decides whether two operands compare: a
+branded or refined codec over the right representation is accepted, and
+anything else is an error such as ``binding `station` is compared with
+`gauge.station` (option<string>), which its codec cannot hold``. Bindings without a
+`binds` entry are checked as before.
+
+The entry is `option<K>` when every use of the binding accepts NONE:
+comparing a field with NONE is always valid, and assigning to a field or
+passing an argument accepts it when that field or argument is `option<…>`.
+A key never does. For `option<K>`, a codec fits when its stored type, with
+`undefined` set aside, compares with `K`, so `Schema.UndefinedOr` of a
+literal, branded or refined string fits `option<string>`. For a plain `K`
+the check is unchanged.
+
+A binding assigned (`SET field = $name` in a `CREATE`, `UPDATE` or
+`UPSERT`) to a field that rejects NONE gets a `rejectsNone` entry naming
+that field: `rejectsNone: { station: { table: "gauge", field: "station",
+kind: "string" } }`. A field rejects NONE when it is a top-level field
+whose kind excludes NONE (not `option<…>` or `K | none`, not `any` or
+without `TYPE`; `regex`, `function`, `file` and `table` kinds are not
+counted) and it has no `DEFAULT`, `VALUE` or `COMPUTED` clause. On those
+the engine rejects NONE in every statement the analyzer records an
+assignment in, creating a record or updating one, on SurrealDB 3.3 and 4.0
+alike, also when the table is schemaless or the field is `READONLY` or has
+an `ASSERT`. A field with a plain `DEFAULT` is not counted, because the
+default replaces NONE when a record is created, and nor are a view, a
+`DROP` table, a relation's `in` and `out`, `id`, and a text that defines,
+alters or removes a table or field itself.
+
+This is a compile-time refusal: `sequence(...).define` refuses a codec
+that can hold NONE (`undefined` is part of its stored type, as with
+`Schema.UndefinedOr(…)`) for a binding with a `rejectsNone` entry, with an
+error such as ``binding `station` is assigned to `gauge.station` (string),
+which rejects NONE, and its codec can hold NONE``. Code that compiled
+before can fail here once its modules are generated again with
+`--schema`. Fix it by giving the binding a codec without NONE (a narrower
+one, such as a literal, still fits), or, when NONE is meant, by making the
+field accept it: declare it `option<…>`, or give it a `DEFAULT`. Only an
+assignment counts: a binding compared with the same field (`WHERE $station
+= NONE OR station = $station`) is not refused, and `Schema.Unknown`, which
+holds anything, is not taken to hold NONE.
+
+The limits are plain: only these three patterns are read, by a lexer, not
+a parser, and nothing is recorded where it is not certain (a parameter in a
+longer expression, a path, two tables or an open target, a subquery in
+`FROM`, a comparison inside a block). A binding with no recorded use is
+never checked against the schema. A statement in a block records no
+binding use because it may run for some values of a binding and not others
+(`IF $x != NONE { UPDATE gauge SET station = $x }`): a `rejectsNone` entry
+there would refuse a codec that holds NONE although the text never assigns
+NONE. For the same reason an assignment records no use anywhere a
+condition can skip it, which both versions show running without an error
+when the binding is NONE:
+
+- in a parenthesised query that is not the whole value of a top-level
+  statement: after `IF … THEN` or `ELSE` without braces, behind `AND`, `&&`
+  or `OR`, in a projection or `WHERE` of another query, in a closure (a
+  function argument or an array item skips nothing, but a lexer does not
+  tell it from these);
+- in a query with a `WHERE` of its own (`UPDATE gauge SET station = $x
+  WHERE $x != NONE`). No reading of the `WHERE` can rule out that it skips
+  every record when the binding is NONE: it can test a local `LET` from
+  it, call a function whose body reads the caller's bindings (both
+  versions), or, on 3.3, read a `COMPUTED` field whose expression does.
+
+A comparison in such a subquery is still a use: it accepts NONE whether or
+not it runs. `??` and `?:` evaluate their right side when the left is NONE,
+and a `RETURN` in a top-level `IF` block does not end the text, so these
+skip nothing, yet an assignment behind `??` or `?:` records nothing either.
+The field names these statements compare are checked all the same (see
+[Compared and assigned fields](#compared-and-assigned-fields)).
+
+#### Projected fields
+
+On a `SCHEMAFULL` table SurrealDB 3.3 and 4.0 both answer `SELECT nmae
+FROM person` with `{}` and no error, so a misspelt field quietly comes back
+missing. `analyze(sql)` also reports `projected`: what each `SELECT`
+projects, as `{ table, field, line }` (`field` is `*` for `*`), sorted by
+line, table and field, without duplicates. A `SELECT` is read when it is a
+top-level statement (possibly after `LET $name =` or `RETURN`), a statement
+of a block (the body of `IF`, `ELSE`, `FOR`, a function or a bare `{ … }`,
+read like a top-level statement), or a parenthesised subquery, which is a
+query of its own (in a projection too, against its own table), and when all
+of this holds on tokens outside strings and comments:
+
+- it has exactly one `FROM` outside brackets;
+- it has no `OMIT`;
+- after `FROM` (and an optional `ONLY`) comes exactly one target: a table
+  name, a record id `table:key` whose key is one token or one bracket
+  group, `type::record('table', …)`, `type::thing('table', …)` or
+  `type::table('table')` with a plain string literal, or a local the text
+  fixes to one table (see [A local fixed to one
+  table](#a-local-fixed-to-one-table)); then the end of the
+  query or one of its clauses (`WHERE`, `SPLIT`, `GROUP`, `ORDER`, `LIMIT`,
+  `START`, `FETCH`, `TIMEOUT`, `EXPLAIN`, `WITH`, `VERSION`, `TEMPFILES`);
+- it has no `PARALLEL` after `FROM`, a parse error on both versions;
+- a `FOR UPDATE` is read only in the form both versions accept: every
+  target a record id (`table:key`, `type::record` or `type::thing`), no
+  `GROUP`, `SPLIT` or `VERSION`, and nothing after it but `TEMPFILES` and
+  `EXPLAIN [FULL]`. The lock changes neither the target nor the fields
+  returned. On a table, a range or an array the engine refuses it
+  ("requires record ids as targets"), and the analyzer records nothing.
+
+A pinned engine test runs each of these clauses on both versions and
+checks that it returns the same fields as the query without it (`EXPLAIN`
+returns a plan, which names the same projection); `VERSION`, which needs a
+versioned store, was checked the same way on one. The same `FOR UPDATE`
+rule decides the tables a text reads and the binding uses of its `WHERE`.
+
+Of such a `SELECT`, each projected item of exactly one of these forms is
+recorded, against that table:
+
+- `*`;
+- one bare field name: a word or a quoted name, except the words SurrealQL
+  reads as values, `NONE`, `NULL`, `TRUE` and `FALSE` in any case and `NaN`
+  and `Infinity` spelt so (a pinned test tries every keyword of both
+  versions' parsers on both engines);
+- one bare field name, `AS`, and one name: the field is recorded, never the
+  alias;
+- `SELECT VALUE` followed by one bare field name and then `FROM`.
+
+Every other item records nothing: a function call, a path (`address.city`,
+`tags[0]`), an expression, an alias of anything but one bare field, a graph
+step and a subquery, and `VALUE` before anything but one bare field. Two
+targets, an open target (`$owner` unless the text fixes it to one table,
+`type::table($t)`, a subquery, a range or a graph step after the table) and
+a hole after the target record nothing. A `{ … }` whose entries start with a key and `:` is an object
+literal, not a block, and has no statement.
+
+With `--schema` (or a scope's `declared` detail), a recorded field that a
+`SCHEMAFULL` table does not declare fails generation with its file and line:
+``shop/q.surql:2: selects `staton` of `gauge`, which declares no such
+field``. A quoted name is written as SurrealQL quotes it (`` `lab\`el` ``).
+`*`, `id`, a declared field and a field with declared nested fields (`pos`
+when `pos.x` is declared) resolve. Nothing is checked on a schemaless table
+or a view (both accept any field), on a table the schema does not declare
+(the names check reports it once), in a text that defines, alters or
+removes a table or field itself, or in a template where a hole starts a
+statement (at the start of the text, after `;` or after `{`), because a
+fill there can define a field. The generated modules do not change:
+`projected` is not written into a part.
+
+One limit, the same the binding uses above have: a row written while its
+table was schemaless keeps the fields it had when the table became
+`SCHEMAFULL`, and on 3.3 and 4.0 alike `SELECT extra FROM loose` returns
+them although no definition declares `extra`. The check refuses such a
+text. Declare the field (`DEFINE FIELD extra ON loose TYPE option<…>`), or
+clear it from the old rows (`UPDATE loose UNSET extra`; on 4.0 also
+`ALTER TABLE loose MIGRATE EXISTING ROWS AS clear_loose REMOVE UNDECLARED
+FIELDS`). Until then an `UPDATE` of such a row fails on both versions with
+``Found field 'extra', but no such field exists``. As for the
+binding uses, there is no way to exempt one text: a scope generated without
+schema detail is not checked at all.
+
+#### Compared and assigned fields
+
+SurrealDB 3.3 and 4.0 both answer `SELECT * FROM person WHERE nmae =
+'Ada'` with no rows and no error: on a `SCHEMAFULL` table a field it does
+not declare is NONE in every row, so the comparison never holds.
+`analyze(sql)` also reports `fields`: `{ table, field, role: 'compare',
+line }` for each bare field a query compares in its `WHERE`, whatever the
+other operand, sorted by line, table, field and role, without duplicates. A
+comparison already recorded as a binding use (`station = $station`) is not
+repeated there. A comparison is read where `uses` reads one: in a query
+whose targets are exactly one static table and not open (or a local [fixed
+to one table](#a-local-fixed-to-one-table)), as a top-level
+statement, a statement in a block or a parenthesised subquery (a bare word
+there is a field of the subquery's own row on both versions, never the
+outer one's), at the query's own level or inside parentheses, before a
+second `WHERE` or `SET` clause. A `SELECT` with a subquery in its `FROM`
+records nothing of its own: `SELECT * FROM (SELECT station AS s FROM
+gauge) WHERE s = 'a'` compares `s` of the subquery's results, which
+`gauge` need not declare, and the subquery is read against its own table.
+The field is
+recorded when it is a whole operand of `=`, `==`, `!=`, `<`, `<=`, `>` or
+`>=`:
+
+- on the left: after `WHERE`, `AND`, `OR`, `(` or `,`, and directly before
+  the operator;
+- on the right: directly after an operator that follows the end of an
+  operand (a name, a parameter, a literal or a closing bracket), and
+  before `;`, `)`, `,`, `AND`, `OR`, a clause or `FOR UPDATE`.
+
+A bare field is the word or quoted name `uses` reads: never `NONE`, `NULL`,
+`TRUE` or `FALSE` in any case nor `NaN` or `Infinity`, never a word that
+ends a clause (`AND`, `WHERE`, `ORDER`, …), and nothing followed by `.`,
+`(`, `[`, `:` or an arrow. A pinned engine test compares every keyword of
+both versions' parsers on either side and checks that the analyzer records
+one only where the engine reads the field of that name. A projection alias
+is not visible in `WHERE` on either version, so `SELECT name AS label FROM
+person WHERE label = 'Ada'` compares the field `label`. Nothing else is
+recorded: a path, a call, an index, a graph step, an operand of arithmetic
+or of a cast on the left, any other operator (`?=`, `@@`, `@1@`, `<|2|>`,
+`~`, `CONTAINS`, `IN`, …), and names in `ORDER BY`, `GROUP BY`, `SPLIT`,
+`OMIT` and `FETCH`.
+
+An assignment is recorded as `role: 'assign'`: the target of `field =
+<value>` in the `SET` of an `UPDATE`, `UPSERT` or `CREATE` (after `SET` or a
+`,` of the clause), in the same queries, when the value is a literal
+SurrealDB never evaluates to NONE and the assignment ends after it (at `,`,
+`;`, a closing bracket or a clause): a string of any prefix, a number (`1`,
+`1.5`, `-1`, `1d`, `10dec`), `TRUE`, `FALSE`, `NULL`, an array literal, or
+a record id `table:key`. Every record such a statement writes then fails on
+both versions (``Found field 'nmae', but no such field exists for table
+'person'``). Any other value is not read, because both versions accept
+NONE for a field the table does not declare: `SET nmae = NONE`, `SET nmae =
+$v` with `$v` NONE, `SET nmae = 1 AND NONE` and `SET nmae = [1][5]` all
+succeed, and on a row kept from before its table became `SCHEMAFULL` they
+clear the old field. For the same reason `UNSET` is never read: `UPDATE
+loose UNSET extra` is how such a field is cleared. A binding assigned in
+`SET` where `uses` takes the assignment for a binding use is not repeated
+in `fields`; anywhere else `SET field = $name` records nothing.
+
+With `--schema` (or a scope's `declared` detail), a compared or assigned
+field that a `SCHEMAFULL` table does not declare fails generation with its
+file and line, by the rule the projected fields follow (the same names resolve, the
+same tables and texts are not checked): ``shop/q.surql:2: compares
+`staton` of `gauge`, which declares no such field`` (or `assigns`). The generated modules
+do not change: `fields` is not written into a part. The limit is the one
+the projected fields have: a row written while its table was schemaless
+still matches a comparison with its old field, and the check refuses such a
+text.
+
+#### A local fixed to one table
+
+`LET $x = type::record('t', …);` makes `$x` a record id of `t` whatever the
+key, on both versions, so a later `FROM $x`, `FROM ONLY $x`, `UPDATE $x`,
+`UPSERT $x` or `DELETE $x` targets `t`, and its projected, compared and
+assigned fields are read against `t` as for a static target. A local
+counts only when nothing can make it hold anything else:
+
+- its one `LET` in the whole text is a top-level statement exactly `LET $x
+  = type::record('t', …);` (or `type::thing`) with a plain string literal
+  for the table, and no `FOR` of the same name exists: a `LET` in a block
+  is the block's own, and a second `LET` replaces the first;
+- the read comes after that statement;
+- it is not a name SurrealDB sets (`$this`, `$parent`, `$value`, `$before`,
+  `$after`, `$auth`, …);
+- the text has no hole (a fill could `LET` it), no closure (whose
+  parameters can shadow it) and no `DEFINE` (a function body sees the
+  caller's `LET`s on 3.3 and not on 4.0).
+
+A binding compared with or assigned to a field of such a target is not a
+binding use: `IF $revision = NONE { DELETE $marker } ELSE { UPSERT $marker
+SET revision = $revision }` assigns `$revision` only when it is not NONE,
+and a `rejectsNone` entry would refuse its codec. The tables a text
+reports (`tables`, `openTargets`) do not change: such a target is still
+open there. A local whose table comes from a parameter, a codec or a
+subquery is not read.
+
+#### Rendering in process
+
+The command is a thin wrapper over `renderStatementModules` from
+`effect-surrealkit/analyze`: it reads the tree, refuses anything that is not
+a `.surql` file, and writes, checks or watches; analysis, naming checks and
+rendering are all the function's. Call it directly to generate the modules
+without the CLI or a filesystem:
+
+```ts
+import { Effect } from 'effect';
+import { renderStatementModules } from 'effect-surrealkit/analyze';
+
+const program = renderStatementModules({
+	scopes: [
+		{ name: 'accounts', files: [{ name: 'bindOwner', sql: 'LET $owner = $boundOwner;' }] },
+	],
+	importExtension: '.ts', // default .js
+	// holes: { open: '{{', close: '}}' },
+});
+// Succeeds with { files: [{ path: 'accounts/statements.ts', content }, { path: 'index.ts', content }],
+// warnings: [{ scope, file, line, column, code, message, text }] }, the same
+// bytes the command writes; fails with a StatementModulesError whose
+// `problems` hold every rejected file, invalid, reserved or case-colliding
+// name, invalid scope and, for a scope with `declared`, undeclared name.
+const { files, warnings } = await Effect.runPromise(program);
+```
+
+`renderStatementModulesSync` is the same, throwing the error. A scope may
+carry `declared: { tables, functions }`: every table or custom function a
+file of that scope names that is not in it, nor created by the same text
+with `DEFINE TABLE` or `DEFINE FUNCTION`, is a problem of kind `undeclared`
+(`shop/q.surql:2: reads table \`shipmnt\`, which the schema does not
+declare`). `declaredNames(document)` from `effect-surrealkit/emitter` returns
+those names from a decoded schema document (`decodeDocument`), edge tables
+included; `--schema` applies it to every scope. Names behind an open target
+are not checked: a text with `openTargets` can use tables the check never
+sees.
+
+#### Checking texts against the schema without rendering
+
+`schemaProblems(texts, declared, options?)` from `effect-surrealkit/analyze`
+makes the same checks over named texts and renders nothing, so a name is any
+non-empty string (`billing.openInvoices`, `retrieval/graph/depth-1`) and the
+texts need not be `.surql` files of a scope directory: the pins of [built
+statements](#pinning-built-statements), say. It is the renderer's own check,
+not a copy: both call one function per text, and
+`test/schema-problems.test.ts` requires the same problems from both over
+every fixture.
+
+```ts
+import { Effect } from 'effect';
+import { schemaProblems } from 'effect-surrealkit/analyze';
+import { declaredNames, decodeDocument } from 'effect-surrealkit/emitter';
+
+const declared = declaredNames(await Effect.runPromise(decodeDocument(json)));
+const problems = schemaProblems(
+	[{ name: 'billing.openInvoices', sql: 'SELECT totl FROM invoice;' }],
+	declared,
+	// { holes: { open: '{{', close: '}}' } },
+);
+// [{ name: 'billing.openInvoices', line: 1, code: 'undeclaredField',
+//    message: 'selects `totl` of `invoice`, which declares no such field',
+//    text: 'billing.openInvoices:1: selects `totl` of `invoice`, which declares no such field (undeclaredField)' }]
+```
+
+Each problem has the text's `name`, a `line`, a `column` where the analyzer
+gives one, a `code` and a `message` holding schema names only:
+`undeclaredTable`, `undeclaredFunction`, `undeclaredField` (projected,
+compared or assigned, or a binding used as one) and `extraArgument` from the
+schema checks; the analyzer's own code, with line and column, for a text it
+refuses (it cannot be lexed, or is empty) and for an error it diagnoses
+(`LET $auth`); `unnamed` for an empty name. A refusal is a problem of its
+text, never thrown, so one bad text does not hide the others. Without
+`declared.detail` only tables and functions are checked. The result is
+sorted by name, line and column, without duplicates, and is the same for the
+texts in any order. Warnings are not problems and are not returned.
+
+A template is checked as written, as the renderer checks it: a hole is never
+filled or guessed. A target behind a hole is open and records nothing, and
+where a hole starts a statement (at the start, or after `;` or `{`) no field
+is checked, since a fill there can define one; tables and functions still
+are. To check what a fill makes, check the filled text (`fill`).
+
+#### Checking texts on an engine: `--verify`
+
+The analyzer is a lexer, so a text it can count but SurrealDB cannot parse
+(`SELECT * FORM person;`) generates a module and fails when it first runs.
+`--verify` sends each complete text to SurrealDB's own parser before
+anything is written:
+
+```sh
+effect-surrealkit statements --input queries --out src/generated/statements \
+  --verify --verify-schema schema/tables.surql --verify-schema schema/functions.surql
+```
+
+It needs the optional peer `@surrealdb/node` (`npm install --save-dev
+@surrealdb/node @surrealdb/node-native`); without it the command fails with
+that install command. It starts an in-memory engine in the process, runs the
+`--verify-schema` files in the order given, then sends each complete text
+(a `part` with no holes) once, with no bindings, in scope and file order. A
+fragment or a template cannot be sent as it stands and is skipped. Three
+outcomes are problems, and any one stops generation with exit 1 and writes
+nothing:
+
+- a parse error, with the file, line and column the engine reports
+  (`broken/typo.surql:1:10: Parse error: Unexpected token \`an identifier\`,
+  expected FROM`);
+- a number of results other than the analyzer's `slots`;
+- a text that does not finish within the timeout (10 seconds, or
+  `--verify-timeout <seconds>`, a whole number; `timeoutSeconds` of the
+  function): `slow/wait.surql: the text did not finish within 10s on
+  an empty database with no bindings, so its result count was not verified`.
+  This is the one outcome whichever way the engine reports the timeout (an
+  error for each statement it did not finish, or a refusal of the whole
+  text). Such a text is never reported as verified and never as a parse
+  error.
+
+Any other error a text meets without bindings (a `NONE` record id, an unknown
+record, a `THROW`) is not a problem: the engine still returns one result per
+top-level statement, and that is what the check counts. The schema is
+optional: the parse and the count do not depend on it, so a schema changes
+which errors the texts meet, never what the check reports. Loading it also
+proves the schema files apply, and a schema file that fails to parse or apply
+is a problem with its name. On success the command prints the texts verified
+and the engine version, which is the installed `@surrealdb/node`. A text that
+only another SurrealDB version refuses is checked against this one. With
+`--check` the command verifies, then compares, and writes nothing in either
+case; with `--watch` every regeneration is verified.
+
+A verified text is executed. It runs on a database that is discarded when
+the check ends, so its writes, `DEFINE`s and `REMOVE`s go nowhere, but texts
+run one after another on the same database, so one text's writes are visible
+to the next. The engine is started with network targets, `http::` functions
+and embedded scripts denied: an `http::post` fails with `Function 'http::post'
+is not allowed to be executed` and sends nothing, still counting as one result.
+A script function fails with `Embedded functions are not enabled` (the
+`@surrealdb/node` build has no script runtime, so this holds with or without
+the capability), and a file bucket with `File access denied`, by the engine's
+default (no folder is allowed); each still counts as one result and writes
+nothing. Each text and each schema file may run for 10 seconds, or for
+`--verify-timeout <seconds>`; a `sleep` or a long loop ends there and is a
+timeout problem, as above. Nothing else a text can write in SurrealQL reaches
+outside the engine.
+
+`verifyStatements` from `effect-surrealkit/testing` is the same check, for a
+build that renders in process; it takes the scopes as `renderStatementModules`
+does. `effect-surrealkit/analyze` does not import it or the engine, and stays
+host-neutral.
+
+```ts
+import { verifyStatements } from 'effect-surrealkit/testing';
+
+const verified = verifyStatements({
+	scopes, // as given to renderStatementModules
+	schema: [{ name: 'schema/tables.surql', sql: tablesText }], // optional, in order
+	// holes, timeoutSeconds (default 10)
+});
+// Succeeds with { engine: '4.0.1', sent: ['accounts/bindOwner.surql', …], notSent: [fragments and templates] };
+// fails with a StatementVerificationError whose `problems` hold { kind, file, line?, column?, text, message },
+// kind being 'parse', 'refused', 'count', 'timeout', 'schema' or 'analyzer',
+// or with a TestingError when @surrealdb/node is missing or the engine does not start.
+```
+
+#### Pinning built statements
+
+Pinning keeps the SurrealQL text of statements built in TypeScript in
+checked-in `.surql` files, so a reviewer reads the built statement as SQL,
+a package upgrade that changes the emitted text shows up in a diff, and a
+recorded hash covers a text that is in the repository. Both functions are
+pure and synchronous; the caller reads and writes the files.
+`renderPinnedStatements(statements)` returns `[{ path, content }]`, sorted:
+`billing.openInvoices` becomes `billing/openInvoices.surql` holding its
+`sql` and one newline. It throws a `PinnedStatementsError` listing every
+unnamed, duplicate or colliding name and every segment that is empty or not
+letters, digits, `_` and `-`. `pinnedStatementProblems(statements, files)`
+compares the files on disk and returns `[{ path, name?, kind }]` with kind
+`missing`, `changed` or `stale`, ignoring files that are not `.surql`;
+empty means current.
+
+```ts
+import { mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { pinnedStatementProblems, renderPinnedStatements } from 'effect-surrealkit/analyze';
+
+// build: write every pin
+for (const { path, content } of renderPinnedStatements(statements)) {
+	mkdirSync(dirname(join('pins', path)), { recursive: true });
+	writeFileSync(join('pins', path), content);
+}
+// check: fail on any missing, changed or stale pin
+const files = readdirSync('pins', { recursive: true, encoding: 'utf8' })
+	.filter((path) => path.endsWith('.surql'))
+	.map((path) => ({ path, content: readFileSync(join('pins', path), 'utf8') }));
+const problems = pinnedStatementProblems(statements, files);
+if (problems.length > 0) throw new Error(problems.map((p) => `${p.kind} ${p.path}`).join('\n'));
+```
+
+The analyzer is `effect-surrealkit/analyze`, pure and host-neutral:
+`analyze(sql, { holes? })` returns `{ kind, sql, free, defines, slots,
+throws, throwsAt, holes, holeScopes, provisional, transactional, writes,
+tables, functions, openTargets, diagnostics }` or fails
+with an `AnalyzeError` carrying a line and column.
+
+- **Lexing.** `--`, `//`, `#` and `/* */` comments; `'…'` and `"…"` strings
+  with SurrealQL's escapes, prefixed (`r` `d` `u` `s` `f` `b`); `` `…` `` and
+  `⟨…⟩` identifiers; regex literals; `$name`. An unterminated string,
+  identifier or comment, an invalid escape, unbalanced brackets, an empty
+  statement or a character it cannot classify is an error, never a guess.
+- **Free and defined names.** `free` is every `$name` read before anything in
+  scope defines it, including a read before the `LET` of the same name.
+  A top-level `LET` is in `defines` and visible to later statements and
+  parts; a `LET` inside `{ }`, a `FOR $x IN …` variable, closure parameters
+  (`|$a: int, $b|`) and `DEFINE FUNCTION` parameters are local to their body.
+  `$auth`, `$access`, `$session` and `$token` are never free and a `LET` of
+  one is an error; `$this`, `$self` and `$parent` are never free. `$value`,
+  `$input`, `$before`, `$after` and `$event` are ordinary script names (free
+  unless defined, with a warning, since `sequence` refuses them as
+  bindings), except inside a `DEFINE` other than `FUNCTION` and `PARAM`,
+  where the engine sets them.
+- **Results.** Each terminated top-level statement is one result (`LET`,
+  `IF`, `FOR`, `BEGIN` and `COMMIT` included). A text with its own `BEGIN`,
+  `COMMIT` or `CANCEL` is `transactional`, which the client's
+  `transaction()` cannot send. A `RETURN` inside `BEGIN … COMMIT` followed by
+  another statement is an error: SurrealDB 3 skips what follows, 4 runs it.
+- **THROW.** `throws` holds every string-literal message, at any depth;
+  any other `THROW` is a `dynamicThrow` warning and reaches the client as a
+  `StatementUnexpectedThrow`.
+- **Writes.** `writes` is true when `CREATE`, `INSERT`, `UPDATE`, `UPSERT`,
+  `DELETE`, `RELATE`, `DEFINE`, `REMOVE` or `ALTER` starts a statement or a
+  subquery anywhere in the text, outside strings and comments. `part` and
+  `sequence` carry it to the statement as `writes: true`, so a client that
+  cannot decode the result says the writes are committed. No write found
+  does not prove the text read-only (a function it calls may write), so a
+  part is `writes: false` only when declared so.
+- **Tables and functions.** `tables.read` and `tables.written` are the
+  static tables the text names, each sorted and without duplicates (a
+  table both read and written is in both); `functions` are the custom
+  functions it calls, as written (`fn::a::b`). Written: the target of
+  `CREATE`, `UPDATE`, `UPSERT`, `DELETE [FROM]`, `INSERT [IGNORE]
+  [RELATION] INTO` and the edge of `RELATE a->edge->b`, after an optional
+  `ONLY`. Read: each target of a `SELECT`'s `FROM` list, graph steps
+  written as names (`->edge->table`, `<-`, `<->`, also `->(edge WHERE …)`)
+  and any other `type::record('t', …)`, `type::thing('t', …)` or
+  `type::table('t')`. A static target is a name (also quoted), a record id
+  `t:key` or `type::record`/`type::thing` with a string literal; a
+  parenthesised subquery in `FROM` is read where it stands. Any other target
+  (`$ids`, a function call, `type::table($t)`), or one the lexer cannot read
+  with certainty, sets `openTargets`, so the lists may be incomplete.
+  `DEFINE`, `REMOVE`, `ALTER`, `INFO`, `USE`, `SHOW` and `REBUILD`
+  contribute nothing. `part` takes `tables`, `functions` and `openTargets`,
+  checks them against the text when given and always exposes what the text
+  does; a `sequence`'s statement carries the union over its parts (builders
+  leave them out).
+- **Fragments.** A single expression or block without a final `;` is a
+  `fragment`: no results, generated as a `text(…)` value, usable only to fill
+  a hole. Several statements with an unterminated last one are an error.
+- **Holes and templates.** Outside strings and comments, a name matching
+  `[A-Z][A-Z0-9_]*` between two literal delimiters, `__NAME__` by default,
+  is a hole; `{ holes: { open, close } }` (or the command's `--hole-open`
+  and `--hole-close`) sets other delimiters, which are matched as text,
+  never compiled into a pattern. A text with holes is a template, generated
+  as `text(…)` with its `holes`; its `free` and `defines` are `provisional`,
+  because a fill can read or define names. `fill(template, fills)` returns
+  the filled text, failing on an unknown hole, a missing fill or a fill
+  with holes of its own (unless `allowHoles`); each fill must lex on its own
+  with balanced brackets. Analyse the result to get a part.
+  `holeScopes` gives, for each hole, the names visible at every occurrence
+  (`bound`) and the free names a `LET` placed there would define for every
+  read (`binds`, only where the hole starts a statement); the command
+  writes it as `scopes`, which statement families build on.
+
+What it does not check: it lexes, it does not parse, so it does not know
+whether a text is valid SurrealQL, what a statement returns (only how many
+results), whether a fragment really is one expression, or what a function
+body reads when it is called; a `DEFINE PARAM` is reported as a warning
+and later reads of it stay free.
+
+### Statement families
+
+Some reads differ only in which clauses they hold: a filter the caller may
+leave out, a nearest-neighbour branch only some calls need. A statement
+family is the finite, declared set of those statements, composed from
+generated templates. The caller selects one variant per call with a key
+whose axes the family declares. Every variant is an ordinary static
+`Statement`, with its own text, its own bindings and its own pin. Input
+values never change a text. They still travel only as bindings.
+
+`compose(template, fills)` fills every hole of a generated template.
+`choose(axis, options)` picks a fill by the value of one axis, and `empty`
+leaves a clause out. A fill is a generated text without holes, a part (for
+a hole that starts a statement), another `compose(…)` or `choose(…)`, a
+constant that binds nothing (`literal(…)`) or `empty`. Raw strings are
+refused. `family(axes, root).define({ name, params, result })` takes one
+codec for each name any variant reads, and `select(key)` returns the
+variant's statement:
+
+```text
+queries/catalog/visible.surql   shelf = $shelf.id __PRICE__ __REGION__
+queries/catalog/priceCap.surql  AND price <= $maxPrice
+queries/catalog/regionIs.surql  AND region = $region
+queries/catalog/byWords.surql   SELECT id, title FROM listing WHERE __WHERE__ AND title @1@ $terms ORDER BY id LIMIT 10
+queries/catalog/guarded.surql   RETURN IF $tenant = NONE { … } ELSE { LET $shelf = (…); … data: (__BODY__) … };
+```
+
+```ts
+import { Schema } from 'effect';
+import * as SurrealSchema from 'effect-surrealkit';
+import { run } from 'effect-surrealkit/client';
+import { choose, compose, empty, family } from 'effect-surrealkit/statement';
+import { catalog } from './generated/statements/index.js';
+
+const visible = compose(catalog.visible, {
+	__PRICE__: choose('price', { true: catalog.priceCap, false: empty }),
+	__REGION__: choose('region', { true: catalog.regionIs, false: empty }),
+});
+
+export const listings = family(
+	{ price: [false, true], region: [false, true] },
+	compose(catalog.guarded, {
+		__BODY__: compose(catalog.byWords, { __WHERE__: visible }),
+	}),
+).define({
+	name: 'listings',
+	params: {
+		tenant: SurrealSchema.String,
+		terms: SurrealSchema.String,
+		maxPrice: SurrealSchema.Int,
+		region: SurrealSchema.String,
+	},
+	result: Schema.Unknown,
+});
+
+// A key known at compile time: this variant binds exactly tenant, terms and maxPrice.
+run(listings.select({ price: true, region: false }), { tenant: 't', terms: 'lamp', maxPrice: 40 });
+
+// A key known only at run time: the input must carry every required name
+// some selectable variant reads; the variant selected sends only its own.
+declare const input: { tenant: string; terms: string; maxPrice?: number };
+run(
+	listings.select({ price: input.maxPrice !== undefined, region: false }),
+	{ ...input, maxPrice: input.maxPrice ?? 0 },
+);
+```
+
+The compiler works out what each variant reads from the literal names the
+`statements` command writes. Each text carries its `free` names and, for a
+template, the `scopes` of its holes: `bound`, the names visible at every
+occurrence of a hole, such as `$shelf` above, and `binds`, the names a
+`LET` placed there would define. `$shelf` is a local of the guard, so it
+is no binding of any variant. A key whose axes are unions (`price:
+boolean`) selects any variant in that sub-product. Its statement is typed
+with every name those variants read, and a name is required when its codec
+does not accept `undefined`. Typing the selection as a union of variant
+statements would be unsound: TypeScript would keep only the names every
+variant reads, and a call could omit a value the selected variant needs.
+No type builds SQL or enumerates the variants, so the cost of a family
+does not grow with the number of variants. `test/budget.test.ts` holds it:
+30 families shaped like an eight-variant search cost about 8,000
+instantiations each, about what a block costs.
+
+Mistakes are compile errors whose first line names them
+(`test/diagnostics.test.ts` pins every case `family/*`):
+
+| Mistake | First line (abridged) |
+| --- | --- |
+| a hole without a fill | `… '{ __PRICE__: Empty; }' is not assignable to parameter of type '"hole `__REGION__` has no fill"'` |
+| a fill for no hole | `Type 'Empty' is not assignable to type '"`__COLOUR__` is not a hole of this template"'` |
+| raw SurrealQL as a fill or option | `… '"a hole takes a generated text or part, `compose(…)`, `choose(…)`, `literal(…)` or `empty`, not raw SurrealQL"'` |
+| a template as a fill | `… '"this fill is a template with holes (__NEAR__ …): compose it first"'` |
+| a constant that binds | `… '"a constant fill binds nothing: put the binding in a `.surql` fragment"'` |
+| a fill typed as one of several texts | `… '"this fill is typed as one of several texts, so the compiler cannot tell which a variant holds: choose between them with `choose(…)`"'` |
+| a choice on an undeclared axis | `… '"choose('vector', …) names an axis this family does not declare"'` |
+| an axis nothing chooses on | `… '"axis `size` is never chosen on, so every value of it gives the same text"'` |
+| an axis value without a text | `… '"choose('price', …) has no text for `none`" \| …'` |
+| a codec missing, or one too many | `… '"binding `$maxPrice` is read by a variant of this family and has no codec"'`, `… '"binding `$colour` is not read by any variant of this family"'` |
+| `select` with a property that is no axis | `… '"`colour` is not an axis of this family"'` |
+| `select` without an axis, or a bad value | TypeScript's own (`Property 'vector' is missing …`, `Type 'string' is not assignable to type 'boolean'`) |
+| `run` without a value the variant reads | `… '"binding `maxPrice` has no value"'`, also for a run-time key that may select the variant |
+| `run` with a value the variant does not read, misspelt, or of the wrong type | `TS2353 … 'region' does not exist …`, `TS2561 … Did you mean to write 'maxPrice'?`, `Type 'string' is not assignable to type 'number'` |
+
+The same rules are checked at run time, so a hand-written or out-of-date
+text cannot mislead the compiler:
+
+| When | Check |
+| --- | --- |
+| `compose`, `choose` | every hole filled and none extra; each fill a node; no raw string, template or constant that binds; a choice has options |
+| `define` (module load) | every text's declared `holes`, `free`, `defines`, `throws` and `scopes` equal what the analyzer derives from its SQL (`… does not declare what its text does: scopes.__BODY__.bound: declared [], the text has [shelf]`); the axes are well formed, every chosen axis is declared and every declared axis is chosen on; the codecs are exactly the names the variants read (`the bindings of family `short` do not match the names its variants read; missing: $maxPrice`) |
+| first `select` of a key, `variants()`, or `define` with `build: 'eager'` | the variant's final text is analysed. It must have no holes, be a part rather than a fragment, read and throw exactly what the compiler's rule says, and have no error diagnostics. Its statement then binds exactly the analysed free names (`family `x`, variant price=true: the composition reads [$a], its text reads [$a, $b]`) |
+| `select` | every axis has one of its declared values, and there is no other axis (`family `x`: yes is not a value of the axis `price` (false, true)`) |
+| `run` | unchanged: only the variant's own `params` are encoded and sent |
+
+A variant is built once, on first use. `variants()` builds every one and
+returns `{ key, name, sql, statement }` for each. Its `name` is the
+family's name plus one `axis-value` segment per axis, so the list feeds
+`renderPinnedStatements` and `pinnedStatementProblems` as it is: run it in
+CI and every variant is checked and reviewed as SurrealQL
+(`pins/listings/price-true/region-false.surql`). Every variant's
+statement is named after the family, so metrics count the family under
+one label. Its `variant` (`price=true, region=false`) is recorded on the
+span of a `run` as `effect_surrealkit.statement.variant`. Binding values
+never are.
+
+What a family does not do:
+
+- No text depends on an input value; the choice is by declared keys only.
+- No absent filter is neutralised (`$x = NONE OR …`). The clause is left
+  out of the text.
+- No per-variant codecs: one codec per name per family, so a name only
+  some variants require takes the one codec.
+- No dependent axes (an axis that exists only under some value of
+  another): use two families, or accept variants nobody selects.
+- No custom hole delimiters yet: `Text` does not record its delimiters,
+  and composition assumes `__NAME__`.
+- No definitions propagate through a composite at a statement hole. Only a
+  text's or part's own `defines` count, and `define` refuses a family that
+  relies on more instead of sending a wrong statement.
+
 ### Running statements
 
 Use `run` for one typed statement, `transaction` for an atomic batch,

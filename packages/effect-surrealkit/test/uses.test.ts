@@ -1,6 +1,21 @@
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+import { Effect } from 'effect';
 import { describe, expect, it } from 'vitest';
 
-import { analyzeSync } from '../src/analyze/index.js';
+import {
+	analyzeSync,
+	type DeclaredNames,
+	renderStatementModulesSync,
+	StatementModulesError,
+	type StatementScope,
+} from '../src/analyze/index.js';
+import { run } from '../src/cli/run.js';
+import { declaredNames, decodeDocument } from '../src/emitter/index.js';
+import * as SurrealSchema from '../src/index.js';
+import { part, sequence } from '../src/statement/index.js';
+import { corpusPath, goldenDir, readJson } from './documents.js';
 
 const uses = (sql: string) => analyzeSync(sql).uses;
 
@@ -334,5 +349,520 @@ describe('analyze: field uses', () => {
 		'SELECT * FROM gizmo:1 WHERE a = $a FOR UPDATE FETCH b;',
 	])('records nothing before FOR UPDATE the engines refuse: %s', (sql) => {
 		expect(uses(sql)).toEqual({});
+	});
+});
+
+describe('part and sequence: uses', () => {
+	const read = part({
+		sql: 'SELECT * FROM gizmo WHERE a = $a AND b = $b;',
+		free: ['a', 'b'],
+	});
+
+	it('a part exposes the analysed uses', () => {
+		expect(read.uses).toEqual({
+			a: [field('gizmo', 'a')],
+			b: [field('gizmo', 'b')],
+		});
+	});
+
+	it('declared uses are checked against the text', () => {
+		expect(() =>
+			part({
+				sql: 'SELECT * FROM gizmo WHERE a = $a;',
+				free: ['a'],
+				uses: { a: [field('gizmo', 'z')] as never },
+			}),
+		).toThrow(
+			'uses: the text uses `$a` as field `gizmo.a` on line 1, which is not declared; uses: declared `$a` as field `gizmo.z` on line 1, which the text does not use it as',
+		);
+		expect(() =>
+			part({
+				sql: 'UPDATE gizmo SET a = $a;',
+				free: ['a'],
+				uses: { a: [field('gizmo', 'a', 1, 'compare')] as never },
+			}),
+		).toThrow(
+			'uses: the text uses `$a` as field `gizmo.a` (assigned) on line 1, which is not declared; uses: declared `$a` as field `gizmo.a` on line 1, which the text does not use it as',
+		);
+		expect(
+			part({
+				sql: 'UPDATE gizmo SET a = $a;',
+				free: ['a'],
+				uses: {
+					a: [{ kind: 'field', table: 'gizmo', field: 'a', line: 1 }],
+				},
+			}).uses,
+		).toEqual({ a: [field('gizmo', 'a', 1, 'assign')] });
+		expect(() =>
+			part({
+				sql: 'RETURN $a;',
+				free: ['a'],
+				binds: { a: 'string' },
+			}),
+		).toThrow(
+			'binds: declared `$a`, which the text never uses as an argument, a key or a field',
+		);
+		expect(() =>
+			part({
+				sql: 'SELECT * FROM gizmo WHERE a = $a;',
+				free: ['a'],
+				rejectsNone: {
+					a: { table: 'gizmo', field: 'a', kind: 'string' },
+				},
+			}),
+		).toThrow(
+			'rejectsNone: declared `$a` as assigned to `gizmo.a`, which the text never assigns it to',
+		);
+		expect(
+			part({
+				sql: 'UPDATE gizmo SET a = $a;',
+				free: ['a'],
+				rejectsNone: {
+					a: { table: 'gizmo', field: 'a', kind: 'string' },
+				},
+			}).rejectsNone,
+		).toEqual({ a: { table: 'gizmo', field: 'a', kind: 'string' } });
+	});
+
+	it('sequence merges the uses of the names that remain bindings', () => {
+		const shadow = part({ sql: 'LET $b = 1;', defines: ['b'] });
+		const call = part({ sql: 'RETURN fn::f($a);', free: ['a'] });
+		const statement = sequence(call, shadow, read).define({
+			params: { a: SurrealSchema.String },
+			result: SurrealSchema.String,
+		});
+		expect(statement.uses).toEqual({
+			a: [
+				{ kind: 'argument', function: 'fn::f', index: 0, line: 1 },
+				field('gizmo', 'a'),
+			],
+		});
+		const plain = sequence(part({ sql: 'RETURN 1;' })).define({
+			params: {},
+			result: SurrealSchema.Int,
+		});
+		expect(plain.uses).toBeUndefined();
+	});
+});
+
+const bindsDocument = join(import.meta.dirname, 'fixtures', 'binds.v2.json');
+const declared = async (): Promise<DeclaredNames> =>
+	declaredNames(
+		await Effect.runPromise(decodeDocument(readJson(bindsDocument))),
+	);
+
+describe('declaredNames: detail', () => {
+	it('fields with their kind text, undeclared fields, id keys and arguments', async () => {
+		expect((await declared()).detail).toEqual({
+			tables: {
+				gauge: {
+					fields: {
+						note: { kind: 'option<string>' },
+						reading: { kind: 'float', rejectsNone: true },
+						site: { kind: 'record<site>', rejectsNone: true },
+						station: { kind: 'string', rejectsNone: true },
+						tags: { kind: 'array<string>', rejectsNone: true },
+					},
+					acceptsUndeclared: false,
+				},
+				scratch: { fields: { anything: {} }, acceptsUndeclared: true },
+				site: {
+					fields: { label: { kind: 'string', rejectsNone: true } },
+					acceptsUndeclared: false,
+					idKey: 'string',
+				},
+			},
+			functions: { 'fn::scaled': ['float'] },
+		});
+	});
+});
+
+const compiled = async (name: string) =>
+	declaredNames(
+		await Effect.runPromise(
+			decodeDocument(readJson(corpusPath('compiled', name))),
+		),
+	);
+
+describe('declaredNames: optional kinds', () => {
+	it('gives a field the document records as optional its option kind', async () => {
+		// The document records `TYPE option<string>` as kind `string` with
+		// `optional: true`.
+		const fields = (await compiled('field-presence.v2.json')).detail?.tables
+			.m?.fields;
+		expect(fields?.opt).toEqual({ kind: 'option<string>' });
+		expect(fields?.optd).toEqual({ kind: 'option<string>' });
+		expect(fields?.obj).toEqual({ kind: 'option<object>' });
+		expect(fields?.['obj.a']).toEqual({ kind: 'option<int>' });
+		// Not optional: unchanged.
+		expect(fields?.req).toEqual({ kind: 'string', rejectsNone: true });
+		expect(fields?.nul).toEqual({
+			kind: 'null | string',
+			rejectsNone: true,
+		});
+		expect(fields?.dflt).toEqual({ kind: 'string' });
+	});
+
+	it('gives an optional function argument its option kind, and keeps id keys', async () => {
+		const detail = (await compiled('corpus.v2.json')).detail;
+		expect(detail?.functions['fn::optional_first']).toEqual([
+			'option<int>',
+			'int',
+		]);
+		expect(detail?.functions['fn::greet']).toEqual([
+			'string',
+			'option<string>',
+			'option<int>',
+		]);
+		// An id key carries no optional flag: a key is never NONE.
+		expect(detail?.tables.id_int?.idKey).toBe('int');
+		expect(detail?.tables.id_union?.idKey).toBe('int | string');
+	});
+
+	it('keeps a kind that already is an option', () => {
+		// A document may give the option kind and the flag both, as the
+		// hand-written binds fixture does.
+		return declared().then((names) =>
+			expect(names.detail?.tables.gauge?.fields.note).toEqual({
+				kind: 'option<string>',
+			}),
+		);
+	});
+
+	it('binds an assignment to an optional field of a real document as option<K>', async () => {
+		const { files } = renderStatementModulesSync({
+			scopes: [
+				{
+					name: 'presence',
+					files: [
+						{
+							name: 'q',
+							sql: 'UPDATE m SET opt = $o, req = $r, dflt = $d;',
+						},
+					],
+					declared: await compiled('field-presence.v2.json'),
+				},
+			],
+		});
+		expect(files[0]?.content).toContain(
+			'\tbinds: { "d": "string", "o": "option<string>", "r": "string" },\n',
+		);
+		expect(files[0]?.content).toContain(
+			'\trejectsNone: { "r": { table: "m", field: "req", kind: "string" } },\n',
+		);
+	});
+});
+
+describe('declaredNames: fields that reject NONE', () => {
+	it('marks a top-level field whose kind excludes NONE and that no clause supplies', async () => {
+		// The engine's own document for the field-presence corpus.
+		const document = await Effect.runPromise(
+			decodeDocument(
+				readJson(corpusPath('compiled', 'field-presence.v2.json')),
+			),
+		);
+		const tables = declaredNames(document).detail?.tables ?? {};
+		const marked = Object.entries(tables).flatMap(([table, detail]) =>
+			Object.entries(detail.fields)
+				.filter(([, entry]) => entry.rejectsNone === true)
+				.map(([name]) => `${table}.${name}`),
+		);
+		// Not marked: `option<…>` fields (`opt`, `obj`, `flex`, `roopt`,
+		// `oa.x`), every DEFAULT (`dflt`, `dalw`, `optd`, `ro`, `e.w`,
+		// `ip.pref`), every VALUE (`vin`, `vfall`, `vout`), COMPUTED
+		// (`comp`), a relation's `in` and `out`, and nested fields.
+		expect(marked.sort()).toEqual(['ip.need', 'm.nul', 'm.req', 'up.obj']);
+		expect(tables.m?.fields.nul).toEqual({
+			kind: 'null | string',
+			rejectsNone: true,
+		});
+	});
+});
+
+const render = async (sql: string) =>
+	renderStatementModulesSync({
+		scopes: [
+			{
+				name: 'shop',
+				files: [{ name: 'q', sql }],
+				declared: await declared(),
+			},
+		],
+	});
+
+const problems = async (sql: string): Promise<ReadonlyArray<string>> => {
+	try {
+		await render(sql);
+	} catch (error) {
+		if (error instanceof StatementModulesError)
+			return error.problems.map((problem) => problem.text);
+		throw error;
+	}
+	return [];
+};
+
+describe('statements with schema detail', () => {
+	it('binds each binding whose uses resolve to one simple kind', async () => {
+		const { files } = await render(
+			"SELECT * FROM gauge WHERE station = $s AND note = $n AND tags = $t;\nSELECT * FROM type::record('site', $k) WHERE label = $s;\nRETURN fn::scaled($r);\nSELECT * FROM gauge WHERE id = $i;",
+		);
+		expect(files[0]?.content).toContain(
+			'\tbinds: { "i": "option<record<gauge>>", "k": "string", "n": "option<string>", "r": "float", "s": "option<string>" },\n',
+		);
+	});
+
+	it('binds option<K> only when every use accepts NONE', async () => {
+		const binds = async (sql: string) =>
+			/\tbinds: (.*),\n/u.exec(
+				(await render(sql)).files[0]?.content ?? '',
+			)?.[1];
+		// Assigned to a plain field: NONE is refused there.
+		expect(await binds('UPDATE gauge SET station = $s;')).toBe(
+			'{ "s": "string" }',
+		);
+		// Assigned to an option field, or compared with it.
+		expect(await binds('UPDATE gauge SET note = $n;')).toBe(
+			'{ "n": "option<string>" }',
+		);
+		// One use that refuses NONE decides it.
+		expect(
+			await binds(
+				'SELECT * FROM gauge WHERE station = $s;\nUPDATE gauge SET station = $s;',
+			),
+		).toBe('{ "s": "string" }');
+		expect(
+			await binds(
+				'SELECT * FROM gauge WHERE note = $n;\nUPDATE gauge SET note = $n;',
+			),
+		).toBe('{ "n": "option<string>" }');
+	});
+
+	it('records the first field that rejects NONE each binding is assigned to', async () => {
+		const rejects = async (sql: string) =>
+			/\trejectsNone: (.*),\n/u.exec(
+				(await render(sql)).files[0]?.content ?? '',
+			)?.[1];
+		expect(await rejects('UPDATE gauge SET station = $s, note = $n;')).toBe(
+			'{ "s": { table: "gauge", field: "station", kind: "string" } }',
+		);
+		// Any kind that excludes NONE, simple or not.
+		expect(await rejects('CREATE gauge SET tags = $t;')).toBe(
+			'{ "t": { table: "gauge", field: "tags", kind: "array<string>" } }',
+		);
+		// A comparison records nothing, beside an assignment or alone.
+		expect(
+			await rejects(
+				'SELECT * FROM gauge WHERE station = $s;\nUPSERT gauge SET reading = $s;',
+			),
+		).toBe('{ "s": { table: "gauge", field: "reading", kind: "float" } }');
+		expect(
+			await rejects('SELECT * FROM gauge WHERE station = $s;'),
+		).toBeUndefined();
+		// An option field, an undeclared field of a schemaless table.
+		expect(await rejects('UPDATE gauge SET note = $n;')).toBeUndefined();
+		expect(
+			await rejects('UPDATE scratch SET odd = $o, anything = $a;'),
+		).toBeUndefined();
+		// A text that changes the schema itself may change the field.
+		expect(
+			await rejects(
+				"DEFINE FIELD OVERWRITE station ON gauge TYPE string DEFAULT 'x';\nUPDATE gauge SET station = $s;",
+			),
+		).toBeUndefined();
+		// A condition can skip the assignment: NONE never reaches it.
+		for (const sql of [
+			'IF $x != NONE { (UPDATE gauge SET station = $x) };',
+			'RETURN IF $x != NONE THEN (UPDATE gauge SET station = $x) END;',
+			'RETURN $x != NONE AND (UPDATE gauge SET station = $x);',
+		])
+			expect(await rejects(sql), sql).toBeUndefined();
+		// A WHERE can skip every record: none is written with NONE.
+		for (const sql of [
+			'UPDATE gauge SET station = $x WHERE $x != NONE;',
+			'LET $ok = $x != NONE; UPDATE gauge SET station = $x WHERE $ok;',
+		])
+			expect(await rejects(sql), sql).toBeUndefined();
+		// Nothing can skip it.
+		expect(await rejects('LET $r = (UPDATE gauge SET station = $x);')).toBe(
+			'{ "x": { table: "gauge", field: "station", kind: "string" } }',
+		);
+		// The first such assignment, in the order of the uses.
+		expect(
+			await rejects(
+				'UPDATE gauge SET station = $s;\nUPDATE gauge SET tags = $s;',
+			),
+		).toBe('{ "s": { table: "gauge", field: "station", kind: "string" } }');
+	});
+
+	it('an argument accepts NONE only when its kind is an option', () => {
+		const { files } = renderStatementModulesSync({
+			scopes: [
+				{
+					name: 'shop',
+					files: [
+						{
+							name: 'q',
+							sql: 'RETURN fn::label($a, $b);',
+						},
+					],
+					declared: {
+						tables: [],
+						functions: ['fn::label'],
+						detail: {
+							tables: {},
+							functions: {
+								'fn::label': ['option<string>', 'int'],
+							},
+						},
+					},
+				},
+			],
+		});
+		expect(files[0]?.content).toContain(
+			'\tbinds: { "a": "option<string>", "b": "int" },\n',
+		);
+	});
+
+	it('binds nothing when the uses disagree or do not resolve to a kind', async () => {
+		const { files } = await render(
+			'SELECT * FROM gauge WHERE station = $x AND reading = $x;\nSELECT * FROM scratch WHERE free = $y AND anything = $z;',
+		);
+		expect(files[0]?.content).not.toContain('binds:');
+		expect(files[0]?.content).toContain('uses: {');
+	});
+
+	it('without detail, nothing is bound', () => {
+		const { files } = renderStatementModulesSync({
+			scopes: [
+				{
+					name: 'shop',
+					files: [
+						{
+							name: 'q',
+							sql: 'SELECT * FROM gauge WHERE station = $s;',
+						},
+					],
+					declared: { tables: ['gauge'], functions: [] },
+				},
+			],
+		});
+		expect(files[0]?.content).not.toContain('binds:');
+	});
+
+	it('a field the table does not declare', async () => {
+		expect(
+			await problems('SELECT * FROM gauge\nWHERE statoin = $s;'),
+		).toEqual([
+			'shop/q.surql:2: compares `statoin` of `gauge`, which declares no such field',
+		]);
+	});
+
+	it('an argument beyond the function’s arguments', async () => {
+		expect(await problems('RETURN fn::scaled(1, $extra);')).toEqual([
+			'shop/q.surql:1: passes argument 2 to `fn::scaled`, which takes 1 argument',
+		]);
+	});
+
+	it('an undeclared table or function is reported once', async () => {
+		expect(
+			await problems(
+				'SELECT * FROM gadget WHERE a = $a;\nRETURN fn::other($b);',
+			),
+		).toEqual([
+			'shop/q.surql:1: reads table `gadget`, which the schema does not declare',
+			'shop/q.surql:2: calls function `fn::other`, which the schema does not declare',
+		]);
+	});
+
+	it('a schemaless table accepts any field', async () => {
+		expect(await problems('SELECT * FROM scratch WHERE odd = $a;')).toEqual(
+			[],
+		);
+	});
+});
+
+const fixtures = join(import.meta.dirname, 'fixtures', 'statements-binds');
+const golden = goldenDir('statements-binds');
+
+describe('statements with binds: goldens', () => {
+	const scopes = async (): Promise<ReadonlyArray<StatementScope>> => {
+		const names = await declared();
+		return readdirSync(fixtures).map((scope) => ({
+			name: scope,
+			declared: names,
+			files: readdirSync(join(fixtures, scope)).map((file) => ({
+				name: file.slice(0, -'.surql'.length),
+				sql: readFileSync(join(fixtures, scope, file), 'utf8'),
+			})),
+		}));
+	};
+
+	it('renders the golden modules in memory', async () => {
+		const { files } = renderStatementModulesSync({
+			scopes: await scopes(),
+		});
+		for (const file of files)
+			expect(file.content).toBe(
+				readFileSync(join(golden, file.path), 'utf8'),
+			);
+	});
+
+	it('the command with --schema writes the same modules', async () => {
+		let stderr = '';
+		const code = await run(
+			[
+				'statements',
+				'--input',
+				fixtures,
+				'--out',
+				golden,
+				'--schema',
+				bindsDocument,
+				'--check',
+			],
+			{
+				cwd: import.meta.dirname,
+				stdin: async () => '',
+				stdout: () => {},
+				stderr: (text) => {
+					stderr += text;
+				},
+			},
+		);
+		expect(code, stderr).toBe(0);
+	});
+});
+
+const presenceFixtures = join(
+	import.meta.dirname,
+	'fixtures',
+	'statements-presence',
+);
+const presenceGolden = goldenDir('statements-presence');
+
+describe('statements from the field-presence document: goldens', () => {
+	it('the command with --schema writes the same modules', async () => {
+		let stderr = '';
+		const code = await run(
+			[
+				'statements',
+				'--input',
+				presenceFixtures,
+				'--out',
+				presenceGolden,
+				'--schema',
+				corpusPath('compiled', 'field-presence.v2.json'),
+				'--check',
+			],
+			{
+				cwd: import.meta.dirname,
+				stdin: async () => '',
+				stdout: () => {},
+				stderr: (text) => {
+					stderr += text;
+				},
+			},
+		);
+		expect(code, stderr).toBe(0);
 	});
 });
