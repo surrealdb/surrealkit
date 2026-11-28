@@ -732,6 +732,139 @@ binding is named, so the same expression can be used twice; one name with
 two codecs is refused, as are names SurrealDB sets itself (`$auth`, `$this`,
 `$value`, …).
 
+### Built-in functions
+
+`effect-surrealkit/functions` has a typed function for each of 406 SurrealDB
+built-ins, one namespace per family. Each returns an expression, so it fits
+anywhere the builders take one:
+
+```ts
+import * as SurrealSchema from 'effect-surrealkit';
+import { array, string } from 'effect-surrealkit/functions';
+import { param, select } from 'effect-surrealkit/statement';
+
+const people = select(PersonTable)
+  .where((row) => string.isEmail(row.email))
+  .project((row) => ({
+    short: string.slice(row.name, 0, param('length', SurrealSchema.Int)),
+    first: array.first(string.words(row.name)),
+  }))
+  .build('people');
+// people.sql: SELECT string::slice(name, 0, $length) AS short,
+//             array::first(string::words(name)) AS first
+//             FROM ⟨person⟩ WHERE string::is_email(email);
+// ReadonlyArray<{ short: string; first: string | undefined }>
+```
+
+An argument is an expression whose stored type fits the argument's kind, or
+a primitive (or an array of primitives) written with `literal`; anything else
+is a compile error, and a value still enters only as a binding or a checked
+constant. Trailing optional arguments may be left out (`string.slice(s)`),
+a variadic one takes any number of values (`string.join('-', a, b)`), and a
+constant has no call (`math.pi` is `math::pi`). An argument that is not a
+single term is parenthesised.
+
+The functions are generated from one table,
+[`src/functions/signatures.json`](src/functions/signatures.json): per
+function its name, its arguments (name, kind, optional), whether the last is
+variadic, its result kind, the engine majors it exists in and sample
+arguments. Kinds are `any`, `string`, `int`, `int64`, `float`, `number`,
+`decimal`, `bool`, `datetime`, `duration`, `uuid`, `bytes`, `record`,
+`object`, `geometry`, `range`, `array`, `array<K>` and `option<K>`, each
+decoded by the package's codec of that name (`any`, and an element of
+`array`, may be NONE).
+A result `same:N` is argument `N`'s own codec, used where the result is a
+reordering or subset of an array (`array.sort`, `array.distinct`); `item:N`
+is an element of it or NONE (`array.first`, `time.max`). `items:N`, on the
+variadic argument `N`, is an array of the union of the arguments' element
+codecs when every argument is a typed array, the argument's own codec when
+it is the only one, and `array` otherwise (`array.concat`). The other
+array builders are typed the same way: `with:N,M` is an array of argument
+`N`'s elements and the value `M` (`array.append`, `push`, `prepend`,
+`insert`, `fill`), `adds:N,M` the same with an array `M` adding its
+elements (`array.add`), `elements:N,M` the elements of both arrays
+(`array.union`, `difference`), `padded:N,M` those or `null` past the
+shorter one (`array.logicalAnd`, `logicalOr`, `logicalXor`), `pairs:N,M`
+tuples of one element of each (`array.combine`), `flat:N` the elements of
+the arrays `N` holds (`array.flatten`, `group`), `chunks:N` arrays of `N`'s
+elements (`array.clump`, `windows`), `transposed:N` arrays of the inner
+elements or NONE (`array.transpose`) and `repeats:N` an array of the value
+`N` (`array.repeat`). When an argument they name is not a typed expression
+(an inlined constant, or an open value or array of open values), the
+result is the plain `array` or `array<array>` it was. A result
+`float|decimal:N,…` is a float, or `number | Decimal` when one of the
+arguments it names may hold a decimal (an element of it, for an array): the
+functions SurrealDB computes in the kind of their input (`math.sqrt`,
+`math.mean`, `math.stddev`, `math.variance`, `math.lerp`,
+`math.lerpangle`, `vector.similarityCosine`, `vector.distanceCosine`).
+`math.sqrt(row.amount)` over a decimal field is `number | Decimal`, over an
+int field `number`; even a decimal input can give a float (the spread of one
+value is the int 0, the root of a negative decimal NaN). A function that
+answers NONE for some input is `option<K>` (`parse.emailHost` of a string
+that is not an address, `math.median([])`, `vector.sum([])`). After changing
+the table, run:
+
+```sh
+npm run generate:functions   # node scripts/generate-functions.mjs
+```
+
+It writes `src/functions/generated/` (a file per family, `codecs.ts` and
+`index.ts`), sorted and Biome-formatted; `test/functions.test.ts` fails when
+those files differ from what the table generates. A name is its family's
+namespace and the rest of the path in camelCase: `string::is_email` is
+`string.isEmail`, `vector::distance::euclidean` is
+`vector.distanceEuclidean`, an underscore between two digits stays
+(`math::log10_2` is `math.log10_2`) and a reserved word gets a trailing `_`
+(`rand::enum` is `rand.enum_`).
+
+| Family | Functions | Family | Functions |
+| --- | --- | --- | --- |
+| `array` | 59 | `object` | 8 |
+| `bytes` | 1 | `parse` | 9 |
+| `crypto` | 14 | `rand` | 12 |
+| `duration` | 18 (1 constant) | `record` | 5 |
+| `encoding` | 6 | `search` | 1 (`analyze`) |
+| `geo` | 7 | `string` | 59 |
+| `math` | 63 (21 constants) | `time` | 45 (3 constants) |
+| `meta` | 2 | `type` | 72 |
+| | | `value` | 2 |
+| | | `vector` | 23 |
+
+`test/functions-engine.test.ts` calls every entry with its sample arguments,
+and with each of its `variants`, on the suite's engine. The variants give a
+numeric argument an int, a float and a decimal, a list argument an empty
+list, a parsing function a string that does not parse and a string argument
+the empty string (only those every listed engine accepts are kept), and a
+numeric literal argument carries the codec of its own kind, so a result
+derived from an argument is checked for each kind. On a major the entry
+lists, every result must decode with the codec the function derives; on one
+it does not, the engine must reject the sample call as an unknown function. 32 functions exist only on SurrealDB 4.0:
+`time::age`, `time::make_date`, `time::make_time`, `time::make_timestamp`,
+`time::trunc`, `vector::distance::cosine`, and `type::date`, `type::time`,
+`type::timestamp`, `type::interval`, `type::i8`, `type::i16`, `type::i32`,
+`type::u8`, `type::u16`, `type::u32`, `type::u64`, `type::f16`, `type::f32`
+with their `type::is_*` checks. None exists only on 3.3. Non-deterministic
+functions (`rand::*`, `time::now`, salted hashes) are checked by decoding
+alone.
+
+Over the `cbor.2` protocol, which SDK 2.2.2 negotiates, SurrealDB 4 returns
+17 of these results as SDK classes of their own: `PlainDate`, `PlainTime`,
+`Timestamp`, `Interval` and the sized numbers. Their functions keep the result
+types the table records and decode the same values as over `cbor`: a date
+becomes midnight UTC (an infinite date becomes the engine's datetime bound), a
+time becomes a duration, a timestamp a datetime, an interval its ISO 8601
+text, and a sized number a float or a safe integer. A raw query still returns
+the SDK classes.
+
+Not in the table: functions that take a closure (`array::map`,
+`array::fold`, `array::reduce`, `value::chain`, `value::expect`); the
+full-text and vector functions that need a match reference or a KNN operator
+(`search::score`, `search::highlight`, `search::offsets`, `search::rrf`,
+`search::linear`, `vector::distance::knn`); files (`type::file`, `file::*`);
+and what writes, sleeps, uses the network or reads the session (`http::*`,
+`sleep`, `session::*`, `api::*`, `sequence::*`, `ml::*`, `ext::*`). The
+`set::*` family and the aggregate `count()` are not covered yet.
+
 ### Reads and writes
 
 | Builder | Result |
@@ -1483,6 +1616,55 @@ Not supported: a step to one table of several (`->member_of->team`), so
 `selectFrom` takes the records of one table only; several relations in one
 step (`->(likes, follows)->`); `+path`; ordering by a field read through a
 link; `FETCH` under `SELECT VALUE`; and `FETCH` inside a step.
+
+### Putting it together
+
+A block binds a hybrid search ordered by its score, whose projection calls
+a built-in function and follows a record link, and guards and returns with
+built-in functions (`bestMatch` in `test/blocks.ts`, which
+`test/search-engine.test.ts` runs on SurrealDB 3.3.4 and 4.0.1):
+
+```ts
+import { array, string } from 'effect-surrealkit/functions';
+import {
+  and, block, eq, follow, knn, knnDistance, match, param, score, select,
+} from 'effect-surrealkit/statement';
+
+const terms = match(DocTable, 'body', param('terms', SurrealSchema.String), { ref: 1 });
+const near = knn(DocTable, 'embedding', 'query', { k: 3, ef: 40 });
+
+export const bestMatch = block()
+  .let('hits', () =>
+    select(DocTable)
+      .where(() => and(terms, near))
+      .project((row) => ({
+        id: row.id,
+        title: string.uppercase(row.title),
+        owner: follow(store, row.owner).name,
+        score: score(terms),
+        distance: knnDistance(near),
+      }))
+      .orderByAlias('score', 'DESC')
+      .build())
+  .throwIf(($) => eq(array.len($.hits), 0), 'No match')
+  .return(($) => ({ best: array.first($.hits), matches: array.len($.hits) }))
+  .build('best match', { writes: false });
+
+// Result<typeof bestMatch>: {
+//   best: { id: DocId; title: string; owner: string | undefined; score: number; distance: number } | undefined;
+//   matches: number;
+// }
+// Thrown<typeof bestMatch>: 'No match'
+// Input: { terms: string; query: ReadonlyArray<number> }
+```
+
+```sql
+{
+	LET $hits = (SELECT id AS id, string::uppercase(title) AS title, owner.name AS owner, search::score(1) AS score, vector::distance::knn() AS distance FROM ⟨doc⟩ WHERE body @1@ $terms AND embedding <|3,40|> $query ORDER BY score DESC);
+	IF array::len($hits) = 0 { THROW s"No match" };
+	{ best: array::first($hits), matches: array::len($hits) }
+};
+```
 
 ### What the statements do not know
 

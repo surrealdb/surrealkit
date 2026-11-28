@@ -8,6 +8,7 @@ export default defineConfig([
 			index: "src/index.ts",
 			emitter: "src/emitter/index.ts",
 			statement: "src/statement/index.ts",
+			functions: "src/functions/index.ts",
 			analyze: "src/analyze/index.ts",
 		},
 		format: ["esm"],
