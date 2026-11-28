@@ -1,0 +1,25 @@
+# The tests skipped on the remote-3.3 lane. Written by
+# `UPDATE_SKIPS=1 npm run test:skips`; see scripts/skips.mjs.
+test/interactive-engine.test.ts > interactive transactions over HTTP > returns StatementUnsupported without invoking the body
+test/live-engine.test.ts > embedded 4.0.1 still delivers notifications with {"capabilities":false}
+test/live-engine.test.ts > embedded 4.0.1 still delivers notifications with {"capabilities":{"scripting":false,"network_targets":false,"live_query_notifications":false}}
+test/live-engine.test.ts > refuses HTTP live queries without leaving a server registration
+test/roundtrip.test.ts > generated corpus modules against a prepared engine > audit_log: optional record links and strings
+test/roundtrip.test.ts > generated corpus modules against a prepared engine > fn::double: an undeclared return is unknown and still the engine value
+test/roundtrip.test.ts > generated corpus modules against a prepared engine > fn::greet: trailing optional arguments may be omitted
+test/roundtrip.test.ts > generated corpus modules against a prepared engine > fn::optional_first: int64 through a call, bigint profile, a leading NONE
+test/roundtrip.test.ts > generated corpus modules against a prepared engine > ledger: decimals stay exact
+test/roundtrip.test.ts > generated corpus modules against a prepared engine > member_of: relate(person, team | org) with edge content
+test/roundtrip.test.ts > generated corpus modules against a prepared engine > person: create → select → merge → select (NONE/NULL/absent, FLEXIBLE, sets, ns datetimes)
+test/roundtrip.test.ts > generated corpus modules against a prepared engine > record ids: id_array ([string, datetime], nanoseconds)
+test/roundtrip.test.ts > generated corpus modules against a prepared engine > record ids: id_int
+test/roundtrip.test.ts > generated corpus modules against a prepared engine > record ids: id_int, bigint profile
+test/roundtrip.test.ts > generated corpus modules against a prepared engine > record ids: id_object ({ region, n })
+test/roundtrip.test.ts > generated corpus modules against a prepared engine > record ids: id_string
+test/roundtrip.test.ts > generated corpus modules against a prepared engine > record ids: id_union (int | string)
+test/roundtrip.test.ts > generated corpus modules against a prepared engine > record ids: id_union, bigint profile
+test/roundtrip.test.ts > generated corpus modules against a prepared engine > record ids: id_uuid
+test/roundtrip.test.ts > generated corpus modules against a prepared engine > record ids: int64 extremes, bigint profile
+test/roundtrip.test.ts > generated corpus modules against a prepared engine > runs against the schema the modules were generated from
+test/roundtrip.test.ts > generated corpus modules against a prepared engine > team: open FLEXIBLE object, removable by NONE
+test/watch-query-engine.test.ts > watchQuery rejects HTTP without leaving a registration

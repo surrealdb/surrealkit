@@ -1,0 +1,296 @@
+import { Arbitrary, Effect, Result, Schema } from 'effect';
+import { expect, it } from 'vitest';
+
+import { bind, StatementScopeError } from '../src/client/index.js';
+import { join, joinWith } from '../src/client/internal/join.js';
+import { renameNames } from '../src/statement/rename.js';
+import { make } from '../src/statement/statement.js';
+import { fake } from '../src/testing/index.js';
+
+const read = (binding: string) =>
+	make({
+		name: binding,
+		sql: `$${binding};`,
+		params: { [binding]: Schema.Number },
+		result: Schema.Number,
+	});
+const query = { mode: 'query', refuseTransactional: false } as const;
+const atomic = { mode: 'atomic', refuseTransactional: true } as const;
+
+it('changes only parameter tokens, preserving every byte of literals and comments', () => {
+	const names = { id: 'id__1' };
+	const opaque = [
+		"'$id'",
+		'"$id"',
+		"'a\\'$id'",
+		'"a\\"$id"',
+		`r'thing:["$id", "$id__1"]'`,
+		'r"thing:static"',
+		...['d', 'u', 's', 'f', 'b'].flatMap((prefix) => [
+			`${prefix}'$id'`,
+			`${prefix}"$id"`,
+		]),
+		'`$id`',
+		'⟨$id⟩',
+		'/[$id]\\//',
+	].join(', ');
+	const comment = '-- $id\n// $id\n# $id\n/* $id */';
+	const source = `${comment}\n[${opaque}, $id.field, $id[0], $id::name, $id2, $id / 2, $\`id\`, $⟨id⟩];`;
+	expect(renameNames(source, names)).toBe(
+		`${comment}\n[${opaque}, $id__1.field, $id__1[0], $id__1::name, $id2, $id__1 / 2, $id__1, $id__1];`,
+	);
+});
+
+it.each([
+	"r'thing:[$id]'",
+	'r"thing:[$id]"',
+	"r'thing:[$`id`]'",
+	"r'thing:[$⟨id⟩]'",
+	String.raw`r'thing:[\u0024\u0069d]'`,
+	`r'thing:[r"nested:[$id]"]'`,
+	"r'thing:[$id__1]'",
+	"r'thing:[{ return: 12 }.return / $id / 2]'",
+	String.raw`r'thing:[1 # comment\r, $id\n]'`,
+])('refuses to rewrite around a record literal referencing a changed name (%s)', (record) => {
+	const sql = `[$id, ${record}];`;
+	expect(renameNames(sql, { id: 'id__1' })).toBeUndefined();
+	expect(renameNames(sql, { id: 'id' })).toBe(sql);
+});
+
+it('renames around a record literal that only references unrelated names', () => {
+	expect(
+		renameNames("[$id, r'thing:[$id2, $other]'];", { id: 'id__1' }),
+	).toBe("[$id__1, r'thing:[$id2, $other]'];");
+});
+
+it('finds a record literal in a division expression after a keyword field', () => {
+	const sql = "({ return: 12 }.return / record::id(r'thing:[$id]')[0] / 2);";
+	expect(renameNames(sql, { id: 'id__1' })).toBeUndefined();
+});
+
+it('renames a divisor following a field whose name is a keyword', () => {
+	const sql = '({ return: 12 }.return / $id / 2);';
+	expect(renameNames(sql, { id: 'id__1' })).toBe(
+		'({ return: 12 }.return / $id__1 / 2);',
+	);
+});
+
+it.each([
+	'$id',
+	'$id__1',
+])('refuses a slash that could hide a relevant parameter after a contextual keyword (%s)', (divisor) => {
+	const sql = `SELECT VALUE value / ${divisor} / 2 FROM ONLY [{ value: 12 }];`;
+	expect(renameNames(sql, { id: 'id__1' })).toBeUndefined();
+});
+
+it('refuses a slash after an unclassified word when it could start a regex', () => {
+	expect(
+		renameNames('SELECT VALUE $id FROM /[$id]/;', { id: 'id__1' }),
+	).toBeUndefined();
+});
+
+it('renames division after a bare identifier when the slash cannot start a regex', () => {
+	const sql = 'SELECT VALUE amount / $id FROM ONLY [{ amount: 12 }];';
+	expect(renameNames(sql, { id: 'id__1' })).toBe(
+		'SELECT VALUE amount / $id__1 FROM ONLY [{ amount: 12 }];',
+	);
+});
+
+it.each([
+	['RETURN /[$id]/ = $id;', 'RETURN /[$id]/ = $id__1;'],
+	["[/[$id]/, /r'[$id]/, $id];", "[/[$id]/, /r'[$id]/, $id__1];"],
+	[
+		`[r'thing:["$id" = /[$id]/]', $id];`,
+		`[r'thing:["$id" = /[$id]/]', $id__1];`,
+	],
+])('preserves a known regex when renaming %s', (sql, expected) => {
+	expect(renameNames(sql, { id: 'id__1' })).toBe(expected);
+});
+
+it('refuses a record literal where engines disagree on the end of a comment', () => {
+	const sql = "# comment\r r'thing:[$id]';\n";
+	expect(renameNames(sql, { id: 'id__1' })).toBeUndefined();
+});
+
+it('renames declarations, typed closure parameters, and references inside scopes', () => {
+	const sql = 'FOR $id IN [$id] { LET $id = $id; }; |$id: int| $id;';
+	expect(renameNames(sql, { id: 'id__3' })).toBe(
+		'FOR $id__3 IN [$id__3] { LET $id__3 = $id__3; }; |$id__3: int| $id__3;',
+	);
+});
+
+it.each([
+	"$id; '$id",
+	'$id; /* $id',
+	'$id; `id',
+	'$id; ⟨id',
+	'$id; §',
+	'function($id) { return $id; };',
+])('refuses to guess when it cannot tokenize %s', (sql) =>
+	expect(renameNames(sql, { id: 'id__1' })).toBeUndefined());
+
+it('extends a suffix past locals and quoted variables anywhere in the list', async () => {
+	const first = read('id');
+	const reserve = make({
+		sql: "{ LET $id__1 = 7; $id__1; }; $⟨id__1_⟩; r'thing:[$`id__1__`]'; ({ return: 12 }.return / $id__1___ / 2);",
+		params: {},
+		result: Schema.Unknown,
+		slots: 4,
+	});
+	const joined = await Effect.runPromise(
+		join(
+			[
+				{ statement: first, bindings: { id: 1 } },
+				{ statement: first, bindings: { id: 2 } },
+				{ statement: reserve, bindings: {} },
+			],
+			query,
+		),
+	);
+	expect(joined.sql).toBe(`$id__1____;\n$id__2;\n${reserve.sql}`);
+	expect(joined.bindings).toEqual({ id__1____: 1, id__2: 2 });
+	expect(joined.parts.map(({ sent }) => sent)).toEqual([
+		{ id: 'id__1____' },
+		{ id: 'id__2' },
+		{},
+	]);
+});
+
+it('refuses record literal scope before invoking codecs or dispatching a transaction or pipeline', async () => {
+	const record = make({
+		name: 'record key',
+		sql: "r'thing:[$id]';",
+		params: { id: Schema.Number },
+		result: Schema.Number,
+	});
+	const client = fake({ 'record key': 7 });
+	const members = [bind(record, { id: 7 }), bind(record, { id: 8 })] as const;
+	const refused = (error: unknown) => {
+		expect(error).toBeInstanceOf(StatementScopeError);
+		expect(error).toMatchObject({ statement: record.name, binding: 'id' });
+	};
+	refused(await Effect.runPromise(Effect.flip(client.transaction(members))));
+	refused(await Effect.runPromise(Effect.flip(client.pipeline(members))));
+	expect(client.calls).toEqual([]);
+	const input = {
+		statement: record,
+		bindings: Effect.die('codec must not run'),
+	};
+	refused(
+		await Effect.runPromise(Effect.flip(joinWith([input, input], atomic))),
+	);
+});
+
+it('refuses engine-set collisions before evaluating codecs', async () => {
+	const local = make({
+		name: 'engine name',
+		sql: 'LET $after = 1; $after;',
+		defines: ['after'],
+		params: {},
+		slots: 2,
+		result: Schema.Number,
+	});
+	const encoded = Effect.die('codec must not run');
+	const failure = await Effect.runPromise(
+		Effect.flip(
+			joinWith(
+				[
+					{ statement: local, bindings: encoded },
+					{ statement: local, bindings: encoded },
+				],
+				atomic,
+			),
+		),
+	);
+	expect(failure).toBeInstanceOf(StatementScopeError);
+	expect(failure).toMatchObject({
+		statement: 'engine name',
+		binding: 'after',
+	});
+});
+
+it('refuses unsafe text only when it needs a rename plan', async () => {
+	const uncertain = make({
+		name: 'uncertain',
+		sql: "$id; 'unterminated",
+		params: { id: Schema.Number },
+		result: Schema.Number,
+	});
+	const entry = { statement: uncertain, bindings: { id: 7 } };
+	expect((await Effect.runPromise(join([entry], query))).sql).toBe(
+		uncertain.sql,
+	);
+	const failure = await Effect.runPromise(
+		Effect.flip(join([entry, entry], query)),
+	);
+	expect(failure).toBeInstanceOf(StatementScopeError);
+	expect(failure).toMatchObject({
+		statement: 'uncertain',
+		message: expect.stringContaining('cannot tokenize'),
+	});
+});
+
+it('always builds identical SQL and sent names for the same descriptors with different inputs', async () => {
+	const choices = ['a', 'b', 'a__1', 'a__1_', 'constructor'];
+	const cases = Arbitrary.schema(
+		Schema.Array(
+			Schema.Struct({
+				position: Schema.Int,
+				first: Schema.Int,
+				second: Schema.Int,
+			}),
+		),
+	);
+	const report = await Effect.runPromise(
+		Arbitrary.checkEffect(
+			cases,
+			(items) =>
+				Effect.gen(function* () {
+					const rows = items.map(({ position, first, second }) => {
+						const name =
+							choices[Math.abs(position) % choices.length] ?? 'a';
+						return { name, statement: read(name), first, second };
+					});
+					const separate = (key: 'first' | 'second') =>
+						join(
+							rows.map((row) => ({
+								statement: row.statement,
+								bindings: { [row.name]: row[key] },
+							})),
+							query,
+						);
+					const a = yield* separate('first');
+					const b = yield* separate('second');
+					const names = (request: typeof a) =>
+						request.parts.map(({ sent }) => Object.values(sent));
+					return (
+						a.sql === b.sql &&
+						JSON.stringify(names(a)) === JSON.stringify(names(b)) &&
+						Object.keys(a.bindings).length === rows.length &&
+						Object.keys(b.bindings).length === rows.length
+					);
+				}),
+			{ runs: 100, seed: 20261120 },
+		),
+	);
+	expect(Arbitrary.formatCheckFailure(report) ?? 'Passed').toBe('Passed');
+});
+
+it('keeps original fake bindings when the same statement runs twice in a transaction or pipeline', async () => {
+	const client = fake({
+		id: (values: Readonly<Record<string, unknown>>) => values.id,
+	});
+	const reader = read('id');
+	const statements = [
+		bind(reader, { id: 7 }),
+		bind(reader, { id: 8 }),
+	] as const;
+	expect(await Effect.runPromise(client.transaction(statements))).toEqual([
+		7, 8,
+	]);
+	const outcomes = await Effect.runPromise(client.pipeline(statements));
+	expect(outcomes).toEqual([Result.succeed(7), Result.succeed(8)]);
+	expect(
+		client.calls.map(({ bindings }) => Object.entries(bindings)),
+	).toEqual([[['id', 7]], [['id', 8]], [['id', 7]], [['id', 8]]]);
+});
