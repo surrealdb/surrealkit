@@ -185,21 +185,29 @@ type Document =
 	| { readonly declared: DeclaredNames; readonly text: string }
 	| { readonly problem: string; readonly text: string };
 
+/** The code of a file-system error, such as `ENOENT`, without its message. */
+const errorCode = (cause: unknown): string => {
+	const code = (cause as { readonly code?: unknown } | null)?.code;
+	return typeof code === 'string' ? code : 'unknown error';
+};
+
+// A problem names the document and what went wrong, and never repeats the
+// exception's message: a JSON.parse message quotes the document's text.
 const readDocument = (path: string): Document => {
 	let text: string;
 	try {
 		text = readFileSync(path, 'utf8');
 	} catch (cause) {
 		return {
-			problem: `cannot read ${path}: ${messageOf(cause)}`,
+			problem: `cannot read ${path} (${errorCode(cause)})`,
 			text: '',
 		};
 	}
 	let json: unknown;
 	try {
 		json = JSON.parse(text);
-	} catch (cause) {
-		return { problem: `${path}: ${messageOf(cause)}`, text };
+	} catch {
+		return { problem: `${path} is not valid JSON`, text };
 	}
 	const decoded = Effect.runSync(Effect.result(decodeDocument(json)));
 	if (decoded._tag === 'Failure')
