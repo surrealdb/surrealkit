@@ -202,6 +202,27 @@ encode instead of reaching SurrealDB (see
 [Interpretation notes](#interpretation-notes)). The generated modules need
 an `effect-surrealkit` that exports `EmptyObject`.
 
+### What changes for existing users of the client
+
+- A `CREATE` or `INSERT` of a record id that already exists now fails with
+  `StatementRecordExists` instead of `StatementRequestError`, whatever
+  made the statement: a write builder, a `block`, a `family`, `part`,
+  `sequence` or `make`. `StatementRecordExists` is in every statement's
+  error type, a `select` of stored fields included: leaving it out of a
+  read would need one more type parameter on every statement, which this
+  version does not add.
+- A write builder (`create`, `insert`, `insertRelation`, `update`, `upsert`,
+  `relate`) over a table with a unique index now fails with
+  `StatementIndexConflict` on a duplicate value instead of
+  `StatementRequestError`, on the engine versions the client reads (see
+  [A value that may already be taken](#a-value-that-may-already-be-taken)).
+- `Statement` takes a fourth type parameter, the unique indexes it
+  declares, and `StatementError` a second. Left out, each means any
+  index, so `Statement<P, R>`, `Statement<P, R, Throws>`, a bare
+  `Statement` and `StatementError<Throws>` accept the statements and
+  errors they did before. A type compared exactly with `toEqualTypeOf` (or
+  similar) sees `never` where a statement declares no unique index.
+
 ### Refinements
 
 `PersonFields` holds the field schemas that are identical in every operation;
@@ -731,6 +752,139 @@ binding compares with its column, a string never compares with an int. A
 binding is named, so the same expression can be used twice; one name with
 two codecs is refused, as are names SurrealDB sets itself (`$auth`, `$this`,
 `$value`, …).
+
+### Built-in functions
+
+`effect-surrealkit/functions` has a typed function for each of 406 SurrealDB
+built-ins, one namespace per family. Each returns an expression, so it fits
+anywhere the builders take one:
+
+```ts
+import * as SurrealSchema from 'effect-surrealkit';
+import { array, string } from 'effect-surrealkit/functions';
+import { param, select } from 'effect-surrealkit/statement';
+
+const people = select(PersonTable)
+  .where((row) => string.isEmail(row.email))
+  .project((row) => ({
+    short: string.slice(row.name, 0, param('length', SurrealSchema.Int)),
+    first: array.first(string.words(row.name)),
+  }))
+  .build('people');
+// people.sql: SELECT string::slice(name, 0, $length) AS short,
+//             array::first(string::words(name)) AS first
+//             FROM ⟨person⟩ WHERE string::is_email(email);
+// ReadonlyArray<{ short: string; first: string | undefined }>
+```
+
+An argument is an expression whose stored type fits the argument's kind, or
+a primitive (or an array of primitives) written with `literal`; anything else
+is a compile error, and a value still enters only as a binding or a checked
+constant. Trailing optional arguments may be left out (`string.slice(s)`),
+a variadic one takes any number of values (`string.join('-', a, b)`), and a
+constant has no call (`math.pi` is `math::pi`). An argument that is not a
+single term is parenthesised.
+
+The functions are generated from one table,
+[`src/functions/signatures.json`](src/functions/signatures.json): per
+function its name, its arguments (name, kind, optional), whether the last is
+variadic, its result kind, the engine majors it exists in and sample
+arguments. Kinds are `any`, `string`, `int`, `int64`, `float`, `number`,
+`decimal`, `bool`, `datetime`, `duration`, `uuid`, `bytes`, `record`,
+`object`, `geometry`, `range`, `array`, `array<K>` and `option<K>`, each
+decoded by the package's codec of that name (`any`, and an element of
+`array`, may be NONE).
+A result `same:N` is argument `N`'s own codec, used where the result is a
+reordering or subset of an array (`array.sort`, `array.distinct`); `item:N`
+is an element of it or NONE (`array.first`, `time.max`). `items:N`, on the
+variadic argument `N`, is an array of the union of the arguments' element
+codecs when every argument is a typed array, the argument's own codec when
+it is the only one, and `array` otherwise (`array.concat`). The other
+array builders are typed the same way: `with:N,M` is an array of argument
+`N`'s elements and the value `M` (`array.append`, `push`, `prepend`,
+`insert`, `fill`), `adds:N,M` the same with an array `M` adding its
+elements (`array.add`), `elements:N,M` the elements of both arrays
+(`array.union`, `difference`), `padded:N,M` those or `null` past the
+shorter one (`array.logicalAnd`, `logicalOr`, `logicalXor`), `pairs:N,M`
+tuples of one element of each (`array.combine`), `flat:N` the elements of
+the arrays `N` holds (`array.flatten`, `group`), `chunks:N` arrays of `N`'s
+elements (`array.clump`, `windows`), `transposed:N` arrays of the inner
+elements or NONE (`array.transpose`) and `repeats:N` an array of the value
+`N` (`array.repeat`). When an argument they name is not a typed expression
+(an inlined constant, or an open value or array of open values), the
+result is the plain `array` or `array<array>` it was. A result
+`float|decimal:N,…` is a float, or `number | Decimal` when one of the
+arguments it names may hold a decimal (an element of it, for an array): the
+functions SurrealDB computes in the kind of their input (`math.sqrt`,
+`math.mean`, `math.stddev`, `math.variance`, `math.lerp`,
+`math.lerpangle`, `vector.similarityCosine`, `vector.distanceCosine`).
+`math.sqrt(row.amount)` over a decimal field is `number | Decimal`, over an
+int field `number`; even a decimal input can give a float (the spread of one
+value is the int 0, the root of a negative decimal NaN). A function that
+answers NONE for some input is `option<K>` (`parse.emailHost` of a string
+that is not an address, `math.median([])`, `vector.sum([])`). After changing
+the table, run:
+
+```sh
+npm run generate:functions   # node scripts/generate-functions.mjs
+```
+
+It writes `src/functions/generated/` (a file per family, `codecs.ts` and
+`index.ts`), sorted and Biome-formatted; `test/functions.test.ts` fails when
+those files differ from what the table generates. A name is its family's
+namespace and the rest of the path in camelCase: `string::is_email` is
+`string.isEmail`, `vector::distance::euclidean` is
+`vector.distanceEuclidean`, an underscore between two digits stays
+(`math::log10_2` is `math.log10_2`) and a reserved word gets a trailing `_`
+(`rand::enum` is `rand.enum_`).
+
+| Family | Functions | Family | Functions |
+| --- | --- | --- | --- |
+| `array` | 59 | `object` | 8 |
+| `bytes` | 1 | `parse` | 9 |
+| `crypto` | 14 | `rand` | 12 |
+| `duration` | 18 (1 constant) | `record` | 5 |
+| `encoding` | 6 | `search` | 1 (`analyze`) |
+| `geo` | 7 | `string` | 59 |
+| `math` | 63 (21 constants) | `time` | 45 (3 constants) |
+| `meta` | 2 | `type` | 72 |
+| | | `value` | 2 |
+| | | `vector` | 23 |
+
+`test/functions-engine.test.ts` calls every entry with its sample arguments,
+and with each of its `variants`, on the suite's engine. The variants give a
+numeric argument an int, a float and a decimal, a list argument an empty
+list, a parsing function a string that does not parse and a string argument
+the empty string (only those every listed engine accepts are kept), and a
+numeric literal argument carries the codec of its own kind, so a result
+derived from an argument is checked for each kind. On a major the entry
+lists, every result must decode with the codec the function derives; on one
+it does not, the engine must reject the sample call as an unknown function. 32 functions exist only on SurrealDB 4.0:
+`time::age`, `time::make_date`, `time::make_time`, `time::make_timestamp`,
+`time::trunc`, `vector::distance::cosine`, and `type::date`, `type::time`,
+`type::timestamp`, `type::interval`, `type::i8`, `type::i16`, `type::i32`,
+`type::u8`, `type::u16`, `type::u32`, `type::u64`, `type::f16`, `type::f32`
+with their `type::is_*` checks. None exists only on 3.3. Non-deterministic
+functions (`rand::*`, `time::now`, salted hashes) are checked by decoding
+alone.
+
+Over the `cbor.2` protocol, which SDK 2.2.2 negotiates, SurrealDB 4 returns
+17 of these results as SDK classes of their own: `PlainDate`, `PlainTime`,
+`Timestamp`, `Interval` and the sized numbers. Their functions keep the result
+types the table records and decode the same values as over `cbor`: a date
+becomes midnight UTC (an infinite date becomes the engine's datetime bound), a
+time becomes a duration, a timestamp a datetime, an interval its ISO 8601
+text, and a sized number a float or a safe integer. A raw query still returns
+the SDK classes.
+
+Not in the table: functions that take a closure (`array::map`,
+`array::fold`, `array::reduce`, `value::chain`, `value::expect`); the
+full-text and vector functions that need a match reference or a KNN operator
+(`search::score`, `search::highlight`, `search::offsets`, `search::rrf`,
+`search::linear`, `vector::distance::knn`); files (`type::file`, `file::*`);
+and what writes, sleeps, uses the network or reads the session (`http::*`,
+`sleep`, `session::*`, `api::*`, `sequence::*`, `ml::*`, `ext::*`). The
+`set::*` family and the aggregate `count()` are not covered yet.
 
 ### Reads and writes
 
@@ -1340,6 +1494,709 @@ taken](#a-value-that-may-already-be-taken)); a statement declared not to
 write is refused one. Only `part` and `sequence` import the
 analyzer, so code that uses only the builders does not bundle it.
 
+### Running statements
+
+Use `run` for one typed statement, `transaction` for an atomic batch,
+and `pipeline` for a separate result per statement in one request.
+`withTransaction` makes several requests on an open transaction.
+`client.bulk` writes a list binding in chunks, `stream` emits decoded
+rows, and `client.liveScoped` and `client.live` subscribe to typed
+changes. `timed` returns request measurements alongside the result.
+
+```ts
+import { bind, layer, run, SurrealClient, transaction } from 'effect-surrealkit/client';
+
+const program = Effect.gen(function* () {
+  const name = yield* run(profile, { boundOwner: id });
+  const [created, people] = yield* transaction([
+    bind(createPerson, { person }),
+    bind(adults, { minimum: 18, city: 'Leeds' }),
+  ]);
+  return { name, created, people };
+}).pipe(Effect.provide(layer(db)));
+```
+
+A transaction takes statements paired with their input by `bind`, which
+checks the input against the statement's bindings; a hand-built
+`{ statement, input }` does not compile.
+
+A statement decodes one result, at its `valueSlot`, and every other result
+of its text must be NONE. `valueSlot` is the last result unless the text
+ends with transaction control: a script written `BEGIN; guards…; <value>;
+COMMIT;` decodes the result before `COMMIT`, since SurrealDB answers NONE
+for `BEGIN`, `COMMIT` and `CANCEL`. `sequence` derives the slot from its
+parts, and `make` takes it as `valueSlot` (default: the last).
+
+`layer(db)` takes an SDK connection or session, and statements run with that
+session's authentication. `make(db)` returns the same client as a plain
+value, for an application that names its own services, one per session.
+
+For replay-sensitive WebSocket writes and for live queries that must report a
+lost connection, connect with `reconnect: false` on the root SDK connection.
+Forked sessions inherit that setting. With automatic reconnect enabled, SDK
+2.2.2 can resend a buffered request whose acknowledgement was lost, even
+with conflict retries disabled. An unmanaged live listener can also keep
+waiting after its original socket is gone. The client counts its own sends;
+the SDK can make additional physical sends inside one attempt.
+
+```ts
+await db.connect(endpoint, { reconnect: false });
+const client = make(db);
+```
+
+| Error | When | Was anything written? |
+| --- | --- | --- |
+| `StatementEncodeError` | a binding failed its codec, or its encoded value is not one the SDK sends without loss (`path` says where inside it) | no, nothing was sent |
+| `StatementScopeError` | the client could not safely rename a shared variable, the SDK would discard an atomic binding, or a statement contains transaction control inside a transaction | no, nothing was sent |
+| `StatementThrown<Message>` | a `THROW` the statement declares; in a transaction, `statement` names the one that declares it (`one of …` when several do); `source` and `lines` say where, when the part records them | not by a transaction; a single statement's earlier statements commit on their own |
+| `StatementUnexpectedThrow` | a `THROW` whose message the statement does not declare (a dynamic message), with the thrown text as `reason` and the SDK's error as `cause` | as for `StatementThrown` |
+| `StatementConflict` | a transaction conflict that `retry` did not resolve | the conflicting transaction rolled back. Earlier independent statements may have committed |
+| `StatementIndexConflict<Index>` | a write would duplicate a value of a unique index the statement declares (`uniqueIndexes`; a write builder declares its table's), named by `index`, which is read from the engine's message ([surrealdb/surrealdb#7652](https://github.com/surrealdb/surrealdb/issues/7652) and [surrealdb/surrealdb#7726](https://github.com/surrealdb/surrealdb/issues/7726) ask for a structured error); in a transaction, `statement` names the one that declares it (`one of …` when several do). Prefer `upsert`, `INSERT IGNORE` or `.onDuplicate(…)` where a taken value is expected | not by that statement, nor by a transaction; a single statement's earlier statements commit on their own |
+| `StatementRecordExists` | a `CREATE` or `INSERT` of a record id that already exists | as for `StatementIndexConflict` |
+| `StatementRequestError` | any other failure of the request: transport, authentication, a SurrealQL error (a duplicate on an index the statement does not declare included), or the SDK refusing to send (a `RETURN` followed by another statement in a transaction), with the SDK's error as `cause` | unknown for a transport failure; otherwise no |
+| `StatementEmptyResult` | a `create` or `relate` that returns rows (`nonEmpty`) returned NONE or an empty list: SurrealDB reports a write the session may not make as an empty result, without an error, so the session may lack permission | not by that statement |
+| `StatementDecodeError` | the answer of a statement or transaction known not to write (`writes: false`) is not what it declares: the number of results, a value where NONE belongs, or a last result its codec refuses | no |
+| `StatementWriteOutcomeError` | the same, for a request not known to be read-only; `request` names the statement or transaction and `cause` is the `StatementDecodeError` (naming the statement and result), with `committed: true` and a message saying the request succeeded and either its writes are committed (`writes: true`) or it may have written (`writes` unknown) | yes, whatever it wrote is committed: read it back before resending |
+| `StatementUnsupported` | the connection or engine refuses the requested feature | the feature did not start |
+| `TransactionOutcomeUnknown` | the commit of an interactive transaction, an atomic bulk write, or a multi-statement bulk chunk lacked an acknowledgement | unknown. Read back before replaying |
+| `BulkWriteError` | a non-atomic bulk chunk failed. Carries the failed chunk, confirmed preceding counts and the statement error | preceding chunks completed. The cause describes the failed chunk's outcome |
+| `LiveQueryClosed` | the engine killed the live query or the connection was lost | closing the subscription does not write data |
+| `WatchQueryClosed` | the observer lost its session, authorization or connection permanently, or the SDK reported a live-source overflow | the observer re-executes a read-only statement |
+
+Client error messages, default inspection, and JSON output omit raw server
+diagnostics, undeclared `THROW` text, keys from preflight binding values,
+and the duplicated value and record id of a constraint error (a
+`StatementIndexConflict` shows the statement and the index name only).
+Read `cause`, `reason`, or `path` directly when you need those details and
+can handle them privately. Formatters that traverse those fields, including
+Effect's `Cause.pretty`, can display their contents.
+
+SurrealDB reports a record that exists as a structured error (`AlreadyExists`
+of kind `Record`), which is what `StatementRecordExists` reads. It reports a
+duplicate on a unique index as an `Internal` error that names the index only
+in its message, and its protocol documentation says a message may change
+between releases. The client therefore reads that message only in the form
+the conformance suite pins on SurrealDB 3.3.4 and 4.0.1 (on another version
+it may be a `StatementRequestError`; `checkConstraintErrors` tells), and only for an index
+name the statement declares ([surrealdb/surrealdb#7652](https://github.com/surrealdb/surrealdb/issues/7652) and [surrealdb/surrealdb#7726](https://github.com/surrealdb/surrealdb/issues/7726) ask SurrealDB for a
+structured error instead); any other message stays a
+`StatementRequestError`, as does a duplicate raised inside an event (the
+engine prefixes the event's name). A message of that form is read as a
+duplicate whatever the error's kind and details, and is never a
+`StatementRecordExists`: the fix proposed for #7652, [surrealdb/surrealdb#7653](https://github.com/surrealdb/surrealdb/pull/7653), would report a
+duplicate as `AlreadyExists` of kind `Record` (with the id of the record
+that holds the value) and keep the message, and if it ships the client still
+reports a `StatementIndexConflict` for a declared index and a
+`StatementRequestError` for any other. The message names the index and not its
+table: a write that calls a function writing to another table with a
+unique index of the same name reports that index under this name. A
+`block` and a `family` declare no unique index, so a duplicate inside one is
+a `StatementRequestError`.
+
+An `update` or `delete` by condition may match nothing, so its empty list is
+a result, not an error; so is a denied one (the conformance suite pins
+both).
+
+**An interrupted or timed-out write may have been applied.** Interrupting
+the effect (a timeout included) aborts the request on the client, but the
+engine may already have run it, or may still finish it. Read the data back
+before sending a write again.
+
+Before sending, every encoded binding is checked to be a value the SDK
+sends without loss: the package's `SurrealValue` shape (plus `undefined`
+for NONE, `ArrayBuffer` for bytes and the SDK's record id and range
+values), with well-formed strings and integers the SDK can encode. The SDK
+would otherwise send a class instance as its own fields, a `Map` as a
+document or a lone surrogate as U+FFFD. Older supported SDK versions can also
+encode a bound negative zero as positive zero. The check never throws; `{
+unsafeSkipValueCheck: true }` turns it off.
+
+`{ retry: schedule }` takes an Effect `Schedule` and sends the same,
+already encoded request again while the engine reports a
+`StatementConflict`; no other error is retried. SurrealDB 4 already retries
+a single conflicting statement on the server (a block run alone that loses
+a conflict there succeeds, as `test/block-engine.test.ts` shows), so this
+matters most for transactions and for SurrealDB 3.
+
+```ts
+yield* transaction([bind(bump)], { retry: Schedule.recurs(3) });
+```
+
+Standalone `run` also honors the SDK connection's retry policy. With a
+custom policy that retries a later error in a multi-statement request, an
+earlier write can commit again on each attempt. Use an atomic transaction
+when those writes must succeed or roll back together.
+
+Each run is a span named after the statement, carrying the static text,
+the part sources (`code.file.path`), the number of rows when the result is
+a list (`db.response.returned_rows`) and the error tag on failure
+(`error.type`); never a binding value. `metrics` updates three Effect
+metrics: `effect_surrealkit_statement_runs` (a counter by `statement` and
+`outcome`, which is `success`, the error tag or `interrupted`),
+`effect_surrealkit_statement_duration` (a timer by `statement`) and
+`effect_surrealkit_statement_retries` (a counter by `statement`).
+
+`transaction` sends its statements as one atomic request, joined one after
+another (`make` stores every text with exactly one final `;`, so they always
+parse). When two statements bind the same name, or one defines a top-level
+`LET` with a name the other binds, each gets its own variable in the sent
+text. The names depend only on the statements and their order. See “The
+same statement more than once” below for an example.
+
+A statement that writes its own `BEGIN`, `COMMIT` or `CANCEL` cannot be
+nested in an atomic batch. The SDK also refuses a top-level `RETURN`
+followed by another statement. End a reusable lookup with a bare expression
+such as `$person;` to return that value and let the next statement run.
+
+A statement's `writes` is one of three states, and it decides what a
+result that does not decode is reported as:
+
+| `writes` | Set by | A result that does not decode |
+| --- | --- | --- |
+| `true`: certainly writes | write builders; `part` and `sequence` when the analyzer finds a write; `make({ writes: true })` | `StatementWriteOutcomeError`: the request succeeded and its writes are committed |
+| absent: unknown | `select` with a condition, a projected expression or a bound count; authored text with no write found; `make` by default | `StatementWriteOutcomeError`: the request succeeded and may have written, and any writes it made are committed |
+| `false`: certainly does not write | `select` of stored fields only; `part({ writes: false })`; a sequence whose every part is; `make({ writes: false })` | `StatementDecodeError`, and nothing was written |
+
+A transaction certainly writes when any statement does and is read-only
+only when every statement is. A sequence is the same over its parts, and
+`define({ writes })` settles what the parts leave unknown; a declared
+`writes` that contradicts the text (a part declared `false` whose text the
+analyzer finds a write in, a sequence declared `false` with a writing
+part) is refused when it is made. A caller that knows a `select` with
+expressions is read-only says so with `.build(name, { writes: false })`.
+Declare `false` only for known reads: it is what keeps a decode failure a
+plain `StatementDecodeError`.
+
+`StatementWriteOutcomeError`'s `request` names the statement or atomic
+batch, and its `cause` identifies the failing statement and result slot.
+Read back the receipt or record before deciding to replay. This outcome does
+not prove that a row changed: permissions and conditional writes can yield
+empty results.
+
+#### Several statements in one request: pipelines
+
+`pipeline` sends statements paired with their inputs by `bind` in one
+query request. The effect returns a tuple of Effect `Result`s in the
+same order, each with its own result type and declared throws. An empty
+pipeline returns `[]` without sending a request.
+
+```ts
+import { Effect, Schema } from 'effect';
+import { bind, pipeline, run } from 'effect-surrealkit/client';
+import { make } from 'effect-surrealkit/statement';
+
+const names = make({
+  name: 'person names',
+  sql: 'SELECT VALUE name FROM person WHERE name != $excluded LIMIT 3;',
+  params: { excluded: Schema.String },
+  result: Schema.Array(Schema.String),
+  writes: false,
+});
+const countTeams = make({
+  name: 'team count',
+  sql: 'count((SELECT VALUE id FROM team));',
+  params: {},
+  result: Schema.Number,
+  writes: false,
+});
+
+const reports = pipeline([
+  bind(names, { excluded: 'Bee' }),
+  bind(countTeams),
+], { each: 'transaction' });
+```
+
+The text sent with the `excluded` binding is:
+
+```surql
+BEGIN;
+SELECT VALUE name FROM person WHERE name != $excluded LIMIT 3;
+COMMIT;
+BEGIN;
+count((SELECT VALUE id FROM team));
+COMMIT;
+```
+
+With `each: 'statement'` (the default), each statement's text runs as
+written, including any of its own transaction controls. With
+`each: 'transaction'`, each member gets its own `BEGIN` and `COMMIT`. A
+failure rolls back that member's writes, while the other members can commit. This
+mode refuses members that already contain transaction controls. The
+members share one request scope, so an unrenamed `LET` is visible to later
+members in either mode.
+
+A binding that fails validation, a scope refusal, or a request the SDK
+cannot send or answer fails the outer effect. A failed statement or
+block has its own `Result.fail`, with the first error that caused the
+failure. If every failed slot only reports fallout from a different
+failure, the first failed slot is used. A write whose acknowledged
+result fails decoding has a `StatementWriteOutcomeError` in its result.
+A pipeline has no `retry` option because some writes may already have
+committed by the time another member fails.
+
+Use a pipeline for one round trip when you want the answers together.
+Use concurrent Effects for independent requests whose answers should
+be available as each request finishes:
+
+```ts
+const independent = Effect.all([
+  run(names, { excluded: 'Bee' }),
+  run(countTeams),
+], { concurrency: 2, mode: 'result' });
+```
+
+`Effect.all` collects the results after both requests finish. To act on an
+answer as soon as it arrives, handle it inside its individual effect.
+
+#### The same statement more than once
+
+Bind each occurrence separately in a `transaction` or `pipeline`.
+
+```ts
+const find = make({
+  sql: 'SELECT * FROM ONLY $id;',
+  params: { id: PersonId },
+  result: Schema.UndefinedOr(PersonRow),
+});
+const [first, second] = yield* transaction([
+  bind(find, { id: firstId }),
+  bind(find, { id: secondId }),
+]);
+```
+
+The SDK receives one request containing the following statements and two
+separate encoded bindings.
+
+```surql
+SELECT * FROM ONLY $id__1;
+SELECT * FROM ONLY $id__2;
+```
+
+Names shared by bindings or top-level `LET`s use their statement's 1-based
+position. If the new name is already in use, another `_` is appended until
+it is free. This depends on the statements alone, so different inputs to
+the same list send identical text. Unshared names keep their spelling. A
+scripted client still sees original input names.
+
+For authored queries that will run together, use a final expression such
+as `$person;`. A top-level `RETURN $person;` works alone or at the end of
+an atomic batch. The SurrealDB SDK refuses a top-level `RETURN` followed
+by another statement, and the client preserves that refusal.
+
+A shared engine-set name or text that cannot be safely tokenized for a
+rename raises `StatementScopeError` before sending. Plain queries can
+bind `$__proto__`. Atomic requests refuse it when it would still be sent
+under that name, because the SDK would drop it. A shared `$__proto__`
+binding can be sent under its generated name.
+
+A quoted record literal such as `r'thing:[$id]'` can evaluate a variable
+inside its record key. If that variable needs renaming, composition raises
+`StatementScopeError` before sending. Generated aliases also skip names
+referenced inside quoted record literals.
+
+#### Timing
+
+`timed(effect)` returns the effect's value and one `RequestTiming` for each
+request it sends, in completion order. Nested collectors also see the
+requests made inside their scope. Effects that send nothing return an
+empty timing list.
+
+```ts
+import { Duration, Schema } from 'effect';
+import { bind, type RequestTiming, timed } from 'effect-surrealkit/client';
+import { make } from 'effect-surrealkit/statement';
+
+const answer = make({
+  name: 'read, answer',
+  sql: 'NONE; 42;',
+  params: {},
+  result: Schema.Number,
+  slots: 2,
+  writes: false,
+});
+const numbers = make({
+  name: 'read, answer',
+  sql: '[1, 2];',
+  params: {},
+  result: Schema.Array(Schema.Number),
+  writes: false,
+});
+const [results, [timing]] = yield* timed(
+  client.pipeline([bind(answer), bind(numbers)]),
+);
+
+// One timing observed on embedded SurrealDB 4.0.1.
+const example: RequestTiming = {
+  kind: 'pipeline',
+  name: 'pipeline(read, answer, read, answer)',
+  sends: 1,
+  encode: Duration.nanos(289_333n),
+  wait: Duration.nanos(5_243_334n),
+  server: Duration.nanos(1_143_000n),
+  decode: Duration.nanos(396_584n),
+  total: Duration.nanos(6_301_875n),
+  statements: [
+    { statement: 'read, answer', server: Duration.nanos(785_583n) },
+    { statement: 'read, answer', server: Duration.nanos(357_417n), rows: 2 },
+  ],
+};
+```
+
+- `kind` identifies the client operation. `name` is its span name.
+- `sends` counts client transport attempts, including the client's own
+  conflict retries. The SDK may retry internally within one attempt.
+- `encode` measures binding encoding and preparation of the request.
+- `wait` measures the last transport attempt, including any SDK retries it
+  performs internally.
+- `server` sums the engine durations supplied for the request's slots.
+  Pipelines provide these durations, including the wrapping `BEGIN` and
+  `COMMIT` slots when requested. The collected `run` and `transaction`
+  methods leave them absent.
+- `decode` measures the time spent decoding the answer.
+- `total` measures the whole operation, including earlier attempts and
+  retry delays.
+- `statements` lists the original statement names in request order, with
+  each statement's own `server` duration when available and `rows` count
+  when its decoded result is a list.
+
+The client records these phases with or without `timed`. Request spans
+carry `effect_surrealkit.encode_us`, `effect_surrealkit.wait_us`,
+`effect_surrealkit.decode_us`, `effect_surrealkit.sends`, and
+`effect_surrealkit.server_us` when available. The timers
+`effect_surrealkit_statement_encode_duration`,
+`effect_surrealkit_statement_decode_duration`, and
+`effect_surrealkit_statement_server_duration` use the `statement` tag.
+Binding and result values stay out of span attributes and metric tags.
+
+#### Interactive transactions
+
+Use `client.withTransaction((tx) => effect)` to make several requests
+and commit them together. The body can call `tx.run`, `tx.transaction`
+or `tx.bulk`. The `withTransaction(effect)` accessor supplies the
+transaction as `SurrealClient` so existing code that uses `run` or
+`transaction` joins it.
+
+```ts
+import { run, withTransaction } from 'effect-surrealkit/client';
+
+const move = withTransaction(
+  Effect.gen(function* () {
+    yield* run(debit, { from, amount });
+    return yield* run(credit, { to, amount });
+  }),
+);
+```
+
+A successful body commits. A body that fails, dies or is interrupted
+cancels the transaction. Embedded and WebSocket sessions support this
+API. HTTP returns `StatementUnsupported` before the body starts.
+There are no savepoints. Nested interactive transactions, pipelines,
+live queries and streams are refused in the transaction’s client.
+
+The tested engines, embedded SurrealDB 4.0.1 and WebSocket 3.3.4, can
+continue and commit an open transaction after a statement fails. Propagate
+the failure from the body when its earlier writes should be cancelled.
+A top-level `LET` is local to the request that declares it. Keep the
+statements that use it in that same request.
+
+Pass `{ retry: schedule }` to rerun the whole body in a fresh transaction
+after a conflict. A failed attempt does not commit its database writes.
+The body’s other effects run again. If a commit answer is lost, or none
+arrives within 30 seconds, the client returns `TransactionOutcomeUnknown`
+without cancelling or retrying the commit. The SDK may still complete it.
+Read the data back before deciding whether to run the body again.
+
+#### Bulk writes
+
+Pass an iterable or an Effect `Stream` for a statement's list binding.
+Every chunk is encoded through that binding's schema. Other bindings are
+included unchanged. The default chunk size is 500 and the result holds the
+decoded answer for each chunk in input order.
+
+```ts
+import { Schema } from 'effect';
+import { insert, param } from 'effect-surrealkit/statement';
+import { PersonCreate, PersonTable } from './generated/surreal/index.js';
+
+const insertPeople = insert(
+  PersonTable,
+  param('people', Schema.Array(PersonCreate)),
+).returning('none').build('insert people');
+
+const wrote = client.bulk(insertPeople, { people }, { over: 'people', chunk: 250 });
+```
+
+By default, embedded and WebSocket sessions begin one interactive
+transaction, send each chunk, then commit. An HTTP session sends one
+atomic batch containing **every chunk**, so the request size is unbounded
+by `chunk`. A stream is collected before sending that batch. The client
+peeks one chunk so empty input sends nothing. If begin is unsupported it
+reuses that chunk and runs the hooks only on the fallback. Inside an
+existing transaction, `tx.bulk` uses its handle.
+
+With `atomic: false`, the client sends each chunk in one request and waits
+for its acknowledgement before pulling the next chunk. A chunk containing
+several SurrealQL statements gets its own atomic transaction. A conflict
+rolls back the entire chunk before a scheduled retry. The SDK's rule for
+an early `RETURN` in a stateless transaction also applies to these chunks.
+
+`BulkWriteError` reports the zero-based failed chunk and the confirmed
+counts for preceding chunks. A single-statement chunk with a lost response
+can have written, as can a chunk whose acknowledged result fails decoding.
+An unacknowledged atomic commit raises `TransactionOutcomeUnknown`, including
+when that commit covered one multi-statement chunk. Read back before replaying.
+
+`beforeChunk` sees the original rows and can stop the operation with its
+own error. `onProgress` runs after acknowledgement, with a total for
+arrays and sized collections. Progress inside an open transaction
+describes provisional work. With an explicit retry schedule, a confirmed
+conflict retries the affected non-atomic chunk or the whole atomic write.
+Interactive retries retain the original chunks already pulled from
+one-shot sources. Callback effects may run again. A connection's SDK
+retry policy does not replay collector-backed bulk requests.
+
+Use `updateEach(table, param('rows', Rows))` to merge a different
+`{ id, set }` into each existing record. The codec must use ids for that
+table and fields its merge schema accepts. A missing record raises
+`StatementThrown<'Record not found'>` unless you pass
+`{ missing: 'ignore' }`.
+
+#### Rows as a stream
+
+`stream(statement, input)` returns an Effect `Stream`. Consuming it sends
+one request and delivers the decoded rows in order. The result schema must be a plain
+`Schema.Array(row)`. A statement built with `only()` returns at most one
+row, so use `run` for it. Use `run` for array-wide checks and transformations
+as well. Effect Schema preserves the array's static type when a check is added.
+The stream verifies the schema at runtime and refuses array-wide checks before dispatch.
+
+```ts
+import { Schema, Stream } from 'effect';
+import { stream } from 'effect-surrealkit/client';
+import { make } from 'effect-surrealkit/statement';
+
+const readings = make({
+  name: 'recent readings',
+  sql: 'SELECT VALUE n FROM reading WHERE n >= $minimum ORDER BY n;',
+  params: { minimum: Schema.Number },
+  result: Schema.Array(Schema.Number),
+  writes: false,
+});
+
+const sum = stream(readings, { minimum: 10 }).pipe(
+  Stream.runFold(() => 0, (total, n) => total + n),
+);
+```
+
+This sends the statement's SurrealQL with the encoded `minimum` binding.
+Each consumer pull reads only far enough to decode and emit the next row.
+Taking the first few rows or interrupting the effect closes the iterator
+and aborts the request. The connection can serve subsequent requests.
+`timed` reports one send, the time spent pulling from the iterator, the
+number of emitted rows and the server durations received before closure.
+
+Full consumption verifies that every slot besides the value slot returns
+NONE. An empty list in the value slot emits zero rows, or fails with `StatementEmptyResult` if the
+statement declares `nonEmpty`. A server or decode failure ends the stream
+after any rows already emitted. If decoding fails before a writing stream
+has been fully acknowledged, `StatementWriteOutcomeError` reports the
+unknown write outcome. Read the data back before replaying an interrupted
+or unacknowledged write.
+
+The engine and SDK can buffer data before the consumer asks for it. On
+Apple Silicon with Node 26.13.1, fresh processes read and consumed 100,000
+small rows in four runs per method. Median peak RSS for `run` and `stream`
+was about 183 MiB and 256 MiB on embedded 4.0.1 with SurrealKV, and 168 MiB
+and 293 MiB for the client on WebSocket 3.3.4. Streaming provides early
+row delivery without a memory bound.
+
+#### Live queries
+
+`live(table)` builds a typed `LIVE SELECT` over a table descriptor or a
+`readAs` view. `where` and `project` use the same expressions and binding
+codecs as `select`.
+
+```ts
+import { Effect, Stream } from 'effect';
+import { Int } from 'effect-surrealkit';
+import { SurrealClient } from 'effect-surrealkit/client';
+import { gt, live, param } from 'effect-surrealkit/statement';
+
+const adults = live(PersonTable)
+  .where((row) => gt(row.age, param('minimum', Int)))
+  .project((row) => ({ name: row.name }))
+  .build('adult changes');
+
+const listen = Effect.scoped(Effect.gen(function* () {
+  const client = yield* SurrealClient;
+  const changes = yield* client.liveScoped(adults, { minimum: 17 });
+  return yield* Stream.runForEach(changes, (event) => onChange(event));
+}));
+```
+
+The registration sends `LIVE SELECT name AS name FROM ⟨person⟩ WHERE age >
+$minimum;`. When `liveScoped` succeeds, the listener is ready to receive
+changes even before the first pull. Closing the scope kills the subscription.
+If the SDK kill fails, the client sends a separate KILL for that query ID on the
+same session. If cleanup still cannot be confirmed, scope release logs a warning.
+A failed attachment also reports when its registration could not be cleaned up.
+Use the client's `live` stream to start listening on the first pull and kill
+the subscription when that stream ends.
+`timed` records registration and scope cleanup as separate requests.
+
+Each `CREATE`, `UPDATE` or `DELETE` has a separate typed record `id` and a
+typed `value`. `DELETE` supplies the last row before deletion, including
+the selected projection. The client preserves the engine's delivery order.
+On embedded 4.0.1 and WebSocket 3.3.4, an update
+that stops matching `WHERE` emits no event. An update that starts matching
+again emits `UPDATE`. Live events honor the session's table and field
+permissions, and `readAs` supplies the restricted row codec.
+
+An invalid event fails with `StatementDecodeError`. Server-side `KILLED`
+and a disconnected session end the stream with `LiveQueryClosed`. HTTP
+connections refuse live queries with `StatementUnsupported`. Embedded
+SurrealDB 4.0.1 still delivered changes with
+`capabilities.live_query_notifications` set to `false` in the Node engine
+configuration.
+
+Live queries here start from a table. They provide change events without a
+baseline read. `DIFF`, `FETCH`, record-ID and range targets, ordering,
+limits, grouping, and `only` are outside this API.
+
+#### Watching a query result
+
+Use `client.watchQuery` when a consumer needs the current result of a read.
+For example, if the oldest adult leaves a group, the next oldest adult
+should become the first row. An event filter on the original group can
+miss that departure. Watch changes to the underlying table and let the
+original query compute each new result.
+
+```ts
+import { Stream } from 'effect';
+import { Int } from 'effect-surrealkit';
+import { bindLive, make } from 'effect-surrealkit/client';
+import { gt, live, param, select } from 'effect-surrealkit/statement';
+
+const oldest = select(PersonTable)
+  .where((row) => gt(row.age, param('minimum', Int)))
+  .orderBy((row) => row.age, 'DESC')
+  .limit(1)
+  .build('people.oldest', { writes: false });
+const changes = live(PersonTable)
+  .project((row) => ({ id: row.id }))
+  .build('people.changes');
+
+const states = make(db).watchQuery(oldest, {
+  sources: [bindLive(changes)],
+  reconcileEvery: '30 seconds',
+}, { minimum: 17 });
+
+const display = Stream.runForEach(states, (state) =>
+  state._tag === 'Current' ? renderRows(state.value) : clearRows(state._tag),
+);
+```
+
+Each run owns its registrations. Supply a read whose statement metadata declares
+`writes: false` and at least one live source. Include every table or relation
+whose changes affect membership, projected values or ordering. Bind each live
+source with its own parameters. The observer starts its listeners before the
+first read and reads again if a notification arrives during a refresh. Bursts
+can share one refresh, and a slow consumer can skip intermediate snapshots.
+The observer holds one pending refresh and the latest state. The SDK and
+transport have their own notification buffers.
+Registering a live source requires a supported transport such as WebSocket.
+
+The Stream exposes `Loading`, `Current` with the decoded result, and `Stale`.
+After a transient disconnect, it reacquires listeners on the restored session
+and reads the current result. Periodic reads (every 30 seconds by default)
+also pick up changes in visibility that produced no notification. Reads and
+registrations use the same session. For a child SDK session, pass its owning
+connection to `make(session, { connection: db })`. Changing the database or
+access token ends that observation. Start a new one after a token rotation,
+identity change or permanent disconnect. Interrupting
+the Stream releases the listeners.
+
+Use the current snapshot for display or cache refresh. For processing every
+committed change, keep a durable journal and checkpoint. On SDK 2.2.2, a
+notification can be lost between server registration and SDK attachment.
+The initial and periodic reads reconcile the view after such a gap. The
+published Node engine adapter 3.2.0 can silently discard early notifications
+at its dispatcher limit even with an SDK that reports overflow after attachment.
+When a source reports overflow, the observer fails with
+`WatchQueryClosed` (reason `source-overflow`). Start a fresh observation to
+acquire new registrations and read the current result.
+
+#### Transports
+
+The matrix uses the SDK's native values on embedded SurrealDB, WebSocket
+RPC, and HTTP RPC at `/rpc`. Tested kinds include integers beyond
+JavaScript's safe range, decimals, NaN and infinities, datetimes and
+durations with nanoseconds, UUIDs, bytes, sets, geometry, composite
+record IDs, and nested lists and objects.
+
+| Capability | 4.0.1 embedded | 4.0.0 WebSocket | 4.0.0 HTTP | 3.3.4 WebSocket | 3.3.4 HTTP |
+| --- | --- | --- | --- | --- | --- |
+| JavaScript SDK | 2.2.2 | 2.2.2 | 2.2.2 | 2.2.2 | 2.2.2 |
+| `run` | 1 request, client timing only | 1 request, client timing only | 1 request, client timing only | 1 request, client timing only | 1 request, client timing only |
+| `transaction` | 1 request, client timing only | 1 request, client timing only | 1 request, client timing only | 1 request, client timing only | 1 request, client timing only |
+| `pipeline`, each statement | 1 request, server timing | 1 request, server timing | 1 request, server timing | 1 request, server timing | 1 request, server timing |
+| `pipeline`, each transaction | 1 request, server timing | 1 request, server timing | 1 request, server timing | 1 request, server timing | 1 request, server timing |
+| `stream` | 1 request, server timing | 1 request, server timing | 1 request, server timing | 1 request, server timing | 1 request, server timing |
+| `withTransaction`, one statement | 3 requests, server timing | 3 requests, server timing | Unsupported | 3 requests, server timing | Unsupported |
+| `liveScoped`, start and kill | 2 requests, client timing only | 2 requests, client timing only | Unsupported | 2 requests, client timing only | Unsupported |
+| `bulk`, two chunks, atomic | 4 requests, server timing | 4 requests, server timing | 1 request, client timing only | 4 requests, server timing | 1 request, client timing only |
+| `bulk`, two chunks, non-atomic | 2 requests, client timing only | 2 requests, client timing only | 2 requests, client timing only | 2 requests, client timing only | 2 requests, client timing only |
+| Checked `-0` binding | refused before dispatch | refused before dispatch | refused before dispatch | refused before dispatch | refused before dispatch |
+| Unchecked `-0` binding | returned -0 | returned -0 | returned -0 | returned -0 | returned -0 |
+| Engine float literal `-0.0f` | preserved | preserved | preserved | preserved | preserved |
+
+The counts include begin and commit for an interactive transaction, and
+start and kill for a live query. The interactive example runs one
+statement. Each bulk example writes two chunks. Timing describes what
+the client reports for these requests.
+
+SDK 2.2.2 encodes JavaScript `-0` as a CBOR float and preserved it on all
+five transports when sent with `unsafeSkipValueCheck`. With value checking
+enabled, a bound `-0` still raises `StatementEncodeError` before dispatch
+and names the binding path. This protects callers on older SDK versions such
+as 2.1.1, below the supported floor, which encode it as positive zero.
+
+#### Measured costs
+
+Five fresh Node processes and databases per case on macOS, Apple M2
+Ultra with 128 GiB RAM. Runs used Node 26.13.1, SurrealDB SDK 2.1.1 and
+Effect 4.0.6 with the execution implementation measured at `799ab96`.
+WebSocket connected to a local in-memory server.
+
+| Workload | Embedded 4.0.1 | WebSocket 3.3.4 |
+| --- | ---: | ---: |
+| 5,000 inserts, sequential `run` | 1,275 ms | 1,218 ms |
+| 5,000 inserts, `run` with concurrency 64 | 636 ms | 444 ms |
+| 5,000 inserts, non-atomic `bulk` | 51 ms | 69 ms |
+| 5,000 inserts, atomic `bulk` | 56 ms | 219 ms |
+| Eight sequential reads with `run` | 10.0 ms | 10.9 ms |
+| Eight reads in one `pipeline` | 8.1 ms | 7.1 ms |
+| 20,000 generated `doc` rows with `run` | 137 ms, 209 MiB | 126 ms, 179 MiB |
+| 20,000 generated `doc` rows with `stream` | 328 ms, 220 MiB | 338 ms, 194 MiB |
+| Strict decoding of pre-fetched `doc` rows | 2.59 μs/row | 2.86 μs/row |
+| Two writes in one `transaction` | 1.12 ms | 0.77 ms |
+| Two writes using `withTransaction` | 1.85 ms | 1.40 ms |
+
+The table reports medians. Bulk used chunks of 500. The two-write
+figures are per transaction from 100 repetitions in each sample.
+Peak RSS includes setup and the embedded engine when it shares the
+client process. Stream timing includes consuming all 20,000 rows.
+The streamed read had higher peak process RSS in this workload.
+
+```sh
+npm run build
+npm run --silent bench
+SURREAL_BIN=/path/to/surreal npm run --silent bench > benchmark.json
+```
+
+The binary adds a WebSocket run. The JSON includes all five samples for
+each case. The benchmark runs separately from the test suite.
+
 ### Record links and graph traversal
 
 Links, graph steps, recursive paths and `FETCH` are typed from the store
@@ -1484,6 +2341,55 @@ Not supported: a step to one table of several (`->member_of->team`), so
 step (`->(likes, follows)->`); `+path`; ordering by a field read through a
 link; `FETCH` under `SELECT VALUE`; and `FETCH` inside a step.
 
+### Putting it together
+
+A block binds a hybrid search ordered by its score, whose projection calls
+a built-in function and follows a record link, and guards and returns with
+built-in functions (`bestMatch` in `test/blocks.ts`, which
+`test/search-engine.test.ts` runs on SurrealDB 3.3.4 and 4.0.1):
+
+```ts
+import { array, string } from 'effect-surrealkit/functions';
+import {
+  and, block, eq, follow, knn, knnDistance, match, param, score, select,
+} from 'effect-surrealkit/statement';
+
+const terms = match(DocTable, 'body', param('terms', SurrealSchema.String), { ref: 1 });
+const near = knn(DocTable, 'embedding', 'query', { k: 3, ef: 40 });
+
+export const bestMatch = block()
+  .let('hits', () =>
+    select(DocTable)
+      .where(() => and(terms, near))
+      .project((row) => ({
+        id: row.id,
+        title: string.uppercase(row.title),
+        owner: follow(store, row.owner).name,
+        score: score(terms),
+        distance: knnDistance(near),
+      }))
+      .orderByAlias('score', 'DESC')
+      .build())
+  .throwIf(($) => eq(array.len($.hits), 0), 'No match')
+  .return(($) => ({ best: array.first($.hits), matches: array.len($.hits) }))
+  .build('best match', { writes: false });
+
+// Result<typeof bestMatch>: {
+//   best: { id: DocId; title: string; owner: string | undefined; score: number; distance: number } | undefined;
+//   matches: number;
+// }
+// Thrown<typeof bestMatch>: 'No match'
+// Input: { terms: string; query: ReadonlyArray<number> }
+```
+
+```sql
+{
+	LET $hits = (SELECT id AS id, string::uppercase(title) AS title, owner.name AS owner, search::score(1) AS score, vector::distance::knn() AS distance FROM ⟨doc⟩ WHERE body @1@ $terms AND embedding <|3,40|> $query ORDER BY score DESC);
+	IF array::len($hits) = 0 { THROW s"No match" };
+	{ best: array::first($hits), matches: array::len($hits) }
+};
+```
+
 ### What the statements do not know
 
 - **Permissions.** A generated `select` schema is the row a privileged
@@ -1559,6 +2465,68 @@ link; `FETCH` under `SELECT VALUE`; and `FETCH` inside a step.
 The engine suite (`test/statement-engine.test.ts`) runs every builder against
 the corpus schema and the modules generated from it, and passes on SurrealDB
 3.3.4 and 4.0.1.
+
+## Testing
+
+`effect-surrealkit/testing` helps test code built on statements. Its memory
+database needs `@surrealdb/node`, an optional peer dependency, with its own
+peer `@surrealdb/node-native`; it is imported only when a memory database
+starts, so nothing else in the package needs it installed:
+
+```sh
+npm i -D @surrealdb/node @surrealdb/node-native
+```
+
+```ts
+import { Effect } from 'effect';
+import { run } from 'effect-surrealkit/client';
+import { expectIndex, memoryLayer, recordUser } from 'effect-surrealkit/testing';
+
+const test = Effect.gen(function* () {
+  const rows = yield* run(adults, { minimum: 18, city: 'Leeds' });
+  yield* expectIndex(byEmail, { email: 'ann@example.com' }, 'person_email');
+  const ann = yield* recordUser({ access: 'user', variables: { name: 'ann' } });
+  const visible = yield* ann.client.run(visibleToUsers);
+  return { rows, visible };
+}).pipe(Effect.scoped, Effect.provide(memoryLayer({ schema })));
+```
+
+| Export | What it does |
+| --- | --- |
+| `memoryLayer({ schema?, namespace?, database? })` | `SurrealClient` and `TestDatabase` over a fresh in-memory engine in this process, with `schema` (SurrealQL text) loaded; closed with the layer. `memory(options)` is the same as a scoped effect. |
+| `layerFrom(connection, { namespace, database })` | The same over a connection a test already has (a server, the suite's engine). |
+| `loadSchema(text)` | Runs more schema text in the `TestDatabase`. |
+| `recordUser({ access, variables? })` | Signs a new record user up through a `DEFINE ACCESS … TYPE RECORD` and returns `{ session, client }`, a client running as that session, closed with the scope: what a restricted session sees, row and field permissions included. |
+| `schemaDrift(store)` | The differences between what a store registry declares and what the `TestDatabase` defines, as a list (empty for a match): a declared table that is missing or of another kind, a relation whose `ENFORCED` flag or endpoint tables differ, and a declared index that is missing, of another kind or over other fields. It reads `INFO FOR DB STRUCTURE` and `INFO FOR TABLE … STRUCTURE`, which SurrealDB 3.3 and 4.0 answer alike. |
+| `expectIndex(statement, input, index)`, `expectNoIndex(…)` | Succeed when the engine's plan of a `SELECT` does (does not) read `index`; otherwise an `IndexExpectationError` naming the indexes it does read. `explain(statement, input)` returns the plan and its indexes. |
+| `fake(script)`, `fakeLayer(script)` | A client without an engine. It answers each statement by name with a value, a scripted reply, or a function of its encoded bindings. `calls` records requests and lifecycle operations. |
+| `result(value)`, `thrown(message)`, `conflict()`, `failure(message)` | Reply constructors for ordinary result slots and failures. |
+| `checkConstraintErrors` | An effect over `SurrealClient` that defines the table `effect_surrealkit_constraint_check` with a unique index, writes a duplicate value and an id that exists, removes the table, and returns `{ indexConflict, recordExists, got }`: whether each failed as `StatementIndexConflict` and `StatementRecordExists`, and the tag each failed with. Run it against a disposable database on a new engine version before relying on the two errors. |
+| `indexConflict(index)`, `recordExists()` | A duplicate on the unique index `index`, and a record id that exists, as SurrealDB reports them: `StatementIndexConflict` for a statement that declares `index` (otherwise `StatementRequestError`), and `StatementRecordExists`. |
+| `events(list)`, `unsupported(feature)` | Script a live subscription's events or a feature refusal, such as `{ begin: unsupported('interactive transaction') }`. |
+| `verifyStatements({ scopes, schema?, holes?, timeoutSeconds? })` | Sends each complete authored text once, with no bindings, to a discarded in-memory engine after the schema files, and fails with a `StatementVerificationError` on a parse error, a result count other than the analyzer's `slots`, or a text that does not finish within the timeout; what `statements --verify` runs. See [Checking texts on an engine](#checking-texts-on-an-engine---verify). |
+| `conflictingSession(session, { marker, times })` | Wraps an SDK session, injecting a transaction conflict into the first `times` sent requests with matching text. Returns the wrapped `session` and the `matched.count` readback. |
+
+`expectIndex` runs the statement with `EXPLAIN` appended, which plans it
+without running it. SurrealDB 3.3 and 4.0 answer with the same plan format, a
+tree of `{ operator, attributes, children }` nodes in which a node that reads
+an index names it as `attributes.index` (an `IndexScan` for `=`, a range, and
+`ORDER BY` with `LIMIT`) and a table scan names none; `test/testing.test.ts`
+pins the plan of each builder shape on both engines.
+
+The scripted client is the real client over a scripted transport, so it
+refuses what the real one refuses before anything would be sent: a binding
+its codec or the value check refuses, the scope rules of a transaction, and,
+with the SDK's own message, a transaction whose text has `BEGIN`, `COMMIT` or
+`CANCEL` or a `RETURN` followed by another statement. A canned result is
+decoded by the statement's codec, so a result of the wrong shape fails as it
+would against an engine; a statement the script does not name fails as a
+request. Recorded calls use each statement's original binding names.
+
+`conflictingSession` leaves the injected request unsent. When a request
+has several response slots, the first matching slot has the conflict
+and the others report that they did not execute. Later matching requests
+pass through to the engine and continue incrementing `matched.count`.
 
 ## Two codec worlds
 

@@ -20,9 +20,21 @@
 			"types": "./dist/statement.d.ts",
 			"import": "./dist/statement.js"
 		},
+		"./functions": {
+			"types": "./dist/functions.d.ts",
+			"import": "./dist/functions.js"
+		},
+		"./client": {
+			"types": "./dist/client.d.ts",
+			"import": "./dist/client.js"
+		},
 		"./analyze": {
 			"types": "./dist/analyze.d.ts",
 			"import": "./dist/analyze.js"
+		},
+		"./testing": {
+			"types": "./dist/testing.d.ts",
+			"import": "./dist/testing.js"
 		}
 	},
 	"bin": {
@@ -46,6 +58,7 @@
 		"test": "vitest run",
 		"test:skips": "node scripts/skips.mjs",
 		"test:roundtrip": "node scripts/roundtrip.mjs",
+		"generate:functions": "node scripts/generate-functions.mjs",
 		"typecheck": "tsc --noEmit && tsc --noEmit -p test/types"
 	},
 	"keywords": [
@@ -55,8 +68,14 @@
 		"surrealkit"
 	],
 	"peerDependencies": {
+		"@surrealdb/node": "^3.2.0",
 		"effect": "^4.1.5",
 		"surrealdb": "^2.2.2"
+	},
+	"peerDependenciesMeta": {
+		"@surrealdb/node": {
+			"optional": true
+		}
 	},
 	"devDependencies": {
 		"@biomejs/biome": "2.4.2",

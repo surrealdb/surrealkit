@@ -68,9 +68,9 @@ jobs:
               run: npm run typecheck
 
             # Unit, property (in-process CBOR), golden and CLI suites, and the
-            # engine, field-presence and conformance suites on the in-process
-            # SurrealDB 4 engine of `@surrealdb/node`. The JSON round trips over
-            # HTTP need a server and run in the `engine` job below.
+            # engine, statement, field-presence and conformance suites on the
+            # in-process SurrealDB 4 engine of `@surrealdb/node`. The JSON round
+            # trips over HTTP need a server and run in the `engine` job below.
             # test:skips fails when the skipped tests differ from
             # test/skips/embedded.txt.
             - name: Test
@@ -90,7 +90,7 @@ jobs:
                   # the build to stdout, so inspect the packed tarball, not `pack --json`.
                   npm pack --ignore-scripts --pack-destination /tmp/pack > /dev/null
                   listing="$(tar -tzf /tmp/pack/effect-surrealkit-*.tgz)"
-                  for f in dist/index.js dist/emitter.js dist/statement.js dist/analyze.js dist/cli.js; do
+                  for f in dist/index.js dist/emitter.js dist/statement.js dist/functions.js dist/client.js dist/analyze.js dist/testing.js dist/cli.js; do
                       grep -qx "package/$f" <<<"$listing" || { echo "::error::$f is not in the package"; exit 1; }
                   done
                   # npm 11 refuses even a dry run over a version already on the
@@ -103,6 +103,7 @@ jobs:
                   else
                       npm publish --dry-run
                   fi
+
 
     generated-ts:
         name: Generated TypeScript compiles (examples/effect-typegen through surrealkit compile)
@@ -226,13 +227,20 @@ jobs:
                   echo "SurrealDB never became ready"; exit 1
 
             # Codec round trips through the server (the JSON world over HTTP
-            # included), every cell of the field-presence matrix against
-            # generated schemas, and the conformance suite. The remote lane has
-            # no committed skip list yet, so test:skips reports it as unpinned
-            # and fails only when the suite does.
-            - name: Engine, field-presence and conformance suites
+            # included), every cell of the field-presence matrix against generated
+            # schemas, and the statement and conformance suites. test:skips fails
+            # when the suite does, or when the skipped tests differ from the
+            # committed lists test/skips/remote-4.0.txt and remote-4.0-http.txt,
+            # which are pinned against the server version above (v4.0.0).
+            - name: Engine, field-presence, statement and conformance suites
               env:
                   SURREAL_URL: ws://127.0.0.1:8000/rpc
+              run: npm run test:skips
+
+            - name: Engine suites over HTTP RPC
+              env:
+                  SURREAL_URL: http://127.0.0.1:8000/rpc
+                  SURREAL_TRANSPORT: http
               run: npm run test:skips
 
             # create → select → merge → select, relate and call for the generated

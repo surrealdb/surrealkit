@@ -14,9 +14,16 @@ import { compile, packageRoot, textOf, typesRoot } from './compiler.js';
 
 const fixtures = [
 	'negative.ts',
+	'statement-negative.ts',
 	'block-negative.ts',
 	'search-negative.ts',
+	'graph-negative.ts',
 	'binds-negative.ts',
+	'pipeline-negative.ts',
+	'interactive-negative.ts',
+	'bulk-negative.ts',
+	'stream-negative.ts',
+	'live-negative.ts',
 ].map((file) => join(typesRoot, file));
 
 const directive = /^\s*\/\/ @ts-expect-error(?: \[([^\]\s]+)\])?/u;

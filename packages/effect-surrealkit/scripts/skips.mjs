@@ -8,22 +8,24 @@
  * - `embedded`: neither `SURREAL_URL` nor `SURREAL_BIN` is set.
  * - `binary-<major>.<minor>`: `SURREAL_BIN`, by the version the binary
  *   reports, e.g. `binary-3.3`.
- * - `remote`: `SURREAL_URL`, whose version is not known before the suite
- *   connects.
+ * - `remote-<major>.<minor>`: `SURREAL_URL`, by the version the server
+ *   answers on `GET /version`, e.g. `remote-4.0`.
  *
- * `SURREALKIT_EXEC_ENDPOINT` (the round trips of `scripts/roundtrip.mjs`)
- * appends `-exec`.
+ * `SURREAL_TRANSPORT=http` appends `-http`, and `SURREALKIT_EXEC_ENDPOINT`
+ * (the round trips of `scripts/roundtrip.mjs`) appends `-exec`.
  *
  * Exits 1 when the suite fails, or when a test is skipped that the list does
  * not name or the list names one that was not skipped; both directions are
- * printed. A lane with no list is reported as unpinned and is not compared.
- * `UPDATE_SKIPS=1` writes the list from a passing run.
+ * printed. A lane with no list is reported as unpinned and is not compared;
+ * every run names the lanes that have a list. `UPDATE_SKIPS=1` writes the
+ * list from a passing run.
  */
 import { spawnSync } from 'node:child_process';
 import {
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
+	readdirSync,
 	readFileSync,
 	rmSync,
 	writeFileSync,
@@ -36,25 +38,43 @@ import { fileURLToPath } from 'node:url';
 const packageRoot = resolve(import.meta.dirname, '..');
 const listsRoot = join(packageRoot, 'test', 'skips');
 
+const majorMinor = (text) => {
+	const version = /(\d+)\.(\d+)\./u.exec(text);
+	return version === null ? undefined : `${version[1]}.${version[2]}`;
+};
+
 /**
  * The lane's name. `binaryVersion` is what `surreal version` prints, read
- * only when `SURREAL_BIN` is set.
+ * only when `SURREAL_BIN` is set; `serverVersion` is what the server at
+ * `SURREAL_URL` answers on `GET /version` (e.g. `surrealdb-3.3.4`), read only
+ * when `SURREAL_URL` is set.
  */
-export const laneOf = (env, binaryVersion = () => '') => {
+export const laneOf = (
+	env,
+	binaryVersion = () => '',
+	serverVersion = () => '',
+) => {
 	let lane;
 	if (env.SURREAL_URL !== undefined) {
-		lane = 'remote';
+		const version = majorMinor(serverVersion());
+		if (version === undefined) {
+			throw new Error(
+				`could not read the version of the server at SURREAL_URL (${env.SURREAL_URL})`,
+			);
+		}
+		lane = `remote-${version}`;
 	} else if (env.SURREAL_BIN !== undefined) {
-		const version = /(\d+)\.(\d+)\./u.exec(binaryVersion());
-		if (version === null) {
+		const version = majorMinor(binaryVersion());
+		if (version === undefined) {
 			throw new Error(
 				`could not read the version of SURREAL_BIN (${env.SURREAL_BIN})`,
 			);
 		}
-		lane = `binary-${version[1]}.${version[2]}`;
+		lane = `binary-${version}`;
 	} else {
 		lane = 'embedded';
 	}
+	if (env.SURREAL_TRANSPORT === 'http') lane += '-http';
 	if (env.SURREALKIT_EXEC_ENDPOINT !== undefined) lane += '-exec';
 	return lane;
 };
@@ -129,14 +149,49 @@ const binaryVersion = () => {
 	return result.stdout;
 };
 
-const main = () => {
+/** The address of `GET /version` on the server of an RPC address. */
+export const versionUrl = (rpc) => {
+	const url = new URL(rpc);
+	if (url.protocol === 'ws:') url.protocol = 'http:';
+	else if (url.protocol === 'wss:') url.protocol = 'https:';
+	url.pathname = '/version';
+	url.search = '';
+	url.hash = '';
+	return url.href;
+};
+
+const serverVersion = async (rpc) => {
+	const response = await fetch(versionUrl(rpc));
+	if (!response.ok) {
+		throw new Error(
+			`GET ${versionUrl(rpc)} answered ${response.status} ${response.statusText}`,
+		);
+	}
+	return response.text();
+};
+
+/** The lanes with a committed list, sorted. */
+export const pinnedLanes = (root = listsRoot) =>
+	existsSync(root)
+		? readdirSync(root)
+				.filter((name) => name.endsWith('.txt'))
+				.map((name) => name.slice(0, -'.txt'.length))
+				.sort()
+		: [];
+
+const main = async () => {
 	if (process.argv.length > 2) {
 		console.error(
 			'test:skips takes no arguments: it runs the whole suite, so the skipped tests can be compared.',
 		);
 		return 2;
 	}
-	const lane = laneOf(process.env, binaryVersion);
+	const remote =
+		process.env.SURREAL_URL === undefined
+			? ''
+			: await serverVersion(process.env.SURREAL_URL);
+	const lane = laneOf(process.env, binaryVersion, () => remote);
+	console.log(`[skips] pinned lanes: ${pinnedLanes().join(', ')}`);
 	const listPath = join(listsRoot, `${lane}.txt`);
 	const shown = relative(packageRoot, listPath);
 	const update = process.env.UPDATE_SKIPS === '1';
@@ -223,5 +278,5 @@ if (
 	process.argv[1] !== undefined &&
 	resolve(process.argv[1]) === fileURLToPath(import.meta.url)
 ) {
-	process.exitCode = main();
+	process.exitCode = await main();
 }
