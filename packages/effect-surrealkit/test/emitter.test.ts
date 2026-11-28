@@ -324,6 +324,28 @@ describe('generation rules', () => {
 			unarySchema('Schema.optionalKey', 'Schema.Struct({})', false),
 		).toBe('Schema.optionalKey(Schema.Struct({}))');
 	});
+	it('pipes nullable and optional wrappers around a call', () => {
+		expect(
+			unarySchema(
+				'Schema.NullOr',
+				'SurrealSchema.RecordIdFromJsonAs(SiteId)',
+				true,
+			),
+		).toBe('SurrealSchema.RecordIdFromJsonAs(SiteId).pipe(Schema.NullOr)');
+		expect(
+			unarySchema(
+				'Schema.optionalKey',
+				unarySchema(
+					'Schema.NullOr',
+					'SurrealSchema.RecordIdFromJsonAs(SiteId)',
+					true,
+				),
+				true,
+			),
+		).toBe(
+			'SurrealSchema.RecordIdFromJsonAs(SiteId).pipe(Schema.NullOr, Schema.optionalKey)',
+		);
+	});
 	it('never chains pipe calls in pipeable output', async () => {
 		const document = readJson(compiledPath('corpus'));
 		const piped = await run(

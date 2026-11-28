@@ -234,7 +234,11 @@ const printJsonKind = (
 		}
 		case 'option':
 			// NONE renders as null where it cannot be an absent key.
-			return `Schema.NullOr(${printKind(kind.item, ctx)})`;
+			return unarySchema(
+				'Schema.NullOr',
+				printKind(kind.item, ctx),
+				ctx.profile.pipeable,
+			);
 		case 'union': {
 			if (kind.variants.every(isLiteral)) return undefined;
 			// NONE and NULL both render as null.
@@ -247,7 +251,11 @@ const printJsonKind = (
 			];
 			const nullIndex = variants.indexOf('Schema.Null');
 			if (variants.length === 2 && nullIndex !== -1) {
-				return `Schema.NullOr(${variants[1 - nullIndex]})`;
+				return unarySchema(
+					'Schema.NullOr',
+					variants[1 - nullIndex] as string,
+					ctx.profile.pipeable,
+				);
 			}
 			return variants.length === 1
 				? (variants[0] as string)
@@ -358,7 +366,11 @@ export const printKind = (
 		case 'literal':
 			return printLiteral(kind, ctx);
 		case 'option':
-			return `Schema.UndefinedOr(${printKind(kind.item, ctx)})`;
+			return unarySchema(
+				'Schema.UndefinedOr',
+				printKind(kind.item, ctx),
+				ctx.profile.pipeable,
+			);
 		case 'union': {
 			if (kind.variants.every(isLiteral))
 				return printLiterals(kind.variants, ctx);
@@ -369,7 +381,11 @@ export const printKind = (
 				(variant) => variant.kind === 'null',
 			);
 			if (variants.length === 2 && nullIndex !== -1) {
-				return `Schema.NullOr(${variants[1 - nullIndex]})`;
+				return unarySchema(
+					'Schema.NullOr',
+					variants[1 - nullIndex] as string,
+					ctx.profile.pipeable,
+				);
 			}
 			return `Schema.Union([${variants.join(', ')}])`;
 		}
