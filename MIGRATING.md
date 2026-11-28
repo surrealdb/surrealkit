@@ -10,7 +10,7 @@ on an existing project re-applies nothing and prunes nothing.
 Seven things do need attention, 1.0.0-beta.6 adds five more (8 to 12), and
 1.0.0-beta.7 two more (13 and 14), 1.0.0-beta.8 five more (15 to 19), and
 1.0.0-rc.1 three more (20 to 22). 1.0.0-rc.1 needs SurrealDB 4.0 (20); stay on
-1.0.0-beta.8 while your servers run 3.x.
+1.0.0-beta.8 while your servers run 3.x. Unreleased changes are 23 and up.
 Upgrading from 0.7.0 or any 1.0 beta carries existing state forward; CI checks
 that against every published release, written on SurrealDB 3.3 and carried on
 after the datastore is upgraded to 4.0.
@@ -596,6 +596,23 @@ level. Two new commands, also MCP tools (`compat_status`, `compat_raise`):
   for each field whose records do not fit, names the schema file to change and
   the `MIGRATE EXISTING ROWS` clause to add. Raise the level only once every
   node runs 4.0.
+
+### 23. `setup`, `seed`, `status` and `apply` connect to the selected target (unreleased)
+
+These four commands used to connect through the ambient connection (the
+`SURREALDB_*` environment, `.env` and the connection flags) even when
+`surrealkit.toml` declared targets, so `--target` was accepted and ignored:
+`seed -t staging` seeded the ambient database, and `apply -t prod` ran its file
+there. They now resolve their database like `sync`, `rollout`, `typegen` and `compat`:
+`--target`, else the `primary` target, else the only declared target, else the
+ambient connection.
+
+- A project with a `primary` target, or exactly one declared target, now runs
+  these commands against that target when no `--target` is given. Pass
+  `--target` to pick another, or remove the `[target.*]` section if the ambient
+  connection is the database you meant.
+- These commands work on one database. `--all`, or `--target` given more than
+  once, is now an error that says so, instead of being ignored.
 
 ## Opting into multiple schema modules
 
