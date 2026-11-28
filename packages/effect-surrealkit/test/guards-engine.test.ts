@@ -1,10 +1,10 @@
 /**
  * Where a NONE binding assigned to a field that rejects NONE is guarded:
- * the text runs without an error when the binding is NONE, so reading the
- * assignment as a use that must hold a value would refuse valid SurrealQL.
- * The analyzer takes an assignment for a binding use only where nothing in
- * the text can skip it; these are the engine facts behind that rule, on the
- * engine `SURREAL_BIN` or `SURREAL_URL` names (checked on 3.3 and 4.0).
+ * the text runs without an error when the binding is NONE, so a
+ * `rejectsNone` entry, which refuses a codec that can hold NONE, would
+ * refuse valid SurrealQL. The analyzer takes an assignment for a binding
+ * use only where nothing in the text can skip it; these are the engine
+ * facts on each lane (SurrealDB 4.0 embedded, 3.3 with `SURREAL_BIN`).
  */
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
@@ -22,17 +22,6 @@ if (!engineConfigured) {
 		`[effect-surrealkit] guarded assignment engine suite skipped: ${engineSkipReason}`,
 	);
 }
-
-/** The major version in what the engine reports, e.g. `surrealdb-4.0.1`. */
-const majorVersion = (version: string): number => {
-	const major = /^(?:surrealdb-)?(\d+)\./u.exec(version)?.[1];
-	if (major === undefined) {
-		throw new Error(
-			`could not determine SurrealDB major version: ${version}`,
-		);
-	}
-	return Number(major);
-};
 
 /** The fields `$x` is recorded as assigned to, as `table.field`. */
 const assigned = (sql: string): ReadonlyArray<string> =>
@@ -128,7 +117,7 @@ describe.skipIf(!engineConfigured)(
 					.query('SELECT VALUE okc FROM meter;', { x: 'v' })
 					.collect(),
 			);
-			expect(seen).toEqual([majorVersion(engine.version) === 3]);
+			expect(seen).toEqual([engine.majorVersion === 3]);
 			for (const sql of [
 				'UPDATE gauge SET station = $x WHERE $x != NONE;',
 				'UPSERT gauge:1 SET station = $x WHERE $x != NONE;',

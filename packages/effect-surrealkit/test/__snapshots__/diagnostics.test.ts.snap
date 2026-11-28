@@ -1,0 +1,567 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`type diagnostics > binds/argument-narrow-undefined-or 1`] = `
+[
+  "TS2322: Type '{ weight: Schema.UndefinedOr<Schema.Literal<1>>; }' is not assignable to type '"binding \`weight\` is passed to \`fn::score\` at index 0 (float), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > binds/argument-wrong-representation 1`] = `
+[
+  "TS2322: Type '{ weight: Schema.declareConstructor<string, string, readonly [], string>; }' is not assignable to type '"binding \`weight\` is passed to \`fn::score\` at index 0 (float), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > binds/assigned-narrow-undefined-or 1`] = `
+[
+  "TS2322: Type '{ model: Schema.UndefinedOr<Schema.Literal<"a">>; }' is not assignable to type '"binding \`model\` is assigned to \`meter.model\` (string), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > binds/assigned-wrong-representation 1`] = `
+[
+  "TS2322: Type '{ producer: Schema.declareConstructor<number, number, readonly [], number>; }' is not assignable to type '"binding \`producer\` is assigned to \`snapshot.producer\` (string), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > binds/branded-wrong-representation 1`] = `
+[
+  "TS2322: Type '{ ceiling: Schema.brand<Schema.declareConstructor<string, string, readonly [], string>, "app/Ceiling">; producer: Schema.declareConstructor<string, string, readonly [], string>; }' is not assignable to type '"binding \`ceiling\` is compared with \`snapshot.tally\` (int), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > binds/field-wrong-representation 1`] = `
+[
+  "TS2322: Type '{ ceiling: Schema.declareConstructor<number, number, readonly [], number>; producer: Schema.declareConstructor<number, number, readonly [], number>; }' is not assignable to type '"binding \`producer\` is compared with \`snapshot.producer\` (string), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > binds/key-narrow-undefined-or 1`] = `
+[
+  "TS2322: Type '{ key: Schema.UndefinedOr<Schema.Literal<"a">>; }' is not assignable to type '"binding \`key\` is the key of a \`meter\` record (string), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > binds/key-wrong-representation 1`] = `
+[
+  "TS2322: Type '{ key: Schema.declareConstructor<string, string, readonly [], string>; }' is not assignable to type '"binding \`key\` is the key of a \`gadget\` record (uuid), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > binds/option-null-or-narrow 1`] = `
+[
+  "TS2322: Type '{ model: Schema.NullOr<Schema.Literal<"a">>; }' is not assignable to type '"binding \`model\` is compared with \`meter.model\` (option<string>), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > binds/option-wrong-representation 1`] = `
+[
+  "TS2322: Type '{ model: Schema.UndefinedOr<Schema.Number>; }' is not assignable to type '"binding \`model\` is compared with \`meter.model\` (option<string>), which its codec cannot hold"'.",
+]
+`;
+
+exports[`type diagnostics > block/arm-local-outside 1`] = `
+[
+  "TS2339: Property 'inner' does not exist on type 'Scope<NoLocals>'.",
+]
+`;
+
+exports[`type diagnostics > block/condition-not-boolean 1`] = `
+[
+  "TS2322: Type 'LocalField<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "scripts/team"> & Codec, true>' is not assignable to type 'Condition<NoParams>'.
+  Types of property '[ExprTypeId]' are incompatible.
+    Type 'ExprData<UndefinedOr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "scripts/team"> & Codec>, NoParams>' is not assignable to type 'ExprData<Codec<unknown, boolean, never, never>, NoParams>' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+      Type 'UndefinedOr<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "scripts/team"> & Codec>' is not assignable to type 'Codec<unknown, boolean, never, never>'.
+        Types of property '"Encoded"' are incompatible.
+          Type '_RecordId<"team"> | undefined' is not assignable to type 'boolean'.
+            Type 'undefined' is not assignable to type 'boolean'.",
+]
+`;
+
+exports[`type diagnostics > block/do-with-result 1`] = `
+[
+  "TS2322: Type 'Statement<{}, $Array<declareConstructor<{ readonly id: _RecordId<"invite"> & Brand<"scripts/invite">; readonly expires_at: DateTime; readonly role: "member" | "admin"; readonly status: "open" | ... 1 more ... | "revoked"; readonly team: _RecordId<...> & Brand<...>; }, { ...; }, readonly [...], { ...; }>>, never, nev...' is not assignable to type '"a step run for its effect returns NONE (a write by id with \`.returning(\\"none\\")\`); bind a result with \`let\`"'.",
+]
+`;
+
+exports[`type diagnostics > block/if-not-none-unknown 1`] = `
+[
+  "TS2345: Argument of type '"nope"' is not assignable to parameter of type '"invite"'.",
+]
+`;
+
+exports[`type diagnostics > block/local-engine-name 1`] = `
+[
+  "TS2345: Argument of type '"value"' is not assignable to parameter of type '"\`$value\` is set by SurrealDB, so a block cannot define it"'.",
+]
+`;
+
+exports[`type diagnostics > block/local-not-a-value 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type 'LetValue'.",
+]
+`;
+
+exports[`type diagnostics > block/local-redefined 1`] = `
+[
+  "TS2345: Argument of type '"a"' is not assignable to parameter of type '"local \`$a\` is already defined in this block"'.",
+]
+`;
+
+exports[`type diagnostics > block/local-shadows-binding 1`] = `
+[
+  "TS2345: Argument of type '"x"' is not assignable to parameter of type '"\`$x\` is a binding of this block, and a local of that name would shadow it"'.",
+]
+`;
+
+exports[`type diagnostics > block/object-extra-field 1`] = `
+[
+  "TS2345: Argument of type 'Expr<ObjectCodec<{ readonly team: LocalField<brand<declareConstructor<_RecordId<"team">, _RecordId<"team">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "scripts/team"> & Codec, false>; readonly account: Expr<...>; readonly role: LocalField<...>; readonly ...' is not assignable to parameter of type '"\`bogus\` is not a field \`membership\` accepts in CREATE"'.",
+]
+`;
+
+exports[`type diagnostics > block/return-constant 1`] = `
+[
+  "TS2322: Type 'number' is not assignable to type 'Returned'.",
+]
+`;
+
+exports[`type diagnostics > block/throw-if-none-unknown 1`] = `
+[
+  "TS2345: Argument of type '"nope"' is not assignable to parameter of type '"invite"'.",
+]
+`;
+
+exports[`type diagnostics > block/unknown-field 1`] = `
+[
+  "TS2339: Property 'nope' does not exist on type 'Local<UndefinedOr<declareConstructor<{ readonly id: _RecordId<"invite"> & Brand<"scripts/invite">; readonly expires_at: DateTime; readonly role: "member" | "admin"; readonly status: "open" | "accepted" | "revoked"; readonly team: _RecordId<...> & Brand<...>; }, { ...; }, readonly [...], { ...; }>>>'.",
+]
+`;
+
+exports[`type diagnostics > block/unknown-local 1`] = `
+[
+  "TS2339: Property 'nope' does not exist on type 'Scope<NoLocals & { readonly invite: UndefinedOr<declareConstructor<{ readonly id: _RecordId<"invite"> & Brand<"scripts/invite">; readonly expires_at: DateTime; readonly role: "member" | "admin"; readonly status: "open" | ... 1 more ... | "revoked"; readonly team: _RecordId<...> & Brand<...>; }, { ...; }, readonly [....'.",
+]
+`;
+
+exports[`type diagnostics > none/assigned-and-compared 1`] = `
+[
+  "TS2322: Type '{ name: Schema.UndefinedOr<Schema.declareConstructor<string, string, readonly [], string>>; }' is not assignable to type '"binding \`name\` is assigned to \`person.name\` (string), which rejects NONE, and its codec can hold NONE"'.",
+]
+`;
+
+exports[`type diagnostics > none/assigned-array 1`] = `
+[
+  "TS2322: Type '{ tags: Schema.UndefinedOr<Schema.$Array<Schema.declareConstructor<string, string, readonly [], string>>>; }' is not assignable to type '"binding \`tags\` is assigned to \`person.tags\` (array<string>), which rejects NONE, and its codec can hold NONE"'.",
+]
+`;
+
+exports[`type diagnostics > none/assigned-in-sequence 1`] = `
+[
+  "TS2322: Type '{ age: Schema.declareConstructor<number, number, readonly [], number>; name: Schema.UndefinedOr<Schema.declareConstructor<string, string, readonly [], string>>; }' is not assignable to type '"binding \`name\` is assigned to \`person.name\` (string), which rejects NONE, and its codec can hold NONE"'.",
+]
+`;
+
+exports[`type diagnostics > none/assigned-undefined-or 1`] = `
+[
+  "TS2322: Type '{ name: Schema.UndefinedOr<Schema.declareConstructor<string, string, readonly [], string>>; }' is not assignable to type '"binding \`name\` is assigned to \`person.name\` (string), which rejects NONE, and its codec can hold NONE"'.",
+]
+`;
+
+exports[`type diagnostics > none/assigned-undefined-or-branded 1`] = `
+[
+  "TS2322: Type '{ name: Schema.UndefinedOr<Schema.brand<Schema.declareConstructor<string, string, readonly [], string>, "app/Name">>; }' is not assignable to type '"binding \`name\` is assigned to \`person.name\` (string), which rejects NONE, and its codec can hold NONE"'.",
+]
+`;
+
+exports[`type diagnostics > none/assigned-without-binds 1`] = `
+[
+  "TS2322: Type '{ name: Schema.UndefinedOr<Schema.declareConstructor<string, string, readonly [], string>>; }' is not assignable to type '"binding \`name\` is assigned to \`person.name\` (string), which rejects NONE, and its codec can hold NONE"'.",
+]
+`;
+
+exports[`type diagnostics > object/not-an-expression 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'a' does not exist in type 'Expr<Codec, Params>'.",
+]
+`;
+
+exports[`type diagnostics > schema/computed-field-in-create 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'display' does not exist in type '{ readonly name: string; readonly address: { readonly [x: string]: SurrealValue; readonly city: string; }; readonly email: string; readonly bio: string | null; readonly score: number; ... 11 more ...; readonly updated_at?: DateTime; }'.",
+]
+`;
+
+exports[`type diagnostics > schema/computed-field-in-merge 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'display' does not exist in type '{ readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealMergeValue; readonly city?: string; }; readonly age?: number | undefined; ... 11 more ...; readonly updated_at?: DateTime | undefined; }'.",
+]
+`;
+
+exports[`type diagnostics > schema/decode-native-as-json 1`] = `
+[
+  "TS2345: Argument of type '{ readonly id: _RecordId<"ledger">; readonly amount: Decimal; }' is not assignable to parameter of type '{ readonly id: string; readonly amount: string; }'.
+  Types of property 'id' are incompatible.
+    Type '_RecordId<"ledger">' is not assignable to type 'string'.",
+]
+`;
+
+exports[`type diagnostics > schema/edge-wrong-in 1`] = `
+[
+  "TS2322: Type '_RecordId<"team"> & Brand<"corpus/team">' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type '_RecordId<"team"> & Brand<"corpus/team">' is not assignable to type '_RecordId<"person">'.
+    Types of property 'table' are incompatible.
+      Type '_Table<"team", unknown>' is not assignable to type '_Table<"person", unknown>'.
+        Type '"team"' is not assignable to type '"person"'.",
+]
+`;
+
+exports[`type diagnostics > schema/edge-wrong-out 1`] = `
+[
+  "TS2322: Type '_RecordId<"person"> & Brand<"corpus/person">' is not assignable to type '(_RecordId<"org"> & Brand<"corpus/org">) | (_RecordId<"team"> & Brand<"corpus/team">)'.
+  Type '_RecordId<"person"> & Brand<"corpus/person">' is not assignable to type '_RecordId<"team"> & Brand<"corpus/team">'.
+    Type '_RecordId<"person"> & Brand<"corpus/person">' is not assignable to type '_RecordId<"team">'.
+      Types of property 'table' are incompatible.
+        Type '_Table<"person", unknown>' is not assignable to type '_Table<"team", unknown>'.
+          Type '"person"' is not assignable to type '"team"'.",
+]
+`;
+
+exports[`type diagnostics > schema/endpoint-in-edge-content 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'in' does not exist in type '{ readonly role?: "lead" | "member"; readonly since?: DateTime; }'.",
+]
+`;
+
+exports[`type diagnostics > schema/extra-key-in-closed-object 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'extra' does not exist in type '{ readonly notify?: { readonly email?: boolean; }; readonly theme?: "dark" | "light"; }'.",
+]
+`;
+
+exports[`type diagnostics > schema/function-non-trailing-optional 1`] = `
+[
+  "TS2322: Type '[number]' is not assignable to type 'readonly [number | undefined, number]'.
+  Source has 1 element(s) but target requires 2.",
+]
+`;
+
+exports[`type diagnostics > schema/function-too-few-arguments 1`] = `
+[
+  "TS2322: Type '[]' is not assignable to type 'readonly [string, (string | undefined)?, (number | undefined)?]'.
+  Source has 0 element(s) but target requires 1.",
+]
+`;
+
+exports[`type diagnostics > schema/function-too-many-arguments 1`] = `
+[
+  "TS2322: Type '[string, string, number, number]' is not assignable to type 'readonly [string, (string | undefined)?, (number | undefined)?]'.
+  Source has 4 element(s) but target allows only 3.",
+]
+`;
+
+exports[`type diagnostics > schema/function-wrong-argument 1`] = `
+[
+  "TS2322: Type 'number' is not assignable to type 'string'.",
+]
+`;
+
+exports[`type diagnostics > schema/id-in-create 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'id' does not exist in type '{ readonly name: string; readonly address: { readonly [x: string]: SurrealValue; readonly city: string; }; readonly email: string; readonly bio: string | null; readonly score: number; ... 11 more ...; readonly updated_at?: DateTime; }'.",
+]
+`;
+
+exports[`type diagnostics > schema/int-key-as-string 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type 'RecordIdValue & number'.",
+]
+`;
+
+exports[`type diagnostics > schema/json-field-as-native 1`] = `
+[
+  "TS2322: Type 'declareConstructor<Decimal, string, readonly [decodeTo<Codec<Decimal, Decimal, never, never>, String, never, never>], Decimal>' is not assignable to type 'declareConstructor<Decimal, Decimal, readonly [], Decimal>'.
+  Type 'string' is not assignable to type 'Decimal'.",
+]
+`;
+
+exports[`type diagnostics > schema/json-row-as-native 1`] = `
+[
+  "TS2322: Type '{ readonly id: string; readonly amount: string; }' is not assignable to type '{ readonly id: _RecordId<"ledger">; readonly amount: Decimal; }'.
+  Types of property 'id' are incompatible.
+    Type 'string' is not assignable to type '_RecordId<"ledger">'.",
+]
+`;
+
+exports[`type diagnostics > schema/missing-on-content 1`] = `
+[
+  "TS2741: Property 'role' is missing in type '{ address: { city: string; }; bio: null; email: string; name: string; phones: never[]; score: number; tags: Set<string>; }' but required in type '{ readonly name: string; readonly role: "owner" | "member" | "admin"; readonly address: { readonly [x: string]: SurrealValue; readonly city: string; }; readonly email: string; readonly bio: string | null; ... 10 more ...; readonly updated_at?: DateTime; }'.",
+]
+`;
+
+exports[`type diagnostics > schema/missing-on-create 1`] = `
+[
+  "TS2739: Type '{ address: { city: string; }; bio: null; score: number; }' is missing the following properties from type '{ readonly name: string; readonly address: { readonly [x: string]: SurrealValue; readonly city: string; }; readonly email: string; readonly bio: string | null; readonly score: number; ... 11 more ...; readonly updated_at?: DateTime; }': name, email",
+]
+`;
+
+exports[`type diagnostics > schema/native-row-as-json 1`] = `
+[
+  "TS2322: Type '{ readonly id: _RecordId<"ledger">; readonly amount: Decimal; }' is not assignable to type '{ readonly id: string; readonly amount: string; }'.
+  Types of property 'id' are incompatible.
+    Type '_RecordId<"ledger">' is not assignable to type 'string'.",
+]
+`;
+
+exports[`type diagnostics > schema/none-for-plain-default 1`] = `
+[
+  "TS2375: Type '{ role: undefined; }' is not assignable to type '{ readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealMergeValue; readonly city?: string; }; readonly age?: number | undefined; ... 11 more ...; readonly updated_at?: DateTime | undefined; }' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'role' are incompatible.
+    Type 'undefined' is not assignable to type '"owner" | "member" | "admin"'.",
+]
+`;
+
+exports[`type diagnostics > schema/none-for-required-field 1`] = `
+[
+  "TS2375: Type '{ name: undefined; }' is not assignable to type '{ readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealMergeValue; readonly city?: string; }; readonly age?: number | undefined; ... 11 more ...; readonly updated_at?: DateTime | undefined; }' with 'exactOptionalPropertyTypes: true'. Consider adding 'undefined' to the types of the target's properties.
+  Types of property 'name' are incompatible.
+    Type 'undefined' is not assignable to type 'string'.",
+]
+`;
+
+exports[`type diagnostics > schema/object-key-shape 1`] = `
+[
+  "TS2322: Type 'string' is not assignable to type 'number'.",
+]
+`;
+
+exports[`type diagnostics > schema/person-id-as-owner 1`] = `
+[
+  "TS2322: Type '_RecordId<"person"> & Brand<"corpus/person">' is not assignable to type '(_RecordId<"org"> & Brand<"corpus/org">) | (_RecordId<"team"> & Brand<"corpus/team">)'.
+  Type '_RecordId<"person"> & Brand<"corpus/person">' is not assignable to type '_RecordId<"team"> & Brand<"corpus/team">'.
+    Type '_RecordId<"person"> & Brand<"corpus/person">' is not assignable to type '_RecordId<"team">'.
+      Types of property 'table' are incompatible.
+        Type '_Table<"person", unknown>' is not assignable to type '_Table<"team", unknown>'.
+          Type '"person"' is not assignable to type '"team"'.",
+]
+`;
+
+exports[`type diagnostics > schema/readonly-field-in-content 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'created_at' does not exist in type '{ readonly name: string; readonly role: "owner" | "member" | "admin"; readonly address: { readonly [x: string]: SurrealValue; readonly city: string; }; readonly email: string; readonly bio: string | null; ... 10 more ...; readonly updated_at?: DateTime; }'.",
+]
+`;
+
+exports[`type diagnostics > schema/readonly-field-in-merge 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'created_at' does not exist in type '{ readonly name?: string; readonly role?: "owner" | "member" | "admin"; readonly address?: { readonly [x: string]: SurrealMergeValue; readonly city?: string; }; readonly age?: number | undefined; ... 11 more ...; readonly updated_at?: DateTime | undefined; }'.",
+]
+`;
+
+exports[`type diagnostics > schema/refine-changes-presence 1`] = `
+[
+  "TS2322: Type '(s: declareConstructor<string, string, readonly [], string>) => optionalKey<declareConstructor<string, string, readonly [], string>>' is not assignable to type '(schema: declareConstructor<string, string, readonly [], string>) => Narrowing<declareConstructor<string, string, readonly [], string>>'.
+  Type 'optionalKey<declareConstructor<string, string, readonly [], string>>' is not assignable to type 'Narrowing<declareConstructor<string, string, readonly [], string>>'.
+    Type 'optionalKey<declareConstructor<string, string, readonly [], string>>' is not assignable to type '{ readonly DecodingServices: never; readonly EncodingServices: never; readonly '~type.optionality': "required"; readonly '~encoded.optionality': "required"; }'.
+      Types of property ''~type.optionality'' are incompatible.
+        Type '"optional"' is not assignable to type '"required"'.",
+]
+`;
+
+exports[`type diagnostics > schema/refine-changes-type 1`] = `
+[
+  "TS2322: Type '() => Schema.Number' is not assignable to type '(schema: declareConstructor<string, string, readonly [], string>) => Narrowing<declareConstructor<string, string, readonly [], string>>'.
+  Type 'Number' is not assignable to type 'Narrowing<declareConstructor<string, string, readonly [], string>>'.
+    Type 'Bottom<number, number, never, never, Number, Number, number, number, readonly [], number, "readonly", "required", "no-default", "readonly", "required">' is not assignable to type '{ readonly Type: string; readonly Encoded: string; }'.
+      Types of property 'Type' are incompatible.
+        Type 'number' is not assignable to type 'string'.",
+]
+`;
+
+exports[`type diagnostics > schema/refine-unknown-key 1`] = `
+[
+  "TS2353: Object literal may only specify known properties, and 'nope' does not exist in type 'NoExtraKeys<Refinements<{ readonly name: "person"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"person">, _RecordId<"person">, readonly [...], _RecordId<...>>, "corpus/person">; ... 10 more ...; readonly indexes: { ...; }; }>, { ...; }>'.",
+  "TS7006: Parameter 's' implicitly has an 'any' type.",
+]
+`;
+
+exports[`type diagnostics > schema/replace-changes-presence 1`] = `
+[
+  "TS2345: Argument of type 'optional<String>' is not assignable to parameter of type 'FieldSchema'.
+  Type 'optional<String>' is not assignable to type '{ readonly DecodingServices: never; readonly EncodingServices: never; readonly '~type.optionality': "required"; readonly '~encoded.optionality': "required"; }'.
+    Types of property ''~type.optionality'' are incompatible.
+      Type '"optional"' is not assignable to type '"required"'.",
+]
+`;
+
+exports[`type diagnostics > schema/replace-unshared-field 1`] = `
+[
+  "TS2345: Argument of type '"address"' is not assignable to parameter of type '"name" | "role" | "age" | "display" | "manager" | "mentor" | "nickname" | "odd.name" | "pattern" | "email" | "ssn" | "bio" | "created_at" | "phones" | "score" | "tags" | "touched_at" | "updated_at"'.",
+]
+`;
+
+exports[`type diagnostics > schema/tagged-id-wrong-tag 1`] = `
+[
+  "TS2322: Type '{ _tag: "org"; id: RecordId<"team"> & Brand<"corpus/team">; }' is not assignable to type 'TaggedRecordId<{ readonly org: brand<declareConstructor<_RecordId<"org">, _RecordId<"org">, readonly [declareConstructor<RecordIdValue, RecordIdValue, readonly [], RecordIdValue>], _RecordId<...>>, "corpus/org">; readonly team: brand<...>; }>'.
+  Types of property 'id' are incompatible.
+    Type '_RecordId<"team"> & Brand<"corpus/team">' is not assignable to type '_RecordId<"org"> & Brand<"corpus/org">'.
+      Type '_RecordId<"team"> & Brand<"corpus/team">' is not assignable to type '_RecordId<"org">'.
+        Types of property 'table' are incompatible.
+          Type '_Table<"team", unknown>' is not assignable to type '_Table<"org", unknown>'.
+            Type '"team"' is not assignable to type '"org"'.",
+]
+`;
+
+exports[`type diagnostics > schema/team-id-as-person-id 1`] = `
+[
+  "TS2322: Type '_RecordId<"team"> & Brand<"corpus/team">' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Type '_RecordId<"team"> & Brand<"corpus/team">' is not assignable to type '_RecordId<"person">'.
+    Types of property 'table' are incompatible.
+      Type '_Table<"team", unknown>' is not assignable to type '_Table<"person", unknown>'.
+        Type '"team"' is not assignable to type '"person"'.",
+]
+`;
+
+exports[`type diagnostics > schema/unbranded-sdk-id 1`] = `
+[
+  "TS2322: Type 'RecordId<"person", string, unknown>' is not assignable to type '_RecordId<"person"> & Brand<"corpus/person">'.
+  Property '[TypeId]' is missing in type 'RecordId<"person", string, unknown>' but required in type 'Brand<"corpus/person">'.",
+]
+`;
+
+exports[`type diagnostics > search/fusion-list-without-id 1`] = `
+[
+  "TS2322: Type 'Expr<$Array<ProjectedCodec<{ title: Path<declareConstructor<string, string, readonly [], string> & Codec>; }>>, NoParams>' is not assignable to type '"a fused list is a list of rows with an \`id\`, such as \`select(…).project((row) => ({ id: row.id, … })).toExpr()\`"'.",
+]
+`;
+
+exports[`type diagnostics > search/highlight-without-highlights 1`] = `
+[
+  "TS2345: Argument of type 'Match<2, declareConstructor<string, string, readonly [], string> & Codec, false, { readonly terms: declareConstructor<string, string, readonly [], string>; }>' is not assignable to parameter of type '"the FULLTEXT index of this match keeps no HIGHLIGHTS, so \`search::highlight\` would return the text unmarked: define the index with HIGHLIGHTS"'.",
+]
+`;
+
+exports[`type diagnostics > search/knn-count-fractional 1`] = `
+[
+  "TS2322: Type 'number' is not assignable to type '"the neighbour count is a positive integer"'.",
+]
+`;
+
+exports[`type diagnostics > search/knn-count-not-literal 1`] = `
+[
+  "TS2322: Type 'number' is not assignable to type '"the neighbour count is an integer literal written in the code: SurrealDB parses no binding there"'.",
+]
+`;
+
+exports[`type diagnostics > search/knn-effort-zero 1`] = `
+[
+  "TS2322: Type 'number' is not assignable to type '"the search effort is a positive integer"'.",
+]
+`;
+
+exports[`type diagnostics > search/knn-jaccard 1`] = `
+[
+  "TS2322: Type '"JACCARD"' is not assignable to type 'Distance'.",
+]
+`;
+
+exports[`type diagnostics > search/knn-not-a-vector 1`] = `
+[
+  "TS2345: Argument of type '"title"' is not assignable to parameter of type '"\`doc.title\` is not an array of numbers, so it has no nearest neighbours"'.",
+]
+`;
+
+exports[`type diagnostics > search/knn-pearson 1`] = `
+[
+  "TS2322: Type '"PEARSON"' is not assignable to type 'Distance'.",
+]
+`;
+
+exports[`type diagnostics > search/knn-vector-dimension 1`] = `
+[
+  "TS2345: Argument of type 'Expr<Tuple<readonly [declareConstructor<number, number, readonly [], number>, declareConstructor<number, number, readonly [], number>, declareConstructor<number, number, readonly [], number>]>, { ...; }>' is not assignable to parameter of type '"the query vector has 3 elements and the vector index on \`doc.embedding\` has dimension 4"'.",
+]
+`;
+
+exports[`type diagnostics > search/knn-without-vector-index 1`] = `
+[
+  "TS2345: Argument of type '"title"' is not assignable to parameter of type '"\`doc\` has no HNSW or DISKANN index on \`title\`: search without one by naming a distance, as in \`{ k, distance: 'COSINE' }\`"'.",
+]
+`;
+
+exports[`type diagnostics > search/linear-weights-per-list 1`] = `
+[
+  "TS2322: Type '[1, 2, 3]' is not assignable to type 'readonly [1, 2, 3] & "there are 2 lists and 3 weights; give one weight per list"'.
+  Type '[1, 2, 3]' is not assignable to type '"there are 2 lists and 3 weights; give one weight per list"'.",
+]
+`;
+
+exports[`type diagnostics > search/match-reference-not-literal 1`] = `
+[
+  "TS2322: Type 'number' is not assignable to type '"a match reference is an integer literal from 0 to 255, written in the code: SurrealDB parses no binding there"'.",
+]
+`;
+
+exports[`type diagnostics > search/match-reference-out-of-range 1`] = `
+[
+  "TS2322: Type 'number' is not assignable to type '"a match reference is an integer from 0 to 255"'.",
+]
+`;
+
+exports[`type diagnostics > search/match-terms-not-a-string 1`] = `
+[
+  "TS2345: Argument of type 'Expr<declareConstructor<number, number, readonly [], number>, { readonly n: declareConstructor<number, number, readonly [], number>; }>' is not assignable to parameter of type 'Terms'.
+  Type 'Expr<declareConstructor<number, number, readonly [], number>, { readonly n: declareConstructor<number, number, readonly [], number>; }>' is not assignable to type 'Expr<Codec<unknown, string, never, never>, Params>'.
+    Type 'declareConstructor<number, number, readonly [], number>' is not assignable to type 'Codec<unknown, string, never, never>'.
+      Types of property '"Encoded"' are incompatible.
+        Type 'number' is not assignable to type 'string'.",
+]
+`;
+
+exports[`type diagnostics > search/match-without-fulltext-index 1`] = `
+[
+  "TS2345: Argument of type '"title"' is not assignable to parameter of type '"\`doc\` has no FULLTEXT index on \`title\`"'.",
+]
+`;
+
+exports[`type diagnostics > search/order-by-unknown-alias 1`] = `
+[
+  "TS2345: Argument of type '"rank"' is not assignable to parameter of type '"\`rank\` is not a name the result row holds"'.",
+]
+`;
+
+exports[`type diagnostics > search/order-by-value-alias 1`] = `
+[
+  "TS2345: Argument of type '"title"' is not assignable to parameter of type '"\`title\` is not a name the result row holds"'.",
+]
+`;
+
+exports[`type diagnostics > search/order-by-value-object-key 1`] = `
+[
+  "TS2345: Argument of type '"city"' is not assignable to parameter of type '"\`city\` is not a name the result row holds"'.",
+]
+`;
+
+exports[`type diagnostics > search/order-by-value-object-key-later 1`] = `
+[
+  "TS2345: Argument of type '"city"' is not assignable to parameter of type '"\`city\` is not a name the result row holds"'.",
+]
+`;
+
+exports[`type diagnostics > search/score-without-reference 1`] = `
+[
+  "TS2345: Argument of type 'Match<undefined, declareConstructor<string, string, readonly [], string> & Codec, true, { readonly terms: declareConstructor<string, string, readonly [], string>; }>' is not assignable to parameter of type '"this match has no reference number, so search::score cannot name it: give it one, as in \`match(table, field, terms, { ref: 1 })\`"'.",
+]
+`;
+
+exports[`type diagnostics > select/for-update-late 1`] = `
+[
+  "TS2339: Property 'forUpdate' does not exist on type 'Select<{ readonly name: "invite"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"invite">, _RecordId<"invite">, readonly [declareConstructor<...>], _RecordId<...>>, "scripts/invite">; ... 10 more ...; readonly indexes: {}; }, { ...; }, decla...'.",
+]
+`;
+
+exports[`type diagnostics > select/for-update-table 1`] = `
+[
+  "TS2339: Property 'forUpdate' does not exist on type 'Select<{ readonly name: "invite"; readonly type: "normal"; readonly schemafull: true; readonly drop: false; readonly id: brand<declareConstructor<_RecordId<"invite">, _RecordId<"invite">, readonly [declareConstructor<...>], _RecordId<...>>, "scripts/invite">; ... 10 more ...; readonly indexes: {}; }, NoParams, decla...'.",
+]
+`;

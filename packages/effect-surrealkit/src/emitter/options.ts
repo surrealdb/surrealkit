@@ -42,6 +42,8 @@ export const EmitterOptions = Schema.Struct({
 	datetime: Schema.optionalKey(DatetimeProfile),
 	/** Emit `<Table>Patch` JSON Patch unions (not yet qualified). Default false. */
 	patch: Schema.optionalKey(Schema.Boolean),
+	/** Print nested unary field-schema constructors using Effect pipelines. */
+	pipeable: Schema.optionalKey(Schema.Boolean),
 	/**
 	 * Extension of the generated modules' imports of each other. Default
 	 * `".js"`, which compilers and bundlers map to the `.ts` sources; `".ts"`

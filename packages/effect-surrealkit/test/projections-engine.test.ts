@@ -1,6 +1,6 @@
 /**
- * Projected fields against an engine. Why they are worth recording: on a
- * SCHEMAFULL table the engine answers a SELECT
+ * Projected fields against an engine. Why they are checked when
+ * modules are generated: on a SCHEMAFULL table the engine answers a SELECT
  * of a field the table does not declare without an error, the field missing
  * from each row. Which bare words are values and not fields: every keyword
  * of the SurrealDB 3.3 and 4.0 parsers (`test/fixtures/surql-keywords.txt`,
@@ -91,7 +91,7 @@ describe.skipIf(!engineConfigured)(
 			}
 		});
 
-		it('is what the analyzer records', () => {
+		it('is what the analyzer records for the schema check', () => {
 			expect(
 				analyzeSync('SELECT name, nmae FROM person;').projected,
 			).toEqual([
@@ -244,8 +244,8 @@ describe.skipIf(!engineConfigured)(
  * The clauses that may follow a SELECT's target, on both engines: each the
  * analyzer reads through returns the same fields as the query without it
  * (EXPLAIN, a plan, names the same projection), and each it refuses is one
- * the engine refuses. VERSION needs a versioned store, which an in-memory
- * engine is not, so it is not pinned here: a probe on a versioned SurrealKV
+ * the engine refuses. VERSION needs a versioned store, which the memory
+ * lanes are not, so it is not pinned here: a probe on a versioned SurrealKV
  * store showed the same fields with it on SurrealDB 3.3 and 4.0.
  */
 describe.skipIf(!engineConfigured)('a trailing clause of a SELECT', () => {

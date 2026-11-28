@@ -16,6 +16,10 @@
 			"types": "./dist/emitter.d.ts",
 			"import": "./dist/emitter.js"
 		},
+		"./statement": {
+			"types": "./dist/statement.d.ts",
+			"import": "./dist/statement.js"
+		},
 		"./analyze": {
 			"types": "./dist/analyze.d.ts",
 			"import": "./dist/analyze.js"

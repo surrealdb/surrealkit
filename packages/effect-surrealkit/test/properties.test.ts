@@ -16,11 +16,7 @@ const viaJson = (value: unknown): unknown => JSON.parse(JSON.stringify(value));
 
 const native: ReadonlyArray<readonly [string, Schema.Codec<unknown, unknown>]> =
 	[
-		// The SDK's encoder writes -0 as the CBOR integer zero.
-		[
-			'Float',
-			S.Float.check(Schema.makeFilter((value) => !Object.is(value, -0))),
-		],
+		['Float', S.Float],
 		['Int', S.Int],
 		['Int64', S.Int64],
 		['DateTime', S.DateTime],

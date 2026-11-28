@@ -5,6 +5,7 @@
  *   else started (a throwaway container); root/root credentials.
  * - `SURREAL_BIN` (e.g. `/usr/local/bin/surreal`): start
  *   `surreal start --bind 127.0.0.1:<free port> memory` and stop it after.
+ * - `SURREAL_TRANSPORT=http`: use HTTP RPC with either server option.
  * - With neither set: the embedded engine of `@surrealdb/node`, in process and
  *   in memory, so the engine suites run on a plain `npm test`.
  *
@@ -14,19 +15,53 @@
  * when they are skipped.
  */
 import { type ChildProcess, spawn } from 'node:child_process';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { createServer } from 'node:net';
 
-import { Surreal } from 'surrealdb';
+import { type ConnectOptions, Surreal } from 'surrealdb';
 
 /** How the engine is provided. */
 export type EngineMode = 'embedded' | 'binary' | 'remote';
+export type EngineTransport = 'embedded' | 'ws' | 'http';
+
+const remoteUrl = process.env.SURREAL_URL;
+const binary = process.env.SURREAL_BIN;
+const requestedTransport = process.env.SURREAL_TRANSPORT;
 
 export const engineMode: EngineMode =
-	process.env.SURREAL_URL !== undefined
+	remoteUrl !== undefined
 		? 'remote'
-		: process.env.SURREAL_BIN !== undefined
+		: binary !== undefined
 			? 'binary'
 			: 'embedded';
+
+if (
+	requestedTransport !== undefined &&
+	requestedTransport !== 'http' &&
+	requestedTransport !== 'ws'
+) {
+	throw new Error('SURREAL_TRANSPORT must be http or ws');
+}
+if (requestedTransport !== undefined && engineMode === 'embedded') {
+	throw new Error('SURREAL_TRANSPORT requires SURREAL_BIN or SURREAL_URL');
+}
+
+export const transport: EngineTransport =
+	engineMode === 'embedded'
+		? 'embedded'
+		: (requestedTransport ??
+			(/^https?:\/\//iu.test(remoteUrl ?? '') ? 'http' : 'ws'));
+
+export const interactiveTransactions = transport !== 'http';
+export const liveQueries = transport !== 'http';
+
+const withTransport = (rpc: string, via: 'ws' | 'http'): URL => {
+	const url = new URL(rpc);
+	const secure = url.protocol === 'wss:' || url.protocol === 'https:';
+	url.protocol = `${via}${secure ? 's' : ''}:`;
+	return url;
+};
 
 const embeddedEngine = async (): Promise<Surreal> => {
 	const { createNodeEngines } = await import('@surrealdb/node');
@@ -88,6 +123,9 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 export interface Engine {
 	readonly db: Surreal;
 	readonly mode: EngineMode;
+	readonly transport: EngineTransport;
+	/** RPC address of the disposable server, when the engine runs out of process. */
+	readonly rpcUrl?: string;
 	/** As the engine reports it, e.g. `surrealdb-4.0.1`. */
 	readonly version: string;
 	readonly majorVersion: number;
@@ -98,14 +136,22 @@ export interface Engine {
 	 * namespace and database, and returns the last statement's JSON result.
 	 */
 	readonly http: (sql: string) => Promise<unknown>;
+	/**
+	 * Runs SurrealQL in the same namespace and database while requests of
+	 * `db` are still running, and answers when the engine has run it: a
+	 * test's concurrent write. A server engine gets it over a TCP connection
+	 * of its own, through `node:http`; `db` over HTTP sends through `fetch`,
+	 * and Node 26's `fetch` (undici 8.9.0) can hold a request to an origin
+	 * until another request to it has been answered.
+	 */
+	readonly aside: (sql: string) => Promise<void>;
 	readonly stop: () => Promise<void>;
 }
 
 const httpSql =
 	(rpc: string, namespace: string) =>
 	async (sql: string): Promise<unknown> => {
-		const url = new URL(rpc);
-		url.protocol = url.protocol === 'wss:' ? 'https:' : 'http:';
+		const url = withTransport(rpc, 'http');
 		url.pathname = '/sql';
 		const response = await fetch(url, {
 			method: 'POST',
@@ -128,9 +174,60 @@ const httpSql =
 		return last.result;
 	};
 
-const connect = async (url: string, namespace: string): Promise<Surreal> => {
+/** `POST /sql` on a fresh connection (`agent: false`), shared with nothing. */
+const asideSql =
+	(rpc: string, namespace: string) =>
+	(sql: string): Promise<void> =>
+		new Promise((resolve, reject) => {
+			const url = withTransport(rpc, 'http');
+			url.pathname = '/sql';
+			const send = url.protocol === 'https:' ? httpsRequest : httpRequest;
+			const request = send(
+				url,
+				{
+					method: 'POST',
+					agent: false,
+					headers: {
+						Accept: 'application/json',
+						Authorization: `Basic ${btoa('root:root')}`,
+						'surreal-ns': namespace,
+						'surreal-db': namespace,
+					},
+				},
+				(response) => {
+					let body = '';
+					response.setEncoding('utf8');
+					response.on('data', (chunk: string) => {
+						body += chunk;
+					});
+					response.on('end', () => {
+						const statements = JSON.parse(body) as ReadonlyArray<{
+							readonly status: string;
+						}>;
+						if (
+							Array.isArray(statements) &&
+							statements.every(({ status }) => status === 'OK')
+						)
+							resolve();
+						else reject(new Error(`HTTP /sql failed: ${body}`));
+					});
+					response.on('error', reject);
+				},
+			);
+			request.on('error', reject);
+			request.end(sql);
+		});
+
+type EngineOptions = Pick<ConnectOptions, 'retry'>;
+
+const connect = async (
+	url: string,
+	namespace: string,
+	options: EngineOptions,
+): Promise<Surreal> => {
 	const db = new Surreal();
 	await db.connect(url, {
+		...options,
 		authentication: { username: 'root', password: 'root' },
 	});
 	await db.query(
@@ -151,17 +248,29 @@ const engineVersion = async (db: Surreal) => {
 	return { version, majorVersion: Number(major) };
 };
 
-const startEmbedded = async (namespace: string): Promise<Engine> => {
+const startEmbedded = async (
+	namespace: string,
+	options: EngineOptions,
+): Promise<Engine> => {
 	const db = await embeddedEngine();
 	try {
-		await db.connect('mem://', { namespace, database: namespace });
+		await db.connect('mem://', {
+			...options,
+			namespace,
+			database: namespace,
+		});
 		return {
 			db,
 			mode: 'embedded',
+			transport: 'embedded',
 			namespace,
 			...(await engineVersion(db)),
 			http: async () => {
 				throw new Error(httpSkipReason);
+			},
+			// In process, a query runs while another is still running.
+			aside: async (sql) => {
+				await db.query(sql);
 			},
 			stop: async () => {
 				await db.close();
@@ -173,18 +282,19 @@ const startEmbedded = async (namespace: string): Promise<Engine> => {
 	}
 };
 
-export const startEngine = async (): Promise<Engine> => {
+export const startEngine = async (
+	options: EngineOptions = {},
+): Promise<Engine> => {
 	const namespace = `effect_surrealkit_${Date.now()}_${Math.floor(Math.random() * 1e6)}`;
-	if (engineMode === 'embedded') return startEmbedded(namespace);
+	if (engineMode === 'embedded') return startEmbedded(namespace, options);
 
 	let child: ChildProcess | undefined;
-	let url = process.env.SURREAL_URL;
+	let url = remoteUrl;
 	if (url === undefined) {
-		const bin = process.env.SURREAL_BIN;
-		if (bin === undefined) throw new Error(engineSkipReason);
+		if (binary === undefined) throw new Error(engineSkipReason);
 		const port = await freePort();
 		child = spawn(
-			bin,
+			binary,
 			[
 				'start',
 				'--bind',
@@ -199,13 +309,15 @@ export const startEngine = async (): Promise<Engine> => {
 			],
 			{ stdio: 'ignore' },
 		);
-		url = `ws://127.0.0.1:${port}/rpc`;
+		url = `${transport}://127.0.0.1:${port}/rpc`;
+	} else if (transport !== 'embedded') {
+		url = withTransport(url, transport).href;
 	}
 	let db: Surreal | undefined;
 	let lastError: unknown;
 	for (let attempt = 0; attempt < 100 && db === undefined; attempt++) {
 		try {
-			db = await connect(url, namespace);
+			db = await connect(url, namespace, options);
 		} catch (error) {
 			lastError = error;
 			await delay(100);
@@ -221,9 +333,12 @@ export const startEngine = async (): Promise<Engine> => {
 	return {
 		db: connected,
 		mode: engineMode,
+		transport,
+		rpcUrl: url,
 		namespace,
 		...(await engineVersion(connected)),
 		http: httpSql(url, namespace),
+		aside: asideSql(url, namespace),
 		stop: async () => {
 			await connected
 				.query(`REMOVE NAMESPACE IF EXISTS ${namespace}`)

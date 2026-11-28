@@ -4,6 +4,7 @@ import { kebabCase, pascalCase } from './names.js';
 import type { DatetimeProfile, EmitterOptions, IntProfile } from './options.js';
 
 export interface Profile {
+	readonly pipeable?: boolean;
 	readonly int: IntProfile;
 	readonly datetime: DatetimeProfile;
 }
@@ -139,6 +140,7 @@ export const profileFor = (options: EmitterOptions, key: string): Profile => {
 	const field = options.fields?.[key];
 	return {
 		int: field?.int ?? options.int ?? 'safe-number',
+		...(options.pipeable && { pipeable: true }),
 		datetime: field?.datetime ?? options.datetime ?? 'sdk',
 	};
 };
